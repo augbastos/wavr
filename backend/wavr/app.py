@@ -14,6 +14,8 @@ from wavr.hub import Hub
 from wavr.fusion import FusionEngine
 from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
+from wavr.sources.network import NetworkSource
+from wavr.sources.ruview import RuViewSource
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -24,6 +26,19 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "testclient"})
 
 def _is_loopback(host) -> bool:
     return host in _LOOPBACK_HOSTS
+
+
+def _default_sources(cfg):
+    """Plano A real-source set: network always-on ($0), ruview always-on (harmless
+    reconnect loop when the container is absent), sim off by default (toggle it on
+    from the dashboard to populate the view when no real data is flowing)."""
+    return [
+        ("network", lambda: NetworkSource(
+            cfg.net_known_macs, interval=cfg.net_interval, grace=cfg.net_grace), True),
+        ("ruview", lambda: RuViewSource(
+            cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
+        ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
+    ]
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
@@ -41,7 +56,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
         await _hub.publish(d)
 
     manager = SourceManager(_ingest)
-    for name, factory, enabled in (sources or [("sim", lambda: SimulatedSource(interval=cfg.sim_interval), True)]):
+    for name, factory, enabled in (sources if sources is not None else _default_sources(cfg)):
         manager.register(name, factory, enabled)
 
     @asynccontextmanager
