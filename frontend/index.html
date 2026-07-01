@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f1216">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<meta name="description" content="Wavr — sensoriamento residencial multi-modal com fusão explicável por cômodo.">
 <title>Wavr — Fused Home Sensing</title>
 <style>
   :root{--bg:#0f1216;--surface:#171c22;--ink:#e8edf2;--muted:#9aa7b4;
@@ -24,7 +28,8 @@
   .pill.on{background:rgba(61,181,74,.15);color:var(--accent);}
   .pill.off{background:rgba(154,167,180,.12);color:var(--muted);}
   .bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0 12px;}
-  .bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s ease-out;}
+  .bar>i{display:block;height:100%;background:var(--accent);width:100%;
+         transform:scaleX(0);transform-origin:left;transition:transform .3s ease-out;}
   .src{display:flex;justify-content:space-between;font-size:.78rem;color:var(--muted);
        padding:3px 0;border-top:1px dashed var(--line);}
   .src .m{text-transform:capitalize;color:var(--ink);}
@@ -38,12 +43,16 @@
   .row .t{color:var(--muted);min-width:88px;}
   .row .r{text-transform:capitalize;min-width:80px;}
   .controls:not([hidden]){display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid var(--line);}
-  .ctl{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.8rem;cursor:pointer;}
+  .ctl{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.8rem;cursor:pointer;
+       transition:border-color .15s ease-out,color .15s ease-out;}
+  .ctl:hover{border-color:var(--muted);}
   .ctl.on{border-color:var(--accent);color:var(--accent);}
   .ctl.off{color:var(--muted);}
-  .ctl.small{padding:5px 11px;font-size:.75rem;}
+  .ctl.small{padding:6px 12px;font-size:.78rem;}
   .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
-  @media (prefers-reduced-motion:reduce){.bar>i{transition:none;}}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .empty{color:var(--muted);font-size:.82rem;padding:14px 18px;}
+  @media (prefers-reduced-motion:reduce){.bar>i,.ctl{transition:none;}}
 </style>
 </head>
 <body>
@@ -53,9 +62,9 @@
   <div id="srcToggles" class="src-toggles"></div>
 </div>
 <main>
-  <div class="rooms" id="rooms"></div>
-  <h3>Timeline</h3>
-  <div class="timeline" id="timeline"></div>
+  <div class="rooms" id="rooms" aria-label="Estado por cômodo"><div class="empty">aguardando dados dos cômodos…</div></div>
+  <h3 id="tl-h">Timeline</h3>
+  <div class="timeline" id="timeline" role="log" aria-labelledby="tl-h"><div class="empty">sem eventos ainda</div></div>
 </main>
 <script>
 // ---- DataProvider contract: { start(onEvent), history() } — items are RoomState dicts ----
@@ -114,7 +123,8 @@ async function renderControls(){
   if(MODE!=="live") return;               // the control plane is a backend feature
   document.getElementById("controls").hidden = false;
   const post = (url,body)=> fetch(location.origin+url,{method:"POST",
-    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)})
+    .catch(()=>{});  // rede local pode falhar momentaneamente; o refresh() seguinte re-sincroniza
   async function refresh(){
     let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
     const sys = document.getElementById("sysToggle");
@@ -142,6 +152,7 @@ const cards = {};
 function upsert(rs){
   let c = cards[rs.room];
   if(!c){
+    roomsEl.querySelector(".empty")?.remove();
     const el = document.createElement("div"); el.className="card";
     el.innerHTML = `<h2>${rs.room}</h2><div class="conf"></div>
       <span class="pill"></span><div class="bar"><i></i></div>
@@ -152,15 +163,18 @@ function upsert(rs){
   const pill = c.querySelector(".pill");
   pill.textContent = rs.occupied ? "ocupado" : "vazio";
   pill.className = "pill " + (rs.occupied ? "on" : "off");
-  c.querySelector(".bar>i").style.width = Math.round(rs.confidence*100) + "%";
+  c.querySelector(".bar>i").style.transform = `scaleX(${rs.confidence})`;
   c.querySelector(".srcs").innerHTML = rs.sources.map(s =>
     `<div class="src"><span class="m">${s.modality}</span><span>${s.presence?"presente":"vazio"} · ${Math.round(s.confidence*100)}%</span></div>`).join("");
   const v = rs.vitals || {};
-  c.querySelector(".vit").textContent = v.breathing_bpm!=null
-    ? `resp ${v.breathing_bpm} rpm · bpm ${v.heart_bpm}` : "";
+  const vit = [];
+  if(v.breathing_bpm!=null) vit.push(`resp ${v.breathing_bpm} rpm`);
+  if(v.heart_bpm!=null) vit.push(`bpm ${v.heart_bpm}`);
+  c.querySelector(".vit").textContent = vit.join(" · ");
 }
 
 function pushTimeline(rs){
+  timelineEl.querySelector(".empty")?.remove();
   const row = document.createElement("div"); row.className="row";
   row.innerHTML = `<span class="t">${rs.ts.slice(11,19)}</span><span class="r">${rs.room}</span>
     <span>${rs.occupied?"ocupado":"vazio"} (${Math.round(rs.confidence*100)}%)</span>`;
