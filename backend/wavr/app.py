@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
@@ -12,6 +14,9 @@ from wavr.hub import Hub
 from wavr.fusion import FusionEngine
 from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
+
+
+_INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "testclient"})
@@ -112,6 +117,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
             pass
         finally:
             _hub.unsubscribe(q)
+
+    @app.get("/")
+    async def dashboard():
+        return FileResponse(_INDEX)
 
     return app
 
