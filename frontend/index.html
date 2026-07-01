@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wavr — Fused Home Sensing</title>
+<style>
+  :root{--bg:#0f1216;--surface:#171c22;--ink:#e8edf2;--muted:#9aa7b4;
+        --accent:#3db54a;--warn:#e0b341;--line:#232a32;--radius:14px;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  header{padding:20px 24px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;justify-content:space-between;}
+  h1{font-size:1.25rem;margin:0;letter-spacing:-0.01em;}
+  .mode{font-size:.8rem;color:var(--muted);}
+  .mode b{color:var(--accent);}
+  main{padding:24px;max-width:1000px;margin:0 auto;}
+  .rooms{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;}
+  .card h2{margin:0 0 4px;font-size:1rem;text-transform:capitalize;}
+  .conf{font-variant-numeric:tabular-nums;font-size:.82rem;color:var(--muted);}
+  .pill{display:inline-block;font-size:.75rem;padding:3px 10px;border-radius:999px;margin:8px 0;}
+  .pill.on{background:rgba(61,181,74,.15);color:var(--accent);}
+  .pill.off{background:rgba(154,167,180,.12);color:var(--muted);}
+  .bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0 12px;}
+  .bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s ease-out;}
+  .src{display:flex;justify-content:space-between;font-size:.78rem;color:var(--muted);
+       padding:3px 0;border-top:1px dashed var(--line);}
+  .src .m{text-transform:capitalize;color:var(--ink);}
+  .vit{margin-top:10px;font-size:.82rem;font-variant-numeric:tabular-nums;}
+  h3{margin:28px 0 12px;font-size:.9rem;color:var(--muted);font-weight:600;}
+  .timeline{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+            padding:8px 0;max-height:260px;overflow:auto;}
+  .row{display:flex;gap:14px;padding:7px 18px;font-size:.82rem;border-bottom:1px solid var(--line);
+       font-variant-numeric:tabular-nums;}
+  .row:last-child{border-bottom:0;}
+  .row .t{color:var(--muted);min-width:88px;}
+  .row .r{text-transform:capitalize;min-width:80px;}
+  .controls:not([hidden]){display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid var(--line);}
+  .ctl{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.8rem;cursor:pointer;}
+  .ctl.on{border-color:var(--accent);color:var(--accent);}
+  .ctl.off{color:var(--muted);}
+  .ctl.small{padding:5px 11px;font-size:.75rem;}
+  .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
+  @media (prefers-reduced-motion:reduce){.bar>i{transition:none;}}
+</style>
+</head>
+<body>
+<header><h1>Wavr</h1><div class="mode" id="mode"></div></header>
+<div id="controls" class="controls" hidden>
+  <button id="sysToggle" class="ctl"></button>
+  <div id="srcToggles" class="src-toggles"></div>
+</div>
+<main>
+  <div class="rooms" id="rooms"></div>
+  <h3>Timeline</h3>
+  <div class="timeline" id="timeline"></div>
+</main>
+<script>
+// ---- DataProvider contract: { start(onEvent), history() } — items are RoomState dicts ----
+function WebSocketProvider(){
+  const base = location.origin;
+  return {
+    async history(){ try{ const r=await fetch(base+"/api/history?limit=100"); return await r.json(); }catch{ return []; } },
+    start(onEvent){
+      const ws = new WebSocket(base.replace(/^http/,"ws")+"/ws/live");
+      ws.onmessage = (m)=> onEvent(JSON.parse(m.data));
+      ws.onclose = ()=> setTimeout(()=> this.start(onEvent), 1500);
+    },
+  };
+}
+function SimulatorProvider(){
+  // Fictional multi-modal apartment producing RoomState directly (no backend).
+  const rooms = {
+    casa:    [["network"]],
+    sala:    [["wifi_csi"]],
+    quarto:  [["wifi_csi"],["camera"]],
+    quintal: [["camera"]],
+  };
+  const W = {camera:1.0, wifi_csi:0.6, network:0.45};
+  let tick = 0;
+  function stateFor(room){
+    const mods = rooms[room];
+    let num=0, den=0; const sources=[]; let vitals={};
+    mods.forEach(([m],i)=>{
+      const present = ((tick+i)%7)<4;
+      const conf = present ? W[m] : W[m]*0.3;
+      den += W[m]*conf; if(present) num += W[m]*conf;
+      sources.push({modality:m, presence:present, confidence:+conf.toFixed(3)});
+      if(present && m==="wifi_csi") vitals={breathing_bpm:+(12+3*Math.sin(tick/5)).toFixed(1), heart_bpm:+(60+10*Math.sin(tick/4)).toFixed(0)};
+    });
+    const confidence = den>0 ? +(num/den).toFixed(3) : 0;
+    const parts = sources.map(s=> `${s.modality}: ${s.presence?"presente":"vazio"}`);
+    return {room, occupied:confidence>=0.5, confidence, vitals, sources,
+            explanation: parts.join(" · ")+` → ${Math.round(confidence*100)}% ocupado`,
+            ts:new Date().toISOString()};
+  }
+  const all = ()=> Object.keys(rooms).map(stateFor);
+  return {
+    async history(){ const out=[]; for(let t=0;t<12;t++){ tick=t; out.push(...all()); } tick=12; return out; },
+    start(onEvent){ setInterval(()=>{ all().forEach(onEvent); tick++; }, 1500); },
+  };
+}
+
+// ---- Mode selection (PRIVACY: never "live" off localhost) ----
+const MODE = (location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "live" : "simulated";
+const provider = MODE==="live" ? WebSocketProvider() : SimulatorProvider();
+document.getElementById("mode").innerHTML = MODE==="live"
+  ? "fonte: <b>casa real</b> (local)" : "fonte: <b>demo</b> (dados fictícios)";
+
+// ---- Control plane (Plano A / live only): global on/off + per-source on/off ----
+async function renderControls(){
+  if(MODE!=="live") return;               // the control plane is a backend feature
+  document.getElementById("controls").hidden = false;
+  const post = (url,body)=> fetch(location.origin+url,{method:"POST",
+    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+  async function refresh(){
+    let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
+    const sys = document.getElementById("sysToggle");
+    sys.textContent = s.running ? "Sistema: LIGADO" : "Sistema: DESLIGADO";
+    sys.className = "ctl " + (s.running ? "on" : "off");
+    sys.onclick = async ()=>{ await post("/api/system/toggle",{on:!s.running}); refresh(); };
+    const wrap = document.getElementById("srcToggles"); wrap.innerHTML = "";
+    s.sources.forEach(src=>{
+      const b = document.createElement("button");
+      b.className = "ctl small " + (src.enabled ? "on" : "off");
+      b.textContent = `${src.name}: ${src.enabled ? "on" : "off"}`;
+      b.onclick = async ()=>{ await post(`/api/sources/${src.name}/toggle`,{enabled:!src.enabled}); refresh(); };
+      wrap.appendChild(b);
+    });
+  }
+  refresh(); setInterval(refresh, 3000);
+}
+renderControls();
+
+// ---- Rendering (RoomState) ----
+const roomsEl = document.getElementById("rooms");
+const timelineEl = document.getElementById("timeline");
+const cards = {};
+
+function upsert(rs){
+  let c = cards[rs.room];
+  if(!c){
+    const el = document.createElement("div"); el.className="card";
+    el.innerHTML = `<h2>${rs.room}</h2><div class="conf"></div>
+      <span class="pill"></span><div class="bar"><i></i></div>
+      <div class="srcs"></div><div class="vit"></div>`;
+    roomsEl.appendChild(el); c = cards[rs.room] = el;
+  }
+  c.querySelector(".conf").textContent = `confiança ${Math.round(rs.confidence*100)}%`;
+  const pill = c.querySelector(".pill");
+  pill.textContent = rs.occupied ? "ocupado" : "vazio";
+  pill.className = "pill " + (rs.occupied ? "on" : "off");
+  c.querySelector(".bar>i").style.width = Math.round(rs.confidence*100) + "%";
+  c.querySelector(".srcs").innerHTML = rs.sources.map(s =>
+    `<div class="src"><span class="m">${s.modality}</span><span>${s.presence?"presente":"vazio"} · ${Math.round(s.confidence*100)}%</span></div>`).join("");
+  const v = rs.vitals || {};
+  c.querySelector(".vit").textContent = v.breathing_bpm!=null
+    ? `resp ${v.breathing_bpm} rpm · bpm ${v.heart_bpm}` : "";
+}
+
+function pushTimeline(rs){
+  const row = document.createElement("div"); row.className="row";
+  row.innerHTML = `<span class="t">${rs.ts.slice(11,19)}</span><span class="r">${rs.room}</span>
+    <span>${rs.occupied?"ocupado":"vazio"} (${Math.round(rs.confidence*100)}%)</span>`;
+  timelineEl.prepend(row);
+  while(timelineEl.children.length>60) timelineEl.lastChild.remove();
+}
+
+const handle = (rs)=>{ upsert(rs); pushTimeline(rs); };
+(async ()=>{ (await provider.history()).forEach(handle); provider.start(handle); })();
+</script>
+</body>
+</html>
