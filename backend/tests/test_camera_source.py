@@ -54,3 +54,33 @@ async def test_camera_releases_capture_on_aclose():
     await agen.__anext__()          # pull one event, mid-stream
     await agen.aclose()             # disable → must run frames() finally
     assert released["v"] is True    # RTSP released deterministically, not GC-deferred
+
+async def test_rtsp_frames_reads_then_releases(monkeypatch):
+    from wavr.sources import camera
+    opened = {"cap": None, "released": False}
+    def fake_open(url):
+        opened["cap"] = f"cap:{url}"
+        return opened["cap"]
+    reads = iter([(True, "frame1"), (True, "frame2"), (False, None)])  # (ok, frame); (False,_) ends
+    monkeypatch.setattr(camera, "_open_capture", fake_open)
+    monkeypatch.setattr(camera, "_read", lambda cap: next(reads))
+    monkeypatch.setattr(camera, "_release", lambda cap: opened.__setitem__("released", True))
+    got = []
+    agen = camera.rtsp_frames("rtsp://cam")
+    async for f in agen:
+        got.append(f)
+    assert got == ["frame1", "frame2"]
+    assert opened["released"] is True   # released after the stream ends
+
+def test_yolo_detect_counts_persons(monkeypatch):
+    from wavr.sources import camera
+    # Fake YOLO result: two boxes, classes [person=0, chair=56], confs [0.9, 0.7]
+    class _Boxes:
+        cls = [0, 56]
+        conf = [0.9, 0.7]
+    class _Result:
+        boxes = _Boxes()
+    monkeypatch.setattr(camera, "_model", lambda: (lambda frame: [_Result()]))
+    det = camera.yolo_detect("frame")
+    assert det.count == 1            # only the person box
+    assert det.confidence == 0.9
