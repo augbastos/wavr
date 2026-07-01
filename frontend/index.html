@@ -87,19 +87,25 @@ function SimulatorProvider(){
     quarto:  [["wifi_csi"],["camera"]],
     quintal: [["camera"]],
   };
-  const W = {camera:1.0, wifi_csi:0.6, network:0.45};
+  // Trust weights per modality — mirror backend FusionEngine DEFAULT_WEIGHTS.
+  const W = {camera:1.0, wifi_csi:0.85, network:0.5, sim:0.6};
   let tick = 0;
   function stateFor(room){
     const mods = rooms[room];
-    let num=0, den=0; const sources=[]; let vitals={};
+    // Mirror the real engine: confidence = agreement × strength, so a lone coarse
+    // source (e.g. network) can never read 100% — same math the backend uses.
+    let num=0, den=0, strength=0; const sources=[]; let vitals={};
     mods.forEach(([m],i)=>{
       const present = ((tick+i)%7)<4;
-      const conf = present ? W[m] : W[m]*0.3;
-      den += W[m]*conf; if(present) num += W[m]*conf;
+      const conf = present ? 0.9 : 0.2;      // detector's own confidence (independent of trust weight)
+      const mass = W[m]*conf;
+      den += mass;
+      if(present){ num += mass; strength = Math.max(strength, mass); }
       sources.push({modality:m, presence:present, confidence:+conf.toFixed(3)});
       if(present && m==="wifi_csi") vitals={breathing_bpm:+(12+3*Math.sin(tick/5)).toFixed(1), heart_bpm:+(60+10*Math.sin(tick/4)).toFixed(0)};
     });
-    const confidence = den>0 ? +(num/den).toFixed(3) : 0;
+    const agreement = den>0 ? num/den : 0;
+    const confidence = +(agreement*strength).toFixed(3);
     const parts = sources.map(s=> `${s.modality}: ${s.presence?"presente":"vazio"}`);
     return {room, occupied:confidence>=0.5, confidence, vitals, sources,
             explanation: parts.join(" · ")+` → ${Math.round(confidence*100)}% ocupado`,
