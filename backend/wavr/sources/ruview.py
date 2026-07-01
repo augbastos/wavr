@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 from typing import AsyncIterator, Callable
 
 from wavr.events import SensingEvent, normalize_ruview
@@ -37,12 +39,13 @@ class RuViewSource:
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:
             try:
-                async for frame in self._connect(self._url):
-                    if frame.get("type") == "sensing_update":
-                        yield normalize_ruview(frame, self._room)
+                async with contextlib.aclosing(self._connect(self._url)) as stream:
+                    async for frame in stream:
+                        if isinstance(frame, dict) and frame.get("type") == "sensing_update":
+                            yield normalize_ruview(frame, self._room)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                pass  # connection error: fall through to the reconnect sleep
+                logging.warning("RuViewSource connection error; reconnecting", exc_info=True)
             if self._delay:
                 await asyncio.sleep(self._delay)

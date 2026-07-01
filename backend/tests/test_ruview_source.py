@@ -49,3 +49,29 @@ async def test_ruview_reconnects_after_a_dropped_connection():
     [ev] = await _first_n(src, 1)
     assert calls["n"] == 2                   # it retried
     assert ev.presence is True
+
+async def test_ruview_skips_non_dict_frame_without_reconnect():
+    calls = {"n": 0}
+    async def connect(url):
+        calls["n"] += 1
+        yield [1, 2, 3]   # validly-decoded but non-dict frame
+        yield FRAME
+    src = RuViewSource("ws://x", room="sala", connect=connect)
+    [ev] = await _first_n(src, 1)
+    assert ev.modality == "wifi_csi"
+    assert calls["n"] == 1   # single connection, no reconnect
+
+async def test_ruview_closes_inner_connect_generator_deterministically():
+    closed = {"v": False}
+    async def connect(url):
+        try:
+            yield FRAME
+            yield FRAME
+        finally:
+            closed["v"] = True
+    src = RuViewSource("ws://x", room="sala", connect=connect)
+    agen = src.events()
+    ev = await agen.__anext__()
+    assert ev.modality == "wifi_csi"
+    await agen.aclose()
+    assert closed["v"] is True
