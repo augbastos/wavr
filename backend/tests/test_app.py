@@ -72,3 +72,10 @@ def test_state_change_without_local_header_is_rejected():
     with build_client() as client:
         r = client.post("/api/system/toggle", json={"on": False})  # no X-Wavr-Local
         assert r.status_code == 403
+
+
+def test_is_loopback_helper_rejects_non_loopback():
+    from wavr.app import _is_loopback
+    assert _is_loopback("127.0.0.1") and _is_loopback("::1") and _is_loopback("testclient")
+    assert not _is_loopback("192.168.1.50")
+    assert not _is_loopback(None)
