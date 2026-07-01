@@ -79,3 +79,11 @@ def test_is_loopback_helper_rejects_non_loopback():
     assert _is_loopback("127.0.0.1") and _is_loopback("::1") and _is_loopback("testclient")
     assert not _is_loopback("192.168.1.50")
     assert not _is_loopback(None)
+
+
+def test_root_serves_dashboard_html():
+    with build_client() as client:
+        r = client.get("/")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/html")
+        assert "Fused Home Sensing" in r.text  # distinctive marker from frontend/index.html
