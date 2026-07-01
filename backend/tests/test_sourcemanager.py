@@ -44,3 +44,14 @@ async def test_global_stop_zeroes_active_tasks():
     assert all(s["active"] for s in m.status()["sources"])
     await m.set_running(False)
     assert not any(s["active"] for s in m.status()["sources"])
+
+
+async def test_register_enabled_while_running_spawns_task_immediately():
+    m = SourceManager(lambda e: asyncio.sleep(0))
+    m.register("a", lambda: FakeSource("sala"))
+    await m.start()
+    # register a second, enabled source AFTER start() — must not silently no-op
+    m.register("b", lambda: FakeSource("quarto"), enabled=True)
+    src = [s for s in m.status()["sources"] if s["name"] == "b"][0]
+    assert src["enabled"] is True and src["active"] is True
+    await m.stop()
