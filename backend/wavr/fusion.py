@@ -16,7 +16,7 @@ class FusionEngine:
     trusted source dominate when modalities disagree."""
 
     def __init__(self, weights: dict | None = None, threshold: float = 0.5):
-        self._weights = weights or DEFAULT_WEIGHTS
+        self._weights = weights if weights is not None else DEFAULT_WEIGHTS
         self._threshold = threshold
         self._latest: dict[str, dict[str, SensingEvent]] = {}  # room -> modality -> event
 

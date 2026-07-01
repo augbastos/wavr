@@ -1,4 +1,6 @@
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from wavr.app import create_app
 from wavr.storage import Storage
@@ -7,12 +9,17 @@ from wavr.fusion import FusionEngine
 from wavr.sources.simulated import SimulatedSource
 
 
-def build_client():
+def build_client(client=None):
+    # `client`: optional (host, port) tuple forwarded to TestClient, which uses it
+    # verbatim as scope["client"] for every request/websocket it issues. This lets
+    # tests forge a non-loopback peer to exercise the *real* enforcement path
+    # (middleware / route guard) instead of just the `_is_loopback` helper.
     app = create_app(
         sources=[("sim", lambda: SimulatedSource(interval=0.01), True)],
         storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
     )
-    return TestClient(app)
+    kwargs = {"client": client} if client is not None else {}
+    return TestClient(app, **kwargs)
 
 
 def test_history_returns_roomstate_list():
@@ -87,3 +94,35 @@ def test_root_serves_dashboard_html():
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/html")
         assert "Fused Home Sensing" in r.text  # distinctive marker from frontend/index.html
+
+
+# --- Merge-gate regressions: exercise the wired-up enforcement, not just the helper ---
+
+def test_non_loopback_http_peer_gets_403():
+    # Forge scope["client"] to a LAN address so the request actually goes through
+    # `loopback_only` (the middleware wired up in app.py), not `_is_loopback` in
+    # isolation. TestClient's default peer ("testclient") is in the allowlist, so
+    # without this forge the middleware would never be exercised by any test.
+    with build_client(client=("192.168.1.50", 12345)) as client:
+        r = client.get("/api/system")
+        assert r.status_code == 403
+
+
+def test_bad_host_header_returns_400():
+    # TestClient's default Host ("testserver") is in TrustedHostMiddleware's
+    # allowlist, so this is the only case that needs forcing.
+    with build_client() as client:
+        r = client.get("/api/system", headers={"Host": "evil.com"})
+        assert r.status_code == 400
+
+
+def test_ws_non_loopback_peer_closed_with_1008():
+    # Same forged-peer technique as the HTTP 403 test, but through the WebSocket
+    # route, which the http middleware does NOT cover (see app.py comment) — the
+    # /ws/live handler does its own inline `_is_loopback` check and must close
+    # with policy-violation code 1008 before accepting.
+    with build_client(client=("192.168.1.50", 12345)) as client:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/live"):
+                pass
+        assert exc_info.value.code == 1008

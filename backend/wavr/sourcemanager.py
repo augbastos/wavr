@@ -21,6 +21,11 @@ class SourceManager:
     def register(self, name: str, factory: Callable[[], object], enabled: bool = True) -> None:
         self._factories[name] = factory
         self._enabled[name] = enabled
+        # If the manager is already running, a newly registered enabled source must
+        # start immediately — otherwise a runtime register() silently no-ops until
+        # the next full start()/set_enabled() cycle.
+        if enabled and self._running:
+            self._spawn(name)
 
     async def start(self) -> None:
         self._running = True
