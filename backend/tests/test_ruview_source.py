@@ -1,0 +1,51 @@
+import pytest
+from wavr.sources.ruview import RuViewSource
+
+FRAME = {
+    "type": "sensing_update",
+    "classification": {"presence": True, "confidence": 0.43},
+    "features": {"motion_band_power": 9.7758},
+    "vital_signs": {"breathing_rate_bpm": 9.707, "heart_rate_bpm": 46.22},
+    "timestamp": 1782924055.636,
+}
+
+async def _first_n(source, n):
+    out = []
+    agen = source.events()
+    try:
+        async for ev in agen:
+            out.append(ev)
+            if len(out) == n:
+                break
+    finally:
+        await agen.aclose()
+    return out
+
+async def test_ruview_yields_wifi_csi_events_from_frames():
+    async def connect(url):
+        for f in (FRAME, FRAME):
+            yield f
+    src = RuViewSource("ws://x", room="quarto", connect=connect)
+    evs = await _first_n(src, 2)
+    assert all(e.modality == "wifi_csi" and e.room == "quarto" for e in evs)
+    assert evs[0].breathing_bpm == 9.707 and evs[0].confidence == 0.43
+
+async def test_ruview_skips_non_sensing_frames():
+    async def connect(url):
+        yield {"type": "hello"}          # ignored
+        yield FRAME                       # yielded
+    src = RuViewSource("ws://x", room="sala", connect=connect)
+    [ev] = await _first_n(src, 1)
+    assert ev.modality == "wifi_csi"
+
+async def test_ruview_reconnects_after_a_dropped_connection():
+    calls = {"n": 0}
+    async def connect(url):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("boom")   # first connection fails
+        yield FRAME                          # second connection succeeds
+    src = RuViewSource("ws://x", room="sala", connect=connect, reconnect_delay=0)
+    [ev] = await _first_n(src, 1)
+    assert calls["n"] == 2                   # it retried
+    assert ev.presence is True
