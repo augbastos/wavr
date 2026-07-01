@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import logging
 import re
 import socket
 from datetime import datetime, timezone
@@ -75,9 +76,13 @@ class NetworkSource:
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:
-            try:
-                seen = await self._scan()
-            except Exception:
+            if self._known:
+                try:
+                    seen = await self._scan()
+                except Exception:
+                    logging.warning("NetworkSource scan failed", exc_info=True)
+                    seen = set()
+            else:
                 seen = set()
             if self._known & seen:
                 self._missed = 0

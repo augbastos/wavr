@@ -71,6 +71,27 @@ async def test_network_source_grace_holds_presence_across_misses():
     # tick0 seen -> present; tick1 miss#1 -> still present (grace); tick2 miss#2 -> still present; tick3 miss#3 -> absent
     assert [e.presence for e in evs] == [True, True, True, False]
 
+async def test_network_source_skips_scan_when_no_known_macs():
+    called = {"v": False}
+    async def scan():
+        called["v"] = True
+        return set()
+    src = NetworkSource(set(), scan=scan, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert called["v"] is False
+    assert ev.presence is False
+    assert ev.confidence == 0.0
+
+async def test_network_source_scans_when_known_macs_present():
+    called = {"v": False}
+    async def scan():
+        called["v"] = True
+        return {"aa:bb:cc:dd:ee:ff"}
+    src = NetworkSource(KNOWN, scan=scan, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert called["v"] is True
+    assert ev.presence is True
+
 async def test_arp_scan_parses_real_command_output(monkeypatch):
     from wavr.sources import network
     async def fake_run(*args):
