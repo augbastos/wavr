@@ -14,6 +14,13 @@ from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "testclient"})
+
+
+def _is_loopback(host) -> bool:
+    return host in _LOOPBACK_HOSTS
+
+
 def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
@@ -49,7 +56,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
     @app.middleware("http")
     async def loopback_only(request: Request, call_next):
         host = request.client.host if request.client else None
-        if host not in ("127.0.0.1", "::1", "testclient"):
+        if not _is_loopback(host):
             return JSONResponse({"detail": "loopback only"}, status_code=403)
         return await call_next(request)
 
@@ -92,6 +99,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
+        host = ws.client.host if ws.client else None
+        if not _is_loopback(host):
+            await ws.close(code=1008)  # policy violation; WS isn't covered by the http middleware
+            return
         await ws.accept()
         q = _hub.subscribe()
         try:
