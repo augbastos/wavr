@@ -29,13 +29,11 @@ class CameraSource:
                  interval: float = 0.5):
         self.room = room
         self._url = rtsp_url
-        self._frames = frames
-        self._detect = detect
+        self._frames = frames or rtsp_frames
+        self._detect = detect or yolo_detect
         self._interval = interval
 
     async def events(self) -> AsyncIterator[SensingEvent]:
-        assert self._frames is not None and self._detect is not None, \
-            "CameraSource requires frames + detect (real defaults wired in Task 2)"
         async with contextlib.aclosing(self._frames(self._url)) as stream:
             async for frame in stream:
                 det = await asyncio.to_thread(self._detect, frame)
@@ -48,3 +46,60 @@ class CameraSource:
                 )
                 if self._interval:
                     await asyncio.sleep(self._interval)
+
+
+# ---- Real adapters (lazy imports; only exercised on the real hardware path) ----
+
+_YOLO_MODEL = None
+
+
+def _open_capture(url: str):
+    import cv2  # lazy: only needed on the real path
+    return cv2.VideoCapture(url)
+
+
+def _read(cap):
+    return cap.read()  # (ok: bool, frame)
+
+
+def _release(cap) -> None:
+    with contextlib.suppress(Exception):
+        cap.release()
+
+
+def _model():
+    """Load the YOLO nano model once (GPU if available). Lazy — importing
+    ultralytics pulls torch/CUDA, which we never want at import/test time."""
+    global _YOLO_MODEL
+    if _YOLO_MODEL is None:
+        from ultralytics import YOLO
+        _YOLO_MODEL = YOLO("yolov8n.pt")
+    return _YOLO_MODEL
+
+
+async def rtsp_frames(url: str) -> "AsyncIterator[object]":
+    """Pull frames from an RTSP capture. Blocking reads run in a thread so they
+    never block the loop; the capture is released in the finally, so aclose()
+    on disable is a hard RTSP kill."""
+    cap = _open_capture(url)
+    try:
+        while True:
+            ok, frame = await asyncio.to_thread(_read, cap)
+            if not ok:
+                break
+            yield frame
+    finally:
+        _release(cap)
+
+
+def yolo_detect(frame) -> Detection:
+    results = _model()(frame)
+    persons = []
+    for r in results:
+        boxes = getattr(r, "boxes", None)
+        if boxes is None:
+            continue
+        for cls, conf in zip(list(boxes.cls), list(boxes.conf)):
+            if int(cls) == 0:  # COCO class 0 = person
+                persons.append(float(conf))
+    return Detection(count=len(persons), confidence=max(persons) if persons else 0.0)
