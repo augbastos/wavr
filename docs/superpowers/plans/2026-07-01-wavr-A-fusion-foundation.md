@@ -89,8 +89,9 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -e ".\backend[dev]"   # the .\ forces path interpretation of the extras
-# git repo already exists; if starting fresh: git init; git config user.name "..."; git config user.email "..."
+cd backend
+pip install -e ".[dev]"            # run from inside backend/ so the extras path is unambiguous
+# git repo already exists; if starting fresh (from repo root): git init + git config user.name/user.email
 ```
 Expected: `Successfully installed wavr-0.1.0 fastapi ... pytest ...`. All later commands assume the venv is active and you run from `C:\IA\wavr\backend`.
 
@@ -367,7 +368,7 @@ class SimulatedSource:
         present = (phase % 7) < 4
         gives_vitals = modality == "wifi_csi"
         # camera is high-confidence, network low, wifi mid
-        conf = {"camera": 0.94, "wifi_csi": 0.6, "network": 0.45, "sim": 0.5}.get(modality, 0.5)
+        conf = {"camera": 0.95, "wifi_csi": 0.9, "network": 0.6, "sim": 0.6}.get(modality, 0.5)
         return SensingEvent(
             room=room,
             modality=modality,
@@ -416,7 +417,7 @@ def ev(room, modality, presence, conf, br=None, hr=None):
 
 def test_single_present_modality_makes_room_occupied():
     f = FusionEngine()
-    rs = f.update(ev("sala", "wifi_csi", True, 0.6))
+    rs = f.update(ev("sala", "wifi_csi", True, 0.9))   # strength = 0.85 * 0.9 = 0.765
     assert rs.room == "sala"
     assert rs.occupied is True
     assert 0.0 < rs.confidence <= 1.0
@@ -433,11 +434,11 @@ def test_high_weight_camera_overrides_low_weight_network():
 
 def test_vitals_surface_from_wifi_csi():
     f = FusionEngine()
-    rs = f.update(ev("quarto", "wifi_csi", True, 0.7, br=14.0, hr=66.0))
+    rs = f.update(ev("quarto", "wifi_csi", True, 0.9, br=14.0, hr=66.0))
     assert rs.vitals == {"breathing_bpm": 14.0, "heart_bpm": 66.0}
 
 
-def test_all_absent_makes_room_empty_with_low_confidence():
+def test_all_absent_makes_room_empty_with_zero_confidence():
     f = FusionEngine()
     rs = f.update(ev("sala", "wifi_csi", False, 0.4))
     assert rs.occupied is False
@@ -449,6 +450,16 @@ def test_explanation_lists_modalities():
     f.update(ev("quarto", "network", False, 0.4))
     rs = f.update(ev("quarto", "camera", True, 0.9))
     assert "network" in rs.explanation and "camera" in rs.explanation
+
+
+def test_weak_lone_source_scores_below_strong_lone_source():
+    # A lone coarse source (network) must not report the same confidence as a
+    # lone precise source (camera) — the old num/den made both 100%.
+    f = FusionEngine()
+    net = f.update(ev("casa", "network", True, 0.6))    # strength 0.5 * 0.6 = 0.30
+    cam = f.update(ev("quintal", "camera", True, 0.9))  # strength 1.0 * 0.9 = 0.90
+    assert net.confidence < cam.confidence
+    assert cam.confidence > 0.5
 ```
 
 - [ ] **Step 2: Run — expect FAIL.** `pytest tests/test_fusion.py -v`
@@ -463,10 +474,16 @@ from wavr.roomstate import RoomState
 
 # Default trust weights per modality. Camera (video) is most precise; network
 # (device presence) is house-level and coarse. Tunable via config later.
-DEFAULT_WEIGHTS = {"camera": 1.0, "wifi_csi": 0.6, "network": 0.45, "sim": 0.5}
+DEFAULT_WEIGHTS = {"camera": 1.0, "wifi_csi": 0.85, "network": 0.5, "sim": 0.6}
 
 
 class FusionEngine:
+    """Explainable fusion. Per room, confidence = agreement × strength, where
+    `agreement` is the fraction of trusted mass saying "present" and `strength`
+    is the best present evidence (weight × the source's own confidence). This stops
+    a lone weak source (e.g. coarse network) from ever reporting 100%, and lets a
+    trusted source dominate when modalities disagree."""
+
     def __init__(self, weights: dict | None = None, threshold: float = 0.5):
         self._weights = weights or DEFAULT_WEIGHTS
         self._threshold = threshold
@@ -484,21 +501,23 @@ class FusionEngine:
 
     def _fuse(self, room: str, ts: str) -> RoomState:
         events = self._latest[room]
-        num = 0.0   # weighted presence mass
-        den = 0.0   # total weighted mass
+        num = 0.0        # weighted mass saying "present"
+        den = 0.0        # total weighted mass
+        strength = 0.0   # best present evidence (weight × confidence)
         sources = []
         vitals: dict = {}
         for modality, e in events.items():
-            w = self._weights.get(modality, 0.5)
-            mass = w * e.confidence
+            mass = self._weights.get(modality, 0.5) * e.confidence
             den += mass
             if e.presence:
                 num += mass
+                strength = max(strength, mass)
             sources.append({"modality": modality, "presence": e.presence,
                             "confidence": round(e.confidence, 3)})
             if e.presence and e.breathing_bpm is not None:
                 vitals = {"breathing_bpm": e.breathing_bpm, "heart_bpm": e.heart_bpm}
-        confidence = round(num / den, 3) if den > 0 else 0.0
+        agreement = num / den if den > 0 else 0.0
+        confidence = round(agreement * strength, 3)
         occupied = confidence >= self._threshold
         parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
         explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
@@ -506,7 +525,7 @@ class FusionEngine:
                          vitals=vitals, sources=sources, explanation=explanation, ts=ts)
 ```
 
-- [ ] **Step 4: Run — expect 5 passed.** `pytest tests/test_fusion.py -v`
+- [ ] **Step 4: Run — expect 6 passed.** `pytest tests/test_fusion.py -v`
 
 - [ ] **Step 5: Commit**
 
@@ -907,18 +926,25 @@ class SourceManager:
         task = self._tasks.pop(name, None)
         if task:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            # wait_for guards against a source whose teardown blocks (e.g. a stalled
+            # camera read) so a disable/stop can't hang the control plane.
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                await asyncio.wait_for(task, timeout=5.0)
 
     async def _run(self, name: str) -> None:
+        agen = self._factories[name]().events()
         try:
-            src = self._factories[name]()
-            async for ev in src.events():
+            async for ev in agen:
                 await self._on_event(ev)
         except asyncio.CancelledError:
             raise
         except Exception:
             logging.exception("source %s crashed", name)
+        finally:
+            # Deterministic teardown: runs the source generator's cleanup (e.g. a
+            # CameraSource releasing its RTSP stream) the moment the task is cancelled.
+            with contextlib.suppress(Exception):
+                await agen.aclose()
 ```
 
 - [ ] **Step 4: Run — expect 3 passed.** `pytest tests/test_sourcemanager.py -v`
@@ -989,20 +1015,35 @@ def test_state_returns_latest_per_room():
         assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals", "sources", "explanation", "ts"}
 
 
+LOCAL = {"X-Wavr-Local": "1"}  # state-changing routes require this header (CSRF guard)
+
+
 def test_system_toggle_off_then_on():
     with build_client() as client:
         assert client.get("/api/system").json()["running"] is True
-        client.post("/api/system/toggle", json={"on": False})
+        client.post("/api/system/toggle", json={"on": False}, headers=LOCAL)
         assert client.get("/api/system").json()["running"] is False
-        client.post("/api/system/toggle", json={"on": True})
+        client.post("/api/system/toggle", json={"on": True}, headers=LOCAL)
         assert client.get("/api/system").json()["running"] is True
 
 
 def test_source_toggle_disables_named_source():
     with build_client() as client:
-        client.post("/api/sources/sim/toggle", json={"enabled": False})
+        client.post("/api/sources/sim/toggle", json={"enabled": False}, headers=LOCAL)
         sim = [s for s in client.get("/api/system").json()["sources"] if s["name"] == "sim"][0]
         assert sim["enabled"] is False
+
+
+def test_unknown_source_returns_404():
+    with build_client() as client:
+        r = client.post("/api/sources/nope/toggle", json={"enabled": False}, headers=LOCAL)
+        assert r.status_code == 404
+
+
+def test_state_change_without_local_header_is_rejected():
+    with build_client() as client:
+        r = client.post("/api/system/toggle", json={"on": False})  # no X-Wavr-Local
+        assert r.status_code == 403
 ```
 
 - [ ] **Step 2: Run — expect FAIL.** `pytest tests/test_app.py -v`
@@ -1012,13 +1053,11 @@ def test_source_toggle_disables_named_source():
 ```python
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Body, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import JSONResponse
 
 from wavr.config import load_config
 from wavr.storage import Storage
@@ -1056,12 +1095,28 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
 
-    # PRIVACY BOUNDARY (defense-in-depth vs DNS-rebinding): loopback Host only.
-    # "testserver" is the TestClient default Host — required for the pytest suite.
+    # PRIVACY: reject any request whose peer isn't loopback. Enforced in code so it
+    # holds even if someone runs uvicorn with --host 0.0.0.0. ("testclient" is the
+    # pytest TestClient peer.) This is the load-bearing control; the Host allowlist
+    # is extra defense against DNS-rebinding.
+    @app.middleware("http")
+    async def loopback_only(request: Request, call_next):
+        host = request.client.host if request.client else None
+        if host not in ("127.0.0.1", "::1", "testclient"):
+            return JSONResponse({"detail": "loopback only"}, status_code=403)
+        return await call_next(request)
+
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["localhost", "127.0.0.1", "localhost:8000", "127.0.0.1:8000", "testserver"],
+        allowed_hosts=["localhost", "127.0.0.1", "testserver"],
     )
+
+    def require_local(request: Request):
+        # CSRF guard for state-changing routes: a cross-origin browser page can't set
+        # a custom header on a simple request without a (failing) CORS preflight, so
+        # this blocks drive-by POSTs (e.g. a webpage trying to enable your camera).
+        if request.headers.get("x-wavr-local") != "1":
+            raise HTTPException(status_code=403, detail="missing X-Wavr-Local header")
 
     @app.get("/api/history")
     async def history(limit: int = 200):
@@ -1076,13 +1131,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
         return manager.status()
 
     @app.post("/api/system/toggle")
-    async def system_toggle(on: bool = Body(..., embed=True)):
+    async def system_toggle(on: bool = Body(..., embed=True), _=Depends(require_local)):
         await manager.set_running(on)
         return manager.status()
 
     @app.post("/api/sources/{name}/toggle")
-    async def source_toggle(name: str, enabled: bool = Body(..., embed=True)):
-        await manager.set_enabled(name, enabled)
+    async def source_toggle(name: str, enabled: bool = Body(..., embed=True), _=Depends(require_local)):
+        try:
+            await manager.set_enabled(name, enabled)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown source: {name}")
         return manager.status()
 
     @app.websocket("/ws/live")
@@ -1103,9 +1161,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
 app = create_app()
 ```
 
-- [ ] **Step 4: Run — expect 5 passed.** `pytest tests/test_app.py -v`
+- [ ] **Step 4: Run — expect 7 passed.** `pytest tests/test_app.py -v`
 
-- [ ] **Step 5: Run the FULL suite — expect 25 passed** (3+1+3+5+2+2+1+3+5 = 25). `pytest -v`
+- [ ] **Step 5: Run the FULL suite — expect 28 passed** (3+1+3+6+2+2+1+3+7 = 28). `pytest -v`
 
 - [ ] **Step 6: Manual smoke — the fused stream on simulated data**
 
@@ -1173,7 +1231,7 @@ git commit -m "feat: FastAPI app — source->fusion->storage->hub, ws/live, api/
   .row:last-child{border-bottom:0;}
   .row .t{color:var(--muted);min-width:88px;}
   .row .r{text-transform:capitalize;min-width:80px;}
-  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid var(--line);}
+  .controls:not([hidden]){display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid var(--line);}
   .ctl{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.8rem;cursor:pointer;}
   .ctl.on{border-color:var(--accent);color:var(--accent);}
   .ctl.off{color:var(--muted);}
@@ -1250,7 +1308,7 @@ async function renderControls(){
   if(MODE!=="live") return;               // the control plane is a backend feature
   document.getElementById("controls").hidden = false;
   const post = (url,body)=> fetch(location.origin+url,{method:"POST",
-    headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
   async function refresh(){
     let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
     const sys = document.getElementById("sysToggle");
@@ -1313,14 +1371,14 @@ const handle = (rs)=>{ upsert(rs); pushTimeline(rs); };
 
 - [ ] **Step 2: Serve the dashboard from the backend (same-origin, no CORS)**
 
-Add to `backend/wavr/app.py` imports:
+Add at the **top of `backend/wavr/app.py`** (after the existing imports — the first two are imports, the `_INDEX` line is a module-level constant):
 ```python
 from pathlib import Path
 from fastapi.responses import FileResponse
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 ```
-And inside `create_app`, before `return app`:
+And add this route **inside `create_app`**, just before `return app`:
 ```python
     @app.get("/")
     async def dashboard():
@@ -1364,14 +1422,22 @@ Run `/impeccable polish frontend/index.html` then `/impeccable audit frontend/in
 # Wavr — Extension seams
 
 - **Sub-plan B (real sources):** add `NetworkSource` / `RuViewSource` as more `SensorSource`
-  implementations; a small async merge feeds all sources into the same `_pump`. FusionEngine
-  and dashboard are unchanged.
-- **Sub-plan C (camera + CV):** `CameraSource` (RTSP + YOLO) with a server-side safety toggle
-  (default OFF at boot; disabling closes the RTSP stream — no frame read). Only derived events
-  persist; never frames.
+  implementations, then register them in `create_app`'s `sources` list (or via
+  `SourceManager.register`). The manager already runs one task per source and fans them into the
+  shared `_ingest` → FusionEngine → storage → hub — no merge code needed. FusionEngine and
+  dashboard are unchanged.
+- **Sub-plan C (camera + CV):** `CameraSource` (RTSP + YOLO) registered with `enabled=False` so it
+  never starts at boot (safe default). Enabling is runtime via `POST /api/sources/{name}/toggle`
+  (already CSRF-guarded by the `X-Wavr-Local` header). The camera MUST release RTSP + stop YOLO in
+  its generator's `finally` — `SourceManager._run` triggers it via `agen.aclose()` on disable — and
+  should read frames in a cancellation-responsive worker it can join, so a stalled read can't
+  outlive a disable. Only derived events persist; never frames. Toggle state is in-memory: cameras
+  always boot OFF (safe), no persisted ON.
 - **Camada 2/3 (rules, away):** subscribe via `Hub.subscribe()` and register the subscriber as a
   task inside `create_app`'s `lifespan`. React to RoomState; emit MQTT to localhost:1883.
 - **Camada 4 (AI narration):** read `GET /api/state` (latest RoomState per room) + `GET /api/history`.
+- **Network granularity:** `network` is a house-level signal (a "casa" pseudo-room) — a weak hint
+  that does NOT corroborate specific rooms in A/B; folding it as a per-room prior is a later refinement.
 - **Deferred:** Supabase history for Plano B (intentionally not built — less surface, safer).
 ```
 
@@ -1399,7 +1465,7 @@ git commit -m "feat: Impeccable polish + Plano B deploy + seams doc"
 ---
 
 ## Definition of Done (Sub-plan A)
-- [ ] Multi-modal `SimulatedSource` → `FusionEngine` → `RoomState` end-to-end, 25 tests passing.
+- [ ] Multi-modal `SimulatedSource` → `FusionEngine` → `RoomState` end-to-end, 28 tests passing.
 - [ ] Dashboard shows fused RoomState per room: confidence bar + per-modality breakdown + timeline.
 - [ ] Control plane works: global on/off and per-source on/off via `SourceManager` + `/api/system`;
       global off cancels all source tasks (~zero footprint); dashboard shows the controls (live mode).
