@@ -2,13 +2,13 @@
 
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
 [![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![live demo](https://img.shields.io/badge/demo-wavr--3ef.pages.dev-3db54a)](https://wavr-3ef.pages.dev)
 
 Multi-modal home presence system: fuses WiFi CSI, LAN device scan, camera CV (YOLO), and mmWave
 radar into one explainable `RoomState` per room — occupancy, confidence, per-modality "why",
 per-person position (x/y) and posture on a top-down house radar.
 
-**Live demo (simulated data only):** https://wavr-3ef.pages.dev
+**Try it locally (no backend, no hardware):** open `frontend/index.html` — off-localhost the
+dashboard self-switches to a built-in simulator (simulated data only, zero network requests).
 
 ![Wavr dashboard — position radar with posture labels, explainable per-room fusion, timeline](docs/img/demo.png)
 
@@ -42,7 +42,7 @@ python -m uvicorn wavr.app:app --host 127.0.0.1 --port 8000
 # or double-click scripts/wavr.ps1
 ```
 
-Tests: `python -m pytest backend/tests -q` (138, all hardware mock-tested).
+Tests: `python -m pytest backend/tests -q` (195, all hardware mock-tested).
 
 ## Design stance: integration over hype
 
