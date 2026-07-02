@@ -15,7 +15,7 @@
   body{margin:0;background:var(--bg);color:var(--ink);
        font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
   header{padding:20px 24px;border-bottom:1px solid var(--line);
-         display:flex;align-items:center;justify-content:space-between;}
+         display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;}
   h1{font-size:1.25rem;margin:0;letter-spacing:-0.01em;}
   .mode{font-size:.8rem;color:var(--muted);}
   .mode b{color:var(--accent);}
@@ -56,6 +56,7 @@
   .ctl.on{border-color:var(--accent);color:var(--accent);}
   .ctl.off{color:var(--muted);}
   .ctl.small{padding:6px 12px;font-size:.78rem;}
+  .ctl:disabled{opacity:.6;cursor:default;}
   .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
   .empty{color:var(--muted);font-size:.82rem;padding:14px 18px;}
