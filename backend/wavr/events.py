@@ -59,7 +59,9 @@ def normalize_ruview(raw: dict, room: str) -> SensingEvent:
             continue
         x, y = t.get("x"), t.get("y")
         posture = t.get("posture")
-        has_pos = isinstance(x, (int, float)) and isinstance(y, (int, float))
+        def _num(v):
+            return isinstance(v, (int, float)) and not isinstance(v, bool)
+        has_pos = _num(x) and _num(y)
         if not has_pos and not isinstance(posture, str):
             continue
         targets.append(Target(
