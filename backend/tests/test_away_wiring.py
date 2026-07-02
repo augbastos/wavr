@@ -25,5 +25,7 @@ async def test_no_away_task_when_disabled(monkeypatch):
     hub = Hub()
     app = create_app(sources=[], hub=hub)                         # no publisher, mqtt off
     async with app.router.lifespan_context(app):
-        pass
-    assert hub._subscribers == set()                             # no rules AND no away subscriber
+        await asyncio.sleep(0)                                    # let any tasks (there should be none) schedule
+        # assert DURING the lifespan: proves the off-by-default GATE (no rules/away instantiated),
+        # not just that shutdown-cleanup unsubscribes. A broken gate would show a subscriber here.
+        assert hub._subscribers == set()                         # no rules AND no away subscriber
