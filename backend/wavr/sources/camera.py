@@ -26,11 +26,14 @@ class CameraSource:
     def __init__(self, room: str, rtsp_url: str = "",
                  frames: Callable[[str], AsyncIterator[object]] | None = None,
                  detect: Callable[[object], Detection] | None = None,
-                 interval: float = 0.5):
+                 interval: float = 0.5, confidence: float = 0.0):
         self.room = room
         self._url = rtsp_url
         self._frames = frames or rtsp_frames
-        self._detect = detect or yolo_detect
+        self._confidence = confidence
+        # An injected `detect` is responsible for its own thresholding — the
+        # confidence param is only applied on the real (yolo_detect) path below.
+        self._detect = detect or (lambda f: yolo_detect(f, self._confidence))
         self._interval = interval
 
     async def events(self) -> AsyncIterator[SensingEvent]:
@@ -92,7 +95,7 @@ async def rtsp_frames(url: str) -> "AsyncIterator[object]":
         _release(cap)
 
 
-def yolo_detect(frame) -> Detection:
+def yolo_detect(frame, conf_threshold: float = 0.0) -> Detection:
     results = _model()(frame)
     persons = []
     for r in results:
@@ -100,6 +103,6 @@ def yolo_detect(frame) -> Detection:
         if boxes is None:
             continue
         for cls, conf in zip(list(boxes.cls), list(boxes.conf)):
-            if int(cls) == 0:  # COCO class 0 = person
+            if int(cls) == 0 and float(conf) >= conf_threshold:  # COCO class 0 = person
                 persons.append(float(conf))
     return Detection(count=len(persons), confidence=max(persons) if persons else 0.0)

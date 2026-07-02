@@ -84,3 +84,19 @@ def test_yolo_detect_counts_persons(monkeypatch):
     det = camera.yolo_detect("frame")
     assert det.count == 1            # only the person box
     assert det.confidence == 0.9
+
+def test_yolo_detect_filters_by_confidence_threshold(monkeypatch):
+    from wavr.sources import camera
+    # Fake YOLO result: two person boxes (cls=0), confs [0.9, 0.3]
+    class _Boxes:
+        cls = [0, 0]
+        conf = [0.9, 0.3]
+    class _Result:
+        boxes = _Boxes()
+    monkeypatch.setattr(camera, "_model", lambda: (lambda frame: [_Result()]))
+    det = camera.yolo_detect("frame", conf_threshold=0.5)
+    assert det.count == 1             # only the 0.9 box clears the threshold
+    assert det.confidence == 0.9
+    det_default = camera.yolo_detect("frame")  # default 0.0 keeps all
+    assert det_default.count == 2
+    assert det_default.confidence == 0.9
