@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import struct
 from datetime import datetime, timezone
@@ -77,16 +78,17 @@ class MmWaveSource:
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         frames = self._frames if self._frames is not None else _serial_frames(self._port)
-        async for raw in frames:
-            targets = tuple(parse_ld2450_frame(raw))
-            speed = max((t.velocity or 0.0 for t in targets), default=0.0)
-            yield SensingEvent(
-                room=self._room, modality="mmwave",
-                presence=bool(targets), motion=speed,
-                breathing_bpm=None, heart_bpm=None,
-                confidence=0.9 if targets else 0.0,
-                ts=datetime.now(timezone.utc).isoformat(),
-                targets=targets,
-            )
-            if self._interval:
-                await asyncio.sleep(self._interval)
+        async with contextlib.aclosing(frames) as stream:
+            async for raw in stream:
+                targets = tuple(parse_ld2450_frame(raw))
+                speed = max((t.velocity or 0.0 for t in targets), default=0.0)
+                yield SensingEvent(
+                    room=self._room, modality="mmwave",
+                    presence=bool(targets), motion=speed,
+                    breathing_bpm=None, heart_bpm=None,
+                    confidence=0.9 if targets else 0.0,
+                    ts=datetime.now(timezone.utc).isoformat(),
+                    targets=targets,
+                )
+                if self._interval:
+                    await asyncio.sleep(self._interval)
