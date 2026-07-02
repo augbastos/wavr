@@ -30,7 +30,19 @@ Enquanto esses 4 valerem, expandir é trivial. O resto do plano é: endurecer ag
 2. **Rodar sem admin.** `arp -a`, `ping`, cv2/RTSP, YOLO — todos rodam como usuário comum. Confirmar que nada pede elevação. Idealmente um usuário Windows dedicado, separado do teu diário.
 3. **Câmeras numa rede isolada JÁ.** A maioria dos roteadores tem "rede de convidados" (SSID separado). Põe as Tapo lá e **bloqueia o egress de internet delas** no roteador — Tapo phone-home é o vazamento de privacidade; corta. Primeiro passo de segmentação, com hardware que já tens.
 4. **Loopback fica.** Dashboard continua só-loopback; acesso de outro device só via túnel SSH ou, depois, pelo appliance.
-5. **Start em 1 passo.** Um serviço Windows (via NSSM rodando `uvicorn`) com auto-start no login, OU um atalho `.ps1` fixado. Praticidade agora sem esperar o Tauri.
+5. **Abrir sob demanda — NÃO serviço sempre-ligado (por causa da VRAM, ver abaixo).** No laptop gamer o modelo certo é: abrir Wavr quando quer vigiar (atalho `.ps1` fixado, ou Tauri depois) → processo sobe; fechar → processo morre → VRAM 100% de volta pros jogos. O serviço sempre-ligado é do **appliance** (Fase 2), onde não há jogo competindo por VRAM.
+
+### Ciclo de vida da VRAM (o que tu pediu: usa quando abre, solta quando fecha)
+
+**Só o YOLO (câmera) usa VRAM.** Scan de rede, WiFi CSI, fusão, dashboard, storage = zero GPU. E o design já escopa isso naturalmente:
+
+- **Wavr aberto, câmeras OFF (boot-OFF)** → `_model()` nunca é chamado → **zero VRAM.** Roda presença por rede + CSI enquanto tu joga, sem tocar a GPU.
+- **Liga uma câmera** (toggle consciente) → YOLO carrega na primeira detecção → usa VRAM.
+- **Fecha o programa** (processo sai) → o driver NVIDIA devolve **100% da VRAM** — garantia limpa e confiável pros jogos. É o "fecho e para de ocupar" que tu quer.
+
+*Nuance:* enquanto o processo vive, o **contexto CUDA** segura umas centenas de MB mesmo com a câmera desligada — porque o modelo fica em cache no processo (`_YOLO_MODEL` global). Duas saídas:
+- **Garantia total = fechar o programa** (processo morre → tudo volta). É o caminho recomendado pro laptop.
+- **Opcional (deixar Wavr aberto sem segurar VRAM):** ao desligar a ÚLTIMA câmera, descarregar o modelo (`_YOLO_MODEL = None` + `torch.cuda.empty_cache()`) — recupera a maior parte da VRAM sem fechar; o contexto CUDA residual só some no exit. Enhancement pequeno, fazer junto do bring-up de câmera se quiser rodar Wavr o dia todo com câmera on/off sem pesar nos jogos.
 
 **Pré-requisitos de código antes de ligar câmera real** (do review final — fazer nesta fase, cada um seu mini-plano SDD):
 - I2: keep-alive na `CameraSource` (erro transitório não mata a câmera; reconnect estilo RuView).
