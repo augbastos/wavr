@@ -17,3 +17,13 @@ def test_config_has_source_b_defaults(monkeypatch):
     assert cfg.ruview_url == "ws://localhost:3000/ws/sensing"
     assert cfg.ruview_room == "sala"
     assert cfg.ruview_reconnect == 3.0
+
+def test_config_has_camera_defaults(monkeypatch):
+    for var in ("WAVR_CAM_QUARTO_URL", "WAVR_CAM_QUINTAL_URL",
+                "WAVR_CAM_INTERVAL", "WAVR_CAM_CONFIDENCE"):
+        monkeypatch.delenv(var, raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.cam_quarto_url == "" and cfg.cam_quintal_url == ""
+    assert cfg.cam_interval == 0.5
+    assert cfg.cam_confidence == 0.4

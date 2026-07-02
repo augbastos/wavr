@@ -19,6 +19,10 @@ class Config:
     ruview_url: str
     ruview_room: str
     ruview_reconnect: float
+    cam_quarto_url: str
+    cam_quintal_url: str
+    cam_interval: float
+    cam_confidence: float
 
 
 def load_config() -> Config:
@@ -36,4 +40,8 @@ def load_config() -> Config:
         ruview_url=os.getenv("WAVR_RUVIEW_URL", "ws://localhost:3000/ws/sensing"),
         ruview_room=os.getenv("WAVR_RUVIEW_ROOM", "sala"),
         ruview_reconnect=float(os.getenv("WAVR_RUVIEW_RECONNECT", "3.0")),
+        cam_quarto_url=os.getenv("WAVR_CAM_QUARTO_URL", ""),
+        cam_quintal_url=os.getenv("WAVR_CAM_QUINTAL_URL", ""),
+        cam_interval=float(os.getenv("WAVR_CAM_INTERVAL", "0.5")),
+        cam_confidence=float(os.getenv("WAVR_CAM_CONFIDENCE", "0.4")),
     )
