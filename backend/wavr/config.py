@@ -28,6 +28,7 @@ class Config:
     mqtt_prefix: str
     gemini_api_key: str
     gemini_model: str
+    narrate_enabled: bool
 
 
 def load_config() -> Config:
@@ -54,4 +55,5 @@ def load_config() -> Config:
         mqtt_prefix=os.getenv("WAVR_MQTT_PREFIX", "wavr"),
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("WAVR_GEMINI_MODEL", "gemini-1.5-flash"),
+        narrate_enabled=os.getenv("WAVR_NARRATE_ENABLED", "").lower() in ("1", "true", "yes"),
     )

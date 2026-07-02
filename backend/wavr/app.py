@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sqlite3
 from contextlib import asynccontextmanager, suppress
@@ -91,10 +92,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
     _away = AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace) if _rules_publish else None
 
-    # Narrator: opt-in via injected `narrator` (tests) or GEMINI_API_KEY (real Gemini
-    # generator, lazily imported). Off by default -- no key, no narrator, 503 on call.
+    # Narrator: opt-in via injected `narrator` (tests) or BOTH WAVR_NARRATE_ENABLED and
+    # GEMINI_API_KEY (real Gemini generator, lazily imported). Off by default -- no
+    # explicit opt-in, no narrator, 503 on call. The flag is a conscious two-factor
+    # gate so merely having a key present (e.g. in ./.env) can't silently enable
+    # cloud egress.
     _narrator = narrator
-    if _narrator is None and cfg.gemini_api_key:
+    if _narrator is None and cfg.narrate_enabled and cfg.gemini_api_key:
         _narrator = Narrator(make_gemini_generate(cfg.gemini_api_key, cfg.gemini_model))
 
     async def _ingest(event):
@@ -174,8 +178,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if _narrator is None:
             raise HTTPException(status_code=503, detail="narration not configured (set GEMINI_API_KEY)")
         try:
-            text = _narrator.narrate(latest, _storage.recent(50))
+            text = await asyncio.to_thread(_narrator.narrate, latest, _storage.recent(50))
         except Exception:
+            logging.exception("narrate failed")
             raise HTTPException(status_code=502, detail="narration backend error")
         return {"narration": text}
 

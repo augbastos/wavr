@@ -31,3 +31,9 @@ def test_narrate_502_on_generator_error():
             raise RuntimeError("gemini down")
     with _client(narrator=_Boom()) as c:
         assert c.post("/api/narrate").status_code == 502
+
+def test_narrate_503_when_key_present_but_flag_unset(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key-present")
+    monkeypatch.delenv("WAVR_NARRATE_ENABLED", raising=False)
+    with _client(narrator=None) as c:                     # key set, but no opt-in flag
+        assert c.post("/api/narrate").status_code == 503

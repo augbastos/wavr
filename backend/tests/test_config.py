@@ -48,3 +48,8 @@ def test_config_has_gemini_defaults(monkeypatch):
     cfg = load_config()
     assert cfg.gemini_api_key == ""
     assert cfg.gemini_model == "gemini-1.5-flash"
+
+def test_config_narrate_enabled_defaults_false(monkeypatch):
+    monkeypatch.delenv("WAVR_NARRATE_ENABLED", raising=False)
+    from wavr.config import load_config
+    assert load_config().narrate_enabled is False
