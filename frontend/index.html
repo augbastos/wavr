@@ -304,7 +304,15 @@ function dot(room, t){
   if(label){
     const txt = document.createElementNS(SVG_NS, "text");
     txt.setAttribute("class", "radar-posture");
-    txt.setAttribute("x", x); txt.setAttribute("y", y + 0.32);
+    // Flip the caption above the dot when it sits in the lower half of the room, so the
+    // baseline never lands on (or past) the viewBox's bottom edge and clips descenders.
+    const ly = (y - room.y) > room.h/2 ? y - 0.24 : y + 0.32;
+    // text-anchor is "middle"; clamp the label's x independently of the dot's so a wide
+    // word (e.g. "andando") can't overflow the room/viewBox on either side near a corner.
+    const half = label.length*0.085 + 0.05;
+    const lo = room.x + half, hi = room.x + room.w - half;
+    const lx = lo <= hi ? Math.min(Math.max(x, lo), hi) : room.x + room.w/2;
+    txt.setAttribute("x", lx); txt.setAttribute("y", ly);
     txt.textContent = label;
     g.appendChild(txt);
   }
@@ -318,7 +326,9 @@ async function renderRadar(){
                        {name:"quintal",x:0,y:3.2,w:7.7,h:2.5}]};   // demo default = backend DEFAULT_MAP
   const svg = document.getElementById("radar");
   const W = Math.max(...map.rooms.map(r=>r.x+r.w)), H = Math.max(...map.rooms.map(r=>r.y+r.h));
-  svg.setAttribute("viewBox", `-0.2 -0.2 ${W+0.4} ${H+0.4}`);
+  // Bottom margin is larger than the other sides as a second safety net (on top of the
+  // dot()-level label flip/clamp above) for posture-caption footprint near room edges.
+  svg.setAttribute("viewBox", `-0.2 -0.2 ${W+0.4} ${H+0.8}`);
   const roomIdx = {};
   map.rooms.forEach(r=>{
     const g = document.createElementNS(SVG_NS, "g");
