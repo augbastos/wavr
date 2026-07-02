@@ -5,7 +5,7 @@ import math
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
-from wavr.events import SensingEvent
+from wavr.events import SensingEvent, Target
 
 # Fixed fictional apartment: which modality "watches" which room.
 # "casa" = house-level presence (network); rooms get wifi_csi and/or camera.
@@ -38,6 +38,17 @@ class SimulatedSource:
         gives_vitals = modality == "wifi_csi"
         # camera is high-confidence, network low, wifi mid
         conf = {"camera": 0.95, "wifi_csi": 0.9, "network": 0.6, "sim": 0.6}.get(modality, 0.5)
+
+        targets = ()
+        if present and modality in ("wifi_csi", "camera"):
+            # Deterministic ellipse walk inside a 4x3 m room; posture cycles.
+            px = round(2.0 + 1.6 * math.sin(phase / 4.0), 2)
+            py = round(1.5 + 1.1 * math.cos(phase / 4.0), 2)
+            posture = ("walking", "standing", "sitting")[(phase // 5) % 3]
+            speed = 0.5 if posture == "walking" else 0.0
+            targets = (Target(id=1, x=px, y=py, posture=posture,
+                              velocity=speed, confidence=conf),)
+
         return SensingEvent(
             room=room,
             modality=modality,
@@ -47,4 +58,5 @@ class SimulatedSource:
             heart_bpm=round(60 + 10 * math.sin(phase / 4.0), 2) if (present and gives_vitals) else None,
             confidence=conf if present else round(conf * 0.3, 3),
             ts=datetime.now(timezone.utc).isoformat(),
+            targets=targets,
         )

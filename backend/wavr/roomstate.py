@@ -10,6 +10,7 @@ class RoomState:
     confidence: float
     vitals: dict = field(default_factory=dict)
     sources: list = field(default_factory=list)
+    targets: list = field(default_factory=list)
     explanation: str = ""
     ts: str = ""
 

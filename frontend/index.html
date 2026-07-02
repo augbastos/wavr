@@ -62,6 +62,16 @@
   .empty{color:var(--muted);font-size:.82rem;padding:14px 18px;}
   .cams:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
   .cams h3{margin:4px 0 12px;}
+  .radar{padding:12px 24px;border-bottom:1px solid var(--line);}
+  .radar h3{margin:4px 0 12px;}
+  #radar{width:100%;max-width:760px;display:block;background:var(--surface);
+         border:1px solid var(--line);border-radius:var(--radius);}
+  .radar-room{fill:none;stroke:var(--line);stroke-width:.025;vector-effect:non-scaling-stroke;}
+  .radar-room.occ{fill:rgba(61,181,74,.08);stroke:var(--accent);}
+  .radar-roomlabel{fill:var(--muted);font-size:.24px;text-transform:capitalize;}
+  .radar-dot{fill:var(--accent);}
+  .radar-target{transition:transform .25s cubic-bezier(.22,1,.36,1);}
+  .radar-posture{fill:var(--muted);font-size:.28px;text-anchor:middle;}
   .cam-form{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
   .cam-form input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
                   border-radius:8px;padding:8px 11px;font-size:.82rem;}
@@ -76,7 +86,7 @@
                border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.75rem;
                transition:border-color .15s ease-out,color .15s ease-out;}
   .cam-row .rm:hover{border-color:var(--warn);color:var(--warn);}
-  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm{transition:none;}}
+  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.radar-target{transition:none;}}
 </style>
 </head>
 <body>
@@ -104,6 +114,9 @@
 <div id="narrate" class="narrate" hidden>
   <button id="narrateBtn" class="ctl">Narrar</button>
   <p id="narrateOut" class="narrate-out" aria-live="polite"></p>
+</div>
+<div id="radarWrap" class="radar"><h3 id="radar-h">Radar</h3>
+  <svg id="radar" role="img" aria-labelledby="radar-h" preserveAspectRatio="xMidYMid meet"></svg>
 </div>
 <main>
   <div class="rooms" id="rooms" aria-label="Estado por cômodo"><div class="empty">aguardando dados dos cômodos…</div></div>
@@ -138,7 +151,7 @@ function SimulatorProvider(){
     const mods = rooms[room];
     // Mirror the real engine: confidence = agreement × strength, so a lone coarse
     // source (e.g. network) can never read 100% — same math the backend uses.
-    let num=0, den=0, strength=0; const sources=[]; let vitals={};
+    let num=0, den=0, strength=0; const sources=[]; let vitals={}; let hasTarget=false;
     mods.forEach(([m],i)=>{
       const present = ((tick+i)%7)<4;
       const conf = present ? 0.9 : 0.2;      // detector's own confidence (independent of trust weight)
@@ -147,11 +160,19 @@ function SimulatorProvider(){
       if(present){ num += mass; strength = Math.max(strength, mass); }
       sources.push({modality:m, presence:present, confidence:+conf.toFixed(3)});
       if(present && m==="wifi_csi") vitals={breathing_bpm:+(12+3*Math.sin(tick/5)).toFixed(1), heart_bpm:+(60+10*Math.sin(tick/4)).toFixed(0)};
+      if(present && (m==="wifi_csi"||m==="camera")) hasTarget = true;
     });
     const agreement = den>0 ? num/den : 0;
     const confidence = +(agreement*strength).toFixed(3);
     const parts = sources.map(s=> `${s.modality}: ${s.presence?"presente":"vazio"}`);
-    return {room, occupied:confidence>=0.5, confidence, vitals, sources,
+    // Same deterministic ellipse walk + posture cycle as the Python SimulatedSource,
+    // so the public demo shows a moving radar target (id=1) with no real data.
+    const posture = ["walking","standing","sitting"][Math.floor(tick/5)%3];
+    const targets = hasTarget ? [{
+      id:1, x:+(2.0+1.6*Math.sin(tick/4)).toFixed(2), y:+(1.5+1.1*Math.cos(tick/4)).toFixed(2),
+      z:null, posture, velocity: posture==="walking" ? 0.5 : 0.0, confidence:0.9,
+    }] : [];
+    return {room, occupied:confidence>=0.5, confidence, vitals, sources, targets,
             explanation: parts.join(" · ")+` → ${Math.round(confidence*100)}% ocupado`,
             ts:new Date().toISOString()};
   }
@@ -261,6 +282,100 @@ function renderNarrate(){
 }
 renderNarrate();
 
+// ---- Radar (top-down house map + live/demo targets; works in both modes) ----
+const SVG_NS = "http://www.w3.org/2000/svg";
+const POSTURE_LABEL = {walking:"andando", standing:"em pé", sitting:"sentado", lying:"deitado"};
+let radarUpdate = null;
+
+function dot(room, t){
+  const g = document.createElementNS(SVG_NS, "g");
+  g.setAttribute("class", "radar-target");
+  const c = document.createElementNS(SVG_NS, "circle");
+  c.setAttribute("class", "radar-dot");
+  c.setAttribute("cx", 0); c.setAttribute("cy", 0); c.setAttribute("r", 0.12);
+  c.appendChild(document.createElementNS(SVG_NS, "title"));
+  const txt = document.createElementNS(SVG_NS, "text");
+  txt.setAttribute("class", "radar-posture");
+  g.appendChild(c); g.appendChild(txt);
+  placeDot(g, room, t);   // position set before insertion -> no fly-in on first paint
+  return g;
+}
+
+function placeDot(g, room, t){
+  const r = 0.12;
+  let x = t.x != null ? room.x + t.x : room.x + room.w/2;
+  let y = t.y != null ? room.y + t.y : room.y + room.h/2;
+  x = Math.min(Math.max(x, room.x + r), room.x + room.w - r);
+  y = Math.min(Math.max(y, room.y + r), room.y + room.h - r);
+  // CSS px == SVG user units here; style.transform (not the attribute) so the
+  // .radar-target transition animates movement between updates.
+  g.style.transform = `translate(${x}px, ${y}px)`;
+  g.querySelector("title").textContent =
+    `alvo ${t.id ?? "?"} · confiança ${Math.round((t.confidence ?? 0)*100)}%`;
+  const txt = g.querySelector("text");
+  const label = POSTURE_LABEL[t.posture];
+  if(label){
+    // Flip the caption above the dot when it sits in the lower half of the room, so the
+    // baseline never lands on (or past) the viewBox's bottom edge and clips descenders.
+    const ly = (y - room.y) > room.h/2 ? -0.24 : 0.32;
+    // text-anchor is "middle"; clamp the label's x independently of the dot's so a wide
+    // word (e.g. "andando") can't overflow the room/viewBox on either side near a corner.
+    const half = label.length*0.085 + 0.05;
+    const lo = room.x + half, hi = room.x + room.w - half;
+    const lx = lo <= hi ? Math.min(Math.max(x, lo), hi) : room.x + room.w/2;
+    txt.setAttribute("x", lx - x); txt.setAttribute("y", ly);   // coords relative to the g
+    txt.textContent = label;
+  } else {
+    txt.textContent = "";
+  }
+}
+
+async function renderRadar(){
+  let map;
+  if(MODE==="live"){ try{ map = await (await fetch(location.origin+"/api/house")).json(); }catch{} }
+  map = map || {rooms:[{name:"sala",x:0,y:0,w:4,h:3},{name:"quarto",x:4.2,y:0,w:3.5,h:3},
+                       {name:"quintal",x:0,y:3.2,w:7.7,h:2.5}]};   // demo default = backend DEFAULT_MAP
+  const svg = document.getElementById("radar");
+  const W = Math.max(...map.rooms.map(r=>r.x+r.w)), H = Math.max(...map.rooms.map(r=>r.y+r.h));
+  // Bottom margin is larger than the other sides as a second safety net (on top of the
+  // dot()-level label flip/clamp above) for posture-caption footprint near room edges.
+  svg.setAttribute("viewBox", `-0.2 -0.2 ${W+0.4} ${H+0.8}`);
+  const roomIdx = {};
+  map.rooms.forEach(r=>{
+    const g = document.createElementNS(SVG_NS, "g");
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("class", "radar-room");
+    rect.setAttribute("x", r.x); rect.setAttribute("y", r.y);
+    rect.setAttribute("width", r.w); rect.setAttribute("height", r.h);
+    const label = document.createElementNS(SVG_NS, "text");
+    label.setAttribute("class", "radar-roomlabel");
+    label.setAttribute("x", r.x + 0.15); label.setAttribute("y", r.y + 0.35);
+    label.textContent = r.name;
+    const layer = document.createElementNS(SVG_NS, "g");
+    g.appendChild(rect); g.appendChild(label); g.appendChild(layer);
+    svg.appendChild(g);
+    roomIdx[r.name] = {r, rect, layer, dots: new Map()};
+  });
+  radarUpdate = (rs)=>{
+    const e = roomIdx[rs.room]; if(!e) return;
+    e.rect.classList.toggle("occ", !!rs.occupied);
+    // Reuse dots keyed by target id so movement TRANSITIONS instead of teleporting
+    // (a person walking reads as motion, not a slideshow of positions).
+    const seen = new Set();
+    (rs.targets||[]).forEach(t=>{
+      const key = String(t.id ?? "?");
+      seen.add(key);
+      const g = e.dots.get(key);
+      if(g){ placeDot(g, e.r, t); }
+      else { const n = dot(e.r, t); e.dots.set(key, n); e.layer.appendChild(n); }
+    });
+    [...e.dots.keys()].forEach(k=>{
+      if(!seen.has(k)){ e.dots.get(k).remove(); e.dots.delete(k); }
+    });
+  };
+}
+renderRadar();
+
 // ---- Rendering (RoomState) ----
 const roomsEl = document.getElementById("rooms");
 const timelineEl = document.getElementById("timeline");
@@ -299,7 +414,7 @@ function pushTimeline(rs){
   while(timelineEl.children.length>60) timelineEl.lastChild.remove();
 }
 
-const handle = (rs)=>{ upsert(rs); pushTimeline(rs); updateHouse(rs); };
+const handle = (rs)=>{ upsert(rs); pushTimeline(rs); updateHouse(rs); radarUpdate?.(rs); };
 (async ()=>{ (await provider.history()).forEach(handle); provider.start(handle); })();
 </script>
 </body>
