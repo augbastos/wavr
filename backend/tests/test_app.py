@@ -49,7 +49,7 @@ def test_state_returns_latest_per_room():
         state = r.json()
         assert state  # at least one room
         any_room = next(iter(state.values()))
-        assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals", "sources", "explanation", "ts"}
+        assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals", "sources", "targets", "explanation", "ts"}
 
 
 LOCAL = {"X-Wavr-Local": "1"}  # state-changing routes require this header (CSRF guard)
