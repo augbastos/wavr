@@ -2,6 +2,7 @@
 name = "wavr"
 version = "0.1.0"
 requires-python = ">=3.11"
+license = { text = "AGPL-3.0-or-later" }
 dependencies = [
   "fastapi>=0.110",
   "uvicorn[standard]>=0.29",
