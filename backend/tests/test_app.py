@@ -49,7 +49,7 @@ def test_state_returns_latest_per_room():
         state = r.json()
         assert state  # at least one room
         any_room = next(iter(state.values()))
-        assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals", "sources", "explanation", "ts"}
+        assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals", "sources", "targets", "explanation", "ts"}
 
 
 LOCAL = {"X-Wavr-Local": "1"}  # state-changing routes require this header (CSRF guard)
@@ -116,6 +116,13 @@ def test_bad_host_header_returns_400():
     with build_client() as client:
         r = client.get("/api/system", headers={"Host": "evil.com"})
         assert r.status_code == 400
+
+
+def test_get_house_returns_rooms():
+    with build_client() as client:
+        r = client.get("/api/house")
+        assert r.status_code == 200
+        assert any(room["name"] == "sala" for room in r.json()["rooms"])
 
 
 def test_ws_non_loopback_peer_closed_with_1008():

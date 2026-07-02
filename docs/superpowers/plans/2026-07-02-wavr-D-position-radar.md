@@ -731,3 +731,12 @@ async function renderRadar(){
 - Homografia da câmera (posição x/y a partir do YOLO) e calibração offset/rotação do mmWave por cômodo.
 - Associação de tracks multi-fonte (fundir alvos de mmWave + câmera no MESMO cômodo) — pesquisa, Sub-plano E.
 - "fallen" detection (lying + fora da cama/sofá + duração) — o caso de uso segurança-de-verdade em cima do que este plano entrega.
+- **Casa 3D com paredes (pedido do Augusto 2026-07-02):** evoluir a vista de radar pra 3D. O seam já
+  existe — `house.json`/`GET /api/house` é a fonte do formato da casa; extensão natural do schema:
+  `wall_height` (default 2.6), aberturas/portas por parede, e futuramente polígonos em vez de retângulos.
+  Duas rotas de render: (a) **isométrico SVG/CSS-transform** — zero dependência, mantém o dashboard
+  single-file, paredes extrudadas semi-transparentes, dots viram pinos com sombra no chão (recomendado
+  primeiro); (b) **Three.js** — 3D real com órbita/zoom (quebra a regra zero-dep; avaliar). Junto:
+  **editor de casa in-app** (desenhar/ajustar cômodos pelo dashboard, persistir via API no lugar de
+  editar JSON na mão) — mesmo padrão do camera-config (SQLite + CRUD + UI live-only). Candidato a
+  Sub-plano F.

@@ -29,6 +29,9 @@ class Config:
     gemini_api_key: str
     gemini_model: str
     narrate_enabled: bool
+    house_map: str
+    mmwave_port: str
+    mmwave_room: str
 
 
 def load_config() -> Config:
@@ -56,4 +59,7 @@ def load_config() -> Config:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("WAVR_GEMINI_MODEL", "gemini-1.5-flash"),
         narrate_enabled=os.getenv("WAVR_NARRATE_ENABLED", "").lower() in ("1", "true", "yes"),
+        house_map=os.getenv("WAVR_HOUSE_MAP", ""),
+        mmwave_port=os.getenv("WAVR_MMWAVE_PORT", ""),
+        mmwave_room=os.getenv("WAVR_MMWAVE_ROOM", "sala"),
     )

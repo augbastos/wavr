@@ -1,5 +1,6 @@
 import pytest
-from wavr.sources.camera import CameraSource, Detection
+from wavr.sources.camera import CameraSource, Detection, classify_posture
+from wavr.events import Target
 import wavr.sources.camera as _cam
 
 async def _first_n(source, n):
@@ -153,3 +154,104 @@ def test_release_model_nulls_global_and_is_torch_safe():
     _cam._YOLO_MODEL = "sentinel"
     _cam.release_model()                              # torch absent -> suppressed, no raise
     assert _cam._YOLO_MODEL is None
+
+
+# ---- Task 6: posture classification + pose-mode wiring ----
+
+# COCO-17 indices: 5,6 shoulders / 11,12 hips / 13,14 knees / 15,16 ankles
+def _kp(shoulder_y, hip_y, knee_y, x=100.0, dx=0.0):
+    kps = [(0.0, 0.0)] * 17
+    kps[5] = (x, shoulder_y); kps[6] = (x + 10, shoulder_y)
+    kps[11] = (x + dx, hip_y); kps[12] = (x + dx + 10, hip_y)
+    kps[13] = (x + dx, knee_y); kps[14] = (x + dx + 10, knee_y)
+    kps[15] = (x + dx, knee_y + 80); kps[16] = (x + dx + 10, knee_y + 80)
+    return kps
+
+
+def test_posture_standing():
+    assert classify_posture(_kp(100, 300, 450)) == "standing"   # big hip->knee drop
+
+
+def test_posture_sitting():
+    assert classify_posture(_kp(100, 300, 330)) == "sitting"    # knees near hip level
+
+
+def test_posture_lying():
+    assert classify_posture(_kp(200, 210, 215, dx=300)) == "lying"  # torso horizontal
+
+
+def test_posture_missing_keypoints_none():
+    assert classify_posture([(0.0, 0.0)] * 17) is None
+
+
+async def test_camera_pose_mode_attaches_targets():
+    async def frames(url):
+        yield "frame1"
+
+    def detect(frame):
+        return Detection(count=1, confidence=0.9)
+
+    def fake_pose(frame, confidence):
+        return [Target(id=1, x=None, y=None, posture="sitting", confidence=0.9)]
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", interval=0,
+                       frames=frames, detect=detect,
+                       pose=True, pose_detect=fake_pose)
+    [ev] = await _first_n(src, 1)
+    assert ev.targets and ev.targets[0].posture == "sitting"
+
+
+async def test_camera_pose_default_off_targets_empty():
+    async def frames(url):
+        yield "frame1"
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", interval=0,
+                       frames=frames, detect=lambda f: Detection(count=1, confidence=0.9))
+    [ev] = await _first_n(src, 1)
+    assert ev.targets == ()                            # pose=False default -> unchanged behavior
+
+
+def test_yolo_pose_detect_builds_posture_targets(monkeypatch):
+    from wavr.sources import camera
+
+    class _Keypoints:
+        xy = [[(100.0, 100.0), (110.0, 100.0)] + [(0.0, 0.0)] * 15]  # only shoulders set -> None posture
+
+    class _Boxes:
+        cls = [0]
+        conf = [0.85]
+
+    class _Result:
+        boxes = _Boxes()
+        keypoints = _Keypoints()
+
+    monkeypatch.setattr(camera, "_pose_model", lambda: (lambda frame: [_Result()]))
+    targets = camera.yolo_pose_detect("frame", 0.0)
+    assert len(targets) == 1
+    t = targets[0]
+    assert t.x is None and t.y is None
+    assert t.confidence == 0.85
+    assert t.posture is None                            # missing hip/knee keypoints
+
+
+async def test_last_camera_stop_releases_pose_model(monkeypatch):
+    _reset_active()
+    calls = {"n": 0}
+    monkeypatch.setattr(_cam, "release_model", lambda: calls.__setitem__("n", calls["n"] + 1))
+    async def frames(url):
+        while True:
+            yield "f"
+    src = CameraSource("quarto", frames=frames, detect=lambda f: Detection(1, 0.5),
+                       pose=True, pose_detect=lambda f, c: [], interval=0)
+    agen = src.events()
+    await agen.__anext__()
+    await agen.aclose()
+    assert calls["n"] == 1                              # both models unload via the same path
+
+
+def test_release_model_also_nulls_pose_model():
+    _cam._YOLO_MODEL = "sentinel"
+    _cam._POSE_MODEL = "sentinel"
+    _cam.release_model()
+    assert _cam._YOLO_MODEL is None
+    assert _cam._POSE_MODEL is None

@@ -1,6 +1,9 @@
 from wavr.config import load_config
 
-def test_defaults_load_without_env():
+def test_defaults_load_without_env(monkeypatch):
+    # a developer's real .env (loaded by load_dotenv) must not leak into this test
+    for var in ("WAVR_DB", "WAVR_SIM_INTERVAL", "WAVR_FUSION_THRESHOLD"):
+        monkeypatch.delenv(var, raising=False)
     cfg = load_config()
     assert cfg.db_path == "wavr.db"
     assert cfg.sim_interval == 1.0
