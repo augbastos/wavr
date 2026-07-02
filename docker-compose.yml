@@ -1,0 +1,26 @@
+services:
+  wavr:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    # network_mode: host keeps the in-app loopback guard valid (peer stays real loopback
+    # on localhost access). Linux/appliance only; on Docker Desktop Windows/Mac host
+    # networking is limited — run uvicorn directly there instead (see docs).
+    network_mode: host
+    env_file:
+      - .env            # WAVR_* + GEMINI_API_KEY; never baked into the image
+    volumes:
+      - wavr-data:/data # SQLite persists across restarts (derived RoomState only)
+    restart: unless-stopped
+
+    # --- GPU/camera variant (opt-in): uncomment when using a torch+cv2 image (see docs).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  wavr-data:
