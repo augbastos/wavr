@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from wavr.events import SensingEvent
 from wavr.sourcemanager import SourceManager
 
@@ -74,3 +76,17 @@ async def test_self_terminated_source_reports_inactive():
     assert status["finite"] is False   # completed task must not report active
     assert "x" in got
     await mgr.stop()
+
+
+async def test_unregister_removes_source_and_kills_task():
+    async def on_event(ev):
+        pass
+    mgr = SourceManager(on_event)
+    mgr.register("cam_x", lambda: FakeSource("sala"), True)   # FakeSource = existing infinite fixture
+    await mgr.start()
+    assert any(s["name"] == "cam_x" and s["active"] for s in mgr.status()["sources"])
+    await mgr.unregister("cam_x")
+    names = [s["name"] for s in mgr.status()["sources"]]
+    assert "cam_x" not in names                          # gone from the roster
+    with pytest.raises(KeyError):
+        await mgr.unregister("cam_x")                     # already gone
