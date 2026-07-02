@@ -22,6 +22,7 @@ from wavr.sources.simulated import SimulatedSource
 from wavr.sources.network import NetworkSource
 from wavr.sources.ruview import RuViewSource
 from wavr.sources.camera import CameraSource
+from wavr.sources.mmwave import MmWaveSource
 from wavr.camera_store import CameraStore
 from wavr.rules import RulesEngine
 from wavr.away import AwayMonitor
@@ -42,14 +43,20 @@ def _is_loopback(host) -> bool:
 def _default_sources(cfg):
     """Plano A real-source set: network always-on ($0), ruview always-on (harmless
     reconnect loop when the container is absent), sim off by default (toggle it on
-    from the dashboard to populate the view when no real data is flowing)."""
-    return [
+    from the dashboard to populate the view when no real data is flowing). mmwave is
+    only added when a serial port is configured (passive local serial, no frames
+    otherwise) — but then it's always-on, same as network/ruview."""
+    sources = [
         ("network", lambda: NetworkSource(
             cfg.net_known_macs, interval=cfg.net_interval, grace=cfg.net_grace), True),
         ("ruview", lambda: RuViewSource(
             cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
         ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
     ]
+    if cfg.mmwave_port:
+        sources.append(
+            ("mmwave", lambda: MmWaveSource(cfg.mmwave_room, cfg.mmwave_port), True))
+    return sources
 
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
