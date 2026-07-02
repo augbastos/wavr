@@ -15,10 +15,17 @@
   body{margin:0;background:var(--bg);color:var(--ink);
        font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
   header{padding:20px 24px;border-bottom:1px solid var(--line);
-         display:flex;align-items:center;justify-content:space-between;}
+         display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;}
   h1{font-size:1.25rem;margin:0;letter-spacing:-0.01em;}
   .mode{font-size:.8rem;color:var(--muted);}
   .mode b{color:var(--accent);}
+  .hdr-right{display:flex;align-items:center;gap:14px;}
+  .house{font-size:.8rem;font-weight:600;padding:4px 12px;border-radius:999px;border:1px solid var(--line);}
+  .house.home{color:var(--accent);border-color:var(--accent);}
+  .house.away{color:var(--muted);}
+  .narrate:not([hidden]){display:flex;align-items:flex-start;gap:14px;padding:12px 24px;border-bottom:1px solid var(--line);}
+  .narrate-out{margin:0;font-size:.9rem;color:var(--ink);max-width:70ch;line-height:1.5;}
+  .narrate-out.muted{color:var(--muted);}
   main{padding:24px;max-width:1000px;margin:0 auto;}
   .rooms{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;}
@@ -49,6 +56,7 @@
   .ctl.on{border-color:var(--accent);color:var(--accent);}
   .ctl.off{color:var(--muted);}
   .ctl.small{padding:6px 12px;font-size:.78rem;}
+  .ctl:disabled{opacity:.6;cursor:default;}
   .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
   .empty{color:var(--muted);font-size:.82rem;padding:14px 18px;}
@@ -72,7 +80,12 @@
 </style>
 </head>
 <body>
-<header><h1>Wavr</h1><div class="mode" id="mode"></div></header>
+<header><h1>Wavr</h1>
+  <div class="hdr-right">
+    <span id="house" class="house" aria-live="polite"></span>
+    <div class="mode" id="mode"></div>
+  </div>
+</header>
 <div id="controls" class="controls" hidden>
   <button id="sysToggle" class="ctl"></button>
   <div id="srcToggles" class="src-toggles"></div>
@@ -87,6 +100,10 @@
     <button type="submit" class="ctl">Adicionar</button>
   </form>
   <div id="camList" class="cam-list"></div>
+</div>
+<div id="narrate" class="narrate" hidden>
+  <button id="narrateBtn" class="ctl">Narrar</button>
+  <p id="narrateOut" class="narrate-out" aria-live="polite"></p>
 </div>
 <main>
   <div class="rooms" id="rooms" aria-label="Estado por cômodo"><div class="empty">aguardando dados dos cômodos…</div></div>
@@ -150,6 +167,16 @@ const MODE = (location.hostname==="localhost"||location.hostname==="127.0.0.1") 
 const provider = MODE==="live" ? WebSocketProvider() : SimulatorProvider();
 document.getElementById("mode").innerHTML = MODE==="live"
   ? "fonte: <b>casa real</b> (local)" : "fonte: <b>demo</b> (dados fictícios)";
+
+// ---- House indicator (home/away) — works in both live and demo modes ----
+const houseEl = document.getElementById("house");
+const roomOcc = {};
+function updateHouse(rs){
+  roomOcc[rs.room] = !!rs.occupied;
+  const home = Object.values(roomOcc).some(Boolean);
+  houseEl.textContent = home ? "casa: alguém em casa" : "casa: vazia";
+  houseEl.className = "house " + (home ? "home" : "away");
+}
 
 // ---- Control plane (Plano A / live only): global on/off + per-source on/off ----
 async function renderControls(){
@@ -215,6 +242,25 @@ async function renderCameras(){
 }
 renderCameras();
 
+// ---- Narration (Plano A / live only) ----
+function renderNarrate(){
+  if(MODE!=="live") return;                 // narration hits the backend/cloud; never in Plano B
+  document.getElementById("narrate").hidden = false;
+  const btn = document.getElementById("narrateBtn");
+  const out = document.getElementById("narrateOut");
+  btn.onclick = async ()=>{
+    btn.disabled = true; out.className = "narrate-out muted"; out.textContent = "gerando resumo…";
+    try{
+      const r = await fetch(location.origin+"/api/narrate",{method:"POST",headers:{"X-Wavr-Local":"1"}});
+      if(r.status===503){ out.textContent = "narração não configurada (defina GEMINI_API_KEY + WAVR_NARRATE_ENABLED)"; }
+      else if(!r.ok){ out.textContent = "erro ao gerar narração"; }
+      else { const d = await r.json(); out.className = "narrate-out"; out.textContent = d.narration || "(sem resposta)"; }
+    }catch{ out.textContent = "falha de conexão"; }
+    finally{ btn.disabled = false; }
+  };
+}
+renderNarrate();
+
 // ---- Rendering (RoomState) ----
 const roomsEl = document.getElementById("rooms");
 const timelineEl = document.getElementById("timeline");
@@ -253,7 +299,7 @@ function pushTimeline(rs){
   while(timelineEl.children.length>60) timelineEl.lastChild.remove();
 }
 
-const handle = (rs)=>{ upsert(rs); pushTimeline(rs); };
+const handle = (rs)=>{ upsert(rs); pushTimeline(rs); updateHouse(rs); };
 (async ()=>{ (await provider.history()).forEach(handle); provider.start(handle); })();
 </script>
 </body>
