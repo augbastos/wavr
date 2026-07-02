@@ -15,6 +15,7 @@ camera = ["opencv-python>=4.9", "ultralytics>=8.2"]
 mqtt = ["paho-mqtt>=2.0"]
 genai = ["google-generativeai>=0.7"]
 mmwave = ["pyserial>=3.5"]
+mcp = ["mcp>=1.2"]
 
 [build-system]
 requires = ["setuptools>=68"]
