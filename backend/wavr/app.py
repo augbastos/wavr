@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from wavr.sources.simulated import SimulatedSource
 from wavr.sources.network import NetworkSource
 from wavr.sources.ruview import RuViewSource
 from wavr.sources.camera import CameraSource
+from wavr.camera_store import CameraStore
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -39,14 +41,27 @@ def _default_sources(cfg):
         ("ruview", lambda: RuViewSource(
             cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
         ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
-        ("camera_quarto", lambda: CameraSource(
-            "quarto", cfg.cam_quarto_url, interval=cfg.cam_interval, confidence=cfg.cam_confidence), False),
-        ("camera_quintal", lambda: CameraSource(
-            "quintal", cfg.cam_quintal_url, interval=cfg.cam_interval, confidence=cfg.cam_confidence), False),
     ]
 
 
-def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
+def _mask_rtsp(url: str) -> str:
+    """Redact the password in an rtsp URL for API responses: rtsp://user:pw@host -> rtsp://user:***@host."""
+    if "@" not in url or "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    creds, host = rest.split("@", 1)
+    if ":" in creds:
+        user = creds.split(":", 1)[0]
+        creds = f"{user}:***"
+    return f"{scheme}://{creds}@{host}"
+
+
+def _camera_factory(cam: dict, cfg):
+    return lambda: CameraSource(cam["room"], cam["rtsp_url"],
+                                interval=cfg.cam_interval, confidence=cam["confidence"])
+
+
+def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -63,6 +78,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
     manager = SourceManager(_ingest)
     for name, factory, enabled in (sources if sources is not None else _default_sources(cfg)):
         manager.register(name, factory, enabled)
+
+    _cameras = camera_store or CameraStore(cfg.db_path)
+    for cam in _cameras.list():                       # persisted cameras -> boot-OFF sources
+        manager.register(cam["name"], _camera_factory(cam, cfg), False)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -121,6 +140,38 @@ def create_app(sources=None, storage=None, hub=None, fusion=None) -> FastAPI:
         except KeyError:
             raise HTTPException(status_code=404, detail=f"unknown source: {name}")
         return manager.status()
+
+    @app.get("/api/cameras")
+    async def cameras():
+        return [{**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"])} for cam in _cameras.list()]
+
+    @app.post("/api/cameras")
+    async def add_camera(
+        name: str = Body(...), room: str = Body(...),
+        rtsp_url: str = Body(...), confidence: float = Body(cfg.cam_confidence),
+        _=Depends(require_local),
+    ):
+        name = name.strip()
+        if not name or not room.strip() or not rtsp_url.strip():
+            raise HTTPException(status_code=400, detail="name, room, rtsp_url are required")
+        if name in {s["name"] for s in manager.status()["sources"]}:
+            raise HTTPException(status_code=409, detail=f"source name in use: {name}")
+        try:
+            _cameras.add(name, room.strip(), rtsp_url.strip(), confidence)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail=f"camera exists: {name}")
+        manager.register(name, _camera_factory(_cameras.get(name), cfg), False)  # boots OFF
+        return [{**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"])} for cam in _cameras.list()]
+
+    @app.delete("/api/cameras/{name}")
+    async def delete_camera(name: str, _=Depends(require_local)):
+        if not _cameras.delete(name):
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        try:
+            await manager.unregister(name)
+        except KeyError:
+            pass   # not registered (e.g. removed before a restart re-registered it)
+        return [{**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"])} for cam in _cameras.list()]
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):

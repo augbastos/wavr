@@ -4,16 +4,6 @@ from wavr.sourcemanager import SourceManager
 from wavr.sources.camera import CameraSource, Detection
 
 
-def test_default_sources_register_both_cameras_boot_off(monkeypatch):
-    for v in ("WAVR_CAM_QUARTO_URL", "WAVR_CAM_QUINTAL_URL"):
-        monkeypatch.delenv(v, raising=False)
-    from wavr.config import load_config
-    from wavr.app import _default_sources
-    srcs = {name: enabled for name, factory, enabled in _default_sources(load_config())}
-    assert srcs["camera_quarto"] is False   # SAFETY: boot OFF
-    assert srcs["camera_quintal"] is False   # SAFETY: boot OFF
-
-
 async def test_camera_toggle_on_then_off_releases_rtsp():
     released = {"v": False}
     async def frames(url):
