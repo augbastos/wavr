@@ -5,7 +5,7 @@ from wavr.roomstate import RoomState
 
 # Default trust weights per modality. Camera (video) is most precise; network
 # (device presence) is house-level and coarse. Tunable via config later.
-DEFAULT_WEIGHTS = {"camera": 1.0, "wifi_csi": 0.85, "network": 0.5, "sim": 0.6}
+DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "network": 0.5, "sim": 0.6}
 
 
 class FusionEngine:
