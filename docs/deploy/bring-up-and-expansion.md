@@ -85,6 +85,28 @@ Depois desta fase, laptop e appliance rodam **a mesma imagem** — a diferença 
 
 ---
 
+## Radar de posição — hardware
+
+**Expandir monitoramento pra posição (x/y) e postura (posição do corpo) usando hardware minimalista e que já funciona com Python puro.**
+
+- **Tier R0 — radar de 1 cômodo, sem solda (~€15-20):** 1× HLK-LD2450 (~€10-15) + adaptador USB-TTL CP2102/CH340 (~€3-5) + 4 jumpers fêmea-fêmea (5V/GND/TX/RX — atenção: LD2450 usa UART 256000 baud). Liga DIRETO no PC: `WAVR_MMWAVE_PORT=COM3`, `WAVR_MMWAVE_ROOM=sala`, `pip install -e backend[mmwave]`, restart → pontos no radar. Zero ESP32, zero firmware.
+- **Tier R1 — cômodo remoto (futuro, +€6-9/cômodo):** LD2450 + ESP32 baratinho; transporte TCP/MQTT é um `frames` generator novo — a classe e o parser NÃO mudam (seam já pronto).
+- **Tier R2 — o experimento CSI (RuView, ~€25):** 2× ESP32-S3; quando os frames do RuView tiverem pose/targets, `normalize_ruview` já os aceita (passthrough pronto). Tratar como pesquisa, não como entregável.
+- **Tier R3 — postura pelas câmeras que JÁ EXISTEM (€0):** Tapo C210 → `pip install -e backend[camera]` (~5GB, torch CUDA) + ligar `pose=True` no bring-up da câmera → "sentado/em pé/deitado" no radar (sem posição x/y — homografia é follow-up).
+
+**Calibração (documentar honesto):** x/y do LD2450 são no frame DO SENSOR (montado na parede, olhando pro cômodo). V1 assume sensor no canto-origem olhando pro +y; offset/rotação por cômodo = follow-up pequeno quando o hardware chegar.
+
+### Notas de bring-up (do review)
+
+- **(a) Transporte serial do LD2450 — dois issues conhecidos deferidos:** O fluxo serial tem uma race condition na close/read durante shutdown (pior caso: freeze do event loop no Windows) e o buffer não é persistido entre frames — ambos conhecidos no protocolo do componente. O bring-up **DEVE incluir teste de desligar a fonte durante streaming** (não só leitura feliz dos dados normais), pra detectar o freeze antes de escalar pra produção.
+- **(b) Decode sign-magnitude:** A convenção de decodificação segue o componente ESPHome `ld2450` (valores x/y/vx/vy). **Confirmar contra o device real** que a interpretação de bits está correta (especialmente quando os valores são negativos ou em boundaries de quarto).
+
+### Privacidade
+
+**Targets (posição x/y) são LIVE-ONLY por decisão:** fluem pelo WebSocket pro dashboard, mas NUNCA são persistidos no SQLite nem publicados no MQTT. Histórico de movimento em disco seria um passivo de privacidade que o Wavr recusa por design — apenas confidência ocupacional (sim/não por cômodo) é armazenada.
+
+---
+
 ## Fase 2 — Appliance dedicado (quando quiser, sem dor)
 
 **Os 3 eixos no máximo. Migração = trocar onde roda, não o quê.**

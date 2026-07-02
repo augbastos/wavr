@@ -13,6 +13,8 @@ product
 
 Wavr fuses multiple sensing modalities (WiFi CSI, network scan, camera CV, simulator) into one explainable `RoomState` per room — occupancy + confidence 0..1 + per-modality "why". Success: the dashboard makes the fusion legible at a glance (confidence, modality breakdown, timeline), runs light, and never leaks real data off the LAN.
 
+**Position and posture:**  v1 adds optional position (x/y from mmWave radar) and posture (sitting/standing/lying from camera pose estimation), displayed on the room radar when enabled. Fusion is best-source pass-through (no multi-modal track association yet) — a stepping stone to richer context without storage or privacy overhead, since targets are live-only and never persisted.
+
 ## Brand Personality
 
 Technical-trustworthy. Precise, calm, legible — a serious measurement instrument, not a gadget. Explainability is the hero: the "why" behind every state is always visible.
