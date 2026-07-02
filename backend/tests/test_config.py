@@ -40,3 +40,11 @@ def test_config_has_away_default(monkeypatch):
     monkeypatch.delenv("WAVR_AWAY_GRACE", raising=False)
     from wavr.config import load_config
     assert load_config().away_grace == 3
+
+def test_config_has_gemini_defaults(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("WAVR_GEMINI_MODEL", raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.gemini_api_key == ""
+    assert cfg.gemini_model == "gemini-1.5-flash"
