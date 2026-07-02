@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+*.db
+.env
+.superpowers
+.wrangler
+.playwright-mcp
+docs
+frontend
+node_modules
