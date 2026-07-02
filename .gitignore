@@ -8,3 +8,4 @@ node_modules/
 *.pt
 *.egg-info/
 .wrangler/
+.playwright-mcp/
