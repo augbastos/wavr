@@ -12,6 +12,11 @@ def test_first_occupied_sets_home_retained_no_event():
     AwayMonitor(lambda t, p, r: msgs.append((t, p, r))).handle(_rs("sala", True))
     assert msgs == [("wavr/house/state", "home", True)]   # retained state, NO arrived event on first determination
 
+def test_first_away_sets_away_retained_no_event():
+    msgs = []
+    AwayMonitor(lambda t, p, r: msgs.append((t, p, r)), away_grace=1).handle(_rs("sala", False))
+    assert msgs == [("wavr/house/state", "away", True)]   # retained away state, NO left event on first determination
+
 def test_away_is_debounced_home_is_immediate():
     msgs = []
     m = AwayMonitor(lambda t, p, r: msgs.append((t, p, r)), away_grace=3)

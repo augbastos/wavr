@@ -41,5 +41,5 @@ def make_gemini_generate(api_key: str, model: str = "gemini-1.5-flash") -> Calla
             import google.generativeai as genai   # optional dep
             genai.configure(api_key=api_key)
             _MODEL = genai.GenerativeModel(model)
-        return _MODEL.generate_content(prompt).text
+        return _MODEL.generate_content(prompt, request_options={"timeout": 30}).text
     return generate
