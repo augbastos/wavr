@@ -56,3 +56,52 @@ def test_camera_endpoints_require_local_header(tmp_path):
         r = c.post("/api/cameras", json={"name": "x", "room": "r",
                                          "rtsp_url": "rtsp://x", "confidence": 0.5})
         assert r.status_code == 403
+
+
+def test_delete_camera_requires_local_header(tmp_path):
+    store = CameraStore(str(tmp_path / "d.db"))
+    with TestClient(create_app(sources=[], camera_store=store)) as c:   # no X-Wavr-Local
+        r = c.delete("/api/cameras/x")
+        assert r.status_code == 403
+
+
+def test_post_malformed_rtsp_url_rejected_and_not_persisted(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.post("/api/cameras", json={"name": "cam_bad", "room": "sala",
+                                         "rtsp_url": "a@b://c", "confidence": 0.5})
+        assert r.status_code == 400
+        assert c.get("/api/cameras").json() == []          # never persisted; later GET still works
+
+
+def test_post_notaurl_rejected_and_not_persisted(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.post("/api/cameras", json={"name": "cam_bad2", "room": "sala",
+                                         "rtsp_url": "notaurl", "confidence": 0.5})
+        assert r.status_code == 400
+        assert c.get("/api/cameras").json() == []
+
+
+def test_mask_rtsp_never_raises_on_malformed_url():
+    from wavr.app import _mask_rtsp
+    assert _mask_rtsp("a@b://c") == "a@b://c"               # malformed shape -> returned unchanged, no raise
+
+
+def test_post_name_with_slash_rejected(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.post("/api/cameras", json={"name": "a/b", "room": "sala",
+                                         "rtsp_url": "rtsp://x", "confidence": 0.5})
+        assert r.status_code == 400
+
+
+def test_post_name_with_html_rejected(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.post("/api/cameras", json={"name": "<img src=x>", "room": "sala",
+                                         "rtsp_url": "rtsp://x", "confidence": 0.5})
+        assert r.status_code == 400
+
+
+def test_post_confidence_out_of_range_rejected(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.post("/api/cameras", json={"name": "cam_conf", "room": "sala",
+                                         "rtsp_url": "rtsp://x", "confidence": 999})
+        assert r.status_code == 400
