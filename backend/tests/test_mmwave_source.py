@@ -50,3 +50,22 @@ async def test_source_emits_presence_from_injected_frames():
     e2 = await asyncio.wait_for(anext(gen), 1)
     assert e2.presence is False and e2.targets == ()
     await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mmwave_closes_inner_frames_generator_deterministically():
+    closed = {"v": False}
+
+    async def fake_frames():
+        try:
+            yield _frame(_slot(1000, 1000, 0))
+            yield _frame(_slot(1000, 1000, 0))
+        finally:
+            closed["v"] = True
+
+    src = MmWaveSource(room="sala", port="", frames=fake_frames(), interval=0)
+    gen = src.events()
+    ev = await asyncio.wait_for(anext(gen), 1)
+    assert ev.presence is True
+    await gen.aclose()
+    assert closed["v"] is True
