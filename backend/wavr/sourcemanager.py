@@ -86,3 +86,9 @@ class SourceManager:
             # CameraSource releasing its RTSP stream) the moment the task is cancelled.
             with contextlib.suppress(Exception):
                 await agen.aclose()
+            # Self-terminated source (generator ended on its own): drop it from
+            # the active set so status() reports active=False. Only pop if the
+            # registered task is still THIS one (a re-enable may have replaced it;
+            # _kill pops before awaiting, so this is a no-op on the cancel path).
+            if self._tasks.get(name) is asyncio.current_task():
+                self._tasks.pop(name, None)
