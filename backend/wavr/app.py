@@ -16,6 +16,7 @@ from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
 from wavr.sources.network import NetworkSource
 from wavr.sources.ruview import RuViewSource
+from wavr.sources.camera import CameraSource
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -38,6 +39,10 @@ def _default_sources(cfg):
         ("ruview", lambda: RuViewSource(
             cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
         ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
+        ("camera_quarto", lambda: CameraSource(
+            "quarto", cfg.cam_quarto_url, interval=cfg.cam_interval, confidence=cfg.cam_confidence), False),
+        ("camera_quintal", lambda: CameraSource(
+            "quintal", cfg.cam_quintal_url, interval=cfg.cam_interval, confidence=cfg.cam_confidence), False),
     ]
 
 
