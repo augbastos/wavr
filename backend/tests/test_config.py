@@ -25,3 +25,13 @@ def test_config_has_camera_defaults(monkeypatch):
     cfg = load_config()
     assert cfg.cam_interval == 0.5
     assert cfg.cam_confidence == 0.4
+
+def test_config_has_mqtt_defaults(monkeypatch):
+    for v in ("WAVR_MQTT_ENABLED", "WAVR_MQTT_HOST", "WAVR_MQTT_PORT", "WAVR_MQTT_PREFIX"):
+        monkeypatch.delenv(v, raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.mqtt_enabled is False       # opt-in: off by default
+    assert cfg.mqtt_host == "localhost"
+    assert cfg.mqtt_port == 1883
+    assert cfg.mqtt_prefix == "wavr"
