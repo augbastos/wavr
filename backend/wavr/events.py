@@ -24,7 +24,7 @@ class Target:
 @dataclass(frozen=True)
 class SensingEvent:
     room: str
-    modality: str            # "wifi_csi" | "network" | "camera" | "sim"
+    modality: str            # "wifi_csi" | "network" | "camera" | "mmwave" | "sim"
     presence: bool
     motion: float
     breathing_bpm: float | None
@@ -52,6 +52,26 @@ def normalize_ruview(raw: dict, room: str) -> SensingEvent:
     features = raw.get("features", {})
     vitals = raw.get("vital_signs", {})
     ts = raw.get("timestamp")
+
+    targets = []
+    for i, t in enumerate(raw.get("targets") or []):
+        if not isinstance(t, dict):
+            continue
+        x, y = t.get("x"), t.get("y")
+        posture = t.get("posture")
+        has_pos = isinstance(x, (int, float)) and isinstance(y, (int, float))
+        if not has_pos and not isinstance(posture, str):
+            continue
+        targets.append(Target(
+            id=int(t.get("id", i + 1)),
+            x=float(x) if has_pos else None,
+            y=float(y) if has_pos else None,
+            z=_f(t.get("z")),
+            posture=posture if isinstance(posture, str) else None,
+            velocity=_f(t.get("velocity")),
+            confidence=float(t.get("confidence", 0.5)),
+        ))
+
     return SensingEvent(
         room=room,
         modality="wifi_csi",
@@ -61,4 +81,5 @@ def normalize_ruview(raw: dict, room: str) -> SensingEvent:
         heart_bpm=_f(vitals.get("heart_rate_bpm")),
         confidence=float(classification.get("confidence", 0.0)),
         ts=_iso_from_unix(ts) if ts is not None else datetime.now(timezone.utc).isoformat(),
+        targets=tuple(targets),
     )
