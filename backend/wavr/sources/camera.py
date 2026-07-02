@@ -8,13 +8,35 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Callable
 
-from wavr.events import SensingEvent
+from wavr.events import SensingEvent, Target
 
 
 @dataclass(frozen=True)
 class Detection:
     count: int
     confidence: float
+
+
+def classify_posture(keypoints) -> str | None:
+    """COCO-17 pixel keypoints -> coarse posture. Pure heuristic, no ML."""
+    def mid(a, b):
+        (ax, ay), (bx, by) = keypoints[a], keypoints[b]
+        if (ax, ay) == (0.0, 0.0) or (bx, by) == (0.0, 0.0):
+            return None
+        return ((ax + bx) / 2, (ay + by) / 2)
+
+    sh, hip, knee = mid(5, 6), mid(11, 12), mid(13, 14)
+    if sh is None or hip is None or knee is None:
+        return None
+    dx, dy = hip[0] - sh[0], hip[1] - sh[1]
+    torso = (dx * dx + dy * dy) ** 0.5
+    if torso == 0:
+        return None
+    if abs(dx) > abs(dy):
+        return "lying"
+    if (knee[1] - hip[1]) < 0.32 * torso:
+        return "sitting"
+    return "standing"
 
 
 class CameraSource:
@@ -29,7 +51,9 @@ class CameraSource:
                  frames: Callable[[str], AsyncIterator[object]] | None = None,
                  detect: Callable[[object], Detection] | None = None,
                  interval: float = 0.5, confidence: float = 0.0,
-                 reconnect_delay: float = 3.0):
+                 reconnect_delay: float = 3.0,
+                 pose: bool = False,
+                 pose_detect: Callable[[object, float], list[Target]] | None = None):
         self.room = room
         self._url = rtsp_url
         self._frames = frames or rtsp_frames
@@ -39,6 +63,13 @@ class CameraSource:
         self._detect = detect or (lambda f: yolo_detect(f, self._confidence))
         self._interval = interval
         self._reconnect = reconnect_delay
+        # Opt-in posture pass: off by default -> zero behavior change (Camera
+        # add-form/API flag not exposed yet; enabling comes with real-camera
+        # bring-up). pose_detect always takes (frame, confidence) — unlike
+        # `detect`, it never needs a closure since yolo_pose_detect already
+        # has that signature.
+        self._pose = pose
+        self._pose_detect = pose_detect or yolo_pose_detect
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         global _ACTIVE
@@ -50,11 +81,16 @@ class CameraSource:
                         async for frame in stream:
                             det = await asyncio.to_thread(self._detect, frame)
                             present = det.count > 0
+                            targets: tuple[Target, ...] = ()
+                            if self._pose:
+                                targets = tuple(await asyncio.to_thread(
+                                    self._pose_detect, frame, self._confidence))
                             yield SensingEvent(
                                 room=self.room, modality="camera", presence=present,
                                 motion=0.0, breathing_bpm=None, heart_bpm=None,
                                 confidence=det.confidence if present else 0.0,
                                 ts=datetime.now(timezone.utc).isoformat(),
+                                targets=targets,
                             )
                             if self._interval:
                                 await asyncio.sleep(self._interval)
@@ -73,6 +109,7 @@ class CameraSource:
 # ---- Real adapters (lazy imports; only exercised on the real hardware path) ----
 
 _YOLO_MODEL = None
+_POSE_MODEL = None
 _ACTIVE = 0                       # count of running CameraSource.events() loops
 _MODEL_LOCK = threading.Lock()    # guards the lazy YOLO load (called from to_thread workers)
 
@@ -105,13 +142,29 @@ def _model():
     return _YOLO_MODEL
 
 
+def _pose_model():
+    """Load the YOLO-pose nano model once (GPU if available). Lazy/thread-safe
+    for the same reasons as `_model()` — its own cached global so the plain
+    detect and pose paths can be loaded/released independently until both
+    cameras stop."""
+    global _POSE_MODEL
+    if _POSE_MODEL is None:
+        with _MODEL_LOCK:
+            if _POSE_MODEL is None:
+                from ultralytics import YOLO
+                _POSE_MODEL = YOLO("yolo11n-pose.pt")
+    return _POSE_MODEL
+
+
 def release_model() -> None:
-    """Drop the cached YOLO model and hand cached VRAM back to the driver. Safe
-    with torch absent (suppressed). Called when the last camera stops so the GPU
-    isn't held while no camera is running (e.g. so games get the VRAM back)."""
-    global _YOLO_MODEL
+    """Drop the cached YOLO models (detect + pose) and hand cached VRAM back to
+    the driver. Safe with torch absent (suppressed). Called when the last
+    camera stops so the GPU isn't held while no camera is running (e.g. so
+    games get the VRAM back)."""
+    global _YOLO_MODEL, _POSE_MODEL
     with _MODEL_LOCK:
         _YOLO_MODEL = None
+        _POSE_MODEL = None
     with contextlib.suppress(Exception):
         import torch
         torch.cuda.empty_cache()
@@ -143,3 +196,26 @@ def yolo_detect(frame, conf_threshold: float = 0.0) -> Detection:
             if int(cls) == 0 and float(conf) >= conf_threshold:  # COCO class 0 = person
                 persons.append(float(conf))
     return Detection(count=len(persons), confidence=max(persons) if persons else 0.0)
+
+
+def yolo_pose_detect(frame, confidence: float = 0.0) -> list[Target]:
+    """Posture-only targets: no homography yet, so x/y stay None — only
+    `posture` (derived from COCO-17 keypoints via `classify_posture`) and the
+    box confidence are meaningful here."""
+    results = _pose_model()(frame)
+    targets: list[Target] = []
+    for r in results:
+        boxes = getattr(r, "boxes", None)
+        kpts = getattr(r, "keypoints", None)
+        if boxes is None or kpts is None:
+            continue
+        for i, (cls, conf) in enumerate(zip(list(boxes.cls), list(boxes.conf))):
+            if int(cls) != 0 or float(conf) < confidence:  # COCO class 0 = person
+                continue
+            kps = [(float(x), float(y)) for x, y in kpts.xy[i]]
+            targets.append(Target(
+                id=i + 1, x=None, y=None,
+                posture=classify_posture(kps),
+                confidence=float(conf),
+            ))
+    return targets
