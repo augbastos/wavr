@@ -53,10 +53,33 @@ Enquanto esses 4 valerem, expandir é trivial. O resto do plano é: endurecer ag
 
 **Isso é o movimento de maior alavancagem pra "expandir a qualquer momento".** Uma vez que o backend é uma imagem Docker + `.env`, migrar pra QUALQUER box = `pull` + copiar `.env` + `docker run`. Mesmo ambiente no laptop e no Jetson — acabou "funciona só na minha máquina".
 
-- `Dockerfile` no backend: base com Python 3.11, `pip install -e .[camera]`, entrypoint `uvicorn`.
-- GPU passthrough via **nvidia-container-toolkit** — funciona no 3060 (via WSL2 no Windows) E nativo no Jetson. O MESMO compose sobe nos dois.
-- `docker-compose.yml`: monta o `.env`, o volume do SQLite (só-derivado), `restart: unless-stopped`.
-- Custo: Docker+GPU no Windows precisa WSL2 + toolkit (setup de uma vez). No Jetson é nativo. Vale pela portabilidade.
+**Status:** `backend/Dockerfile` + `docker-compose.yml` (raiz) + `.dockerignore` já existem no repo (base lean, sem torch/cv2 — só network/ruview/sim/fusion/rules/away/narration-503). O variant com câmera/GPU é follow-up (ver abaixo).
+
+### Build + run (appliance/Linux)
+
+```bash
+# On the Linux appliance (Jetson/mini-PC):
+cp /path/to/.env .env            # your WAVR_* + GEMINI_API_KEY
+docker compose up -d --build     # builds the lean base image, starts on 127.0.0.1:8000
+# Dashboard from another device on the LAN: SSH tunnel (keeps the loopback guard intact)
+ssh -L 8000:127.0.0.1:8000 user@appliance   # then open http://127.0.0.1:8000 locally
+```
+
+### Por que `network_mode: host` + bind `127.0.0.1`
+
+O guard de loopback do app (`_LOOPBACK_HOSTS`, ver `wavr/app.py`) confia no peer real da conexão. Com `network_mode: host` (Linux), o processo dentro do container vê a mesma stack de rede do host — bind em `127.0.0.1:8000` preserva o guard **sem tocar em código**. NÃO usar bind `0.0.0.0` numa bridge network: o gateway Docker apareceria como peer não-loopback e o guard rejeitaria (403) todo request, inclusive os legítimos. Acesso de outro device na LAN é via túnel SSH (`ssh -L`), que mantém a conexão local ao container como loopback — mesma postura "loopback-only" já documentada na Fase 0.
+
+### Caveat: Windows (Docker Desktop)
+
+No laptop de desenvolvimento (Windows), `network_mode: host` não funciona como no Linux — o Docker Desktop roda os containers numa VM e o host networking é limitado/não suportado da mesma forma. **No Windows, continuar rodando `uvicorn` direto** (o jeito atual, Fase 0) em vez de Docker. Docker é o caminho appliance/Linux (Fase 1+2); no Windows ele só serve pra testar o build da imagem, não pra rodar o serviço long-lived.
+
+### Variant GPU/câmera (follow-up)
+
+A imagem base é lean (sem torch/cv2) — cobre presença por rede/CSI, mas NÃO detecção por câmera. Para câmera real: build de um variant que instala `pip install -e backend[camera]` sobre uma base `nvidia/cuda` (torch com suporte CUDA), e descomentar o stanza `deploy.resources.reservations.devices` (GPU) no `docker-compose.yml` + instalar `nvidia-container-toolkit` no host (WSL2 no Windows / nativo no Jetson — ver Fase 2). Imagem consideravelmente maior; tratar como entregável separado, não parte do Fase 1 base.
+
+### Segredos
+
+`.env` nunca é copiado pra dentro da imagem — é montado em runtime via `env_file` no compose, e `.dockerignore` exclui `.env` explicitamente do build context (junto de `.venv`, `*.db`, `.git`, `.superpowers`). Nenhuma credencial (RTSP das Tapo, `GEMINI_API_KEY`) chega a ficar em nenhuma layer da imagem.
 
 Depois desta fase, laptop e appliance rodam **a mesma imagem** — a diferença é só o `.env` e a rede.
 
