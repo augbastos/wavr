@@ -22,6 +22,7 @@ from wavr.sources.ruview import RuViewSource
 from wavr.sources.camera import CameraSource
 from wavr.camera_store import CameraStore
 from wavr.rules import RulesEngine
+from wavr.away import AwayMonitor
 from wavr.mqtt_publisher import make_publisher
 
 
@@ -87,6 +88,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     if _rules_publish is None and cfg.mqtt_enabled:
         _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port)
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
+    _away = AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace) if _rules_publish else None
 
     async def _ingest(event):
         rs = _fusion.update(event)
@@ -111,15 +113,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def lifespan(app: FastAPI):
         await manager.start()
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
+        away_task = asyncio.create_task(_away.run(_hub)) if _away else None
         try:
             yield
         finally:
-            if rules_task:
-                rules_task.cancel()
-                # Suppress CancelledError AND any error a caller-injected publisher
-                # might raise, so shutdown always reaches manager.stop() + camera close.
-                with suppress(asyncio.CancelledError, Exception):
-                    await rules_task
+            # Suppress CancelledError AND any error a caller-injected publisher
+            # might raise, so shutdown always reaches manager.stop() + camera close.
+            for t in (rules_task, away_task):
+                if t:
+                    t.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await t
             await manager.stop()
             if _owns_cameras:
                 with suppress(Exception):
