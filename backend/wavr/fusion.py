@@ -52,5 +52,16 @@ class FusionEngine:
         occupied = confidence >= self._threshold
         parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
         explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
+
+        best_targets: list = []
+        best_w = -1.0
+        for modality, e in events.items():
+            if e.presence and e.targets:
+                w = self._weights.get(modality, 0.5)
+                if w > best_w:
+                    best_w = w
+                    best_targets = [t.to_dict() for t in e.targets]
+
         return RoomState(room=room, occupied=occupied, confidence=confidence,
-                         vitals=vitals, sources=sources, explanation=explanation, ts=ts)
+                         vitals=vitals, sources=sources, targets=best_targets,
+                         explanation=explanation, ts=ts)

@@ -5,6 +5,23 @@ from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
+class Target:
+    """One tracked person. Room-local frame: meters, origin = room's top-left
+    on the house map, x right / y down. x/y None = source knows posture but
+    not position (e.g. camera without homography)."""
+    id: int
+    x: float | None
+    y: float | None
+    z: float | None = None
+    posture: str | None = None      # open vocab: standing/sitting/lying/walking/...
+    velocity: float | None = None   # m/s, magnitude
+    confidence: float = 0.0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class SensingEvent:
     room: str
     modality: str            # "wifi_csi" | "network" | "camera" | "sim"
@@ -14,9 +31,12 @@ class SensingEvent:
     heart_bpm: float | None
     confidence: float        # the modality's own confidence 0..1
     ts: str                  # ISO-8601 UTC (+00:00)
+    targets: tuple = ()      # tuple[Target, ...] — new optional last field
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["targets"] = list(d["targets"])
+        return d
 
 
 def _iso_from_unix(ts: float) -> str:
