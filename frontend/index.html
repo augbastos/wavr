@@ -189,7 +189,13 @@ async function renderCameras(){
     list.innerHTML = cams.length ? "" : `<div class="empty">nenhuma câmera configurada</div>`;
     cams.forEach(c=>{
       const row = document.createElement("div"); row.className="cam-row";
-      row.innerHTML = `<span><b>${c.name}</b> · ${c.room} · <span class="conf">${c.rtsp_url}</span></span>`;
+      const label = document.createElement("span");
+      const nameEl = document.createElement("b"); nameEl.textContent = c.name;
+      const confEl = document.createElement("span"); confEl.className = "conf"; confEl.textContent = c.rtsp_url;
+      label.appendChild(nameEl);
+      label.appendChild(document.createTextNode(` · ${c.room} · `));
+      label.appendChild(confEl);
+      row.appendChild(label);
       const rm = document.createElement("button"); rm.className="rm"; rm.textContent="Remover";
       rm.onclick = async ()=>{ await fetch(location.origin+`/api/cameras/${encodeURIComponent(c.name)}`,
         {method:"DELETE", headers:{"X-Wavr-Local":"1"}}).catch(()=>{}); refresh(); };

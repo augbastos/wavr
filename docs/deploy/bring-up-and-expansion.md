@@ -21,8 +21,6 @@ Enquanto esses 4 valerem, expandir é trivial. O resto do plano é: endurecer ag
 
 1. **`.env` único como a costura de portabilidade.** Todos os `WAVR_*` num `.env` (já git-ignored; teu padrão `C:\IA\.env`). Segredos (creds RTSP das Tapo) SÓ aqui, nunca em código/git. Esse arquivo é o que migra pro appliance intacto.
    ```
-   WAVR_CAM_QUARTO_URL=rtsp://user:pass@192.168.x.x:554/stream1
-   WAVR_CAM_QUINTAL_URL=rtsp://user:pass@192.168.x.x:554/stream1
    WAVR_NET_MACS=aa:bb:...,cc:dd:...     # device→pessoa
    WAVR_RUVIEW_URL=ws://localhost:3000/ws/sensing
    WAVR_CAM_CONFIDENCE=0.5
@@ -79,7 +77,7 @@ Depois desta fase, laptop e appliance rodam **a mesma imagem** — a diferença 
 
 | Quero adicionar... | Custo, dado o design | Toca o núcleo? |
 |---|---|---|
-| 3ª/4ª câmera | 1 linha em `_default_sources` + URL no `.env` | Não |
+| 3ª/4ª câmera | adicionar pela seção Câmeras do dashboard, persistido em SQLite | Não |
 | Fonte nova (BLE, mmWave) | 1 classe `SensorSource` + registro | Não (seam pronto) |
 | Mudar de box (laptop→Jetson→mini-PC) | `pull` + `.env` + `docker run` | Não |
 | Segmentar a rede | Config de roteador/VLAN | Não (guards do app já viajam) |
