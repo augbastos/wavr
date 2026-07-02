@@ -7,6 +7,7 @@ from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine
 from wavr.sources.simulated import SimulatedSource
+from wavr.camera_store import CameraStore
 
 
 def build_client(client=None):
@@ -17,6 +18,7 @@ def build_client(client=None):
     app = create_app(
         sources=[("sim", lambda: SimulatedSource(interval=0.01), True)],
         storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
+        camera_store=CameraStore(":memory:"),
     )
     kwargs = {"client": client} if client is not None else {}
     return TestClient(app, **kwargs)

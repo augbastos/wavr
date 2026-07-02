@@ -52,7 +52,23 @@
   .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
   .empty{color:var(--muted);font-size:.82rem;padding:14px 18px;}
-  @media (prefers-reduced-motion:reduce){.bar>i,.ctl{transition:none;}}
+  .cams:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .cams h3{margin:4px 0 12px;}
+  .cam-form{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  .cam-form input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+                  border-radius:8px;padding:8px 11px;font-size:.82rem;}
+  .cam-form input::placeholder{color:var(--muted);opacity:1;}
+  .cam-form input[name="rtsp_url"]{flex:1;min-width:220px;}
+  .cam-form input[name="confidence"]{width:88px;}
+  .cam-list{display:flex;flex-direction:column;gap:6px;}
+  .cam-row{display:flex;justify-content:space-between;align-items:center;gap:12px;
+           font-size:.82rem;padding:8px 0;border-top:1px dashed var(--line);}
+  .cam-row>span{min-width:0;overflow-wrap:anywhere;}
+  .cam-row .rm{flex-shrink:0;background:none;border:1px solid var(--line);color:var(--muted);
+               border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.75rem;
+               transition:border-color .15s ease-out,color .15s ease-out;}
+  .cam-row .rm:hover{border-color:var(--warn);color:var(--warn);}
+  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm{transition:none;}}
 </style>
 </head>
 <body>
@@ -60,6 +76,17 @@
 <div id="controls" class="controls" hidden>
   <button id="sysToggle" class="ctl"></button>
   <div id="srcToggles" class="src-toggles"></div>
+</div>
+<div id="cameras" class="cams" hidden>
+  <h3 id="cams-h">Câmeras</h3>
+  <form id="camForm" class="cam-form" aria-labelledby="cams-h">
+    <input name="name" placeholder="nome (ex: cam_sala)" required aria-label="nome da câmera">
+    <input name="room" placeholder="cômodo (ex: sala)" required aria-label="cômodo">
+    <input name="rtsp_url" placeholder="rtsp://user:senha@ip:554/stream" required aria-label="URL RTSP">
+    <input name="confidence" type="number" step="0.05" min="0" max="1" value="0.4" aria-label="confiança mínima" title="confiança mínima de detecção (0–1)">
+    <button type="submit" class="ctl">Adicionar</button>
+  </form>
+  <div id="camList" class="cam-list"></div>
 </div>
 <main>
   <div class="rooms" id="rooms" aria-label="Estado por cômodo"><div class="empty">aguardando dados dos cômodos…</div></div>
@@ -149,6 +176,44 @@ async function renderControls(){
   refresh(); setInterval(refresh, 3000);
 }
 renderControls();
+
+// ---- Camera management (Plano A / live only) ----
+async function renderCameras(){
+  if(MODE!=="live") return;                 // live-only; never in Plano B
+  document.getElementById("cameras").hidden = false;
+  const post = (url,body)=> fetch(location.origin+url,{method:"POST",
+    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+  async function refresh(){
+    let cams; try{ cams = await (await fetch(location.origin+"/api/cameras")).json(); }catch{ return; }
+    const list = document.getElementById("camList");
+    list.innerHTML = cams.length ? "" : `<div class="empty">nenhuma câmera configurada</div>`;
+    cams.forEach(c=>{
+      const row = document.createElement("div"); row.className="cam-row";
+      const label = document.createElement("span");
+      const nameEl = document.createElement("b"); nameEl.textContent = c.name;
+      const confEl = document.createElement("span"); confEl.className = "conf"; confEl.textContent = c.rtsp_url;
+      label.appendChild(nameEl);
+      label.appendChild(document.createTextNode(` · ${c.room} · `));
+      label.appendChild(confEl);
+      row.appendChild(label);
+      const rm = document.createElement("button"); rm.className="rm"; rm.textContent="Remover";
+      rm.onclick = async ()=>{ await fetch(location.origin+`/api/cameras/${encodeURIComponent(c.name)}`,
+        {method:"DELETE", headers:{"X-Wavr-Local":"1"}}).catch(()=>{}); refresh(); };
+      row.appendChild(rm); list.appendChild(row);
+    });
+  }
+  document.getElementById("camForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const f = e.target;
+    await post("/api/cameras", {
+      name: f.name.value, room: f.room.value, rtsp_url: f.rtsp_url.value,
+      confidence: parseFloat(f.confidence.value),
+    }).catch(()=>{});
+    f.reset(); f.confidence.value = "0.4"; refresh();
+  };
+  refresh();
+}
+renderCameras();
 
 // ---- Rendering (RoomState) ----
 const roomsEl = document.getElementById("rooms");
