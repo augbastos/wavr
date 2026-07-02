@@ -94,8 +94,9 @@ def test_build_inventory_shape_and_fields():
                           hostnames={"24:0a:c4:aa:bb:cc": "esp32-sensor"})
     assert all(isinstance(d, Device) for d in inv)
     assert set(inv[0].to_dict().keys()) == {
-        "mac", "ip", "vendor", "device_type", "known", "hostname",
+        "mac", "ip", "vendor", "device_type", "known", "hostname", "risks",
     }
+    assert inv[0].to_dict()["risks"] == []      # empty until the opt-in port pass runs
     by_mac = {d.mac: d for d in inv}
     apple = by_mac["a4:83:e7:11:22:33"]
     assert apple.vendor == "Apple" and apple.ip == "192.168.0.1"

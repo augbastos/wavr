@@ -65,16 +65,21 @@ _HOSTNAME_HINTS: tuple[tuple[str, str], ...] = (
 
 @dataclass(frozen=True)
 class Device:
-    """One host seen on the LAN. `known` = MAC is on the allowlist."""
+    """One host seen on the LAN. `known` = MAC is on the allowlist.
+    `risks` holds optional report-only risk notes from wavr.netutils port
+    awareness (empty unless that opt-in pass ran)."""
     mac: str
     ip: str | None
     vendor: str
     device_type: str
     known: bool
     hostname: str | None = None
+    risks: tuple = ()      # tuple[str, ...] — optional last field
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["risks"] = list(d["risks"])
+        return d
 
 
 def _is_multicast_or_reserved(mac: str) -> bool:
