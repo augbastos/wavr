@@ -33,3 +33,18 @@ def test_missing_vitals_and_confidence_default():
     assert ev.presence is False and ev.motion == 0.0
     assert ev.breathing_bpm is None and ev.heart_bpm is None
     assert ev.confidence == 0.0
+
+def test_normalize_ruview_reads_optional_targets():
+    raw = {"classification": {"presence": True, "confidence": 0.8},
+           "features": {"motion_band_power": 2.0},
+           "targets": [{"id": 1, "x": 1.2, "y": 0.8, "posture": "standing"},
+                       {"junk": True},          # tolerated, skipped
+                       "not-a-dict"]}
+    e = normalize_ruview(raw, room="sala")
+    assert len(e.targets) == 1
+    assert e.targets[0].x == 1.2 and e.targets[0].posture == "standing"
+
+
+def test_normalize_ruview_no_targets_key_unchanged():
+    e = normalize_ruview({"classification": {"presence": True}}, room="sala")
+    assert e.targets == ()
