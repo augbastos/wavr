@@ -40,7 +40,4 @@ def test_default_sources_lists_network_ruview_sim(monkeypatch):
     from wavr.app import _default_sources
     srcs = _default_sources(load_config())
     enabled = {name: en for name, factory, en in srcs}
-    assert enabled == {
-        "network": True, "ruview": True, "sim": False,
-        "camera_quarto": False, "camera_quintal": False,
-    }
+    assert enabled == {"network": True, "ruview": True, "sim": False}
