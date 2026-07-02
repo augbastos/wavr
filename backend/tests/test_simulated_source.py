@@ -30,3 +30,18 @@ async def test_simulated_is_deterministic_on_non_time_fields():
 
 def test_simulated_source_satisfies_protocol():
     assert isinstance(SimulatedSource(), SensorSource)
+
+
+def test_sim_emits_walking_target_when_present():
+    src = SimulatedSource(interval=0)
+    ev = src._make("sala", "wifi_csi", idx=1)   # phase 1 → present ((1%7)<4)
+    assert len(ev.targets) == 1
+    t = ev.targets[0]
+    assert 0.0 <= t.x <= 4.0 and 0.0 <= t.y <= 3.0
+    assert t.posture in ("standing", "sitting", "walking")
+
+
+def test_sim_no_targets_when_absent_or_network():
+    src = SimulatedSource(interval=0)
+    assert src._make("sala", "wifi_csi", idx=4).targets == ()   # phase 4 → absent
+    assert src._make("casa", "network", idx=0).targets == ()    # house-level: never
