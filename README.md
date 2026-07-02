@@ -3,9 +3,15 @@
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
 [![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
-Multi-modal home presence system: fuses WiFi CSI, LAN device scan, camera CV (YOLO), and mmWave
-radar into one explainable `RoomState` per room — occupancy, confidence, per-modality "why",
-per-person position (x/y) and posture on a top-down house radar.
+**Your home, understood — without giving it away.**
+
+Wavr fuses network scan, WiFi CSI, camera pose, and mmWave radar into one *explainable* `RoomState`
+per room: occupied or not, a confidence score, and the per-modality *why* behind it — plus per-person
+position (x/y) and posture on a top-down house radar.
+
+- **Private** — loopback-only, zero cloud egress; camera frames are never stored, position targets never touch disk.
+- **Explainable** — `confidence = agreement × strength`; the dashboard always shows *why* a room reads occupied.
+- **Local** — runs on your own hardware (laptop to Raspberry Pi) and degrades gracefully: network scan alone works, and it sharpens as you add sensors.
 
 **Try it locally (no backend, no hardware):** open `frontend/index.html` — off-localhost the
 dashboard self-switches to a built-in simulator (simulated data only, zero network requests).
