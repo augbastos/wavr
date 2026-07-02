@@ -18,8 +18,8 @@ async def test_injected_publisher_receives_roomstate_via_hub():
     hub = Hub()
     app = create_app(sources=[], hub=hub, rules_publish=lambda t, p, r: msgs.append((t, p, r)))
     async with app.router.lifespan_context(app):
-        await asyncio.sleep(0)                    # let the just-created rules task run to its first await
-        assert len(hub._subscribers) == 1         # rules engine subscribed on startup
+        await asyncio.sleep(0)                    # let the just-created tasks run to their first await
+        assert len(hub._subscribers) == 2         # rules engine + away monitor subscribed on startup
         await hub.publish(_rs("sala", True))
         await asyncio.sleep(0.02)                 # let the rules task drain the queue
     assert any(t == "wavr/rooms/sala/state" for t, _, _ in msgs)
