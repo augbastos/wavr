@@ -50,6 +50,15 @@ class SourceManager:
         elif not enabled:
             await self._kill(name)
 
+    async def unregister(self, name: str) -> None:
+        """Kill the source's task if running and remove it from the roster. Used by
+        the in-app camera CRUD to drop a camera at runtime."""
+        if name not in self._factories:
+            raise KeyError(name)
+        await self._kill(name)
+        self._factories.pop(name, None)
+        self._enabled.pop(name, None)
+
     def status(self) -> dict:
         return {
             "running": self._running,
