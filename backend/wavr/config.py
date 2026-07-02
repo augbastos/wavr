@@ -21,6 +21,10 @@ class Config:
     ruview_reconnect: float
     cam_interval: float
     cam_confidence: float
+    mqtt_enabled: bool
+    mqtt_host: str
+    mqtt_port: int
+    mqtt_prefix: str
 
 
 def load_config() -> Config:
@@ -40,4 +44,8 @@ def load_config() -> Config:
         ruview_reconnect=float(os.getenv("WAVR_RUVIEW_RECONNECT", "3.0")),
         cam_interval=float(os.getenv("WAVR_CAM_INTERVAL", "0.5")),
         cam_confidence=float(os.getenv("WAVR_CAM_CONFIDENCE", "0.4")),
+        mqtt_enabled=os.getenv("WAVR_MQTT_ENABLED", "").lower() in ("1", "true", "yes"),
+        mqtt_host=os.getenv("WAVR_MQTT_HOST", "localhost"),
+        mqtt_port=int(os.getenv("WAVR_MQTT_PORT", "1883")),
+        mqtt_prefix=os.getenv("WAVR_MQTT_PREFIX", "wavr"),
     )
