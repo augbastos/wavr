@@ -16,6 +16,7 @@ class Config:
     net_known_macs: set[str]
     net_interval: float
     net_grace: int
+    away_grace: int
     ruview_url: str
     ruview_room: str
     ruview_reconnect: float
@@ -25,6 +26,9 @@ class Config:
     mqtt_host: str
     mqtt_port: int
     mqtt_prefix: str
+    gemini_api_key: str
+    gemini_model: str
+    narrate_enabled: bool
 
 
 def load_config() -> Config:
@@ -39,6 +43,7 @@ def load_config() -> Config:
         },
         net_interval=float(os.getenv("WAVR_NET_INTERVAL", "15.0")),
         net_grace=int(os.getenv("WAVR_NET_GRACE", "2")),
+        away_grace=int(os.getenv("WAVR_AWAY_GRACE", "3")),
         ruview_url=os.getenv("WAVR_RUVIEW_URL", "ws://localhost:3000/ws/sensing"),
         ruview_room=os.getenv("WAVR_RUVIEW_ROOM", "sala"),
         ruview_reconnect=float(os.getenv("WAVR_RUVIEW_RECONNECT", "3.0")),
@@ -48,4 +53,7 @@ def load_config() -> Config:
         mqtt_host=os.getenv("WAVR_MQTT_HOST", "localhost"),
         mqtt_port=int(os.getenv("WAVR_MQTT_PORT", "1883")),
         mqtt_prefix=os.getenv("WAVR_MQTT_PREFIX", "wavr"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        gemini_model=os.getenv("WAVR_GEMINI_MODEL", "gemini-1.5-flash"),
+        narrate_enabled=os.getenv("WAVR_NARRATE_ENABLED", "").lower() in ("1", "true", "yes"),
     )
