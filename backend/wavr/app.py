@@ -24,6 +24,7 @@ from wavr.camera_store import CameraStore
 from wavr.rules import RulesEngine
 from wavr.away import AwayMonitor
 from wavr.mqtt_publisher import make_publisher
+from wavr.narrator import Narrator, make_gemini_generate
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -75,7 +76,7 @@ def _camera_factory(cam: dict, cfg):
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
-               rules_publish=None) -> FastAPI:
+               rules_publish=None, narrator=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -89,6 +90,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port)
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
     _away = AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace) if _rules_publish else None
+
+    # Narrator: opt-in via injected `narrator` (tests) or GEMINI_API_KEY (real Gemini
+    # generator, lazily imported). Off by default -- no key, no narrator, 503 on call.
+    _narrator = narrator
+    if _narrator is None and cfg.gemini_api_key:
+        _narrator = Narrator(make_gemini_generate(cfg.gemini_api_key, cfg.gemini_model))
 
     async def _ingest(event):
         rs = _fusion.update(event)
@@ -161,6 +168,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/api/state")
     async def state():
         return latest
+
+    @app.post("/api/narrate")
+    async def narrate(_=Depends(require_local)):
+        if _narrator is None:
+            raise HTTPException(status_code=503, detail="narration not configured (set GEMINI_API_KEY)")
+        try:
+            text = _narrator.narrate(latest, _storage.recent(50))
+        except Exception:
+            raise HTTPException(status_code=502, detail="narration backend error")
+        return {"narration": text}
 
     @app.get("/api/system")
     async def system():
