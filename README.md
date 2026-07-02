@@ -1,7 +1,7 @@
 # Wavr — Fused Home Sensing
 
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
-[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 [![live demo](https://img.shields.io/badge/demo-wavr--3ef.pages.dev-3db54a)](https://wavr-3ef.pages.dev)
 
 Multi-modal home presence system: fuses WiFi CSI, LAN device scan, camera CV (YOLO), and mmWave
@@ -81,4 +81,7 @@ contributions: roadmap items above, or a new `SensorSource` (BLE presence, zigbe
 
 ## License
 
-[MIT](LICENSE)
+[AGPL-3.0-or-later](LICENSE) — Wavr is free and open source for personal, self-hosted, and
+non-commercial use. If you run a modified version as a network service, the AGPL requires you to
+publish your changes. A **commercial / dual license** (to use Wavr without the AGPL's
+network-copyleft obligations) is available from the author — open an issue to enquire.
