@@ -118,6 +118,13 @@ def test_bad_host_header_returns_400():
         assert r.status_code == 400
 
 
+def test_get_house_returns_rooms():
+    with build_client() as client:
+        r = client.get("/api/house")
+        assert r.status_code == 200
+        assert any(room["name"] == "sala" for room in r.json()["rooms"])
+
+
 def test_ws_non_loopback_peer_closed_with_1008():
     # Same forged-peer technique as the HTTP 403 test, but through the WebSocket
     # route, which the http middleware does NOT cover (see app.py comment) — the

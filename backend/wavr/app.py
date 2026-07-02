@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
 from wavr.config import load_config
+from wavr.housemap import load_house_map
 from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine
@@ -83,6 +84,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _storage = storage or Storage(cfg.db_path)
     _fusion = fusion or FusionEngine(threshold=cfg.fusion_threshold)
     latest: dict[str, dict] = {}  # room -> last RoomState dict (Camada 4 seam)
+    _house = load_house_map(cfg.house_map)
 
     # Rules/MQTT engine: opt-in via injected `rules_publish` (tests) or WAVR_MQTT_ENABLED
     # (real paho publisher, lazily connected). Off by default -- no publisher, no engine.
@@ -172,6 +174,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/api/state")
     async def state():
         return latest
+
+    @app.get("/api/house")
+    async def house():
+        return _house
 
     @app.post("/api/narrate")
     async def narrate(_=Depends(require_local)):
