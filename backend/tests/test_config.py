@@ -35,3 +35,8 @@ def test_config_has_mqtt_defaults(monkeypatch):
     assert cfg.mqtt_host == "localhost"
     assert cfg.mqtt_port == 1883
     assert cfg.mqtt_prefix == "wavr"
+
+def test_config_has_away_default(monkeypatch):
+    monkeypatch.delenv("WAVR_AWAY_GRACE", raising=False)
+    from wavr.config import load_config
+    assert load_config().away_grace == 3
