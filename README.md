@@ -1,10 +1,16 @@
 # Wavr — Fused Home Sensing
 
+[![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![live demo](https://img.shields.io/badge/demo-wavr--3ef.pages.dev-3db54a)](https://wavr-3ef.pages.dev)
+
 Multi-modal home presence system: fuses WiFi CSI, LAN device scan, camera CV (YOLO), and mmWave
 radar into one explainable `RoomState` per room — occupancy, confidence, per-modality "why",
 per-person position (x/y) and posture on a top-down house radar.
 
-**Public demo (simulated data only):** https://wavr-3ef.pages.dev
+**Live demo (simulated data only):** https://wavr-3ef.pages.dev
+
+![Wavr dashboard — position radar with posture labels, explainable per-room fusion, timeline](docs/img/demo.png)
 
 ## Architecture
 
@@ -38,6 +44,32 @@ python -m uvicorn wavr.app:app --host 127.0.0.1 --port 8000
 
 Tests: `python -m pytest backend/tests -q` (138, all hardware mock-tested).
 
+## Design stance: integration over hype
+
+Wavr does not reimplement sensing research — it orchestrates sensing engines as plugins and is
+honest about each one's confidence. Every source implements one small `SensorSource` seam
+(injectable transports, lazy deps, fully mock-tested), the fusion is transparent math
+(`agreement × strength`, per-modality trust weights), and the dashboard always shows *why* a room
+reads occupied. When an upstream engine's headline feature turns out to be weaker than its README
+(it happens), Wavr consumes what actually works and the weights tell the truth.
+
+## Roadmap
+
+- **mmWave bring-up** — HLK-LD2450 over USB serial (~€15): real x/y target tracking on the radar.
+  Parser + source are done and tested; needs the device.
+- **Camera posture live** — YOLO-pose (`[camera]` extra) on RTSP cameras: standing/sitting/lying.
+- **3D house view** — extrude the `house.json` floor plan with walls (isometric SVG first) + an
+  in-app floor-plan editor.
+- **Cross-source track association** — fuse targets from multiple sensors in the same room.
+- **Fallen-person detection** — lying + location + duration on top of the above.
+
+## Contributing
+
+Issues and PRs welcome. Ground rules: privacy invariants are non-negotiable (nothing leaves the
+LAN except the opt-in narrator; frames are never persisted; new sources must be mock-testable
+without hardware), and every PR needs green tests (`pytest backend/tests -q`). Good first
+contributions: roadmap items above, or a new `SensorSource` (BLE presence, zigbee occupancy, …).
+
 ## Docs
 
 - `PRODUCT.md` — product definition and design principles
@@ -45,3 +77,8 @@ Tests: `python -m pytest backend/tests -q` (138, all hardware mock-tested).
   ESP32 CSI, camera pose), laptop → appliance migration
 - `docs/superpowers/plans/` — every sub-plan (A fusion → B real sources → C camera CV →
   layers 2-4 → Docker → D position/posture radar), all executed via subagent-driven development
+  with per-task adversarial review
+
+## License
+
+[MIT](LICENSE)
