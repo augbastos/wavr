@@ -1,4 +1,3 @@
-import pytest
 from wavr import mqtt_publisher as mp
 
 

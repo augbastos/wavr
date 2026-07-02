@@ -116,7 +116,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         finally:
             if rules_task:
                 rules_task.cancel()
-                with suppress(asyncio.CancelledError):
+                # Suppress CancelledError AND any error a caller-injected publisher
+                # might raise, so shutdown always reaches manager.stop() + camera close.
+                with suppress(asyncio.CancelledError, Exception):
                     await rules_task
             await manager.stop()
             if _owns_cameras:
