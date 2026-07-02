@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sqlite3
 from contextlib import asynccontextmanager, suppress
@@ -22,7 +23,9 @@ from wavr.sources.ruview import RuViewSource
 from wavr.sources.camera import CameraSource
 from wavr.camera_store import CameraStore
 from wavr.rules import RulesEngine
+from wavr.away import AwayMonitor
 from wavr.mqtt_publisher import make_publisher
+from wavr.narrator import Narrator, make_gemini_generate
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -74,7 +77,7 @@ def _camera_factory(cam: dict, cfg):
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
-               rules_publish=None) -> FastAPI:
+               rules_publish=None, narrator=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -87,6 +90,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     if _rules_publish is None and cfg.mqtt_enabled:
         _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port)
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
+    _away = AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace) if _rules_publish else None
+
+    # Narrator: opt-in via injected `narrator` (tests) or BOTH WAVR_NARRATE_ENABLED and
+    # GEMINI_API_KEY (real Gemini generator, lazily imported). Off by default -- no
+    # explicit opt-in, no narrator, 503 on call. The flag is a conscious two-factor
+    # gate so merely having a key present (e.g. in ./.env) can't silently enable
+    # cloud egress.
+    _narrator = narrator
+    if _narrator is None and cfg.narrate_enabled and cfg.gemini_api_key:
+        _narrator = Narrator(make_gemini_generate(cfg.gemini_api_key, cfg.gemini_model))
 
     async def _ingest(event):
         rs = _fusion.update(event)
@@ -111,15 +124,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def lifespan(app: FastAPI):
         await manager.start()
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
+        away_task = asyncio.create_task(_away.run(_hub)) if _away else None
         try:
             yield
         finally:
-            if rules_task:
-                rules_task.cancel()
-                # Suppress CancelledError AND any error a caller-injected publisher
-                # might raise, so shutdown always reaches manager.stop() + camera close.
-                with suppress(asyncio.CancelledError, Exception):
-                    await rules_task
+            # Suppress CancelledError AND any error a caller-injected publisher
+            # might raise, so shutdown always reaches manager.stop() + camera close.
+            for t in (rules_task, away_task):
+                if t:
+                    t.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await t
             await manager.stop()
             if _owns_cameras:
                 with suppress(Exception):
@@ -157,6 +172,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/api/state")
     async def state():
         return latest
+
+    @app.post("/api/narrate")
+    async def narrate(_=Depends(require_local)):
+        if _narrator is None:
+            raise HTTPException(status_code=503, detail="narration not configured (set GEMINI_API_KEY)")
+        try:
+            text = await asyncio.to_thread(_narrator.narrate, latest, _storage.recent(50))
+        except Exception:
+            logging.exception("narrate failed")
+            raise HTTPException(status_code=502, detail="narration backend error")
+        return {"narration": text}
 
     @app.get("/api/system")
     async def system():

@@ -35,3 +35,21 @@ def test_config_has_mqtt_defaults(monkeypatch):
     assert cfg.mqtt_host == "localhost"
     assert cfg.mqtt_port == 1883
     assert cfg.mqtt_prefix == "wavr"
+
+def test_config_has_away_default(monkeypatch):
+    monkeypatch.delenv("WAVR_AWAY_GRACE", raising=False)
+    from wavr.config import load_config
+    assert load_config().away_grace == 3
+
+def test_config_has_gemini_defaults(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("WAVR_GEMINI_MODEL", raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.gemini_api_key == ""
+    assert cfg.gemini_model == "gemini-1.5-flash"
+
+def test_config_narrate_enabled_defaults_false(monkeypatch):
+    monkeypatch.delenv("WAVR_NARRATE_ENABLED", raising=False)
+    from wavr.config import load_config
+    assert load_config().narrate_enabled is False
