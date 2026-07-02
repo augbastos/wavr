@@ -55,3 +55,22 @@ async def test_register_enabled_while_running_spawns_task_immediately():
     src = [s for s in m.status()["sources"] if s["name"] == "b"][0]
     assert src["enabled"] is True and src["active"] is True
     await m.stop()
+
+
+async def test_self_terminated_source_reports_inactive():
+    got = []
+    async def on_event(ev):
+        got.append(ev)
+
+    class _Finite:
+        async def events(self):
+            yield "x"          # emit once, then the generator ends naturally
+
+    mgr = SourceManager(on_event)
+    mgr.register("finite", lambda: _Finite(), True)
+    await mgr.start()
+    await asyncio.sleep(0.02)   # let it emit and complete
+    status = {s["name"]: s["active"] for s in mgr.status()["sources"]}
+    assert status["finite"] is False   # completed task must not report active
+    assert "x" in got
+    await mgr.stop()

@@ -1,5 +1,6 @@
 import pytest
 from wavr.sources.camera import CameraSource, Detection
+import wavr.sources.camera as _cam
 
 async def _first_n(source, n):
     out = []
@@ -100,3 +101,55 @@ def test_yolo_detect_filters_by_confidence_threshold(monkeypatch):
     det_default = camera.yolo_detect("frame")  # default 0.0 keeps all
     assert det_default.count == 2
     assert det_default.confidence == 0.9
+
+def _reset_active():
+    _cam._ACTIVE = 0
+    _cam._YOLO_MODEL = None
+
+async def test_camera_survives_transient_detect_error():
+    _reset_active()
+    calls = {"n": 0}
+    def detect(f):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("bad frame")   # transient
+        return Detection(count=1, confidence=0.7)
+    async def frames(url):
+        yield "f"                              # one frame per connection
+    src = CameraSource("quarto", frames=frames, detect=detect, reconnect_delay=0)
+    [ev] = await _first_n(src, 1)              # 1st frame errors -> reconnect -> 2nd ok
+    assert ev.presence is True and calls["n"] == 2
+
+async def test_last_camera_stop_releases_model(monkeypatch):
+    _reset_active()
+    calls = {"n": 0}
+    monkeypatch.setattr(_cam, "release_model", lambda: calls.__setitem__("n", calls["n"] + 1))
+    async def frames(url):
+        while True:
+            yield "f"
+    src = CameraSource("quarto", frames=frames, detect=lambda f: Detection(1, 0.5), interval=0)
+    agen = src.events()
+    await agen.__anext__()
+    await agen.aclose()
+    assert calls["n"] == 1                      # only/last camera stopped -> released
+
+async def test_model_not_released_while_another_camera_active(monkeypatch):
+    _reset_active()
+    calls = {"n": 0}
+    monkeypatch.setattr(_cam, "release_model", lambda: calls.__setitem__("n", calls["n"] + 1))
+    async def frames(url):
+        while True:
+            yield "f"
+    a = CameraSource("quarto", frames=frames, detect=lambda f: Detection(1, 0.5), interval=0)
+    b = CameraSource("quintal", frames=frames, detect=lambda f: Detection(1, 0.5), interval=0)
+    ag_a, ag_b = a.events(), b.events()
+    await ag_a.__anext__(); await ag_b.__anext__()   # _ACTIVE == 2
+    await ag_a.aclose()
+    assert calls["n"] == 0                            # one still active -> not released
+    await ag_b.aclose()
+    assert calls["n"] == 1                            # last stopped -> released
+
+def test_release_model_nulls_global_and_is_torch_safe():
+    _cam._YOLO_MODEL = "sentinel"
+    _cam.release_model()                              # torch absent -> suppressed, no raise
+    assert _cam._YOLO_MODEL is None
