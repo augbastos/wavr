@@ -39,6 +39,11 @@ class Config:
     ble_room: str
     ble_rssi_min: int
     ble_interval: float
+    # Multi-device client auth (ADR-0006) — opt-in, all default to loopback-only.
+    multidevice: bool
+    bind_host: str
+    tls_cert: str
+    tls_key: str
 
 
 def load_config() -> Config:
@@ -81,4 +86,11 @@ def load_config() -> Config:
         ble_room=os.getenv("WAVR_BLE_ROOM", "casa"),
         ble_rssi_min=int(os.getenv("WAVR_BLE_RSSI_MIN", "-80")),
         ble_interval=float(os.getenv("WAVR_BLE_INTERVAL", "15.0")),
+        # Multi-device (ADR-0006): default OFF -> zero behaviour change, loopback-only
+        # exactly as today. `bind_host` is only honoured when multidevice is on; the
+        # TLS paths are empty until Phase 2 (self-signed cert generation).
+        multidevice=os.getenv("WAVR_MULTIDEVICE", "").lower() in ("1", "true", "yes"),
+        bind_host=os.getenv("WAVR_BIND", "127.0.0.1"),
+        tls_cert=os.getenv("WAVR_TLS_CERT", ""),
+        tls_key=os.getenv("WAVR_TLS_KEY", ""),
     )
