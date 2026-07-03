@@ -32,8 +32,8 @@
   [design](superpowers/specs/2026-07-03-multi-device-client-auth-design.md)).
 - **MCP "brain on Home Assistant"** — the read-only MCP grows read access to HA
   entities + the ability to trigger HA services for control (Wavr never becomes a
-  device driver). Needs an ADR for the read→write control boundary (loopback + auth,
-  explicit consent, camera boot-OFF, zero exfil).
+  device driver). See [ADR-0005](adr/0005-mcp-control-boundary.md) for the read→write
+  control boundary (loopback + auth, explicit consent, camera boot-OFF, zero exfil).
 - **Packaging** — a Tauri desktop shell (tray, auto-start) around the existing backend +
   dashboard, and the dashboard as an installable **PWA** for the mobile companion (no
   framework, no build step added).
