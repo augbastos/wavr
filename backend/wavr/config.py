@@ -27,6 +27,7 @@ class Config:
     mqtt_host: str
     mqtt_port: int
     mqtt_prefix: str
+    ha_discovery: bool
     gemini_api_key: str
     gemini_model: str
     narrate_enabled: bool
@@ -58,6 +59,7 @@ def load_config() -> Config:
         mqtt_host=os.getenv("WAVR_MQTT_HOST", "localhost"),
         mqtt_port=int(os.getenv("WAVR_MQTT_PORT", "1883")),
         mqtt_prefix=os.getenv("WAVR_MQTT_PREFIX", "wavr"),
+        ha_discovery=os.getenv("WAVR_HA_DISCOVERY", "").lower() in ("1", "true", "yes"),
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("WAVR_GEMINI_MODEL", "gemini-1.5-flash"),
         narrate_enabled=os.getenv("WAVR_NARRATE_ENABLED", "").lower() in ("1", "true", "yes"),
