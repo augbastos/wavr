@@ -54,8 +54,26 @@ class FusionEngine:
         self._latest: dict[str, dict[str, SensingEvent]] = {}  # room -> modality -> event
 
     def update(self, event: SensingEvent) -> RoomState:
-        self._latest.setdefault(event.room, {})[event.modality] = event
-        return self._fuse(event.room, event.ts)
+        room_events = self._latest.setdefault(event.room, {})
+        try:
+            _as_utc(event.ts)
+            valid_ts = True
+        except (TypeError, ValueError):
+            valid_ts = False
+
+        if valid_ts:
+            room_events[event.modality] = event
+            ts = event.ts
+        else:
+            # A malformed/unparseable ts must never be stored: once in
+            # `_latest` it would poison this modality's slot and make every
+            # later fuse touching the room raise (killing healthy sources
+            # one-by-one). Reject the event instead and fuse whatever's
+            # already known for the room.
+            ts = max((e.ts for e in room_events.values()), default=None)
+            if ts is None:
+                ts = datetime.now(timezone.utc).isoformat()
+        return self._fuse(event.room, ts)
 
     def state(self, room: str) -> RoomState | None:
         if room not in self._latest:
@@ -76,15 +94,34 @@ class FusionEngine:
         events = self._latest[room]
         # Reference "now" for ageing: injected clock, else the room's newest event
         # (identity for fresh events → existing fusion math is unchanged).
-        ref = _as_utc(self._now_fn()) if self._now_fn is not None else _as_utc(ts)
+        try:
+            ref = _as_utc(self._now_fn()) if self._now_fn is not None else _as_utc(ts)
+        except (TypeError, ValueError):
+            # ts itself is unusable (e.g. the room has no stored events yet and
+            # the triggering event's ts was rejected upstream) — fall back to
+            # wall-clock rather than raising.
+            ref = datetime.now(timezone.utc)
         num = 0.0        # weighted mass saying "present"
         den = 0.0        # total weighted mass
         strength = 0.0   # best present evidence (weight × confidence)
         sources = []
         vitals: dict = {}
+        decays: dict[str, float] = {}  # modality -> trust multiplier, reused for target gating
         for modality, e in events.items():
-            age_s = max(0.0, (ref - _as_utc(e.ts)).total_seconds())
+            try:
+                e_ts = _as_utc(e.ts)
+            except (TypeError, ValueError):
+                # Defensive: a stored event with an unparseable ts must never
+                # crash fusion for the room's other, healthy sources. Treat it
+                # as contributing no evidence (same as a dead source).
+                decays[modality] = 0.0
+                sources.append({"modality": modality, "presence": e.presence,
+                                "confidence": round(e.confidence, 3),
+                                "age_s": None, "health": "invalid_ts"})
+                continue
+            age_s = max(0.0, (ref - e_ts).total_seconds())
             decay, health = self._freshness(age_s)
+            decays[modality] = decay
             mass = self._weights.get(modality, 0.5) * e.confidence * decay
             den += mass
             if e.presence:
@@ -96,7 +133,9 @@ class FusionEngine:
             if e.presence and e.breathing_bpm is not None:
                 vitals = {"breathing_bpm": e.breathing_bpm, "heart_bpm": e.heart_bpm}
         agreement = num / den if den > 0 else 0.0
-        confidence = round(agreement * strength, 3)
+        # Defensive clamp: a single out-of-range source confidence (negative or
+        # >1) must never drive the fused confidence outside [0, 1].
+        confidence = round(min(1.0, max(0.0, agreement * strength)), 3)
         occupied = confidence >= self._threshold
         parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
         explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
@@ -104,7 +143,10 @@ class FusionEngine:
         best_targets: list = []
         best_w = -1.0
         for modality, e in events.items():
-            if e.presence and e.targets:
+            # Same freshness/decay gate as the confidence loop: a stale/dead
+            # (or invalid-ts) source must not pass its targets through — a
+            # decayed-to-zero source is indistinguishable from an absent one.
+            if e.presence and e.targets and decays.get(modality, 0.0) > 0.0:
                 w = self._weights.get(modality, 0.5)
                 if w > best_w:
                     best_w = w

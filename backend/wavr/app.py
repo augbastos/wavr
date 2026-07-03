@@ -73,7 +73,10 @@ def _default_sources(cfg):
 
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-_URL_SHAPE_RE = re.compile(r"^\w+://.+")
+# Scheme is restricted to rtsp(s) -- the URL is handed straight to cv2.VideoCapture,
+# so allowing arbitrary schemes (http://, file://, etc.) would let a caller point it
+# at internal/metadata endpoints or the local filesystem (SSRF/LFI via camera add).
+_URL_SHAPE_RE = re.compile(r"^rtsps?://.+", re.IGNORECASE)
 # Same-origin allowlist for the /ws/live handshake (browsers send Origin; native
 # clients/tests send none). Blocks a drive-by cross-site page from opening the live
 # targets/vitals stream. "testserver" matches the Host allowlist for the TestClient.
@@ -199,15 +202,28 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
         # revoke devices; a 'user' is read-only (audit C1). Applied via include_router
-        # dependencies so it wraps every route in the devices router.
-        if getattr(request.state, "role", None) not in ("root", "central"):
+        # dependencies so it wraps every route in the devices router (GET + DELETE).
+        role = getattr(request.state, "role", None)
+        if role not in ("root", "central"):
             raise HTTPException(status_code=403, detail="central role required")
+
+    def require_csrf_root(request: Request):
+        # CSRF guard for STATE-CHANGING device routes (DELETE only -- the GET list is a
+        # read and needs no CSRF). Same rule as every other state-changing route: the
+        # loopback 'root' additionally needs the X-Wavr-Local header, so a same-origin
+        # browser drive-by `fetch('/api/devices/x',{method:'DELETE'})` can't revoke a
+        # device using just the operator's session. A token-authed LAN central is
+        # header-independent and unaffected.
+        role = getattr(request.state, "role", None)
+        if role == "root" and request.headers.get("x-wavr-local") != "1":
+            raise HTTPException(status_code=403, detail="missing X-Wavr-Local header")
 
     if cfg.multidevice:
         app.include_router(build_pair_router(_devices, _pairing))
         app.include_router(build_ws_ticket_router(_devices, _pairing))
-        app.include_router(build_devices_router(_devices),
-                           dependencies=[Depends(require_central)])
+        app.include_router(
+            build_devices_router(_devices, delete_deps=[Depends(require_csrf_root)]),
+            dependencies=[Depends(require_central)])
 
     # PRIVACY: the load-bearing access control. Default (WAVR_MULTIDEVICE off) is strict
     # loopback-only, enforced in code so it holds even under --host 0.0.0.0 ("testclient"
@@ -261,6 +277,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.get("/api/history")
     async def history(limit: int = 200):
+        # Clamp: a negative limit means "no limit" to SQLite's `LIMIT ?` (full-table
+        # dump), and an unbounded positive value is still a resource-exhaustion risk.
+        limit = max(1, min(limit, 1000))
         return await asyncio.to_thread(_storage.recent, limit)
 
     @app.get("/api/state")
@@ -331,7 +350,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if not _NAME_RE.match(room):
             raise HTTPException(status_code=400, detail="room must be alphanumeric/_/-")
         if not _URL_SHAPE_RE.match(rtsp_url):
-            raise HTTPException(status_code=400, detail="rtsp_url must look like scheme://...")
+            raise HTTPException(status_code=400, detail="rtsp_url must be rtsp:// or rtsps://")
         if not (0.0 <= confidence <= 1.0):
             raise HTTPException(status_code=400, detail="confidence must be between 0.0 and 1.0")
         if name in {s["name"] for s in manager.status()["sources"]}:

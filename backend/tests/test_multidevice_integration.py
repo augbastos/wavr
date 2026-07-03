@@ -79,6 +79,31 @@ def test_revoked_token_is_denied(app):
     assert peer.get("/api/state", headers=auth).status_code == 403
 
 
+def test_loopback_delete_device_requires_csrf_header(app):   # audit fix: CSRF on device revoke
+    peer, auth = _pair(app, "user")
+    central = TestClient(app)
+    device_id = central.get("/api/devices", headers=CSRF).json()["devices"][0]["device_id"]
+    # loopback root WITHOUT the CSRF header is refused (same-origin browser drive-by
+    # DELETE using just the operator's session, no header the page can't also send)
+    assert central.delete(f"/api/devices/{device_id}").status_code == 403
+    # loopback root WITH the header still works
+    assert central.delete(f"/api/devices/{device_id}", headers=CSRF).status_code == 200
+    assert peer.get("/api/state", headers=auth).status_code == 403   # actually revoked
+
+
+def test_central_role_can_manage_devices_without_csrf_header(app):
+    # A LAN 'central' companion is Bearer-token-authenticated, not cookie/session-based,
+    # so it isn't subject to the loopback-root CSRF gate -- confirms the fix is scoped
+    # to the loopback root and doesn't regress the authenticated central path.
+    user_peer, user_auth = _pair(app, "user")
+    central_peer, central_auth = _pair(app, "central")
+    listed = central_peer.get("/api/devices", headers=central_auth)
+    assert listed.status_code == 200
+    target = next(d for d in listed.json()["devices"] if d["role"] == "user")
+    assert central_peer.delete(f"/api/devices/{target['device_id']}", headers=central_auth).status_code == 200
+    assert user_peer.get("/api/state", headers=user_auth).status_code == 403   # revoked
+
+
 # --- /ws/live ticket path (audit M1 revoke re-check + M2 subnet) ---
 
 def _ticket(peer, auth):

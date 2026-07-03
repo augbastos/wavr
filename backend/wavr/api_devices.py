@@ -60,16 +60,20 @@ def build_ws_ticket_router(store, pairing) -> APIRouter:
     return router
 
 
-def build_devices_router(store) -> APIRouter:
+def build_devices_router(store, delete_deps=None) -> APIRouter:
     """GET /api/devices -> list (no token material); DELETE /api/devices/{id} ->
-    revoke. Revocation takes effect on the device's next request."""
+    revoke. Revocation takes effect on the device's next request.
+
+    `delete_deps` (optional) are extra FastAPI dependencies applied ONLY to the
+    state-changing DELETE (e.g. a CSRF-header guard) -- the GET list is a read and
+    needs no CSRF, so it must stay reachable without the header."""
     router = APIRouter()
 
     @router.get("/api/devices")
     async def devices():
         return {"devices": [d.to_dict() for d in store.list()]}
 
-    @router.delete("/api/devices/{device_id}")
+    @router.delete("/api/devices/{device_id}", dependencies=list(delete_deps or []))
     async def revoke(device_id: str):
         if not store.revoke(device_id):
             raise HTTPException(status_code=404, detail=f"unknown device: {device_id}")
