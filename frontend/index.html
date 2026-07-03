@@ -161,6 +161,18 @@
   .radar-draw{fill:rgba(61,181,74,.1);stroke:var(--accent);stroke-width:.02;
               stroke-dasharray:.12 .08;vector-effect:non-scaling-stroke;pointer-events:none;}
   #radar.editing{cursor:crosshair;touch-action:none;}
+  /* House editor (live-only, central): draw/edit rooms/walls/stairs, multi-floor, undo/redo, save */
+  .hed:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .hed-tools .primary{border-color:var(--accent);color:var(--accent);}
+  .hed h3{margin:4px 0 12px;}
+  .hed-dirty{font-size:.78rem;color:var(--warn);font-weight:600;}
+  .hed-hint{margin:8px 0 0;font-size:.78rem;color:var(--muted);max-width:70ch;}
+  #radar.hed-drawing{cursor:crosshair;touch-action:none;}
+  #radar.hed-live .room-poly,#radar.hed-live .wall,#radar.hed-live .feat{pointer-events:auto;cursor:pointer;}
+  .room-poly.selected{stroke:var(--warn);stroke-width:.045;fill:rgba(224,179,65,.14);}
+  .wall.selected{stroke:var(--warn);stroke-width:.08;}
+  .feat.selected{stroke:var(--ink);stroke-width:.06;}
   /* Pairing panel (live-only, multidevice-gated): mint pairing code + list/revoke devices */
   .pair:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
   .pair h3{margin:4px 0 12px;}
@@ -291,6 +303,22 @@
     <div id="zoneList" class="zone-list" aria-label="Zonas"></div>
   </div>
 </div>
+<section id="houseEditor" class="hed" hidden aria-labelledby="hed-h">
+  <h3 id="hed-h">Editor da planta</h3>
+  <div class="hed-tools">
+    <button type="button" data-tool="select" class="ctl small on">Selecionar</button>
+    <button type="button" data-tool="room" class="ctl small">+ Cômodo</button>
+    <button type="button" data-tool="wall" class="ctl small">+ Parede</button>
+    <button type="button" data-tool="stairs" class="ctl small">+ Escada</button>
+    <button type="button" id="hedDelete" class="ctl small" disabled>Apagar</button>
+    <button type="button" id="hedUndo" class="ctl small" disabled>↶ Desfazer</button>
+    <button type="button" id="hedRedo" class="ctl small" disabled>↷ Refazer</button>
+    <button type="button" id="hedAddFloor" class="ctl small">+ Andar</button>
+    <button type="button" id="hedSave" class="ctl small primary">Salvar</button>
+    <span id="hedDirty" class="hed-dirty" hidden aria-live="polite">não salvo</span>
+  </div>
+  <p class="hed-hint">Selecionar: clique num cômodo/parede/escada para marcar e apagar · + Cômodo/+ Parede: arraste no radar · + Escada: clique no radar</p>
+</section>
 <main>
   <div class="rooms" id="rooms" aria-label="Estado por cômodo"><div class="empty">aguardando dados dos cômodos…</div></div>
   <h3 id="tl-h">Timeline</h3>
@@ -813,6 +841,12 @@ function placeDot(g, room, t){
 
 async function renderRadar(){
   await loadHouse();                        // sets HOUSE (+ DEMO_HOUSE fallback) and currentFloor
+  // House-editor state, declared up front: renderHouseOverlay (below) reads SELECTED on every
+  // render, including the very first synchronous rebuildRoomsForFloor() call further down.
+  let TOOL = "select", DIRTY = false, SELECTED = null;   // SELECTED: {kind:'room'|'wall'|'feature', id}
+  const HOUSE_HISTORY = [], HOUSE_REDO = [];
+  const EDIT_SNAP = 0.25;
+  function snap(v){ return Math.round(v/EDIT_SNAP)*EDIT_SNAP; }
   const svg = document.getElementById("radar");
   // Layer order (document order = paint order, first = bottom): true house geometry, zones,
   // room rects + dots, then the in-progress zone-drawing preview on top of everything.
@@ -845,8 +879,10 @@ async function renderRadar(){
       if(!r.polygon || r.polygon.length < 3) return;
       const poly = document.createElementNS(SVG_NS, "polygon");
       poly.setAttribute("points", r.polygon.map(p=>p[0]+","+p[1]).join(" "));
-      poly.setAttribute("class", "room-poly");
+      poly.setAttribute("class", "room-poly" + (SELECTED && SELECTED.kind==="room" && SELECTED.id===r.id ? " selected" : ""));
       if(r.name) poly.dataset.name = r.name;
+      if(r.id) poly.dataset.id = r.id;
+      poly.onclick = ()=> selectHouseEl("room", r.id);
       houseLayer.appendChild(poly);
     });
     (f.walls||[]).forEach(w=>{
@@ -854,7 +890,9 @@ async function renderRadar(){
       const ln = document.createElementNS(SVG_NS, "line");
       ln.setAttribute("x1", w.a[0]); ln.setAttribute("y1", w.a[1]);
       ln.setAttribute("x2", w.b[0]); ln.setAttribute("y2", w.b[1]);
-      ln.setAttribute("class", "wall");
+      ln.setAttribute("class", "wall" + (SELECTED && SELECTED.kind==="wall" && SELECTED.id===w.id ? " selected" : ""));
+      if(w.id) ln.dataset.id = w.id;
+      ln.onclick = ()=> selectHouseEl("wall", w.id);
       houseLayer.appendChild(ln);
     });
     (f.features||[]).forEach(ft=>{
@@ -862,7 +900,9 @@ async function renderRadar(){
       const c = document.createElementNS(SVG_NS, "circle");
       c.setAttribute("cx", ft.at[0]); c.setAttribute("cy", ft.at[1]);
       c.setAttribute("r", 0.15);
-      c.setAttribute("class", "feat feat-"+ft.type);
+      c.setAttribute("class", "feat feat-"+ft.type + (SELECTED && SELECTED.kind==="feature" && SELECTED.id===ft.id ? " selected" : ""));
+      if(ft.id) c.dataset.id = ft.id;
+      c.onclick = ()=> selectHouseEl("feature", ft.id);
       houseLayer.appendChild(c);
     });
   }
@@ -1051,6 +1091,174 @@ async function renderRadar(){
     refreshZones();
   };
   refreshZones();
+
+  // ---- House editor (live-only, central): draw/edit rooms/walls/stairs, multi-floor, undo/redo, save ----
+  // Builds directly on the v2 HOUSE doc + the T6 rendering closures above (floorFor, rebuildRoomsForFloor,
+  // buildFloorSelect, renderHouseOverlay, svgPoint, drawLayer, editMode) — no separate render path.
+  function houseSnapshot(){ return JSON.parse(JSON.stringify(HOUSE)); }
+  function pushHouseHistory(){
+    HOUSE_HISTORY.push(houseSnapshot());
+    if(HOUSE_HISTORY.length > 50) HOUSE_HISTORY.shift();
+    HOUSE_REDO.length = 0;
+    updateHedButtons();
+  }
+  function markHouseDirty(v){
+    DIRTY = v;
+    const d = document.getElementById("hedDirty");
+    if(d) d.hidden = !v;
+  }
+  function afterHouseEdit(){
+    if(!floorFor(currentFloor)) currentFloor = HOUSE.floors[0].level;   // e.g. undo removed the current floor
+    buildFloorSelect();
+    rebuildRoomsForFloor();
+    markHouseDirty(true);
+    updateHedButtons();
+  }
+  function updateHedButtons(){
+    const u = document.getElementById("hedUndo"), r = document.getElementById("hedRedo"),
+          del = document.getElementById("hedDelete");
+    if(u) u.disabled = !HOUSE_HISTORY.length;
+    if(r) r.disabled = !HOUSE_REDO.length;
+    if(del) del.disabled = !SELECTED;
+  }
+  function undoHouse(){
+    if(!HOUSE_HISTORY.length) return;
+    HOUSE_REDO.push(houseSnapshot());
+    HOUSE = HOUSE_HISTORY.pop();
+    SELECTED = null;
+    afterHouseEdit();
+  }
+  function redoHouse(){
+    if(!HOUSE_REDO.length) return;
+    HOUSE_HISTORY.push(houseSnapshot());
+    HOUSE = HOUSE_REDO.pop();
+    SELECTED = null;
+    afterHouseEdit();
+  }
+  let hedUidN = 0;
+  function hedUid(prefix){ hedUidN += 1; return prefix + "_" + Date.now().toString(36) + hedUidN; }
+  function selectHouseEl(kind, id){
+    if(MODE !== "live" || TOOL !== "select") return;   // belt-and-suspenders: CSS also gates click reachability
+    SELECTED = (SELECTED && SELECTED.kind===kind && SELECTED.id===id) ? null : {kind, id};   // click again = deselect
+    renderHouseOverlay(floorFor(currentFloor));
+    updateHedButtons();
+  }
+  function deleteSelectedHouseEl(){
+    if(!SELECTED) return;
+    const f = floorFor(currentFloor); if(!f) return;
+    pushHouseHistory();
+    const key = SELECTED.kind==="room" ? "rooms" : SELECTED.kind==="wall" ? "walls" : "features";
+    f[key] = (f[key]||[]).filter(o => o.id !== SELECTED.id);
+    SELECTED = null;
+    afterHouseEdit();
+  }
+  function addHouseFloor(){
+    pushHouseHistory();
+    const nl = Math.max(...HOUSE.floors.map(f=>f.level)) + 1;
+    HOUSE.floors.push({id: hedUid("f"), name: (nl+1)+"º andar", level: nl, rooms: [], walls: [], features: [], backdrop: null});
+    currentFloor = nl;
+    afterHouseEdit();
+  }
+  async function saveHouseDoc(){
+    try{
+      const r = await fetch(location.origin+"/api/house", {method:"PUT",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+        body: JSON.stringify(HOUSE)});
+      if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); }
+      else { alert("Falha ao salvar (" + r.status + ")"); }
+    }catch{ alert("Falha de conexão ao salvar"); }
+  }
+
+  function initHouseEditor(){
+    if(MODE !== "live") return;              // editor is central-only; demo + companion never see it or PUT
+    const ed = document.getElementById("houseEditor"); if(!ed) return;
+    ed.hidden = false;
+    svg.classList.add("hed-live");
+    let hedStart = null, hedPreview = null;
+    function cancelHedDraw(){ hedStart = null; if(hedPreview){ hedPreview.remove(); hedPreview = null; } }
+    function updateHedPreview(a, b){
+      if(!hedPreview) return;
+      if(TOOL === "room"){
+        hedPreview.setAttribute("x", Math.min(a.x,b.x)); hedPreview.setAttribute("y", Math.min(a.y,b.y));
+        hedPreview.setAttribute("width", Math.abs(b.x-a.x)); hedPreview.setAttribute("height", Math.abs(b.y-a.y));
+      } else {
+        hedPreview.setAttribute("x1", a.x); hedPreview.setAttribute("y1", a.y);
+        hedPreview.setAttribute("x2", b.x); hedPreview.setAttribute("y2", b.y);
+      }
+    }
+    document.querySelectorAll('#houseEditor [data-tool]').forEach(b=>{
+      b.onclick = ()=>{
+        TOOL = b.dataset.tool;
+        document.querySelectorAll('#houseEditor [data-tool]').forEach(x => x.classList.toggle("on", x===b));
+        svg.classList.toggle("hed-drawing", TOOL==="room" || TOOL==="wall" || TOOL==="stairs");
+        cancelHedDraw();
+      };
+    });
+    document.getElementById("hedUndo").onclick = undoHouse;
+    document.getElementById("hedRedo").onclick = redoHouse;
+    document.getElementById("hedSave").onclick = saveHouseDoc;
+    document.getElementById("hedAddFloor").onclick = addHouseFloor;
+    document.getElementById("hedDelete").onclick = deleteSelectedHouseEl;
+    updateHedButtons();
+
+    svg.addEventListener("pointerdown", (evt)=>{
+      if(MODE!=="live" || editMode) return;             // never fight the zone editor for the same drag
+      if(TOOL==="select" || TOOL==="stairs") return;     // stairs = single click, handled on pointerup
+      const p = svgPoint(evt); if(!p) return;
+      hedStart = {x: snap(p.x), y: snap(p.y)};
+      hedPreview = document.createElementNS(SVG_NS, TOOL==="room" ? "rect" : "line");
+      hedPreview.setAttribute("class", TOOL==="room" ? "radar-draw" : "wall");
+      if(TOOL==="wall") hedPreview.setAttribute("stroke-dasharray", ".08 .06");
+      drawLayer.appendChild(hedPreview);
+      updateHedPreview(hedStart, hedStart);
+      try{ svg.setPointerCapture(evt.pointerId); }catch{}
+      evt.preventDefault();
+    });
+    svg.addEventListener("pointermove", (evt)=>{
+      if(MODE!=="live" || editMode || !hedStart) return;
+      const p = svgPoint(evt); if(p) updateHedPreview(hedStart, {x: snap(p.x), y: snap(p.y)});
+    });
+    svg.addEventListener("pointerup", (evt)=>{
+      if(MODE!=="live" || editMode) return;
+      const f = floorFor(currentFloor);
+      if(TOOL==="stairs"){
+        const p = svgPoint(evt); if(!p || !f) return;
+        pushHouseHistory();
+        f.features = f.features || [];
+        f.features.push({id: hedUid("s"), type:"stairs", at:[snap(p.x), snap(p.y)], to_level: currentFloor+1});
+        afterHouseEdit();
+        return;
+      }
+      if(!hedStart) return;
+      const p = svgPoint(evt);
+      const end = p ? {x: snap(p.x), y: snap(p.y)} : hedStart;
+      try{ svg.releasePointerCapture(evt.pointerId); }catch{}
+      if(TOOL==="room" && f){
+        const x = Math.min(hedStart.x,end.x), y = Math.min(hedStart.y,end.y);
+        const X = Math.max(hedStart.x,end.x), Y = Math.max(hedStart.y,end.y);
+        if(X-x >= EDIT_SNAP && Y-y >= EDIT_SNAP){
+          pushHouseHistory();
+          f.rooms = f.rooms || [];
+          f.rooms.push({id: hedUid("r"), name: "cômodo "+(f.rooms.length+1), polygon:[[x,y],[X,y],[X,Y],[x,Y]]});
+          afterHouseEdit();
+        }
+      } else if(TOOL==="wall" && f){
+        if(Math.hypot(end.x-hedStart.x, end.y-hedStart.y) >= EDIT_SNAP){
+          pushHouseHistory();
+          f.walls = f.walls || [];
+          f.walls.push({id: hedUid("w"), a:[hedStart.x,hedStart.y], b:[end.x,end.y]});
+          afterHouseEdit();
+        }
+      }
+      cancelHedDraw();
+    });
+    window.addEventListener("keydown", (e)=>{
+      if(MODE!=="live") return;
+      if(e.ctrlKey && (e.key==="z"||e.key==="Z") && !e.shiftKey){ e.preventDefault(); undoHouse(); }
+      if(e.ctrlKey && (e.key==="y"||e.key==="Y" || (e.shiftKey && (e.key==="z"||e.key==="Z")))){ e.preventDefault(); redoHouse(); }
+    });
+  }
+  initHouseEditor();
 
   radarUpdate = (rs)=>{
     const e = roomIdx[rs.room]; if(!e) return;
