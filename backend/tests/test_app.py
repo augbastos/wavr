@@ -122,7 +122,10 @@ def test_get_house_returns_rooms():
     with build_client() as client:
         r = client.get("/api/house")
         assert r.status_code == 200
-        assert any(room["name"] == "sala" for room in r.json()["rooms"])
+        house = r.json()
+        # v2 structure: look for "sala" across all floors
+        rooms = [room for floor in house.get("floors", []) for room in floor.get("rooms", [])]
+        assert any(room["name"] == "sala" for room in rooms)
 
 
 def test_ws_non_loopback_peer_closed_with_1008():
