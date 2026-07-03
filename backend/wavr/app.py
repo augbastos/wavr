@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
@@ -38,6 +39,7 @@ from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_de
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
+_VENDOR_DIR = _INDEX.parent / "vendor"
 
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "testclient"})
@@ -238,6 +240,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     if cfg.multidevice:
         _allowed_hosts.append(_local_ip)   # LAN peers reach the central by its IP
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
+
+    # Self-hosted three.js (3D house view): same-origin static mount, zero external
+    # requests. Scoped to /vendor only -- does not touch "/" or the pre-existing
+    # manifest/sw/icon gap. Sits behind loopback_or_authed like every other route, so
+    # a LAN companion still needs to be an authenticated peer under WAVR_MULTIDEVICE.
+    app.mount("/vendor", StaticFiles(directory=_VENDOR_DIR), name="vendor")
 
     def require_local(request: Request):
         # State-changing routes. Loopback "root" (the local dashboard) still needs the
