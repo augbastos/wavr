@@ -882,7 +882,7 @@ async function renderRadar(){
       poly.setAttribute("class", "room-poly" + (SELECTED && SELECTED.kind==="room" && SELECTED.id===r.id ? " selected" : ""));
       if(r.name) poly.dataset.name = r.name;
       if(r.id) poly.dataset.id = r.id;
-      poly.onclick = ()=> selectHouseEl("room", r.id);
+      poly.onclick = ()=>{ if(!r.id) return; selectHouseEl("room", r.id); };
       houseLayer.appendChild(poly);
     });
     (f.walls||[]).forEach(w=>{
@@ -892,7 +892,7 @@ async function renderRadar(){
       ln.setAttribute("x2", w.b[0]); ln.setAttribute("y2", w.b[1]);
       ln.setAttribute("class", "wall" + (SELECTED && SELECTED.kind==="wall" && SELECTED.id===w.id ? " selected" : ""));
       if(w.id) ln.dataset.id = w.id;
-      ln.onclick = ()=> selectHouseEl("wall", w.id);
+      ln.onclick = ()=>{ if(!w.id) return; selectHouseEl("wall", w.id); };
       houseLayer.appendChild(ln);
     });
     (f.features||[]).forEach(ft=>{
@@ -902,7 +902,7 @@ async function renderRadar(){
       c.setAttribute("r", 0.15);
       c.setAttribute("class", "feat feat-"+ft.type + (SELECTED && SELECTED.kind==="feature" && SELECTED.id===ft.id ? " selected" : ""));
       if(ft.id) c.dataset.id = ft.id;
-      c.onclick = ()=> selectHouseEl("feature", ft.id);
+      c.onclick = ()=>{ if(!ft.id) return; selectHouseEl("feature", ft.id); };
       houseLayer.appendChild(c);
     });
   }
@@ -1164,7 +1164,7 @@ async function renderRadar(){
       const r = await fetch(location.origin+"/api/house", {method:"PUT",
         headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
         body: JSON.stringify(HOUSE)});
-      if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); }
+      if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); buildFloorSelect(); rebuildRoomsForFloor(); }
       else { alert("Falha ao salvar (" + r.status + ")"); }
     }catch{ alert("Falha de conexão ao salvar"); }
   }
