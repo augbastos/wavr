@@ -173,7 +173,7 @@
                     transition:border-color .15s ease-out,color .15s ease-out;}
   .pair-dev-row .rm:hover{border-color:var(--warn);color:var(--warn);}
   /* Companion pairing screen (private-LAN viewer only; hidden in central + demo) */
-  .cpair{min-height:60vh;display:flex;align-items:center;justify-content:center;padding:32px 24px;}
+  .cpair:not([hidden]){min-height:60vh;display:flex;align-items:center;justify-content:center;padding:32px 24px;}
   .cpair-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
               padding:28px 26px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:14px;}
   .cpair-card h2{margin:0;font-size:1.1rem;letter-spacing:-0.01em;}
