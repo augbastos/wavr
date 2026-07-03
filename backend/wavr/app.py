@@ -13,7 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
 from wavr.config import load_config
-from wavr.housemap import load_house_map
+from wavr.housemap import load_house_map, room_names, save_house_map, HouseMapError
 from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine
@@ -167,7 +167,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             from wavr.ha_discovery import publish_ha_discovery
             publish_ha_discovery(
                 _rules_publish,
-                [r["name"] for r in _house.get("rooms", [])],
+                room_names(_house),
                 prefix=cfg.mqtt_prefix,
             )
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
@@ -261,6 +261,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.get("/api/house")
     async def house():
+        return _house
+
+    @app.put("/api/house")
+    async def put_house(doc: dict = Body(...), _=Depends(require_local)):
+        try:
+            save_house_map(cfg.house_map, doc)
+        except HouseMapError as exc:
+            # empty-path -> 409 (server misconfig); invalid doc -> 422.
+            code = 409 if "no house_map path" in str(exc) else 422
+            raise HTTPException(status_code=code, detail=str(exc))
+        _house.clear()
+        _house.update(doc)          # keep the in-memory map (GET, room_names) in sync
         return _house
 
     @app.post("/api/narrate")

@@ -33,12 +33,20 @@
   ([ADR-0005](adr/0005-mcp-control-boundary.md)). Write surface security-audited.
 - **PWA companion** — the dashboard is an installable PWA (manifest + service worker),
   caching only the shell, zero external requests.
+- **House maquette editor (Sub-plano F Ph.1)** — multi-floor, top-down, editable
+  geometry (room polygons, walls, stairs) in meters, persisted via `PUT /api/house`
+  (central-only), rendered in the radar. Authored geometry as the coordinate frame;
+  wall-occlusion fusion (spec B2), camera homography (spec A), and plan/CAD upload
+  (specs F2/F3) are follow-ons.
 - **ADRs 0001–0006** + this roadmap; relicensed **AGPL-3.0**; a security + performance
   audit pass (vitals never persisted, WS Origin check, sqlite off the event loop,
   bounded queues, capped ping sweeps).
 
 ## Now / next — just engineering time
 
+- **House maquette follow-ons** — camera homography for plan-to-camera alignment
+  (spec A), wall-occlusion fusion weighting (spec B2), plan-as-backdrop rendering
+  (spec F2), auto-build geometry from plan/CAD upload (spec F3).
 - **Packaging** — a Tauri desktop shell (tray, auto-start) around the existing backend +
   dashboard, so the "Wavr desktop is the central" story ships as one installable app
   (the mobile-companion PWA is already installable; this is the desktop wrapper).
