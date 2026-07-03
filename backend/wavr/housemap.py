@@ -137,7 +137,10 @@ def validate_house_map(doc: dict) -> None:
         for w in walls:
             if not (isinstance(w, dict) and _point(w.get("a")) and _point(w.get("b"))):
                 raise HouseMapError("wall a/b must be finite points")
-        for feat in f.get("features", []):
+        feats = f.get("features", [])
+        if not isinstance(feats, list):
+            raise HouseMapError("features must be a list")
+        for feat in feats:
             if not isinstance(feat, dict) or feat.get("type") not in _FEATURE_TYPES:
                 raise HouseMapError(f"feature type must be one of {sorted(_FEATURE_TYPES)}")
             at = feat.get("at")
