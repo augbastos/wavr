@@ -149,7 +149,30 @@
   .radar-draw{fill:rgba(61,181,74,.1);stroke:var(--accent);stroke-width:.02;
               stroke-dasharray:.12 .08;vector-effect:non-scaling-stroke;pointer-events:none;}
   #radar.editing{cursor:crosshair;touch-action:none;}
-  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.zone-item .rm,.radar-target,.radar-zone{transition:none;}}
+  /* Pairing panel (live-only, multidevice-gated): mint pairing code + list/revoke devices */
+  .pair:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .pair h3{margin:4px 0 12px;}
+  .pair-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;}
+  .pair-role{display:flex;gap:8px;align-items:center;font-size:.82rem;color:var(--muted);}
+  .pair-role select{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+                    border-radius:8px;padding:8px 11px;font-size:.82rem;}
+  .pair-code-box:not([hidden]){display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:2px 0 14px;}
+  .pair-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+             font-size:1.7rem;letter-spacing:.18em;color:var(--accent);
+             font-variant-numeric:tabular-nums;user-select:all;}
+  .pair-hint{color:var(--muted);font-size:.78rem;max-width:44ch;overflow-wrap:anywhere;}
+  .pair-sub{margin:8px 0 4px;font-size:.72rem;color:var(--muted);font-weight:600;
+            text-transform:uppercase;letter-spacing:.05em;}
+  .pair-dev-list{display:flex;flex-direction:column;max-height:250px;overflow:auto;}
+  .pair-dev-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+                font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
+  .pair-dev-row>span:first-child{min-width:0;overflow-wrap:anywhere;}
+  .pair-dev-meta{color:var(--muted);font-variant-numeric:tabular-nums;}
+  .pair-dev-row .rm{flex-shrink:0;background:none;border:1px solid var(--line);color:var(--muted);
+                    border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.75rem;
+                    transition:border-color .15s ease-out,color .15s ease-out;}
+  .pair-dev-row .rm:hover{border-color:var(--warn);color:var(--warn);}
+  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.zone-item .rm,.pair-dev-row .rm,.radar-target,.radar-zone{transition:none;}}
 </style>
 </head>
 <body>
@@ -191,6 +214,25 @@
       <div id="alertList" class="alert-list" aria-live="polite"></div>
     </div>
   </div>
+</div>
+<div id="pairing" class="pair" hidden>
+  <h3 id="pair-h">Parear dispositivo</h3>
+  <form id="pairForm" class="pair-form" aria-labelledby="pair-h">
+    <label class="pair-role">Papel
+      <select name="role" aria-label="papel do dispositivo">
+        <option value="user">usuário</option>
+        <option value="central">central</option>
+      </select>
+    </label>
+    <button type="submit" class="ctl">Gerar código de pareamento</button>
+  </form>
+  <div id="pairCodeBox" class="pair-code-box" hidden>
+    <span id="pairCode" class="pair-code" aria-live="polite"></span>
+    <button type="button" id="pairCopy" class="ctl small">Copiar</button>
+    <span class="pair-hint">digite este código no app do dispositivo em até 2 min · rede local</span>
+  </div>
+  <h4 class="pair-sub">Dispositivos pareados</h4>
+  <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
 </div>
 <div id="radarWrap" class="radar"><h3 id="radar-h">Radar</h3>
   <svg id="radar" role="img" aria-labelledby="radar-h" preserveAspectRatio="xMidYMid meet"></svg>
@@ -442,6 +484,87 @@ function renderNetwork(){
   refresh(); setInterval(refresh, 15000);
 }
 renderNetwork();
+
+// ---- Pairing panel (Plano A / live only, multidevice-gated) ----
+// Mints one-time multi-device pairing codes and lists/revokes paired devices.
+// The backend routes (/api/pair-code, /api/devices) only exist when WAVR_MULTIDEVICE=1;
+// when they 404 (or the backend is unreachable) the whole panel stays hidden, so
+// single-device installs never see it. Never shows in Plano B (demo).
+async function renderPairing(){
+  if(MODE!=="live") return;                 // live-only; never in Plano B (demo)
+  const hdr = {"X-Wavr-Local":"1"};         // same local-only guard as the other panels
+  // Probe the multidevice API first. A 404 means the feature is off; a thrown fetch
+  // means the backend is momentarily unreachable. Either way: leave the panel hidden.
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/devices",{headers:hdr}); }
+  catch{ return; }                          // backend unreachable — stay hidden
+  if(!probe.ok) return;                     // 404 → multidevice off → stay hidden
+  let seed; try{ seed = (await probe.json()).devices; }catch{ seed = []; }
+  document.getElementById("pairing").hidden = false;
+
+  const devList = document.getElementById("pairDevList");
+  const codeBox = document.getElementById("pairCodeBox");
+  const codeEl  = document.getElementById("pairCode");
+
+  async function refresh(devices){
+    if(devices === undefined){              // no cached list passed in — fetch a fresh one
+      try{ devices = (await (await fetch(location.origin+"/api/devices",{headers:hdr})).json()).devices; }
+      catch{ return; }                      // backend momentarily unreachable — keep last view
+    }
+    devices = Array.isArray(devices) ? devices : [];
+    devList.textContent = "";
+    if(!devices.length){
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "nenhum dispositivo pareado";
+      devList.appendChild(e); return;
+    }
+    devices.forEach(d => {
+      const row = document.createElement("div"); row.className = "pair-dev-row";
+      const left = document.createElement("span");
+      const name = document.createElement("b"); name.textContent = d.name || "(sem nome)";  // textContent — server data
+      const meta = document.createElement("span"); meta.className = "pair-dev-meta";
+      const seen = (typeof d.last_seen_ts==="string" && d.last_seen_ts.length>=19)
+                   ? d.last_seen_ts.slice(11,19)
+                   : (d.last_seen_ts!=null ? String(d.last_seen_ts) : "—");
+      meta.textContent = " · " + (d.role || "?") + " · visto " + seen + (d.revoked ? " · revogado" : "");
+      left.appendChild(name); left.appendChild(meta);
+      row.appendChild(left);
+      const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
+      rm.textContent = "Revogar";
+      rm.onclick = async ()=>{
+        await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id),
+          {method:"DELETE", headers:hdr}).catch(()=>{});
+        refresh();                          // re-sync after revoking
+      };
+      row.appendChild(rm); devList.appendChild(row);
+    });
+  }
+
+  document.getElementById("pairForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const role = e.target.role.value;
+    try{
+      const r = await fetch(location.origin+"/api/pair-code",{method:"POST",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+        body:JSON.stringify({role})});
+      if(!r.ok) return;                     // e.g. multidevice turned off mid-session
+      const d = await r.json();
+      codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
+      codeBox.hidden = false;
+    }catch{ return; }                       // network hiccup — leave the last code shown
+    refresh();                              // a fresh code may register a slot; keep list current
+  };
+
+  const copyBtn = document.getElementById("pairCopy");
+  copyBtn.onclick = ()=>{
+    const code = codeEl.textContent; if(!code) return;
+    try{ if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{}); }catch{}
+    copyBtn.textContent = "Copiado"; setTimeout(()=>{ copyBtn.textContent = "Copiar"; }, 1500);
+  };
+
+  refresh(seed);                            // seed the list from the probe response we already read
+}
+renderPairing();
 
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
