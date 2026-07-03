@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from wavr.api_inventory import build_inventory_router
 from wavr.config import load_config
+from wavr.device_meta import DeviceMeta
 from wavr.netinventory import Device
 from wavr.netinventory_service import NetworkInventoryService, RogueAlert
 
@@ -111,11 +112,11 @@ async def test_start_scans_then_stop_is_cancel_safe():
 
 # ---- read-only router (FastAPI TestClient on a tiny app) --------------------
 
-def _router_client() -> TestClient:
+def _router_client(device_meta=None, name_deps=None) -> TestClient:
     svc = _service()
     asyncio.run(svc.scan_once())                   # seed one scan synchronously
     app = FastAPI()
-    app.include_router(build_inventory_router(svc))
+    app.include_router(build_inventory_router(svc, device_meta=device_meta, name_deps=name_deps))
     return TestClient(app)
 
 
@@ -129,9 +130,83 @@ def test_inventory_endpoint_returns_device_json():
         "a4:83:e7:11:22:33", "24:0a:c4:aa:bb:cc", "de:ad:be:ef:00:01",
     }
     apple = by_mac["a4:83:e7:11:22:33"]
-    assert set(apple) == {"mac", "ip", "vendor", "device_type", "known"}
+    # name/first_seen/last_seen are always present (Feature A/C) -- None when
+    # no device_meta store is wired in, as here.
+    assert set(apple) == {"mac", "ip", "vendor", "device_type", "known",
+                           "name", "first_seen", "last_seen"}
     assert apple["known"] is True and apple["vendor"] == "Apple"
+    assert apple["name"] is None and apple["first_seen"] is None and apple["last_seen"] is None
     assert "risks" not in apple                    # port-scan off -> no risk notes
+
+
+# ---- Feature A: device_meta merge + seen() wiring ----------------------------
+
+def test_scan_once_calls_device_meta_seen_for_each_observed_mac():
+    dm = DeviceMeta(":memory:")
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0, device_meta=dm)
+    asyncio.run(svc.scan_once())
+    for mac in ("a4:83:e7:11:22:33", "24:0a:c4:aa:bb:cc", "de:ad:be:ef:00:01"):
+        assert dm.get(mac) is not None
+        assert dm.get(mac)["first_seen"] is not None
+
+
+def test_scan_once_tolerates_a_broken_device_meta_store():
+    class BoomMeta:
+        def seen(self, mac):
+            raise RuntimeError("disk full")
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0, device_meta=BoomMeta())
+    devices = asyncio.run(svc.scan_once())          # must not raise
+    assert devices                                   # scan still completed
+
+
+def test_inventory_endpoint_merges_name_and_seen_fields():
+    dm = DeviceMeta(":memory:")
+    dm.set_name("a4:83:e7:11:22:33", "MacBook do Augusto")
+    svc = _service()
+    asyncio.run(svc.scan_once())
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc, device_meta=dm))
+    with TestClient(app) as c:
+        r = c.get("/api/inventory")
+    by_mac = {d["mac"]: d for d in r.json()["devices"]}
+    apple = by_mac["a4:83:e7:11:22:33"]
+    assert apple["name"] == "MacBook do Augusto"
+    assert apple["first_seen"] is None and apple["last_seen"] is None   # named but never scanned via this dm
+    unnamed = by_mac["24:0a:c4:aa:bb:cc"]
+    assert unnamed["name"] is None
+
+
+# ---- Feature A: PUT /api/inventory/name (router-level, unguarded) -----------
+
+def test_put_name_endpoint_persists_and_returns_entry():
+    dm = DeviceMeta(":memory:")
+    with _router_client(device_meta=dm) as c:
+        r = c.put("/api/inventory/name", json={"mac": "A4-83-E7-11-22-33", "name": "Sala TV"})
+    assert r.status_code == 200
+    assert r.json() == {"mac": "a4:83:e7:11:22:33", "name": "Sala TV",
+                         "first_seen": None, "last_seen": None}
+    assert dm.get("a4:83:e7:11:22:33")["name"] == "Sala TV"
+
+
+def test_put_name_endpoint_rejects_invalid_mac():
+    dm = DeviceMeta(":memory:")
+    with _router_client(device_meta=dm) as c:
+        r = c.put("/api/inventory/name", json={"mac": "not-a-mac", "name": "x"})
+    assert r.status_code == 400
+
+
+def test_put_name_endpoint_rejects_empty_name():
+    dm = DeviceMeta(":memory:")
+    with _router_client(device_meta=dm) as c:
+        r = c.put("/api/inventory/name", json={"mac": "a4:83:e7:11:22:33", "name": "   "})
+    assert r.status_code == 400
+
+
+def test_put_name_endpoint_absent_without_device_meta():
+    # No device_meta wired in -> the write route isn't even registered.
+    with _router_client() as c:
+        r = c.put("/api/inventory/name", json={"mac": "a4:83:e7:11:22:33", "name": "x"})
+    assert r.status_code == 404
 
 
 def test_alerts_endpoint_returns_rogue_json():

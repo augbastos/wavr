@@ -81,3 +81,26 @@ def test_config_port_default_and_env(monkeypatch):
     assert load_config().port == 8000
     monkeypatch.setenv("WAVR_PORT", "8443")
     assert load_config().port == 8443
+
+def test_config_has_internet_monitor_defaults(monkeypatch):
+    for v in ("WAVR_INTERNET_MONITOR", "WAVR_INTERNET_CHECK_HOST",
+              "WAVR_INTERNET_CHECK_INTERVAL", "WAVR_INTERNET_FAIL_THRESHOLD"):
+        monkeypatch.delenv(v, raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.internet_monitor is False       # opt-in: off by default
+    assert cfg.internet_check_host == ""       # empty -> auto-guess the LAN gateway
+    assert cfg.internet_check_interval == 15.0
+    assert cfg.internet_fail_threshold == 3
+
+def test_config_reads_internet_monitor_env(monkeypatch):
+    monkeypatch.setenv("WAVR_INTERNET_MONITOR", "1")
+    monkeypatch.setenv("WAVR_INTERNET_CHECK_HOST", "1.1.1.1")
+    monkeypatch.setenv("WAVR_INTERNET_CHECK_INTERVAL", "5")
+    monkeypatch.setenv("WAVR_INTERNET_FAIL_THRESHOLD", "2")
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.internet_monitor is True
+    assert cfg.internet_check_host == "1.1.1.1"
+    assert cfg.internet_check_interval == 5.0
+    assert cfg.internet_fail_threshold == 2

@@ -181,14 +181,27 @@
   .net-col h4{margin:0 0 6px;font-size:.72rem;color:var(--muted);font-weight:600;
               text-transform:uppercase;letter-spacing:.05em;}
   .dev-list,.alert-list{display:flex;flex-direction:column;max-height:250px;overflow:auto;}
-  .dev-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  .dev-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
            font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
-  .dev-row>span:first-child{min-width:0;overflow-wrap:anywhere;}
+  .dev-left{display:flex;flex-direction:column;gap:2px;min-width:0;overflow-wrap:anywhere;flex:1;}
   .dev-meta{color:var(--muted);font-variant-numeric:tabular-nums;}
   .mac{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);}
   .tag{flex-shrink:0;font-size:.7rem;padding:2px 9px;border-radius:999px;border:1px solid var(--line);}
   .tag.known{color:var(--accent);border-color:rgba(61,181,74,.4);}
   .tag.unknown{color:var(--warn);border-color:rgba(224,179,65,.45);}
+  /* Device naming + first/last-seen (network panel, item: device inventory enrichment) */
+  .dev-name-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:0;}
+  .dev-main.named{font-weight:600;}
+  .dev-sub{color:var(--muted);}
+  .dev-meta-line{display:flex;flex-wrap:wrap;align-items:baseline;color:var(--muted);
+                 font-variant-numeric:tabular-nums;}
+  .dev-seen{color:var(--muted);}
+  .dev-rename-btn{align-self:flex-start;background:none;border:none;color:var(--muted);cursor:pointer;
+                  font-size:.75rem;padding:2px 0;margin-top:2px;transition:color .15s ease-out;}
+  .dev-rename-btn:hover,.dev-rename-btn:focus-visible{color:var(--accent);}
+  .dev-rename-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;}
+  .dev-rename-form input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+                         border-radius:8px;padding:6px 10px;font-size:.8rem;min-width:140px;}
   .alert-row{font-size:.8rem;padding:7px 0;border-top:1px dashed var(--line);}
   .alert-row .at{color:var(--danger);font-weight:600;}
   .alert-row .ameta{color:var(--muted);font-variant-numeric:tabular-nums;
@@ -207,6 +220,11 @@
   .status-chip{font-size:.72rem;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);}
   .status-chip.on{color:var(--accent);border-color:rgba(61,181,74,.4);}
   .status-house{font-size:.82rem;color:var(--muted);}
+  /* Internet-up/down indicator (GET /api/status → internet{ok,since}), glanceable at the top of Status. */
+  .status-internet{font-size:.82rem;margin-bottom:10px;font-weight:600;}
+  .status-internet.ok{color:var(--accent);}
+  .status-internet.down{color:var(--danger);}
+  .status-internet.off{color:var(--muted);font-weight:400;}
   /* per-source freshness (health/age_s) in the room-card "why" rows — conveyed via the
      colored dot + (dead only) strikethrough + the explicit "· Ns" age text appended in
      JS, never via opacity alone (opacity would drop --ink/--muted text below AA). */
@@ -414,6 +432,7 @@
   <div class="panel-inner">
     <h3 id="status-h">Status</h3>
     <div id="statusVersion" class="status-version"></div>
+    <div id="statusInternet" class="status-internet" hidden></div>
     <div class="status-cols">
       <div class="status-col">
         <h4>Sensores</h4>
@@ -455,7 +474,7 @@
     <div id="netHint" class="net-hint">Ainda sem dispositivos detectados na rede.</div>
     <div class="net-cols">
       <div class="net-col">
-        <h4>Dispositivos na rede</h4>
+        <h4>Dispositivos na rede <span id="devFb" class="action-fb" aria-live="polite"></span></h4>
         <div id="devList" class="dev-list" aria-live="polite"></div>
       </div>
       <div class="net-col">
@@ -725,12 +744,36 @@ if(MODE==="live"){
 }
 // Visible action feedback (item 4): "✓ feito" next to the button/form that triggered a
 // successful write, or a plain error message on failure. Shared by cameras/pairing/house-editor.
-function actionFeedback(el, ok, msg){
+function actionFeedback(el, ok, msg, okMsg){
   if(!el) return;
   clearTimeout(el._fbTimer);
   el.className = "action-fb " + (ok ? "ok" : "err");
-  el.textContent = ok ? "✓ feito" : (msg || "falha — tente novamente");
+  el.textContent = ok ? (okMsg || "✓ feito") : (msg || "falha — tente novamente");
   if(ok) el._fbTimer = setTimeout(()=>{ el.textContent = ""; el.className = "action-fb"; }, 2000);
+}
+
+// ---- Shared date/time formatting helpers (device first/last-seen, internet-down "since") ----
+function fmtShortDate(iso){
+  if(typeof iso!=="string" || !iso) return null;
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"2-digit"});
+}
+function fmtRelative(iso){
+  if(typeof iso!=="string" || !iso) return null;
+  const t = new Date(iso).getTime();
+  if(isNaN(t)) return null;
+  const diffS = Math.max(0, Math.floor((Date.now()-t)/1000));
+  if(diffS < 60) return "agora";
+  if(diffS < 3600) return `há ${Math.floor(diffS/60)}min`;
+  if(diffS < 86400) return `há ${Math.floor(diffS/3600)}h`;
+  return `há ${Math.floor(diffS/86400)}d`;
+}
+function fmtDateTime(iso){
+  if(typeof iso!=="string" || !iso) return null;
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return null;
+  return d.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
 }
 
 // ---- House indicator (home/away) — works in both live and demo modes ----
@@ -783,9 +826,28 @@ function renderStatus(){
   const sourcesEl  = document.getElementById("statusSources");
   const featuresEl = document.getElementById("statusFeatures");
   const houseEl    = document.getElementById("statusHouse");
+  const internetEl = document.getElementById("statusInternet");
   async function refresh(){
     let s; try{ s = await (await fetch(location.origin+"/api/status")).json(); }catch{ return; }
     versionEl.textContent = "versão " + (s.version ?? "?");
+    // Internet up/down (item: internet monitor) — ok:null means the monitor is off or the
+    // first check hasn't run yet, so show a muted hint instead of a red/green verdict.
+    if(internetEl){
+      const inet = s.internet && typeof s.internet==="object" ? s.internet : {};
+      const monitorOn = !!(s.features && s.features.internet_monitor);
+      internetEl.hidden = false;
+      if(inet.ok === true){
+        internetEl.className = "status-internet ok";
+        internetEl.textContent = "Internet: ok";
+      } else if(inet.ok === false){
+        internetEl.className = "status-internet down";
+        const since = fmtDateTime(inet.since);
+        internetEl.textContent = "Internet: fora do ar" + (since ? " · desde " + since : "");
+      } else {
+        internetEl.className = "status-internet off";
+        internetEl.textContent = monitorOn ? "internet: verificando conexão…" : "monitor de internet desligado";
+      }
+    }
     sourcesEl.textContent = "";
     (Array.isArray(s.sources) ? s.sources : []).forEach(src=>{
       const row = document.createElement("div"); row.className = "status-src-row";
@@ -933,6 +995,10 @@ function renderNetwork(){
   const devList = document.getElementById("devList");
   const alertList = document.getElementById("alertList");
   const hint = document.getElementById("netHint");
+  const devFb = document.getElementById("devFb");
+  // Device-rename edit state (item: device naming) — kept outside refresh() so the 15s poll
+  // doesn't wipe an in-progress edit; only one device can be renamed at a time.
+  let editingMac = null, editingValue = "", editingJustOpened = false;
   async function refresh(){
     let inv, al;
     try{
@@ -949,14 +1015,82 @@ function renderNetwork(){
     devList.textContent = "";
     devices.forEach(d => {
       const row = document.createElement("div"); row.className = "dev-row";
-      const left = document.createElement("span");
+      const firstSeenShort = fmtShortDate(d.first_seen);
+      if(firstSeenShort) row.title = "primeira vez: " + firstSeenShort;   // tooltip keeps the row compact
+      const left = document.createElement("div"); left.className = "dev-left";
+      // Name line: custom name shown prominently (bold) with vendor/type demoted to a
+      // secondary line; falls back to vendor/type as the main text when no name is set.
+      const nameLine = document.createElement("div"); nameLine.className = "dev-name-line";
       const main = document.createElement("span");
-      main.textContent = (d.vendor || "desconhecido") + " · " + (d.device_type || "?");
+      const vendorType = (d.vendor || "desconhecido") + " · " + (d.device_type || "?");
+      if(d.name){
+        main.className = "dev-main named"; main.textContent = d.name;    // textContent only — XSS-safe
+        const sub = document.createElement("span"); sub.className = "dev-sub";
+        sub.textContent = " · " + vendorType;
+        nameLine.appendChild(main); nameLine.appendChild(sub);
+      } else {
+        main.className = "dev-main"; main.textContent = vendorType;
+        nameLine.appendChild(main);
+      }
+      left.appendChild(nameLine);
+      // IP/MAC + last-seen line (compact, inline; first-seen lives in the row tooltip above).
+      const metaLine = document.createElement("div"); metaLine.className = "dev-meta-line";
       const meta = document.createElement("span"); meta.className = "dev-meta";
-      meta.textContent = " · " + (d.ip || "sem ip") + " · ";
+      meta.textContent = (d.ip || "sem ip") + " · ";
       const mac = document.createElement("span"); mac.className = "mac";
       mac.textContent = maskMac(d.mac);      // textContent only — never innerHTML with device data
-      left.appendChild(main); left.appendChild(meta); left.appendChild(mac);
+      metaLine.appendChild(meta); metaLine.appendChild(mac);
+      const lastRel = fmtRelative(d.last_seen);
+      if(lastRel){
+        const seen = document.createElement("span"); seen.className = "dev-seen";
+        seen.textContent = " · visto: " + lastRel;
+        metaLine.appendChild(seen);
+      }
+      left.appendChild(metaLine);
+      // Rename affordance — live/central only: PUT /api/inventory/name needs the X-Wavr-Local
+      // CSRF header, which companion viewers (bearer-token auth) don't send.
+      if(MODE==="live"){
+        if(editingMac === d.mac){
+          const form = document.createElement("form"); form.className = "dev-rename-form";
+          const input = document.createElement("input");
+          input.type = "text"; input.maxLength = 64; input.value = editingValue;
+          input.setAttribute("aria-label", "novo nome do dispositivo");
+          input.oninput = ()=>{ editingValue = input.value; };
+          const save = document.createElement("button");
+          save.type = "submit"; save.className = "ctl small"; save.textContent = "Salvar";
+          const cancel = document.createElement("button");
+          cancel.type = "button"; cancel.className = "ctl small off"; cancel.textContent = "Cancelar";
+          cancel.onclick = ()=>{ editingMac = null; editingValue = ""; refresh(); };
+          form.onsubmit = async (e)=>{
+            e.preventDefault();
+            const newName = input.value.trim();
+            let r;
+            try{
+              r = await fetch(location.origin+"/api/inventory/name", {method:"PUT",
+                headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+                body: JSON.stringify({mac:d.mac, name:newName})});
+            }catch{}
+            if(r && r.ok){
+              editingMac = null; editingValue = "";
+              actionFeedback(devFb, true, null, "✓ renomeado");
+              refresh();
+            } else {
+              let msg = "falha ao renomear";
+              try{ const j = await r.json(); if(j && (j.detail || j.error)) msg = String(j.detail || j.error); }catch{}
+              actionFeedback(devFb, false, msg);
+            }
+          };
+          form.appendChild(input); form.appendChild(save); form.appendChild(cancel);
+          left.appendChild(form);
+          if(editingJustOpened){ editingJustOpened = false; queueMicrotask(()=>{ input.focus(); input.select(); }); }
+        } else {
+          const rn = document.createElement("button");
+          rn.type = "button"; rn.className = "dev-rename-btn"; rn.textContent = "✎ renomear";
+          rn.setAttribute("aria-label", "renomear " + (d.name || vendorType));
+          rn.onclick = ()=>{ editingMac = d.mac; editingValue = d.name || ""; editingJustOpened = true; refresh(); };
+          left.appendChild(rn);
+        }
+      }
       const tag = document.createElement("span");
       tag.className = "tag " + (d.known ? "known" : "unknown");
       tag.textContent = d.known ? "conhecido" : "desconhecido";
