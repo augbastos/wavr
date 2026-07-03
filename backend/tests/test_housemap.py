@@ -91,3 +91,11 @@ def test_over_cap_rooms_raise():
     d["floors"][0]["rooms"] = [{"id": f"r{i}", "name": str(i), "polygon": [[0,0],[1,0],[1,1]]} for i in range(513)]
     with pytest.raises(HouseMapError):
         validate_house_map(d)
+
+
+def test_non_list_features_raise_housemaperror():
+    for bad in (None, 5, "x"):
+        d = _valid()
+        d["floors"][0]["features"] = bad
+        with pytest.raises(HouseMapError):
+            validate_house_map(d)
