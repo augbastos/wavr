@@ -7,6 +7,13 @@
 <meta name="theme-color" content="#0f1216">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <meta name="description" content="Wavr — sensoriamento residencial multi-modal com fusão explicável por cômodo.">
+<!-- PWA: installable app shell. All refs are same-origin relative files (no CDN, no external requests). -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Wavr">
 <title>Wavr — Fused Home Sensing</title>
 <style>
   :root{--bg:#0f1216;--surface:#171c22;--ink:#e8edf2;--muted:#9aa7b4;
@@ -745,6 +752,20 @@ function pushTimeline(rs){
 
 const handle = (rs)=>{ upsert(rs); pushTimeline(rs); updateHouse(rs); radarUpdate?.(rs); };
 (async ()=>{ (await provider.history()).forEach(handle); provider.start(handle); })();
+</script>
+<script>
+// ---- PWA: register the shell service worker (offline launch + installable) ----
+// Only on secure contexts (HTTPS, or localhost/127.0.0.1) — browsers block SW on plain
+// HTTP off-localhost, so this stays silent on the public HTTP demo. The SW is same-origin
+// and caches only the static shell, so registration triggers zero external requests.
+// Fully guarded so a failure can never break the dashboard or the simulator self-switch.
+try {
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+} catch (e) { /* SW unavailable — dashboard works exactly as before */ }
 </script>
 </body>
 </html>
