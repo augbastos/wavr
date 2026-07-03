@@ -139,7 +139,8 @@ def test_multi_target_targets_are_live_only_never_persisted():
     row = st.recent()[0]
     st.close()
     assert "targets" not in row                        # SQLite never stored them
-    assert set(row.keys()) == {"room", "occupied", "confidence", "vitals",
+    assert "vitals" not in row                         # ADR-0002: vitals live-only too
+    assert set(row.keys()) == {"room", "occupied", "confidence",
                                "sources", "explanation", "ts"}
 
     msgs = []

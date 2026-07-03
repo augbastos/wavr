@@ -553,11 +553,12 @@ async function renderRadar(){
         if(p.x>=z.x && p.x<=z.x+z.w && p.y>=z.y && p.y<=z.y+z.h) return true;
     return false;
   }
+  let zoneRects = [], zoneStatus = [];    // built on zone change; per-frame we only toggle .occ
   function drawZones(){
-    zoneLayer.textContent = "";
-    zones.forEach(z => {
+    zoneLayer.textContent = ""; zoneRects = [];
+    zones.forEach((z, i) => {
       const rect = document.createElementNS(SVG_NS, "rect");
-      rect.setAttribute("class", "radar-zone" + (zoneOccupied(z) ? " occ" : ""));
+      rect.setAttribute("class", "radar-zone");
       rect.setAttribute("x", z.x); rect.setAttribute("y", z.y);
       rect.setAttribute("width", z.w); rect.setAttribute("height", z.h);
       const label = document.createElementNS(SVG_NS, "text");
@@ -565,11 +566,12 @@ async function renderRadar(){
       label.setAttribute("x", z.x + 0.12); label.setAttribute("y", z.y + 0.3);
       label.textContent = z.name;         // textContent — no markup injection from a zone name
       zoneLayer.appendChild(rect); zoneLayer.appendChild(label);
+      zoneRects[i] = rect;
     });
   }
   function renderZoneList(){
-    zonePanel.hidden = false;
-    zoneListEl.textContent = "";
+    zonePanel.hidden = !(zones.length || editMode);   // only reveal when there are zones or editing
+    zoneListEl.textContent = ""; zoneStatus = [];
     if(!zones.length){
       const e = document.createElement("div"); e.className = "zone-empty";
       e.textContent = editMode ? "arraste sobre o radar para criar uma zona"
@@ -580,12 +582,10 @@ async function renderRadar(){
       const item = document.createElement("div"); item.className = "zone-item";
       const info = document.createElement("span"); info.className = "zi";
       const name = document.createElement("span"); name.textContent = z.name;
-      const occ = zoneOccupied(z);
       const status = document.createElement("span");
-      status.className = occ ? "zocc" : "zempty";
-      status.textContent = occ ? "• ocupada" : "vazia";
       info.appendChild(name); info.appendChild(status);
       item.appendChild(info);
+      zoneStatus[i] = status;
       if(editMode){
         const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
         rm.textContent = "Remover";
@@ -595,7 +595,15 @@ async function renderRadar(){
       zoneListEl.appendChild(item);
     });
   }
-  function refreshZones(){ drawZones(); renderZoneList(); }
+  function updateZoneOcc(){               // per-frame hot path: no DOM rebuild, just toggle occupied
+    zones.forEach((z, i) => {
+      const occ = zoneOccupied(z);
+      if(zoneRects[i]) zoneRects[i].classList.toggle("occ", occ);
+      const st = zoneStatus[i];
+      if(st){ st.className = occ ? "zocc" : "zempty"; st.textContent = occ ? "• ocupada" : "vazia"; }
+    });
+  }
+  function refreshZones(){ drawZones(); renderZoneList(); updateZoneOcc(); }
 
   function svgPoint(evt){                  // client px -> radar user-space (metres)
     const ctm = svg.getScreenCTM(); if(!ctm) return null;
@@ -650,7 +658,7 @@ async function renderRadar(){
     zoneHintEl.hidden = !editMode;
     svg.classList.toggle("editing", editMode);
     if(!editMode) cancelPending();
-    renderZoneList();
+    refreshZones();
   };
   refreshZones();
 
@@ -672,7 +680,7 @@ async function renderRadar(){
     });
     // Feed absolute target positions to the zone hit-test, then re-highlight zones.
     liveTargets[rs.room] = (rs.targets||[]).map(t => absTargetPoint(e.r, t));
-    refreshZones();
+    updateZoneOcc();   // per-frame: only re-highlight (no DOM rebuild); structure rebuilt on zone change
   };
 }
 renderRadar();

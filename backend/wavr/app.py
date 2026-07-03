@@ -68,6 +68,10 @@ def _default_sources(cfg):
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _URL_SHAPE_RE = re.compile(r"^\w+://.+")
+# Same-origin allowlist for the /ws/live handshake (browsers send Origin; native
+# clients/tests send none). Blocks a drive-by cross-site page from opening the live
+# targets/vitals stream. "testserver" matches the Host allowlist for the TestClient.
+_ORIGIN_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\]|testserver)(:\d+)?$")
 
 
 def _mask_rtsp(url: str) -> str:
@@ -125,7 +129,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def _ingest(event):
         rs = _fusion.update(event)
         d = rs.to_dict()
-        _storage.insert_state(rs)
+        await asyncio.to_thread(_storage.insert_state, rs)  # fsync off the event loop
         latest[d["room"]] = d
         await _hub.publish(d)
 
@@ -200,7 +204,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.get("/api/history")
     async def history(limit: int = 200):
-        return _storage.recent(limit)
+        return await asyncio.to_thread(_storage.recent, limit)
 
     @app.get("/api/state")
     async def state():
@@ -255,6 +259,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             raise HTTPException(status_code=400, detail="name, room, rtsp_url are required")
         if not _NAME_RE.match(name):
             raise HTTPException(status_code=400, detail="name must be alphanumeric/_/-")
+        if not _NAME_RE.match(room):
+            raise HTTPException(status_code=400, detail="room must be alphanumeric/_/-")
         if not _URL_SHAPE_RE.match(rtsp_url):
             raise HTTPException(status_code=400, detail="rtsp_url must look like scheme://...")
         if not (0.0 <= confidence <= 1.0):
@@ -283,6 +289,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         host = ws.client.host if ws.client else None
         if not _is_loopback(host):
             await ws.close(code=1008)  # policy violation; WS isn't covered by the http middleware
+            return
+        origin = ws.headers.get("origin")
+        if origin is not None and not _ORIGIN_RE.match(origin):
+            await ws.close(code=1008)  # cross-site WS: block drive-by reads of the live stream
             return
         await ws.accept()
         q = _hub.subscribe()

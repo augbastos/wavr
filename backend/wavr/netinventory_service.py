@@ -107,6 +107,11 @@ class NetworkInventoryService:
             ))
         if len(self._alerts) > self._max_alerts:    # bounded ring
             self._alerts = self._alerts[-self._max_alerts:]
+        # Bound the edge-trigger dedup set: once it grows large (MAC randomization +
+        # transient visitors accumulate forever), forget MACs no longer on the LAN.
+        # A departed device re-alerts if it returns, which is fine.
+        if len(self._alerted) > 4 * self._max_alerts:
+            self._alerted &= {d.mac for d in devices}
 
     def latest_inventory(self) -> list[Device]:
         """The devices from the most recent scan (empty before the first)."""

@@ -50,9 +50,11 @@ async def arp_scan() -> set[str]:
     ip = _local_ipv4()
     if ip:
         net = ipaddress.ip_network(ip + "/24", strict=False)
+        sem = asyncio.Semaphore(32)   # cap concurrent ping subprocesses (was up to 254)
         async def ping(addr: str) -> None:
-            with contextlib.suppress(Exception):
-                await _run("ping", "-n", "1", "-w", "200", addr)
+            async with sem:
+                with contextlib.suppress(Exception):
+                    await _run("ping", "-n", "1", "-w", "200", addr)
         await asyncio.gather(*(ping(str(h)) for h in net.hosts()))
     return parse_arp_table(await _run("arp", "-a"))
 
