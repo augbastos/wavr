@@ -1,0 +1,16 @@
+# Rust build output
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# generated icons (regenerate with `npm run icon`)
+src-tauri/icons/*.png
+src-tauri/icons/*.ico
+src-tauri/icons/*.icns
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
+# Tauri-generated (schemas/capabilities)
+src-tauri/gen/
+
+# node
+node_modules/
