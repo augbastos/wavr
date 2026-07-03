@@ -3,9 +3,11 @@
 Exposes the LOCAL, derived Wavr presence state over the Model Context Protocol so a
 local agent can *read* what the house currently senses -- nothing more. Every tool
 here is READ-ONLY and LOCAL: no tool mutates state, toggles/creates a source,
-installs anything, controls a device, or reaches off-box. That constraint is
-deliberate and mirrors the rest of Wavr's privacy-first design (see the note on
-build_mcp_server below).
+installs anything, controls a device, or reaches the cloud. The one tool that talks
+to another box -- `get_ha_entities` -- only *reads* the user's own Home Assistant on
+the LAN (ADR-0005 READ half; control is a future, opt-in, consent-gated slice that is
+NOT built here). That constraint is deliberate and mirrors the rest of Wavr's
+privacy-first design (see the note on build_mcp_server below).
 
 Design, matching the camera/mmwave modules:
   * The `mcp` SDK is a LAZY optional dependency (the [mcp] extra). Importing this
@@ -29,6 +31,14 @@ class StateProvider(Protocol):
     def list_rooms(self) -> list[str]: ...
     def room_state(self, room: str) -> dict | None: ...
     def house_map(self) -> dict: ...
+
+
+class HAEntitiesProvider(Protocol):
+    """The minimal READ-ONLY view the HA tool depends on: anything exposing HA's own
+    entity list. The real `wavr.ha_client.HAClient` satisfies it, as does a fake in
+    tests. `None` (not this shape) means HA is not configured -> the tool returns []."""
+
+    def get_entities(self) -> list[dict]: ...
 
 
 class FusionStateProvider:
@@ -87,18 +97,40 @@ def get_house_map(provider: StateProvider) -> dict:
     return provider.house_map()
 
 
+def get_ha_entities(ha_client: HAEntitiesProvider | None) -> list[dict]:
+    """List Home Assistant's OWN entities: `{entity_id, state, friendly_name, domain}`.
+
+    The READ half of the "brain on Home Assistant" (ADR-0005): it exposes HA's entity
+    list to an agent so it can *see* the home. READ-ONLY + LOCAL -- it never calls an HA
+    service, actuates a device, or reaches the cloud (control is a future, opt-in,
+    consent-gated slice, deliberately not built here).
+
+    Gracefully DISABLED: when HA is not configured (`ha_client is None`, i.e. empty
+    WAVR_HA_URL/WAVR_HA_TOKEN) it returns `[]` instead of failing. This does NOT touch
+    Wavr's own RoomState / targets / vitals -- it only relays HA's entity list.
+    """
+    if ha_client is None:
+        return []
+    return ha_client.get_entities() or []
+
+
 # --- Thin, LAZY MCP wiring ---------------------------------------------------------
 
-def build_mcp_server(provider: StateProvider, name: str = "wavr"):
+def build_mcp_server(provider: StateProvider, name: str = "wavr",
+                     ha_client: HAEntitiesProvider | None = None):
     """Build the MCP server exposing the read-only tools above, bound to `provider`.
 
     The MCP SDK is imported HERE, lazily: importing `wavr.mcp` never needs the [mcp]
     extra -- only actually standing up the server does. Install it with
     `pip install .[mcp]`.
 
-    READ-ONLY BY CONSTRUCTION: only the three read tools are registered. Do NOT add a
-    tool here that mutates state, toggles/creates a source, controls a device, installs
-    anything, or reaches off the local box -- this is a local read interface, period.
+    READ-ONLY BY CONSTRUCTION: only read tools are registered. Do NOT add a tool here
+    that mutates state, toggles/creates a source, controls a device, installs anything,
+    or reaches off the local box -- this is a local read interface, period.
+
+    `ha_client` is an optional injected read-only Home Assistant client (ADR-0005 READ
+    half). When None (HA not configured), `get_ha_entities` degrades to an empty list.
+    The HA client is LOCAL-ONLY (own HA on the LAN) and never actuates anything.
     """
     from mcp.server.fastmcp import FastMCP   # lazy: optional [mcp] extra
 
@@ -106,6 +138,7 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr"):
     _list_rooms = list_rooms
     _get_room_context = get_room_context
     _get_house_map = get_house_map
+    _get_ha_entities = get_ha_entities
 
     server = FastMCP(name)
 
@@ -124,6 +157,12 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr"):
         """The house map / floor plan (room geometry)."""
         return _get_house_map(provider)
 
+    @server.tool()
+    def get_ha_entities() -> list[dict]:
+        """List Home Assistant entities (entity_id/state/friendly_name/domain).
+        Read-only + local; empty list when HA is not configured."""
+        return _get_ha_entities(ha_client)
+
     # EXTENSION POINT (future slice -- NOT implemented here): a separate network slice
     # will add a read-only `get_network_inventory()` tool listing devices seen on the
     # LAN. It plugs in right here as another `@server.tool()`, reading from an injected
@@ -134,7 +173,11 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr"):
     return server
 
 
-def make_server_from_app_state(fusion, house_map: dict | None = None, name: str = "wavr"):
+def make_server_from_app_state(fusion, house_map: dict | None = None, name: str = "wavr",
+                               ha_client: HAEntitiesProvider | None = None):
     """Convenience wiring for the app: wrap a live FusionEngine + house map and build
-    the server. Kept tiny and lazy so `import wavr.mcp` stays dependency-free."""
-    return build_mcp_server(FusionStateProvider(fusion, house_map), name=name)
+    the server. Kept tiny and lazy so `import wavr.mcp` stays dependency-free. Pass a
+    read-only `ha_client` (e.g. `wavr.ha_client.client_from_config(cfg)`, which is None
+    when HA is unconfigured) to expose HA's entity list via `get_ha_entities`."""
+    return build_mcp_server(FusionStateProvider(fusion, house_map), name=name,
+                            ha_client=ha_client)

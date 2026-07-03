@@ -44,6 +44,10 @@ class Config:
     bind_host: str
     tls_cert: str
     tls_key: str
+    # Home Assistant read-side (ADR-0005) — the "brain on HA" READ half. LOCAL-ONLY:
+    # the user's own HA on the LAN + a locally-stored token. Both empty => disabled.
+    ha_url: str
+    ha_token: str
 
 
 def load_config() -> Config:
@@ -93,4 +97,7 @@ def load_config() -> Config:
         bind_host=os.getenv("WAVR_BIND", "127.0.0.1"),
         tls_cert=os.getenv("WAVR_TLS_CERT", ""),
         tls_key=os.getenv("WAVR_TLS_KEY", ""),
+        # HA read-side (ADR-0005): empty => disabled. Local HA URL + long-lived token.
+        ha_url=os.getenv("WAVR_HA_URL", ""),
+        ha_token=os.getenv("WAVR_HA_TOKEN", ""),
     )
