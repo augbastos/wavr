@@ -19,7 +19,7 @@ from wavr.hub import Hub
 from wavr.fusion import FusionEngine
 from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
-from wavr.sources.network import NetworkSource
+from wavr.sources.network import NetworkSource, _local_ipv4
 from wavr.sources.ruview import RuViewSource
 from wavr.sources.camera import CameraSource
 from wavr.sources.mmwave import MmWaveSource
@@ -31,6 +31,10 @@ from wavr.narrator import Narrator, make_gemini_generate
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
 from wavr.sources.ble import BLESource
+from wavr.devices import DeviceStore
+from wavr.pairing import PairingManager
+from wavr.auth import authorize, parse_bearer, can_change_state
+from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -126,6 +130,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # unless WAVR_NET_PORTSCAN (ADR-0004).
     _inventory = NetworkInventoryService(cfg.net_known_macs, interval=cfg.net_scan_interval)
 
+    # Multi-device (ADR-0006): device/token store + pairing. ONLY built when
+    # WAVR_MULTIDEVICE is on — otherwise it stays None so we don't open a third
+    # connection to the db (avoids lock contention) and the middleware below is strict
+    # loopback-only, byte-identical to before. `_local_ip` defines the "same /24" that
+    # authenticated LAN peers must sit in.
+    _local_ip = _local_ipv4() or "127.0.0.1"
+    _devices = DeviceStore(cfg.db_path) if cfg.multidevice else None
+    _pairing = PairingManager(_devices) if cfg.multidevice else None
+
     async def _ingest(event):
         rs = _fusion.update(event)
         d = rs.to_dict()
@@ -174,33 +187,54 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_cameras:
                 with suppress(Exception):
                     _cameras.close()
+            if _devices is not None:
+                with suppress(Exception):
+                    _devices.close()
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
 
     app.include_router(build_inventory_router(_inventory))
+    if cfg.multidevice:
+        app.include_router(build_pair_router(_devices, _pairing))
+        app.include_router(build_ws_ticket_router(_devices, _pairing))
+        app.include_router(build_devices_router(_devices))
 
-    # PRIVACY: reject any request whose peer isn't loopback. Enforced in code so it
-    # holds even if someone runs uvicorn with --host 0.0.0.0. ("testclient" is the
-    # pytest TestClient peer.) This is the load-bearing control; the Host allowlist
-    # is extra defense against DNS-rebinding.
+    # PRIVACY: the load-bearing access control. Default (WAVR_MULTIDEVICE off) is strict
+    # loopback-only, enforced in code so it holds even under --host 0.0.0.0 ("testclient"
+    # is the pytest peer). When multidevice is ON (ADR-0006), a same-/24 LAN peer with a
+    # valid Bearer token is also allowed, and its role is attached to the request; loopback
+    # is always "root". Off = byte-identical to before.
     @app.middleware("http")
-    async def loopback_only(request: Request, call_next):
+    async def loopback_or_authed(request: Request, call_next):
         host = request.client.host if request.client else None
-        if not _is_loopback(host):
+        if _is_loopback(host):                       # loopback (incl. TestClient) -> root
+            request.state.role = "root"
+            return await call_next(request)
+        if not cfg.multidevice:                      # off: strict loopback-only, as before
             return JSONResponse({"detail": "loopback only"}, status_code=403)
+        token = parse_bearer(request.headers.get("authorization"))
+        role = authorize(host, _local_ip, token, _devices)
+        if role is None:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        request.state.role = role
         return await call_next(request)
 
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=["localhost", "127.0.0.1", "testserver"],
-    )
+    _allowed_hosts = ["localhost", "127.0.0.1", "testserver"]
+    if cfg.multidevice:
+        _allowed_hosts.append(_local_ip)   # LAN peers reach the central by its IP
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 
     def require_local(request: Request):
-        # CSRF guard for state-changing routes: a cross-origin browser page can't set
-        # a custom header on a simple request without a (failing) CORS preflight, so
-        # this blocks drive-by POSTs (e.g. a webpage trying to enable your camera).
-        if request.headers.get("x-wavr-local") != "1":
-            raise HTTPException(status_code=403, detail="missing X-Wavr-Local header")
+        # State-changing routes. Loopback "root" (the local dashboard) still needs the
+        # CSRF header (blocks drive-by browser POSTs). An authenticated LAN peer must be
+        # 'central'; a 'user' is read-only. Off = same as before (everything is root).
+        role = getattr(request.state, "role", None)
+        if role == "root":
+            if request.headers.get("x-wavr-local") != "1":
+                raise HTTPException(status_code=403, detail="missing X-Wavr-Local header")
+            return
+        if not can_change_state(role):
+            raise HTTPException(status_code=403, detail="central role required")
 
     @app.get("/api/history")
     async def history(limit: int = 200):
@@ -287,13 +321,22 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
         host = ws.client.host if ws.client else None
-        if not _is_loopback(host):
-            await ws.close(code=1008)  # policy violation; WS isn't covered by the http middleware
-            return
         origin = ws.headers.get("origin")
-        if origin is not None and not _ORIGIN_RE.match(origin):
-            await ws.close(code=1008)  # cross-site WS: block drive-by reads of the live stream
-            return
+        if cfg.multidevice and not _is_loopback(host):
+            # LAN companion: a Bearer token can't ride a WS handshake, so require a
+            # valid single-use ticket (minted via POST /api/ws-ticket with the token).
+            ticket = ws.query_params.get("ticket")
+            if not ticket or _pairing.redeem_ticket(ticket) is None:
+                await ws.close(code=1008)
+                return
+        else:
+            # Loopback (or multidevice off): unchanged — loopback peer + Origin allowlist.
+            if not _is_loopback(host):
+                await ws.close(code=1008)  # WS isn't covered by the http middleware
+                return
+            if origin is not None and not _ORIGIN_RE.match(origin):
+                await ws.close(code=1008)  # cross-site WS: block drive-by reads
+                return
         await ws.accept()
         q = _hub.subscribe()
         try:
