@@ -23,6 +23,10 @@ from wavr.devices import VALID_ROLES
 # Defaults from the spec: ~2-min pairing window, short-lived WS ticket.
 CODE_TTL_SECONDS = 120
 TICKET_TTL_SECONDS = 30
+# Brute-force defense (audit H1): cap FAILED redeem attempts per window. With an
+# 8-digit code (10^8) this makes guessing the live code within its window infeasible.
+MAX_FAILED_ATTEMPTS = 10
+ATTEMPT_WINDOW_SECONDS = 60
 
 
 def _utcnow() -> datetime:
@@ -48,13 +52,18 @@ class PairingManager:
 
     def __init__(self, store, now_fn=_utcnow,
                  code_ttl: float = CODE_TTL_SECONDS,
-                 ticket_ttl: float = TICKET_TTL_SECONDS):
+                 ticket_ttl: float = TICKET_TTL_SECONDS,
+                 max_failed: int = MAX_FAILED_ATTEMPTS,
+                 attempt_window: float = ATTEMPT_WINDOW_SECONDS):
         self._store = store
         self._now = now_fn
         self._code_ttl = code_ttl
         self._ticket_ttl = ticket_ttl
+        self._max_failed = max_failed
+        self._attempt_window = attempt_window
         self._codes: dict[str, _PendingCode] = {}
         self._tickets: dict[str, _PendingTicket] = {}
+        self._failed: list[datetime] = []   # timestamps of recent FAILED redeems
 
     # -- pairing codes -----------------------------------------------------
     def mint_code(self, role: str = "user") -> str:
@@ -71,8 +80,16 @@ class PairingManager:
         """Redeem a code for a new device: returns (device_id, token) once, or None
         if the code is unknown, already used, or expired. One-time: the code is
         consumed on the first attempt (valid or not) so it can't be reused."""
-        pending = self._codes.pop(code, None)      # consume on any attempt
-        if pending is None or self._now() >= pending.expires_at:
+        now = self._now()
+        # Rate-limit brute force (audit H1): count only FAILED attempts so legit
+        # redeems are never throttled; over the cap in the window, reject outright.
+        self._failed = [t for t in self._failed
+                        if t >= now - timedelta(seconds=self._attempt_window)]
+        if len(self._failed) >= self._max_failed:
+            return None
+        pending = self._codes.pop(code, None)       # consume the correct code on hit
+        if pending is None or now >= pending.expires_at:
+            self._failed.append(now)                # wrong/expired guess -> counts
             return None
         return self._store.add(name, pending.role)
 
@@ -96,13 +113,14 @@ class PairingManager:
 
     # -- internals ---------------------------------------------------------
     def _fresh_code(self) -> str:
-        """A 6-digit code, retried on the (astronomically unlikely) collision with
-        a still-live code so we never silently clobber an outstanding pairing."""
+        """An 8-digit code (10^8 space; audit H1), retried on the (astronomically
+        unlikely) collision with a still-live code so we never silently clobber an
+        outstanding pairing."""
         for _ in range(10):
-            code = f"{secrets.randbelow(1_000_000):06d}"
+            code = f"{secrets.randbelow(100_000_000):08d}"
             if code not in self._codes:
                 return code
-        return f"{secrets.randbelow(1_000_000):06d}"
+        return f"{secrets.randbelow(100_000_000):08d}"
 
     def _purge_expired(self) -> None:
         """Drop expired codes/tickets so the in-memory maps stay bounded even if a
