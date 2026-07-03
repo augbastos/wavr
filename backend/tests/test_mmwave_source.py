@@ -53,6 +53,32 @@ async def test_source_emits_presence_from_injected_frames():
 
 
 @pytest.mark.asyncio
+async def test_mmwave_reconnects_after_transient_error(monkeypatch):
+    from wavr.sources import mmwave
+
+    calls = {"n": 0}
+
+    async def _fail_gen():
+        raise RuntimeError("boom")
+        yield  # pragma: no cover - unreachable, keeps this an async generator
+
+    async def _ok_gen():
+        yield _frame(_slot(1000, 1000, 0))
+
+    def fake_serial_frames(port):
+        calls["n"] += 1
+        return _fail_gen() if calls["n"] == 1 else _ok_gen()
+
+    monkeypatch.setattr(mmwave, "_serial_frames", fake_serial_frames)
+    src = MmWaveSource(room="sala", port="COM3", interval=0, reconnect_delay=0)
+    gen = src.events()
+    ev = await asyncio.wait_for(anext(gen), 1)
+    assert ev.presence is True
+    assert calls["n"] == 2   # first serial open failed, reconnect opened a fresh one
+    await gen.aclose()
+
+
+@pytest.mark.asyncio
 async def test_mmwave_closes_inner_frames_generator_deterministically():
     closed = {"v": False}
 

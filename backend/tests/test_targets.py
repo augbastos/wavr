@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from wavr.events import SensingEvent, Target
 from wavr.fusion import FusionEngine
 
@@ -47,3 +49,27 @@ def test_posture_only_target_allowed():
     # camera gives posture without position (no homography yet)
     t = Target(id=1, x=None, y=None, posture="lying", confidence=0.9)
     assert t.to_dict()["x"] is None and t.to_dict()["posture"] == "lying"
+
+
+def test_dead_sources_targets_are_not_ghosted_into_an_empty_room():
+    # A dead source's stale (presence=True) targets must not pass through the
+    # target selection just because it's the only source that ever reported
+    # any — that ghosts a phantom person into a room a fresh vacant reading
+    # says is empty.
+    T = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
+    f = FusionEngine(now_fn=lambda: T)
+
+    dead_ts = (T - timedelta(seconds=200)).isoformat()  # > default stale_s (90) -> dead
+    dead = SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                        breathing_bpm=None, heart_bpm=None, confidence=0.9,
+                        ts=dead_ts, targets=(Target(id=1, x=1.0, y=1.0, confidence=0.9),))
+    f.update(dead)
+
+    fresh_vacant = SensingEvent(room="sala", modality="network", presence=False, motion=0.0,
+                                breathing_bpm=None, heart_bpm=None, confidence=0.8,
+                                ts=T.isoformat(), targets=())
+    rs = f.update(fresh_vacant)
+
+    assert rs.occupied is False
+    assert rs.confidence == 0.0
+    assert rs.targets == []

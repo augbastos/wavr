@@ -865,15 +865,21 @@ function placeDot(g, room, t){
 }
 
 // ---- 3D house view: lazy-load self-hosted three.js (never on the top-down-only path) ----
-let _three = null;
-async function ensureThree(){
-  if(_three) return _three;
-  const [THREE, { OrbitControls }] = await Promise.all([
-    import("three"),
-    import("three/addons/controls/OrbitControls.js"),
-  ]);
-  _three = { THREE, OrbitControls };
-  return _three;
+// Memoizes the IN-FLIGHT PROMISE (not just the settled result): rapid Top->3D->Top->3D
+// toggling while the ~750KB three.js dynamic import is still pending would otherwise call
+// ensureThree() multiple times before the first import() resolves, each kicking off its own
+// import and (downstream, in ensure3D) its own WebGLRenderer/ResizeObserver on the same
+// canvas — leaking the earlier ones. Caching the promise itself means every concurrent
+// caller awaits the SAME single import.
+let _threePromise = null;
+function ensureThree(){
+  if(!_threePromise){
+    _threePromise = Promise.all([
+      import("three"),
+      import("three/addons/controls/OrbitControls.js"),
+    ]).then(([THREE, { OrbitControls }]) => ({ THREE, OrbitControls }));
+  }
+  return _threePromise;
 }
 
 async function renderRadar(){
@@ -979,46 +985,67 @@ async function renderRadar(){
   // ---- 3D house view (self-hosted three.js): singleton renderer, built once on first
   // entry into 3D mode; never recreated on subsequent toggles (avoids leaking WebGL
   // contexts on repeated toggling). Only the render loop starts/stops.
-  async function ensure3D(){
-    if(three3d) return three3d;
-    const { THREE, OrbitControls } = await ensureThree();
-    const canvas = document.getElementById("radar3d");
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x171c22);   // matches --surface
-    scene.fog = new THREE.Fog(0x171c22, 14, 42);
-    const camera = new THREE.PerspectiveCamera(45, 4/3, 0.1, 200);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.minDistance = 2;
-    controls.maxDistance = 60;
-    controls.maxPolarAngle = Math.PI/2 - 0.03;   // camera can't dip below the floor plane
-    scene.add(new THREE.AmbientLight(0x8fa3ad, 0.7));
-    const sun = new THREE.DirectionalLight(0xfff2df, 1.4);
-    sun.position.set(8, 12, 6);
-    scene.add(sun);
-    const rim = new THREE.DirectionalLight(0x3db54a, 0.18);   // subtle brand-green fill light
-    rim.position.set(-6, 4, -8);
-    scene.add(rim);
-    const roomGroup = new THREE.Group(); scene.add(roomGroup);
-    // Ground + grid just under floor level, for depth/scale reference while orbiting. Built
-    // once here (ensure3D itself only ever runs once — see the `if(three3d) return` guard
-    // above) and added directly to scene, not roomGroup, so the per-floor clear in render3D()
-    // never touches them and they don't need to be recreated (and leaked) on every call.
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400),
-      new THREE.MeshLambertMaterial({ color: 0x11161b }));
-    ground.rotation.x = -Math.PI/2; ground.position.y = -0.02;
-    scene.add(ground);
-    const grid = new THREE.GridHelper(400, 200, 0x2a323b, 0x1c2229);
-    grid.position.y = -0.01;
-    scene.add(grid);
-    const ro = new ResizeObserver(() => resize3D());
-    ro.observe(canvas);
-    three3d = { THREE, renderer, scene, camera, controls, roomGroup, raf: null, ro };
-    resize3D();
-    return three3d;
+  //
+  // Memoizes the IN-FLIGHT PROMISE (not just `three3d`, the settled result): the old
+  // `if(three3d) return three3d` guard ran BEFORE the `await ensureThree()` below, so rapid
+  // Top->3D->Top->3D toggling during that pending import could call ensure3D() again while
+  // the first call was still awaiting — constructing a second WebGLRenderer/ResizeObserver
+  // on the same canvas and leaking the first. Caching the promise means every concurrent
+  // caller awaits the SAME construction.
+  let _ensure3DPromise = null;
+  function ensure3D(){
+    if(three3d) return Promise.resolve(three3d);
+    if(!_ensure3DPromise){
+      _ensure3DPromise = (async () => {
+        try {
+          const { THREE, OrbitControls } = await ensureThree();
+          const canvas = document.getElementById("radar3d");
+          const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+          const scene = new THREE.Scene();
+          scene.background = new THREE.Color(0x171c22);   // matches --surface
+          scene.fog = new THREE.Fog(0x171c22, 14, 42);
+          const camera = new THREE.PerspectiveCamera(45, 4/3, 0.1, 200);
+          const controls = new OrbitControls(camera, renderer.domElement);
+          controls.enableDamping = true;
+          controls.dampingFactor = 0.08;
+          controls.minDistance = 2;
+          controls.maxDistance = 60;
+          controls.maxPolarAngle = Math.PI/2 - 0.03;   // camera can't dip below the floor plane
+          scene.add(new THREE.AmbientLight(0x8fa3ad, 0.7));
+          const sun = new THREE.DirectionalLight(0xfff2df, 1.4);
+          sun.position.set(8, 12, 6);
+          scene.add(sun);
+          const rim = new THREE.DirectionalLight(0x3db54a, 0.18);   // subtle brand-green fill light
+          rim.position.set(-6, 4, -8);
+          scene.add(rim);
+          const roomGroup = new THREE.Group(); scene.add(roomGroup);
+          // Ground + grid just under floor level, for depth/scale reference while orbiting. Built
+          // once here (this construction only ever runs once — see the promise-cache guard
+          // above) and added directly to scene, not roomGroup, so the per-floor clear in render3D()
+          // never touches them and they don't need to be recreated (and leaked) on every call.
+          const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400),
+            new THREE.MeshLambertMaterial({ color: 0x11161b }));
+          ground.rotation.x = -Math.PI/2; ground.position.y = -0.02;
+          scene.add(ground);
+          const grid = new THREE.GridHelper(400, 200, 0x2a323b, 0x1c2229);
+          grid.position.y = -0.01;
+          scene.add(grid);
+          const ro = new ResizeObserver(() => resize3D());
+          ro.observe(canvas);
+          three3d = { THREE, renderer, scene, camera, controls, roomGroup, raf: null, ro };
+          resize3D();
+          return three3d;
+        } catch (err) {
+          // Construction failed (e.g. WebGL disabled/blocklisted and `new THREE.WebGLRenderer`
+          // threw) — clear the cached promise so a later retry (context may become available,
+          // or the user reloads/toggles again) isn't stuck forever on a rejected promise.
+          _ensure3DPromise = null;
+          throw err;
+        }
+      })();
+    }
+    return _ensure3DPromise;
   }
 
   function resize3D(){
@@ -1061,95 +1088,104 @@ async function renderRadar(){
   }
 
   async function render3D(){
-    const { THREE } = await ensure3D();
-    const { roomGroup } = three3d;
-    // Clear the previous floor's meshes AND free their GPU buffers — remove() alone only
-    // detaches them from the scene graph, it never calls dispose(), so repeated floor
-    // switches / 3D re-entries leaked geometry+material every time without this.
-    while(roomGroup.children.length){
-      const child = roomGroup.children[0];
-      roomGroup.remove(child);
-      child.geometry?.dispose();
-      if(Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-      else child.material?.dispose();
-    }
-
-    const f = floorFor(currentFloor);
-    if(!f){ resize3D(); if(viewMode==="3d") startLoop3D(); return; }
-
-    const mats = {
-      floor: new THREE.MeshLambertMaterial({ color: 0x232a32, side: THREE.DoubleSide }),
-      // See-inside (dollhouse) technique: semi-transparent walls + depthWrite:false (avoids
-      // z-sort flicker between overlapping panels) + a steep camera angle (set below) so
-      // far fewer transparent layers stack between the camera and each room.
-      wall: new THREE.MeshStandardMaterial({
-        color: 0x3db54a, opacity: 0.4, transparent: true, depthWrite: false, side: THREE.DoubleSide,
-      }),
-      edge: new THREE.LineBasicMaterial({ color: 0x9fb0b8 }),
-    };
-
-    const bbox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-    const track = (x, y) => { bbox.minX=Math.min(bbox.minX,x); bbox.minY=Math.min(bbox.minY,y);
-                               bbox.maxX=Math.max(bbox.maxX,x); bbox.maxY=Math.max(bbox.maxY,y); };
-
-    (f.rooms || []).forEach(r => {
-      if(!r.polygon || r.polygon.length < 3) return;
-      r.polygon.forEach(([x,y]) => track(x,y));
-
-      // Floor plate: remap the ShapeGeometry's own vertices to (x, 0, y) directly instead of
-      // a mesh.rotation.x=-PI/2 trick, so floors use the *identical* signed mapping the walls
-      // use below — sidesteps a whole class of mirrored/offset-floor bugs. DoubleSide covers
-      // any winding-direction flip introduced by the axis remap.
-      const shape = new THREE.Shape(r.polygon.map(([x,y]) => new THREE.Vector2(x,y)));
-      const floorGeo = new THREE.ShapeGeometry(shape);
-      const pos = floorGeo.attributes.position;
-      for(let i=0;i<pos.count;i++) pos.setXYZ(i, pos.getX(i), 0, pos.getY(i));
-      pos.needsUpdate = true;
-      floorGeo.computeVertexNormals();
-      roomGroup.add(new THREE.Mesh(floorGeo, mats.floor));
-
-      for(let i=0;i<r.polygon.length;i++){
-        const [ax,ay] = r.polygon[i], [bx,by] = r.polygon[(i+1)%r.polygon.length];
-        addWallSegment3D(THREE, roomGroup, mats, ax, ay, bx, by);
+    // Wrapped end-to-end: if ensure3D()'s `new THREE.WebGLRenderer(...)` throws (WebGL
+    // disabled/blocklisted) — or anything below it throws while building the scene — fall
+    // back to the top-down view instead of leaving an unhandled rejection and a blank
+    // canvas (setViewMode('top') was already called by this point to hide the SVG).
+    try {
+      const { THREE } = await ensure3D();
+      const { roomGroup } = three3d;
+      // Clear the previous floor's meshes AND free their GPU buffers — remove() alone only
+      // detaches them from the scene graph, it never calls dispose(), so repeated floor
+      // switches / 3D re-entries leaked geometry+material every time without this.
+      while(roomGroup.children.length){
+        const child = roomGroup.children[0];
+        roomGroup.remove(child);
+        child.geometry?.dispose();
+        if(Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material?.dispose();
       }
-    });
 
-    // f.walls: additive interior partitions not aligned to any room boundary. DEMO_HOUSE.walls
-    // is [] — room-polygon edges above are the primary wall source, so the demo house (and any
-    // real house that never used the wall tool) still renders full walls in 3D.
-    (f.walls || []).forEach(w => {
-      if(!w.a || !w.b) return;
-      track(w.a[0], w.a[1]); track(w.b[0], w.b[1]);
-      addWallSegment3D(THREE, roomGroup, mats, w.a[0], w.a[1], w.b[0], w.b[1]);
-    });
+      const f = floorFor(currentFloor);
+      if(!f){ resize3D(); if(viewMode==="3d") startLoop3D(); return; }
 
-    (f.features || []).forEach(ft => {
-      if(!ft.at) return;
-      track(ft.at[0], ft.at[1]);
-      const marker = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.3,0.3),
-        new THREE.MeshLambertMaterial({ color: ft.type==="stairs" ? 0xe0b341 : 0x38bdf8 }));
-      marker.position.set(ft.at[0], 0.15, ft.at[1]);
-      roomGroup.add(marker);
-    });
+      const mats = {
+        floor: new THREE.MeshLambertMaterial({ color: 0x232a32, side: THREE.DoubleSide }),
+        // See-inside (dollhouse) technique: semi-transparent walls + depthWrite:false (avoids
+        // z-sort flicker between overlapping panels) + a steep camera angle (set below) so
+        // far fewer transparent layers stack between the camera and each room.
+        wall: new THREE.MeshStandardMaterial({
+          color: 0x3db54a, opacity: 0.4, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        }),
+        edge: new THREE.LineBasicMaterial({ color: 0x9fb0b8 }),
+      };
 
-    // Ground + grid are built once in ensure3D() and added directly to the scene (not
-    // roomGroup), so there's nothing to (re)create here on every floor rebuild.
+      const bbox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+      const track = (x, y) => { bbox.minX=Math.min(bbox.minX,x); bbox.minY=Math.min(bbox.minY,y);
+                                 bbox.maxX=Math.max(bbox.maxX,x); bbox.maxY=Math.max(bbox.maxY,y); };
 
-    // Auto-frame this floor's bbox with a steep ~55-60deg down-angle (dollhouse view) —
-    // at a shallow angle the transparent wall panels stack up and grey out the interior.
-    if(isFinite(bbox.minX)){
-      const cx = (bbox.minX+bbox.maxX)/2, cy = (bbox.minY+bbox.maxY)/2;
-      const span = Math.max(bbox.maxX-bbox.minX, bbox.maxY-bbox.minY, 3);
-      three3d.camera.position.set(cx + span*0.75, span*1.15, cy + span*0.75);
-      three3d.controls.target.set(cx, 0.3, cy);
-      three3d.controls.update();
+      (f.rooms || []).forEach(r => {
+        if(!r.polygon || r.polygon.length < 3) return;
+        r.polygon.forEach(([x,y]) => track(x,y));
+
+        // Floor plate: remap the ShapeGeometry's own vertices to (x, 0, y) directly instead of
+        // a mesh.rotation.x=-PI/2 trick, so floors use the *identical* signed mapping the walls
+        // use below — sidesteps a whole class of mirrored/offset-floor bugs. DoubleSide covers
+        // any winding-direction flip introduced by the axis remap.
+        const shape = new THREE.Shape(r.polygon.map(([x,y]) => new THREE.Vector2(x,y)));
+        const floorGeo = new THREE.ShapeGeometry(shape);
+        const pos = floorGeo.attributes.position;
+        for(let i=0;i<pos.count;i++) pos.setXYZ(i, pos.getX(i), 0, pos.getY(i));
+        pos.needsUpdate = true;
+        floorGeo.computeVertexNormals();
+        roomGroup.add(new THREE.Mesh(floorGeo, mats.floor));
+
+        for(let i=0;i<r.polygon.length;i++){
+          const [ax,ay] = r.polygon[i], [bx,by] = r.polygon[(i+1)%r.polygon.length];
+          addWallSegment3D(THREE, roomGroup, mats, ax, ay, bx, by);
+        }
+      });
+
+      // f.walls: additive interior partitions not aligned to any room boundary. DEMO_HOUSE.walls
+      // is [] — room-polygon edges above are the primary wall source, so the demo house (and any
+      // real house that never used the wall tool) still renders full walls in 3D.
+      (f.walls || []).forEach(w => {
+        if(!w.a || !w.b) return;
+        track(w.a[0], w.a[1]); track(w.b[0], w.b[1]);
+        addWallSegment3D(THREE, roomGroup, mats, w.a[0], w.a[1], w.b[0], w.b[1]);
+      });
+
+      (f.features || []).forEach(ft => {
+        if(!ft.at) return;
+        track(ft.at[0], ft.at[1]);
+        const marker = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.3,0.3),
+          new THREE.MeshLambertMaterial({ color: ft.type==="stairs" ? 0xe0b341 : 0x38bdf8 }));
+        marker.position.set(ft.at[0], 0.15, ft.at[1]);
+        roomGroup.add(marker);
+      });
+
+      // Ground + grid are built once in ensure3D() and added directly to the scene (not
+      // roomGroup), so there's nothing to (re)create here on every floor rebuild.
+
+      // Auto-frame this floor's bbox with a steep ~55-60deg down-angle (dollhouse view) —
+      // at a shallow angle the transparent wall panels stack up and grey out the interior.
+      if(isFinite(bbox.minX)){
+        const cx = (bbox.minX+bbox.maxX)/2, cy = (bbox.minY+bbox.maxY)/2;
+        const span = Math.max(bbox.maxX-bbox.minX, bbox.maxY-bbox.minY, 3);
+        three3d.camera.position.set(cx + span*0.75, span*1.15, cy + span*0.75);
+        three3d.controls.target.set(cx, 0.3, cy);
+        three3d.controls.update();
+      }
+      resize3D();
+      // Start the loop here (not from setViewMode) — on the very first entry into 3D mode,
+      // ensure3D() above hasn't resolved yet by the time setViewMode() runs synchronously,
+      // so three3d doesn't exist there and a start attempt would silently no-op. Guarded by
+      // viewMode in case the user already toggled back to "top" before this async work landed.
+      if(viewMode==="3d") startLoop3D();
+    } catch (err) {
+      console.error("Wavr: 3D view unavailable, falling back to top-down view.", err);
+      if(viewMode === "3d") setViewMode("top");   // re-shows the SVG and hides the 3D canvas
     }
-    resize3D();
-    // Start the loop here (not from setViewMode) — on the very first entry into 3D mode,
-    // ensure3D() above hasn't resolved yet by the time setViewMode() runs synchronously,
-    // so three3d doesn't exist there and a start attempt would silently no-op. Guarded by
-    // viewMode in case the user already toggled back to "top" before this async work landed.
-    if(viewMode==="3d") startLoop3D();
   }
 
   async function renderCurrentView(){
@@ -1557,9 +1593,14 @@ function upsert(rs){
   if(!c){
     roomsEl.querySelector(".empty")?.remove();
     const el = document.createElement("div"); el.className="card";
-    el.innerHTML = `<h2>${rs.room}</h2><div class="conf"></div>
+    // Room name comes from RoomState (attacker-controllable via the camera "room" field) —
+    // never interpolate it into innerHTML. Built with createElement + textContent instead,
+    // same as the .srcs rows below; the rest of the card is static markup with no user data.
+    const h2 = document.createElement("h2"); h2.textContent = rs.room;
+    el.appendChild(h2);
+    el.insertAdjacentHTML("beforeend", `<div class="conf"></div>
       <span class="pill"></span><div class="bar"><i></i></div>
-      <div class="srcs"></div><div class="vit"></div>`;
+      <div class="srcs"></div><div class="vit"></div>`);
     roomsEl.appendChild(el); c = cards[rs.room] = el;
   }
   c.querySelector(".conf").textContent = `confiança ${Math.round(rs.confidence*100)}%`;
@@ -1599,8 +1640,13 @@ function upsert(rs){
 function pushTimeline(rs){
   timelineEl.querySelector(".empty")?.remove();
   const row = document.createElement("div"); row.className="row";
-  row.innerHTML = `<span class="t">${rs.ts.slice(11,19)}</span><span class="r">${rs.room}</span>
-    <span>${rs.occupied?"ocupado":"vazio"} (${Math.round(rs.confidence*100)}%)</span>`;
+  // Room name is attacker-controllable RoomState data — build every field with
+  // createElement + textContent instead of innerHTML so it can never inject markup.
+  const t = document.createElement("span"); t.className="t"; t.textContent = rs.ts.slice(11,19);
+  const r = document.createElement("span"); r.className="r"; r.textContent = rs.room;
+  const status = document.createElement("span");
+  status.textContent = `${rs.occupied?"ocupado":"vazio"} (${Math.round(rs.confidence*100)}%)`;
+  row.appendChild(t); row.appendChild(r); row.appendChild(status);
   timelineEl.prepend(row);
   while(timelineEl.children.length>60) timelineEl.lastChild.remove();
 }

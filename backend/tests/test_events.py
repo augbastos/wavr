@@ -48,3 +48,17 @@ def test_normalize_ruview_reads_optional_targets():
 def test_normalize_ruview_no_targets_key_unchanged():
     e = normalize_ruview({"classification": {"presence": True}}, room="sala")
     assert e.targets == ()
+
+
+def test_normalize_ruview_clamps_negative_confidence():
+    frame = {"classification": {"presence": True, "confidence": -3.0},
+             "features": {}, "vital_signs": {}, "timestamp": 1782924055.0}
+    e = normalize_ruview(frame, room="sala")
+    assert e.confidence == 0.0
+
+
+def test_normalize_ruview_clamps_overlarge_confidence():
+    frame = {"classification": {"presence": True, "confidence": 999.0},
+             "features": {}, "vital_signs": {}, "timestamp": 1782924055.0}
+    e = normalize_ruview(frame, room="sala")
+    assert e.confidence == 1.0
