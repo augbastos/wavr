@@ -33,7 +33,7 @@ from wavr.api_inventory import build_inventory_router
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
-from wavr.auth import authorize, parse_bearer, can_change_state
+from wavr.auth import authorize, parse_bearer, can_change_state, in_subnet
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 
 
@@ -135,7 +135,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # connection to the db (avoids lock contention) and the middleware below is strict
     # loopback-only, byte-identical to before. `_local_ip` defines the "same /24" that
     # authenticated LAN peers must sit in.
-    _local_ip = _local_ipv4() or "127.0.0.1"
+    _local_ip = (_local_ipv4() or "127.0.0.1") if cfg.multidevice else "127.0.0.1"
     _devices = DeviceStore(cfg.db_path) if cfg.multidevice else None
     _pairing = PairingManager(_devices) if cfg.multidevice else None
 
@@ -194,10 +194,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app = FastAPI(title="Wavr", lifespan=lifespan)
 
     app.include_router(build_inventory_router(_inventory))
+    def require_central(request: Request):
+        # Device-management routes: only a 'central' (or the loopback root) may list or
+        # revoke devices; a 'user' is read-only (audit C1). Applied via include_router
+        # dependencies so it wraps every route in the devices router.
+        if getattr(request.state, "role", None) not in ("root", "central"):
+            raise HTTPException(status_code=403, detail="central role required")
+
     if cfg.multidevice:
         app.include_router(build_pair_router(_devices, _pairing))
         app.include_router(build_ws_ticket_router(_devices, _pairing))
-        app.include_router(build_devices_router(_devices))
+        app.include_router(build_devices_router(_devices),
+                           dependencies=[Depends(require_central)])
 
     # PRIVACY: the load-bearing access control. Default (WAVR_MULTIDEVICE off) is strict
     # loopback-only, enforced in code so it holds even under --host 0.0.0.0 ("testclient"
@@ -212,6 +220,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             return await call_next(request)
         if not cfg.multidevice:                      # off: strict loopback-only, as before
             return JSONResponse({"detail": "loopback only"}, status_code=403)
+        # Onboarding: /api/pair is reachable by an in-subnet peer WITHOUT a token
+        # (that is the point of pairing; bounded by the one-time, rate-limited code).
+        if request.url.path == "/api/pair":
+            if in_subnet(host, _local_ip):
+                request.state.role = None
+                return await call_next(request)
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
         token = parse_bearer(request.headers.get("authorization"))
         role = authorize(host, _local_ip, token, _devices)
         if role is None:
@@ -322,11 +337,22 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def live(ws: WebSocket):
         host = ws.client.host if ws.client else None
         origin = ws.headers.get("origin")
+        did = None   # authenticated device id for a LAN companion (None for loopback root)
         if cfg.multidevice and not _is_loopback(host):
-            # LAN companion: a Bearer token can't ride a WS handshake, so require a
-            # valid single-use ticket (minted via POST /api/ws-ticket with the token).
+            # LAN companion: WS isn't covered by the http middleware, so re-check the
+            # subnet here (M2); a Bearer token can't ride a WS handshake, so require a
+            # valid single-use ticket; and re-check the device wasn't revoked between
+            # ticket mint and now (M1).
+            if not in_subnet(host, _local_ip):
+                await ws.close(code=1008)
+                return
             ticket = ws.query_params.get("ticket")
-            if not ticket or _pairing.redeem_ticket(ticket) is None:
+            did = _pairing.redeem_ticket(ticket) if ticket else None
+            if did is None:
+                await ws.close(code=1008)
+                return
+            dev = _devices.get(did)
+            if dev is None or dev.revoked:
                 await ws.close(code=1008)
                 return
         else:
@@ -340,8 +366,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         await ws.accept()
         q = _hub.subscribe()
         try:
+            n = 0
             while True:
                 await ws.send_json(await q.get())
+                n += 1
+                if did is not None and n % 50 == 0:   # M1: drop an open stream on revoke
+                    dev = _devices.get(did)
+                    if dev is None or dev.revoked:
+                        break
         except WebSocketDisconnect:
             pass
         finally:
