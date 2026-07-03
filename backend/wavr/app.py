@@ -13,7 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
 from wavr.config import load_config
-from wavr.housemap import load_house_map
+from wavr.housemap import load_house_map, room_names
 from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine
@@ -167,7 +167,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             from wavr.ha_discovery import publish_ha_discovery
             publish_ha_discovery(
                 _rules_publish,
-                [r["name"] for r in _house.get("rooms", [])],
+                room_names(_house),
                 prefix=cfg.mqtt_prefix,
             )
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
