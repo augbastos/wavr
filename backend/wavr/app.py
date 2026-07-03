@@ -328,7 +328,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if _narrator is None:
             raise HTTPException(status_code=503, detail="narration not configured (set GEMINI_API_KEY)")
         try:
-            text = await asyncio.to_thread(_narrator.narrate, latest, _storage.recent(50))
+            rows = await asyncio.to_thread(_storage.recent, 50)
+            text = await asyncio.to_thread(_narrator.narrate, latest, rows)
         except Exception:
             logging.exception("narrate failed")
             raise HTTPException(status_code=502, detail="narration backend error")

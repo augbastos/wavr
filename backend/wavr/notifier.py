@@ -20,14 +20,27 @@ privacy identity, same as mqtt_publisher/ha_client:
   * FAILURE-TOLERANT: a dead/unreachable ntfy server must never raise into the
     caller (the away/rules loop) -- any transport error is caught and warned
     once, then silently no-ops.
+  * NON-BLOCKING: `notify()` is called SYNCHRONOUSLY from async code (AwayMonitor
+    on the arrived/left edge, NetworkInventoryService's on_rogue callback), so the
+    (up to 5s) blocking POST must never run inline on the event loop -- it would
+    freeze every other coroutine (ingest, websockets, HTTP) for the duration of a
+    slow/unreachable ntfy server. When a loop is running, the POST is offloaded to
+    a worker thread and notify() returns immediately (fire-and-forget); outside a
+    running loop (e.g. a plain sync caller/test) it runs inline, same as before.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import urllib.request
 from typing import Callable
 
 _WARNED = False
+
+# Fire-and-forget background tasks (the offloaded POST) must be kept referenced
+# until they finish, or asyncio may garbage-collect them mid-flight and warn
+# "Task was destroyed but it is pending". Discarded via the done-callback below.
+_BACKGROUND_TASKS: set = set()
 
 # A POST transport takes (url, body_bytes) and returns the raw response (or
 # raises). Default is _urllib_post below; tests inject a fake that records
@@ -52,10 +65,17 @@ def make_notifier(url: str, post: PostFn | None = None) -> Callable[[str], None]
     other transport error) is logged once at WARNING and every call after
     that is a silent no-op, so it can never crash the rules/away loop that
     calls it. `post` is injectable for tests (no network, no new dependency).
+
+    NON-BLOCKING: when called from inside a running event loop, the (blocking)
+    POST is offloaded to a worker thread via `asyncio.to_thread` and notify()
+    returns immediately -- a slow/unreachable ntfy server can no longer freeze
+    the event loop. Outside a running loop there is nothing to offload from,
+    so it runs the POST inline (still failure-tolerant) -- this also keeps
+    notify() trivially testable synchronously with zero network.
     """
     _post = post or _urllib_post
 
-    def notify(message: str) -> None:
+    def _send(message: str) -> None:
         global _WARNED
         try:
             _post(url, message.encode("utf-8"))
@@ -65,4 +85,19 @@ def make_notifier(url: str, post: PostFn | None = None) -> Callable[[str], None]
                     "ntfy notification failed (server unreachable at %s); "
                     "further failures will be silent", url)
                 _WARNED = True
+
+    def notify(message: str) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is None:
+            _send(message)   # no event loop to protect -- just do it inline
+            return
+        # Fire-and-forget: schedule the blocking POST on a worker thread and
+        # return immediately. `_send` already swallows every exception, so the
+        # task can never end in an unhandled-exception warning either.
+        task = loop.create_task(asyncio.to_thread(_send, message))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
     return notify

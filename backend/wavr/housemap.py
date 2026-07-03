@@ -83,6 +83,33 @@ MAX_WALLS_PER_FLOOR = 4096
 MAX_VERTICES = 512
 _FEATURE_TYPES = {"stairs", "door", "window"}
 
+# Bound id/name-shaped strings (audit MEDIUM: unbounded strings let a single small
+# doc smuggle an oversized field even while staying under the whole-doc cap below).
+MAX_STR_LEN = 200
+
+# `backdrop` (per floor) is a Phase-2 placeholder (image_ref/m_per_px/offset/opacity,
+# see docs/superpowers/specs/2026-07-03-house-maquette-editor-design.md) -- today the
+# editor always emits `null`. Bound its shape now so a future/hand-crafted doc can't
+# smuggle an arbitrarily large blob through an unvalidated field.
+MAX_BACKDROP_KEYS = 32
+MAX_BACKDROP_BYTES = 8192
+
+# Whole-doc size guard (audit MEDIUM): PUT /api/house has no body-size cap of its own,
+# so validate_house_map is the backstop against a pathologically large doc (e.g. many
+# small-but-valid rooms, or oversized strings spread across many fields) even when
+# every individual count/length check above passes.
+MAX_DOC_BYTES = 5 * 1024 * 1024   # a few MB
+
+# Known keys the house-map editor (frontend/index.html) actually emits, at each level.
+# Unknown keys are rejected -- but ONLY here, where the shape is verified against the
+# editor's DEMO_HOUSE/save path, DEFAULT_MAP, _migrate_v1, and the test fixtures, so a
+# real, valid doc is never broken by this whitelist.
+_TOP_KEYS = {"version", "units", "floors"}
+_FLOOR_KEYS = {"id", "name", "level", "rooms", "walls", "features", "backdrop"}
+_ROOM_KEYS = {"id", "name", "polygon"}
+_WALL_KEYS = {"id", "a", "b"}
+_FEATURE_KEYS = {"id", "type", "at", "to_level"}
+
 
 class HouseMapError(ValueError):
     """Raised by validate_house_map on any structural violation."""
@@ -96,9 +123,42 @@ def _point(p) -> bool:
     return isinstance(p, (list, tuple)) and len(p) == 2 and _finite(p[0]) and _finite(p[1])
 
 
+def _bounded_str(v, max_len: int = MAX_STR_LEN) -> bool:
+    return isinstance(v, str) and len(v) <= max_len
+
+
+def _no_unknown_keys(obj: dict, allowed: set, what: str) -> None:
+    extra = set(obj.keys()) - allowed
+    if extra:
+        raise HouseMapError(f"unknown {what} key(s): {sorted(extra)}")
+
+
+def _valid_backdrop(b) -> bool:
+    """None (today's only real value) or a small, shallow dict -- reserved shape for
+    the Phase-2 maquette-backdrop feature, bounded so it can't smuggle a large blob."""
+    if b is None:
+        return True
+    if not isinstance(b, dict) or len(b) > MAX_BACKDROP_KEYS:
+        return False
+    try:
+        size = len(json.dumps(b))
+    except (TypeError, ValueError):
+        return False
+    return size <= MAX_BACKDROP_BYTES
+
+
 def validate_house_map(doc: dict) -> None:
     if not isinstance(doc, dict):
         raise HouseMapError("house map must be an object")
+    # Whole-doc size guard FIRST: a parsed JSON body is always re-serializable, so this
+    # is a cheap backstop against a pathologically large doc before any deep walk.
+    try:
+        doc_bytes = len(json.dumps(doc))
+    except (TypeError, ValueError) as exc:
+        raise HouseMapError(f"house map is not JSON-serializable: {exc}")
+    if doc_bytes > MAX_DOC_BYTES:
+        raise HouseMapError(f"house map too large (> {MAX_DOC_BYTES} bytes serialized)")
+    _no_unknown_keys(doc, _TOP_KEYS, "top-level")
     if doc.get("version") != 2:
         raise HouseMapError("version must be 2")
     if doc.get("units") != "m":
@@ -112,6 +172,7 @@ def validate_house_map(doc: dict) -> None:
     for f in floors:
         if not isinstance(f, dict):
             raise HouseMapError("each floor must be an object")
+        _no_unknown_keys(f, _FLOOR_KEYS, "floor")
         level = f.get("level")
         if not isinstance(level, int) or isinstance(level, bool):
             raise HouseMapError("floor level must be an integer")
@@ -119,14 +180,27 @@ def validate_house_map(doc: dict) -> None:
             raise HouseMapError(f"duplicate floor level {level}")
         seen_levels.add(level)
         fid = f.get("id")
-        if not isinstance(fid, str) or fid in seen_ids:
-            raise HouseMapError("floor id must be a unique string")
+        if not _bounded_str(fid) or fid in seen_ids:
+            raise HouseMapError(f"floor id must be a unique string (<= {MAX_STR_LEN} chars)")
         seen_ids.add(fid)
+        if not _bounded_str(f.get("name")):
+            raise HouseMapError(f"floor name must be a string (<= {MAX_STR_LEN} chars)")
+        if not _valid_backdrop(f.get("backdrop")):
+            raise HouseMapError(
+                f"floor backdrop must be null or a small object (<= {MAX_BACKDROP_KEYS} "
+                f"keys, <= {MAX_BACKDROP_BYTES} bytes serialized)")
         rooms = f.get("rooms", [])
         if not isinstance(rooms, list) or len(rooms) > MAX_ROOMS_PER_FLOOR:
             raise HouseMapError(f"rooms must be a list (<= {MAX_ROOMS_PER_FLOOR})")
         for r in rooms:
-            poly = r.get("polygon") if isinstance(r, dict) else None
+            if not isinstance(r, dict):
+                raise HouseMapError("each room must be an object")
+            _no_unknown_keys(r, _ROOM_KEYS, "room")
+            if not _bounded_str(r.get("id")):
+                raise HouseMapError(f"room id must be a string (<= {MAX_STR_LEN} chars)")
+            if not _bounded_str(r.get("name")):
+                raise HouseMapError(f"room name must be a string (<= {MAX_STR_LEN} chars)")
+            poly = r.get("polygon")
             if not isinstance(poly, list) or len(poly) < 3:
                 raise HouseMapError("room polygon must have >= 3 vertices")
             if len(poly) > MAX_VERTICES:
@@ -137,7 +211,12 @@ def validate_house_map(doc: dict) -> None:
         if not isinstance(walls, list) or len(walls) > MAX_WALLS_PER_FLOOR:
             raise HouseMapError(f"walls must be a list (<= {MAX_WALLS_PER_FLOOR})")
         for w in walls:
-            if not (isinstance(w, dict) and _point(w.get("a")) and _point(w.get("b"))):
+            if not isinstance(w, dict):
+                raise HouseMapError("each wall must be an object")
+            _no_unknown_keys(w, _WALL_KEYS, "wall")
+            if "id" in w and not _bounded_str(w.get("id")):
+                raise HouseMapError(f"wall id must be a string (<= {MAX_STR_LEN} chars)")
+            if not (_point(w.get("a")) and _point(w.get("b"))):
                 raise HouseMapError("wall a/b must be finite points")
         feats = f.get("features", [])
         if not isinstance(feats, list):
@@ -145,6 +224,9 @@ def validate_house_map(doc: dict) -> None:
         for feat in feats:
             if not isinstance(feat, dict) or feat.get("type") not in _FEATURE_TYPES:
                 raise HouseMapError(f"feature type must be one of {sorted(_FEATURE_TYPES)}")
+            _no_unknown_keys(feat, _FEATURE_KEYS, "feature")
+            if "id" in feat and not _bounded_str(feat.get("id")):
+                raise HouseMapError(f"feature id must be a string (<= {MAX_STR_LEN} chars)")
             at = feat.get("at")
             if at is not None and not _point(at):
                 raise HouseMapError("feature 'at' must be a finite point")
