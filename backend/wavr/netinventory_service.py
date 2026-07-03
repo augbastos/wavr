@@ -63,18 +63,24 @@ class NetworkInventoryService:
     scan_inventory (default: the real local ARP scan) -- inject a coroutine
     returning canned `arp -a` text to run without a network. `port_scan`
     overrides the WAVR_NET_PORTSCAN env gate (tests); leave None for the
-    default (OFF) behaviour.
+    default (OFF) behaviour. `on_rogue` is an OPTIONAL injectable callback
+    `(RogueAlert) -> None` fired at the same edge-triggered moment a new
+    rogue MAC is recorded (once per MAC, same rule as the alert log) -- used
+    by the opt-in ntfy notifier. Exceptions from it are caught and logged,
+    never propagated (a broken callback must not break scanning).
     """
 
     def __init__(self, known_macs=None,
                  scan: Callable[[], Awaitable[str]] | None = None,
                  interval: float = 30.0, max_alerts: int = 100,
-                 port_scan: bool | None = None):
+                 port_scan: bool | None = None,
+                 on_rogue: Callable[[RogueAlert], None] | None = None):
         self._known = _norm_macs(known_macs)
         self._scan = scan
         self._interval = interval
         self._max_alerts = max_alerts
         self._port_scan = port_scan
+        self._on_rogue = on_rogue
         self._inventory: list[Device] = []
         self._alerts: list[RogueAlert] = []
         self._alerted: set[str] = set()   # MACs already alerted (edge-triggered)
@@ -101,10 +107,16 @@ class NetworkInventoryService:
             if d.known or d.mac in self._alerted:   # allowlisted or already seen
                 continue
             self._alerted.add(d.mac)
-            self._alerts.append(RogueAlert(
+            alert = RogueAlert(
                 ts=ts, mac=d.mac, vendor=d.vendor,
                 ip=d.ip, device_type=d.device_type, hostname=d.hostname,
-            ))
+            )
+            self._alerts.append(alert)
+            if self._on_rogue:
+                try:
+                    self._on_rogue(alert)
+                except Exception:
+                    _LOG.warning("on_rogue callback failed", exc_info=True)
         if len(self._alerts) > self._max_alerts:    # bounded ring
             self._alerts = self._alerts[-self._max_alerts:]
         # Bound the edge-trigger dedup set: once it grows large (MAC randomization +

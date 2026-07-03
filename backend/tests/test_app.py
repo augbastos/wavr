@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -184,3 +186,72 @@ def test_camera_rtsp_url_scheme_restricted_to_rtsp():
             "rtsp_url": "rtsp://10.0.0.5/stream", "confidence": 0.5,
         }, headers=LOCAL)
         assert ok.status_code == 200
+
+
+# --- /healthz + /api/status ----------------------------------------------------
+
+def test_healthz_returns_ok_and_version():
+    from wavr import __version__
+    with build_client() as client:
+        r = client.get("/healthz")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "version": __version__}
+
+
+def test_status_shape_and_no_secrets():
+    from wavr import __version__
+    with build_client() as client:
+        r = client.get("/api/status")
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {"version", "sources", "features", "house"}
+        assert body["version"] == __version__
+
+        assert isinstance(body["sources"], list) and body["sources"]
+        for s in body["sources"]:
+            assert set(s) == {"name", "active"}
+        assert any(s["name"] == "sim" for s in body["sources"])
+
+        expected_features = {
+            "multidevice", "mqtt", "ha_discovery", "mcp_control",
+            "narrate", "net_inventory", "tls", "ntfy",
+        }
+        assert set(body["features"]) == expected_features
+        assert all(isinstance(v, bool) for v in body["features"].values())
+
+        assert set(body["house"]) == {"floors", "rooms"}
+        assert body["house"]["floors"] >= 1
+        assert body["house"]["rooms"] >= 1
+
+        # NO SECRETS: grep the raw JSON text for anything token/credential/MAC/rtsp shaped.
+        raw = json.dumps(body).lower()
+        for secret_marker in ("token", "ha_token", "ha_url", "mac", "rtsp", "password", "secret"):
+            assert secret_marker not in raw
+
+
+def test_status_features_reflect_config_defaults(monkeypatch):
+    for var in ("WAVR_MULTIDEVICE", "WAVR_MQTT_ENABLED", "WAVR_HA_DISCOVERY",
+                "WAVR_MCP_CONTROL", "WAVR_NARRATE_ENABLED", "WAVR_NET_INVENTORY",
+                "WAVR_NTFY_URL"):
+        monkeypatch.delenv(var, raising=False)
+    with build_client() as client:
+        r = client.get("/api/status")
+        features = r.json()["features"]
+        assert features == {
+            "multidevice": False, "mqtt": False, "ha_discovery": False,
+            "mcp_control": False, "narrate": False, "net_inventory": False,
+            "tls": False, "ntfy": False,
+        }
+
+
+def test_status_house_counts_match_default_map(monkeypatch):
+    monkeypatch.delenv("WAVR_HOUSE_MAP", raising=False)   # unset -> DEFAULT_MAP (1 floor, 3 rooms)
+    with build_client() as client:
+        assert client.get("/api/status").json()["house"] == {"floors": 1, "rooms": 3}
+
+
+def test_status_source_list_matches_system_endpoint():
+    with build_client() as client:
+        system_sources = {s["name"]: s["active"] for s in client.get("/api/system").json()["sources"]}
+        status_sources = {s["name"]: s["active"] for s in client.get("/api/status").json()["sources"]}
+        assert status_sources == system_sources
