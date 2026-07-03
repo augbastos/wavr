@@ -7,6 +7,7 @@ C1 (device-route role gate), M2 (WS/HTTP subnet), M3 (pair reachability), revoca
 """
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from wavr.app import create_app
 from wavr.storage import Storage
@@ -76,3 +77,39 @@ def test_revoked_token_is_denied(app):
     devs = central.get("/api/devices", headers=CSRF).json()["devices"]
     central.delete(f"/api/devices/{devs[0]['device_id']}", headers=CSRF)
     assert peer.get("/api/state", headers=auth).status_code == 403
+
+
+# --- /ws/live ticket path (audit M1 revoke re-check + M2 subnet) ---
+
+def _ticket(peer, auth):
+    return peer.post("/api/ws-ticket", headers=auth).json()["ticket"]
+
+
+def test_ws_lan_peer_with_valid_ticket_connects(app):
+    peer, auth = _pair(app, "user")
+    with peer.websocket_connect(f"/ws/live?ticket={_ticket(peer, auth)}"):
+        pass   # accepted (no 1008 close on handshake)
+
+
+def test_ws_without_ticket_is_closed(app):
+    peer, _ = _pair(app, "user")
+    with pytest.raises(WebSocketDisconnect):
+        with peer.websocket_connect("/ws/live"):
+            pass
+
+
+def test_ws_out_of_subnet_is_closed(app):   # audit M2
+    outsider = TestClient(app, client=("10.0.0.5", 12345))
+    with pytest.raises(WebSocketDisconnect):
+        with outsider.websocket_connect("/ws/live?ticket=anything"):
+            pass
+
+
+def test_ws_ticket_is_single_use(app):
+    peer, auth = _pair(app, "user")
+    t = _ticket(peer, auth)
+    with peer.websocket_connect(f"/ws/live?ticket={t}"):
+        pass
+    with pytest.raises(WebSocketDisconnect):     # reused ticket rejected
+        with peer.websocket_connect(f"/ws/live?ticket={t}"):
+            pass
