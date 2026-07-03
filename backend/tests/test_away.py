@@ -53,6 +53,44 @@ def test_no_duplicate_state_when_unchanged():
     m.handle(_rs("sala", True)); m.handle(_rs("sala", True))
     assert [m2 for m2 in msgs if m2[0] == "wavr/house/state"] == [("wavr/house/state", "home", True)]
 
+def test_notify_not_called_on_first_determination():
+    notified = []
+    m = AwayMonitor(notify=notified.append)   # no publish injected -- must default to a no-op
+    m.handle(_rs("sala", True))
+    assert notified == []                     # first determination -> no arrived/left edge
+
+def test_notify_called_on_left_and_arrived_edges():
+    notified = []
+    m = AwayMonitor(notify=notified.append, away_grace=1)
+    m.handle(_rs("sala", True))                            # home (first, no notify)
+    m.handle(_rs("sala", False))                            # grace 1 -> away
+    assert notified == ["Wavr: casa vazia"]
+    m.handle(_rs("sala", True))                             # away -> home
+    assert notified == ["Wavr: casa vazia", "Wavr: alguém chegou em casa"]
+
+def test_notify_message_is_derived_only_no_room_or_coords():
+    notified = []
+    m = AwayMonitor(notify=notified.append, away_grace=1)
+    m.handle(_rs("sala", True))
+    m.handle(_rs("sala", False))
+    assert notified == ["Wavr: casa vazia"]
+    for msg in notified:
+        assert "sala" not in msg and "occupied" not in msg and "confidence" not in msg
+
+def test_notify_is_optional_publish_only_still_works():
+    msgs = []
+    # no `notify` at all -- publish-only behaviour must be unchanged
+    m = AwayMonitor(lambda t, p, r: msgs.append((t, p, r)), away_grace=1)
+    m.handle(_rs("sala", True))
+    m.handle(_rs("sala", False))
+    assert ("wavr/house/event", "left", False) in msgs
+
+def test_publish_defaults_to_noop_when_omitted():
+    # An ntfy-only caller (no MQTT publisher) must still drive edge detection.
+    m = AwayMonitor(notify=lambda msg: None, away_grace=1)
+    m.handle(_rs("sala", True))
+    m.handle(_rs("sala", False))   # must not raise despite no publish callable
+
 async def test_run_consumes_hub_and_unsubscribes():
     msgs = []
     hub = Hub()

@@ -149,3 +149,37 @@ def test_alerts_endpoint_returns_rogue_json():
 def test_config_has_net_scan_interval_default(monkeypatch):
     monkeypatch.delenv("WAVR_NET_SCAN_INTERVAL", raising=False)
     assert load_config().net_scan_interval == 30.0
+
+
+# ---- on_rogue callback (opt-in ntfy hook) -------------------------------------
+
+async def test_on_rogue_fires_once_per_new_rogue_mac():
+    calls = []
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   on_rogue=lambda a: calls.append(a))
+    await svc.scan_once()
+    await svc.scan_once()   # rescan must NOT re-fire (edge-triggered, same rule as alerts)
+    assert sorted(a.mac for a in calls) == ["24:0a:c4:aa:bb:cc", "de:ad:be:ef:00:01"]
+    assert all(isinstance(a, RogueAlert) for a in calls)
+
+
+async def test_on_rogue_never_fires_for_known_mac():
+    calls = []
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   on_rogue=lambda a: calls.append(a))
+    await svc.scan_once()
+    assert all(a.mac != "a4:83:e7:11:22:33" for a in calls)
+
+
+async def test_on_rogue_absent_by_default_no_crash():
+    svc = _service()   # no on_rogue passed
+    await svc.scan_once()   # must not raise
+
+
+async def test_on_rogue_exception_is_swallowed_not_propagated():
+    def boom(alert):
+        raise RuntimeError("callback exploded")
+
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0, on_rogue=boom)
+    devices = await svc.scan_once()   # must not raise despite the callback exploding
+    assert devices   # scan still completed and returned the inventory

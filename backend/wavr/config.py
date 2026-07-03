@@ -67,6 +67,10 @@ class Config:
     # is refused (and sensitive domains are additionally refused in code — ADR-0005 §4).
     mcp_control: bool
     ha_allowed_services: set[str]
+    # Self-hosted ntfy notifications (opt-in) — a short human alert POSTed to the
+    # user's OWN ntfy topic on derived edge events only (house arrived/left,
+    # rogue-device). Empty => disabled (default OFF).
+    ntfy_url: str
 
 
 def load_config() -> Config:
@@ -132,4 +136,7 @@ def load_config() -> Config:
             ).split(",")
             if s.strip()
         },
+        # ntfy (opt-in): empty => disabled. A full topic URL on the user's own
+        # self-hosted ntfy server, e.g. http://nas.local:8080/wavr.
+        ntfy_url=os.getenv("WAVR_NTFY_URL", ""),
     )
