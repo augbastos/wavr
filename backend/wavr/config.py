@@ -34,6 +34,10 @@ class Config:
     house_map: str
     mmwave_port: str
     mmwave_room: str
+    ble_known: dict[str, str]
+    ble_room: str
+    ble_rssi_min: int
+    ble_interval: float
 
 
 def load_config() -> Config:
@@ -66,4 +70,13 @@ def load_config() -> Config:
         house_map=os.getenv("WAVR_HOUSE_MAP", ""),
         mmwave_port=os.getenv("WAVR_MMWAVE_PORT", ""),
         mmwave_room=os.getenv("WAVR_MMWAVE_ROOM", "sala"),
+        ble_known={
+            pair.split("=", 1)[0].strip().replace("-", ":").lower():
+                (pair.split("=", 1)[1].strip() if "=" in pair else "")
+            for pair in os.getenv("WAVR_BLE_KNOWN", "").split(",")
+            if pair.split("=", 1)[0].strip()
+        },
+        ble_room=os.getenv("WAVR_BLE_ROOM", "casa"),
+        ble_rssi_min=int(os.getenv("WAVR_BLE_RSSI_MIN", "-80")),
+        ble_interval=float(os.getenv("WAVR_BLE_INTERVAL", "15.0")),
     )
