@@ -2,7 +2,7 @@
 <html lang="pt-br">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0f1216">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -28,29 +28,44 @@
 </script>
 <style>
   :root{--bg:#0f1216;--surface:#171c22;--ink:#e8edf2;--muted:#9aa7b4;
-        --accent:#3db54a;--warn:#e0b341;--danger:#c65b52;--zone:#6ea8fe;
+        --accent:#3db54a;--warn:#e0b341;--danger:#e8726a;--zone:#6ea8fe;
         --line:#232a32;--radius:14px;}
   *{box-sizing:border-box;}
   body{margin:0;background:var(--bg);color:var(--ink);
-       font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
-  header{padding:20px 24px;border-bottom:1px solid var(--line);
+       font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       overscroll-behavior-y:contain;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;}
+  header{padding:max(20px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) 20px max(24px, env(safe-area-inset-left));
+         border-bottom:1px solid var(--line);
          display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;}
   h1{font-size:1.25rem;margin:0;letter-spacing:-0.01em;}
   .mode{font-size:.8rem;color:var(--muted);}
   .mode b{color:var(--accent);}
   .hdr-right{display:flex;align-items:center;gap:14px;}
-  .house{font-size:.8rem;font-weight:600;padding:4px 12px;border-radius:999px;border:1px solid var(--line);}
+  .house{font-size:.8rem;font-weight:600;padding:4px 12px;border-radius:999px;border:1px solid var(--line);
+         transition:color .25s ease-out,border-color .25s ease-out;}
   .house.home{color:var(--accent);border-color:var(--accent);}
   .house.away{color:var(--muted);}
+  .house.stale{opacity:.6;}
+  /* Above-the-fold hero (all modes): the glanceable "who's home" answer, computed from
+     the same RoomState the #house pill uses. */
+  #homeHero{padding:18px max(24px, env(safe-area-inset-right)) 4px max(24px, env(safe-area-inset-left));}
+  #homeHero[hidden]{display:none;}
+  .hero-line1{margin:0;font-size:1.7rem;font-weight:700;letter-spacing:-0.01em;
+              transition:color .25s ease-out;}
+  .hero-line1.home{color:var(--accent);}
+  .hero-line1.away{color:var(--ink);}
+  .hero-line1.stale{opacity:.6;}
+  .hero-line2{margin:6px 0 0;font-size:.95rem;color:var(--muted);min-height:1.2em;}
   .narrate:not([hidden]){display:flex;align-items:flex-start;gap:14px;padding:12px 24px;border-bottom:1px solid var(--line);}
   .narrate-out{margin:0;font-size:.9rem;color:var(--ink);max-width:70ch;line-height:1.5;}
   .narrate-out.muted{color:var(--muted);}
-  main{padding:24px;max-width:1000px;margin:0 auto;}
+  main{padding:24px;padding-bottom:max(24px, env(safe-area-inset-bottom));max-width:1000px;margin:0 auto;}
   .rooms{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;}
   .card h2{margin:0 0 4px;font-size:1rem;text-transform:capitalize;}
   .conf{font-variant-numeric:tabular-nums;font-size:.82rem;color:var(--muted);}
-  .pill{display:inline-block;font-size:.75rem;padding:3px 10px;border-radius:999px;margin:8px 0;}
+  .pill{display:inline-block;font-size:.75rem;padding:3px 10px;border-radius:999px;margin:8px 0;
+        transition:background .3s ease-out,color .3s ease-out;}
   .pill.on{background:rgba(61,181,74,.15);color:var(--accent);}
   .pill.off{background:rgba(154,167,180,.12);color:var(--muted);}
   .bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0 12px;}
@@ -60,7 +75,7 @@
        padding:3px 0;border-top:1px dashed var(--line);}
   .src .m{text-transform:capitalize;color:var(--ink);}
   .vit{margin-top:10px;font-size:.82rem;font-variant-numeric:tabular-nums;}
-  h3{margin:28px 0 12px;font-size:.9rem;color:var(--muted);font-weight:600;}
+  h3{margin:28px 0 12px;font-size:.9rem;color:var(--ink);font-weight:600;}
   .timeline{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
             padding:8px 0;max-height:260px;overflow:auto;}
   .row{display:flex;gap:14px;padding:7px 18px;font-size:.82rem;border-bottom:1px solid var(--line);
@@ -70,8 +85,9 @@
   .row .r{text-transform:capitalize;min-width:80px;}
   .controls:not([hidden]){display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid var(--line);}
   .ctl{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.8rem;cursor:pointer;
-       transition:border-color .15s ease-out,color .15s ease-out;}
+       transition:border-color .15s ease-out,color .15s ease-out,transform .1s ease-out,background-color .15s ease-out;}
   .ctl:hover{border-color:var(--muted);}
+  .ctl:active{background:rgba(61,181,74,.14);border-color:var(--accent);color:var(--accent);transform:scale(.97);}
   .ctl.on{border-color:var(--accent);color:var(--accent);}
   .ctl.off{color:var(--muted);}
   .ctl.small{padding:6px 12px;font-size:.78rem;}
@@ -83,18 +99,23 @@
   .cams h3{margin:4px 0 12px;}
   .radar{padding:12px 24px;border-bottom:1px solid var(--line);}
   .radar h3{margin:4px 0 12px;}
-  #radar{width:100%;max-width:760px;display:block;background:var(--surface);
+  #radar{width:100%;max-width:760px;aspect-ratio:4/3;display:block;background:var(--surface);
          border:1px solid var(--line);border-radius:var(--radius);}
   /* 3D house view (self-hosted three.js): sibling <canvas> to #radar's <svg>, shown
      in a different DOM element entirely since a WebGL context can't live inside SVG. */
   #radar3d{width:100%;max-width:760px;aspect-ratio:4/3;display:block;background:var(--surface);
-           border:1px solid var(--line);border-radius:var(--radius);touch-action:none;}
+           border:1px solid var(--line);border-radius:var(--radius);
+           /* pan-y (not none): one-finger touch scrolls the page vertically; OrbitControls
+              is configured (see ensure3D()) to only respond to two-finger gestures, so
+              orbit/zoom still work without trapping a one-finger scroll attempt. */
+           touch-action:pan-y;}
   /* Both elements set their own `display:block` above, which otherwise beats the UA
      [hidden]{display:none} rule on specificity alone (same ID, but the UA rule has no ID) —
      without this, toggling .hidden leaves the "hidden" element visually on screen. */
   #radar[hidden],#radar3d[hidden]{display:none;}
   .viewToggle{display:flex;gap:8px;margin-bottom:10px;}
-  .radar-room{fill:none;stroke:var(--line);stroke-width:.025;vector-effect:non-scaling-stroke;}
+  .radar-room{fill:none;stroke:var(--line);stroke-width:.025;vector-effect:non-scaling-stroke;
+              transition:fill .3s ease-out,stroke .3s ease-out;}
   .radar-room.occ{fill:rgba(61,181,74,.08);stroke:var(--accent);}
   .radar-roomlabel{fill:var(--muted);font-size:.24px;text-transform:capitalize;}
   .radar-dot{fill:var(--accent);}
@@ -160,9 +181,9 @@
   .status-chip{font-size:.72rem;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);}
   .status-chip.on{color:var(--accent);border-color:rgba(61,181,74,.4);}
   .status-house{font-size:.82rem;color:var(--muted);}
-  /* per-source freshness (health/age_s) in the room-card "why" rows */
-  .src.stale{opacity:.62;}
-  .src.dead{opacity:.5;}
+  /* per-source freshness (health/age_s) in the room-card "why" rows — conveyed via the
+     colored dot + (dead only) strikethrough + the explicit "· Ns" age text appended in
+     JS, never via opacity alone (opacity would drop --ink/--muted text below AA). */
   .src.dead span{text-decoration:line-through;}
   .src .h{display:inline-block;width:6px;height:6px;border-radius:50%;
           margin-right:6px;vertical-align:middle;background:var(--muted);}
@@ -230,6 +251,9 @@
                     border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.75rem;
                     transition:border-color .15s ease-out,color .15s ease-out;}
   .pair-dev-row .rm:hover{border-color:var(--warn);color:var(--warn);}
+  /* Touch feedback: the remove/revoke cue above was hover-only, so it never showed on
+     touch. :active covers the tap itself; :focus-visible covers keyboard/switch nav. */
+  .rm:active,.rm:focus-visible{border-color:var(--warn);color:var(--warn);}
   /* Companion pairing screen (private-LAN viewer only; hidden in central + demo) */
   .cpair:not([hidden]){min-height:60vh;display:flex;align-items:center;justify-content:center;padding:32px 24px;}
   .cpair-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
@@ -245,7 +269,30 @@
   .cpair-msg{margin:0;font-size:.84rem;color:var(--muted);min-height:1.2em;}
   .cpair-msg.err{color:var(--danger);}
   .cpair-msg.ok{color:var(--accent);}
-  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.zone-item .rm,.pair-dev-row .rm,.radar-target,.radar-zone{transition:none;}}
+  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.zone-item .rm,.pair-dev-row .rm,.radar-target,.radar-zone,
+    .pill,.house,.hero-line1,.radar-room{transition:none;}
+    .ctl:active{transform:none;}}
+  /* ---- Mobile: touch target sizing + iOS zoom-on-focus fix ---- */
+  @media (pointer:coarse){
+    .ctl{min-height:44px;padding:11px 16px;display:inline-flex;align-items:center;justify-content:center;}
+    .ctl.small{min-height:44px;padding:9px 14px;display:inline-flex;align-items:center;justify-content:center;}
+    .rm{min-height:44px;min-width:44px;padding:10px 14px;display:inline-flex;align-items:center;justify-content:center;}
+    /* 16px kills the iOS Safari auto-zoom-on-focus that fires below 16px on any form control. */
+    input,select,textarea{font-size:16px;}
+  }
+  /* ---- Mobile: narrower gutters + a friendlier timeline row at phone widths ---- */
+  @media (max-width:480px){
+    header{padding-left:max(16px, env(safe-area-inset-left));padding-right:max(16px, env(safe-area-inset-right));}
+    #homeHero{padding-left:max(16px, env(safe-area-inset-left));padding-right:max(16px, env(safe-area-inset-right));}
+    main{padding-left:16px;padding-right:16px;}
+    .controls:not([hidden]),.cams:not([hidden]),.radar,.net:not([hidden]),.pair:not([hidden]),
+    .hed:not([hidden]),.narrate:not([hidden]),.statuspanel:not([hidden]){
+      padding-left:16px;padding-right:16px;
+    }
+    .row{gap:8px;padding:7px 14px;}
+    .row .t{min-width:60px;}
+    .row .r{min-width:56px;}
+  }
 </style>
 </head>
 <body>
@@ -256,14 +303,19 @@
     <button id="companionExit" class="ctl small" type="button" hidden>Desconectar</button>
   </div>
 </header>
+<!-- Above-the-fold hero (all modes): glanceable "who's home" answer, before anything else. -->
+<section id="homeHero" aria-live="polite">
+  <p id="heroLine1" class="hero-line1"></p>
+  <p id="heroLine2" class="hero-line2"></p>
+</section>
 <!-- Companion pairing screen (private-LAN viewer, no token yet). Hidden in central + demo. -->
 <div id="companionPair" class="cpair" hidden>
   <form id="cpairForm" class="cpair-card" aria-labelledby="cpair-h">
     <h2 id="cpair-h">Parear com a central</h2>
     <p class="cpair-sub">Digite o código de 8 dígitos exibido no painel da central para ver esta casa neste dispositivo.</p>
     <input id="cpairCode" class="cpair-input" inputmode="numeric" autocomplete="one-time-code"
-           pattern="[0-9]*" maxlength="8" placeholder="00000000" aria-label="código de pareamento">
-    <button type="submit" class="ctl cpair-btn">Parear</button>
+           pattern="[0-9]*" maxlength="8" placeholder="00000000" aria-label="código de pareamento" autofocus>
+    <button type="submit" class="ctl cpair-btn" disabled>Parear</button>
     <p id="cpairMsg" class="cpair-msg" aria-live="polite"></p>
   </form>
 </div>
@@ -382,6 +434,21 @@
   <div class="timeline" id="timeline" role="log" aria-labelledby="tl-h"><div class="empty">sem eventos ainda</div></div>
 </main>
 <script>
+// ---- Reconnection UI (live + companion): dim the house pill/hero + label "reconectando…"
+// while the WS is down; cleared on the very next onmessage frame (see handle() below).
+// Looks elements up live (not via a closed-over const) so it works regardless of where
+// the providers below are defined relative to the DOM-reference declarations further down.
+function setReconnecting(on){
+  const house = document.getElementById("house");
+  const hero1 = document.getElementById("heroLine1");
+  [house, hero1].forEach(el=>{
+    if(!el) return;
+    el.classList.toggle("stale", on);
+    const hasSuffix = / · reconectando…$/.test(el.textContent);
+    if(on && !hasSuffix) el.textContent += " · reconectando…";
+    else if(!on && hasSuffix) el.textContent = el.textContent.replace(/ · reconectando…$/, "");
+  });
+}
 // ---- DataProvider contract: { start(onEvent), history() } — items are RoomState dicts ----
 function WebSocketProvider(){
   const base = location.origin;
@@ -390,7 +457,7 @@ function WebSocketProvider(){
     start(onEvent){
       const ws = new WebSocket(base.replace(/^http/,"ws")+"/ws/live");
       ws.onmessage = (m)=> onEvent(JSON.parse(m.data));
-      ws.onclose = ()=> setTimeout(()=> this.start(onEvent), 1500);
+      ws.onclose = ()=> { setReconnecting(true); setTimeout(()=> this.start(onEvent), 1500); };
     },
   };
 }
@@ -494,7 +561,7 @@ function CompanionProvider(token){
       const proto = location.protocol==="https:" ? "wss://" : "ws://";     // ws/wss chosen from page protocol
       const ws = new WebSocket(proto + location.host + "/ws/live?ticket=" + encodeURIComponent(ticket));
       ws.onmessage = (m)=> onEvent(JSON.parse(m.data));
-      ws.onclose = ()=> { if(!companionAuthFailedOnce) setTimeout(()=> this.start(onEvent), 1500); };
+      ws.onclose = ()=> { if(!companionAuthFailedOnce){ setReconnecting(true); setTimeout(()=> this.start(onEvent), 1500); } };
     },
   };
 }
@@ -506,14 +573,24 @@ function initCompanion(){
   const pairEl  = document.getElementById("companionPair");
   const mainEl  = document.querySelector("main");
   const radarEl = document.getElementById("radarWrap");
+  const heroEl  = document.getElementById("homeHero");
   if(!companionToken()){
     // --- PAIRING SCREEN: hide the whole dashboard, show only the pairing card ---
     if(mainEl)  mainEl.hidden  = true;
     if(radarEl) radarEl.hidden = true;
+    if(heroEl)  heroEl.hidden  = true;    // no RoomState yet — nothing glanceable to show
     pairEl.hidden = false;
     const form  = document.getElementById("cpairForm");
     const input = document.getElementById("cpairCode");
     const msg   = document.getElementById("cpairMsg");
+    const submitBtn = form.querySelector('button[type="submit"]');
+    function updatePairSubmitState(){
+      const valid = /^\d{8}$/.test((input.value||"").replace(/\D+/g,""));
+      submitBtn.disabled = !valid;
+      submitBtn.classList.toggle("on", valid);
+    }
+    input.addEventListener("input", updatePairSubmitState);
+    updatePairSubmitState();
     form.onsubmit = async (e)=>{
       e.preventDefault();
       const code = (input.value||"").replace(/\D+/g,"");
@@ -545,6 +622,11 @@ function initCompanion(){
     exit.hidden = false;
     exit.onclick = ()=>{ companionClearToken(); try{ location.reload(); }catch{} };
   }
+  // Companion-only ordering: rooms/radar are the glanceable answer a phone viewer wants
+  // first; the device-inventory list is secondary, so move it to after <main> in the DOM
+  // (.net's own CSS/hidden toggling in renderNetwork() is untouched — just its position).
+  const netEl = document.getElementById("network");
+  if(netEl && mainEl && netEl.parentNode) mainEl.after(netEl);
 }
 
 const MODE = isLoopbackHost(location.hostname) ? "live"
@@ -560,12 +642,35 @@ document.getElementById("mode").innerHTML =
 
 // ---- House indicator (home/away) — works in both live and demo modes ----
 const houseEl = document.getElementById("house");
+const heroLine1El = document.getElementById("heroLine1");
+const heroLine2El = document.getElementById("heroLine2");
 const roomOcc = {};
+const roomConf = {};
+// Neutral first-paint state (no blank flash) before the first RoomState arrives.
+houseEl.textContent = "casa: —"; houseEl.className = "house";
+if(heroLine1El){ heroLine1El.textContent = "Carregando…"; heroLine1El.className = "hero-line1"; }
 function updateHouse(rs){
   roomOcc[rs.room] = !!rs.occupied;
+  roomConf[rs.room] = rs.confidence;
   const home = Object.values(roomOcc).some(Boolean);
   houseEl.textContent = home ? "casa: alguém em casa" : "casa: vazia";
   houseEl.className = "house " + (home ? "home" : "away");
+  // Above-the-fold hero: same RoomState-derived occupancy the pill uses, formatted as
+  // the glanceable first answer a phone companion needs (line 1: home/away; line 2:
+  // which room(s) + the highest confidence among them).
+  if(heroLine1El){
+    heroLine1El.textContent = home ? "Alguém em casa" : "Casa vazia";
+    heroLine1El.className = "hero-line1 " + (home ? "home" : "away");
+  }
+  if(heroLine2El){
+    const occRooms = Object.keys(roomOcc).filter(r => roomOcc[r]);
+    if(occRooms.length){
+      const maxConf = Math.max(...occRooms.map(r => roomConf[r] ?? 0));
+      heroLine2El.textContent = occRooms.join(", ") + " · " + Math.round(maxConf*100) + "%";
+    } else {
+      heroLine2El.textContent = "";
+    }
+  }
 }
 
 // ---- Status panel (Plano A / live only, read-only): GET /api/status ----
@@ -854,6 +959,11 @@ renderPairing();
 const SVG_NS = "http://www.w3.org/2000/svg";
 const POSTURE_LABEL = {walking:"andando", standing:"em pé", sitting:"sentado", lying:"deitado"};
 let radarUpdate = null;
+// SVG font-size scales with the viewBox transform like any other geometric length, so a
+// fixed user-space font-size shrinks/grows with room/viewport size. rebuildRoomsForFloor()
+// recomputes this (rendered CSS px per 1 viewBox metre) on every layout so room labels and
+// posture captions (set from this) can be expressed in REAL px and stay legible on a phone.
+let radarPxPerM = 40;
 
 // ---- House map (v2: floors -> room polygons + walls + features; meters throughout) ----
 let HOUSE = { version: 2, units: "m", floors: [] };
@@ -925,6 +1035,9 @@ function placeDot(g, room, t){
   g.querySelector("title").textContent =
     `alvo ${t.id ?? "?"} · confiança ${Math.round((t.confidence ?? 0)*100)}%`;
   const txt = g.querySelector("text");
+  // Compensate the viewBox's user-space scaling so the caption reads at a real ~10px
+  // regardless of room/viewport size (see radarPxPerM comment above).
+  txt.style.fontSize = (10 / radarPxPerM) + "px";
   const label = POSTURE_LABEL[t.posture];
   if(label){
     // Flip the caption above the dot when it sits in the lower half of the room, so the
@@ -1041,7 +1154,13 @@ async function renderRadar(){
     const H = rects.length ? Math.max(...rects.map(r=>r.y+r.h)) : 5.7;
     // Bottom margin is larger than the other sides as a second safety net (on top of the
     // dot()-level label flip/clamp above) for posture-caption footprint near room edges.
-    svg.setAttribute("viewBox", `-0.2 -0.2 ${W+0.4} ${H+0.8}`);
+    const viewBoxW = W + 0.4;
+    svg.setAttribute("viewBox", `-0.2 -0.2 ${viewBoxW} ${H+0.8}`);
+    // Rendered CSS px per 1 viewBox metre at the CURRENT screen size — used to keep the
+    // room label (and, via radarPxPerM, the posture caption in placeDot()) at a legible
+    // real pixel size instead of shrinking on a phone-sized #radar.
+    const svgW = svg.getBoundingClientRect().width || svg.clientWidth || 340;
+    radarPxPerM = (svgW / viewBoxW) || 40;
     rects.forEach(r=>{
       const g = document.createElementNS(SVG_NS, "g");
       const rect = document.createElementNS(SVG_NS, "rect");
@@ -1051,6 +1170,7 @@ async function renderRadar(){
       const label = document.createElementNS(SVG_NS, "text");
       label.setAttribute("class", "radar-roomlabel");
       label.setAttribute("x", r.x + 0.15); label.setAttribute("y", r.y + 0.35);
+      label.style.fontSize = (11 / radarPxPerM) + "px";
       label.textContent = r.name;
       const layer = document.createElementNS(SVG_NS, "g");
       g.appendChild(rect); g.appendChild(label); g.appendChild(layer);
@@ -1090,6 +1210,11 @@ async function renderRadar(){
           controls.minDistance = 2;
           controls.maxDistance = 60;
           controls.maxPolarAngle = Math.PI/2 - 0.03;   // camera can't dip below the floor plane
+          // Mobile scroll-trap fix: one-finger touch does nothing here (falls through to
+          // OrbitControls' default/NONE state), so the page can scroll past #radar3d via
+          // its own touch-action:pan-y; two fingers still orbit+zoom in one gesture.
+          controls.touches.ONE = null;
+          controls.touches.TWO = THREE.TOUCH.DOLLY_ROTATE;
           scene.add(new THREE.AmbientLight(0x8fa3ad, 0.7));
           const sun = new THREE.DirectionalLight(0xfff2df, 1.4);
           sun.position.set(8, 12, 6);
@@ -1775,6 +1900,26 @@ function upsert(rs){
   if(v.breathing_bpm!=null) vit.push(`resp ${v.breathing_bpm} rpm`);
   if(v.heart_bpm!=null) vit.push(`bpm ${v.heart_bpm}`);
   c.querySelector(".vit").textContent = vit.join(" · ");
+  c.dataset.occupied = rs.occupied ? "1" : "0";
+  c.dataset.confidence = rs.confidence;
+  reorderCards();
+}
+
+// Occupied rooms first (highest confidence first), empty rooms last — pure CSS `order`
+// on the existing grid/flex .rooms, so cards animate into place via their transitions
+// instead of the DOM being reshuffled.
+function reorderCards(){
+  Object.keys(cards)
+    .map(room => {
+      const el = cards[room];
+      return {room, el, occ: el.dataset.occupied === "1", conf: parseFloat(el.dataset.confidence) || 0};
+    })
+    .sort((a, b) => {
+      if(a.occ !== b.occ) return a.occ ? -1 : 1;
+      if(a.occ) return b.conf - a.conf;
+      return a.room.localeCompare(b.room);
+    })
+    .forEach((entry, i) => { entry.el.style.order = i; });
 }
 
 function pushTimeline(rs){
@@ -1791,7 +1936,7 @@ function pushTimeline(rs){
   while(timelineEl.children.length>60) timelineEl.lastChild.remove();
 }
 
-const handle = (rs)=>{ upsert(rs); pushTimeline(rs); updateHouse(rs); radarUpdate?.(rs); };
+const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); updateHouse(rs); radarUpdate?.(rs); };
 (async ()=>{ (await provider.history()).forEach(handle); provider.start(handle); })();
 </script>
 <script>

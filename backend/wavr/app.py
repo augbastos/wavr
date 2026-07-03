@@ -266,6 +266,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 request.state.role = None
                 return await call_next(request)
             return JSONResponse({"detail": "forbidden"}, status_code=403)
+        # Static shell (index + PWA manifest/sw/icon + vendored three.js): reachable by an
+        # in-subnet peer WITHOUT a token, because the companion must LOAD the page to pair
+        # and these carry nothing sensitive (the page shows only the pairing screen until a
+        # token is entered). The DATA endpoints (/api/*, /ws/*) still require the token.
+        _p = request.url.path
+        if _p == "/" or _p in ("/manifest.webmanifest", "/sw.js", "/icon.svg") or _p.startswith("/vendor/"):
+            if in_subnet(host, _local_ip):
+                request.state.role = None
+                return await call_next(request)
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
         token = parse_bearer(request.headers.get("authorization"))
         role = authorize(host, _local_ip, token, _devices)
         if role is None:
@@ -485,6 +495,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/")
     async def dashboard():
         return FileResponse(_INDEX)
+
+    # PWA shell files, served same-origin so the app installs + caches without any
+    # external request (the SW registers, the manifest resolves, the icon loads). These
+    # are the static shell; like "/" they carry nothing sensitive.
+    _FRONTEND = _INDEX.parent
+
+    @app.get("/manifest.webmanifest")
+    async def manifest():
+        return FileResponse(_FRONTEND / "manifest.webmanifest",
+                            media_type="application/manifest+json")
+
+    @app.get("/sw.js")
+    async def service_worker():
+        return FileResponse(_FRONTEND / "sw.js", media_type="text/javascript")
+
+    @app.get("/icon.svg")
+    async def icon():
+        return FileResponse(_FRONTEND / "icon.svg", media_type="image/svg+xml")
 
     return app
 
