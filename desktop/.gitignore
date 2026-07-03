@@ -6,6 +6,11 @@ src-tauri/Cargo.lock
 src-tauri/icons/*.png
 src-tauri/icons/*.ico
 src-tauri/icons/*.icns
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
+# Tauri-generated (schemas/capabilities)
+src-tauri/gen/
 
 # node
 node_modules/

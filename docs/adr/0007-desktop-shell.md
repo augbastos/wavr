@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted (design) — 2026-07-03. Scaffold on branch `tauri-shell`, not merged; the Rust
-must be compiled + run once on a machine with the toolchain before it lands on `master`.
+Accepted — 2026-07-03. Built + smoke-verified: compiles clean (Rust 1.96.1 MSVC) and a
+headless launch confirmed the shell spawns the backend and serves the live dashboard on
+loopback. One manual visual check remains (window renders + tray-Quit leaves no python).
 
 ## Context
 
