@@ -18,25 +18,30 @@
   `confidence = agreement × strength` stays honest; per-source health in the dashboard.
 - **MQTT Home Assistant auto-discovery** — occupancy/confidence appear as native HA
   entities (opt-in; derived state only, never targets or vitals).
-- **Read-only MCP server** — `RoomState` / house map exposed to agents; no control.
+- **Read-only MCP server** — `RoomState` / house map exposed to agents.
+- **Multi-device (desktop-central + LAN companions)** — a mobile app and peer PCs on the
+  same Wi-Fi connect to the desktop as authenticated `user` / `central` clients: local
+  8-digit pairing (rate-limited), per-device hashed tokens, single-use WS tickets,
+  revocation, an in-subnet real-peer check, and a **companion viewer** (token-authed,
+  read-only dashboard). Opt-in, default-OFF, zero-cloud. **Local TLS** (auto self-signed
+  cert via `python -m wavr.serve`) closes the plaintext-sniff gap
+  ([ADR-0006](adr/0006-authenticated-lan-access.md)). Security-audited (C1/H1/M1–M3 fixed).
+- **MCP "brain on Home Assistant"** — read access to HA entities **plus** a gated control
+  tool that asks HA to run a service (Wavr never becomes a device driver). Opt-in
+  (`WAVR_MCP_CONTROL`, default-OFF), allowlist + consent refusal on both the service and
+  the **target entity**, camera boot-OFF held, every call audit-logged, zero exfil
+  ([ADR-0005](adr/0005-mcp-control-boundary.md)). Write surface security-audited.
+- **PWA companion** — the dashboard is an installable PWA (manifest + service worker),
+  caching only the shell, zero external requests.
 - **ADRs 0001–0006** + this roadmap; relicensed **AGPL-3.0**; a security + performance
   audit pass (vitals never persisted, WS Origin check, sqlite off the event loop,
   bounded queues, capped ping sweeps).
 
 ## Now / next — just engineering time
 
-- **Multi-device (desktop-central + LAN companions)** — a mobile app and peer PCs on
-  the same Wi-Fi connect to the desktop as authenticated `user` / `central` clients,
-  with local pairing and revocation, staying local + zero-cloud
-  ([ADR-0006](adr/0006-authenticated-lan-access.md),
-  [design](superpowers/specs/2026-07-03-multi-device-client-auth-design.md)).
-- **MCP "brain on Home Assistant"** — the read-only MCP grows read access to HA
-  entities + the ability to trigger HA services for control (Wavr never becomes a
-  device driver). See [ADR-0005](adr/0005-mcp-control-boundary.md) for the read→write
-  control boundary (loopback + auth, explicit consent, camera boot-OFF, zero exfil).
 - **Packaging** — a Tauri desktop shell (tray, auto-start) around the existing backend +
-  dashboard, and the dashboard as an installable **PWA** for the mobile companion (no
-  framework, no build step added).
+  dashboard, so the "Wavr desktop is the central" story ships as one installable app
+  (the mobile-companion PWA is already installable; this is the desktop wrapper).
 
 ## Months — ~€15 of hardware, still a solo weekend
 

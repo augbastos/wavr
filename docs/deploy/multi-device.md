@@ -76,4 +76,8 @@ has known limits — safe on a **trusted home LAN**:
 
 - **Phase 2 (done):** self-signed local cert → HTTPS/WSS via `python -m wavr.serve`
   (closes the plaintext gap; needs a one-time trust prompt on the companion).
-- **Phase 3:** the mobile companion UI (pairing screen + `user`-role dashboard, PWA).
+- **Phase 3 (done):** the mobile companion UI — a pairing screen + a token-authed,
+  read-only `user`-role dashboard, served as an installable PWA. The dashboard
+  auto-detects its context: loopback → full central controls, a private-LAN host →
+  companion viewer (central controls hidden, `Authorization: Bearer` + WS ticket sent,
+  a 401/403 clears the token and returns to pairing), any other host → offline simulator.
