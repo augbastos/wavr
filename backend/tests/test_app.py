@@ -98,6 +98,15 @@ def test_root_serves_dashboard_html():
         assert "Fused Home Sensing" in r.text  # distinctive marker from frontend/index.html
 
 
+def test_vendor_serves_self_hosted_threejs():
+    # 3D house view: three.js is self-hosted under /vendor, same loopback gating as
+    # every other route -- confirms the static mount is wired, not a 404.
+    with build_client() as client:
+        r = client.get("/vendor/three/build/three.module.min.js")
+        assert r.status_code == 200
+        assert "javascript" in r.headers["content-type"]
+
+
 # --- Merge-gate regressions: exercise the wired-up enforcement, not just the helper ---
 
 def test_non_loopback_http_peer_gets_403():

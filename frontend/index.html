@@ -15,6 +15,17 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Wavr">
 <title>Wavr — Fused Home Sensing</title>
+<!-- 3D house view: self-hosted three.js (r185 / npm three@0.185.1), NO CDN. Relative
+     paths so this resolves whether served from "/" (live/desktop) or Pages' root (demo).
+     Must stay in <head>, parsed before the body script's first import(). -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/build/three.module.min.js",
+    "three/addons/": "./vendor/three/examples/jsm/"
+  }
+}
+</script>
 <style>
   :root{--bg:#0f1216;--surface:#171c22;--ink:#e8edf2;--muted:#9aa7b4;
         --accent:#3db54a;--warn:#e0b341;--danger:#c65b52;--zone:#6ea8fe;
@@ -74,6 +85,15 @@
   .radar h3{margin:4px 0 12px;}
   #radar{width:100%;max-width:760px;display:block;background:var(--surface);
          border:1px solid var(--line);border-radius:var(--radius);}
+  /* 3D house view (self-hosted three.js): sibling <canvas> to #radar's <svg>, shown
+     in a different DOM element entirely since a WebGL context can't live inside SVG. */
+  #radar3d{width:100%;max-width:760px;aspect-ratio:4/3;display:block;background:var(--surface);
+           border:1px solid var(--line);border-radius:var(--radius);touch-action:none;}
+  /* Both elements set their own `display:block` above, which otherwise beats the UA
+     [hidden]{display:none} rule on specificity alone (same ID, but the UA rule has no ID) —
+     without this, toggling .hidden leaves the "hidden" element visually on screen. */
+  #radar[hidden],#radar3d[hidden]{display:none;}
+  .viewToggle{display:flex;gap:8px;margin-bottom:10px;}
   .radar-room{fill:none;stroke:var(--line);stroke-width:.025;vector-effect:non-scaling-stroke;}
   .radar-room.occ{fill:rgba(61,181,74,.08);stroke:var(--accent);}
   .radar-roomlabel{fill:var(--muted);font-size:.24px;text-transform:capitalize;}
@@ -286,10 +306,15 @@
   <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
 </div>
 <div id="radarWrap" class="radar"><h3 id="radar-h">Radar</h3>
+  <div class="viewToggle" role="group" aria-label="modo de visualização">
+    <button id="viewTop" type="button" class="ctl small on">Topo</button>
+    <button id="view3d" type="button" class="ctl small">3D</button>
+  </div>
   <div class="floorbar" id="floorbar" hidden>
     <label>Andar: <select id="floorSelect" aria-label="andar"></select></label>
   </div>
   <svg id="radar" role="img" aria-labelledby="radar-h" preserveAspectRatio="xMidYMid meet"></svg>
+  <canvas id="radar3d" hidden aria-label="visualização 3D da casa"></canvas>
   <div id="zoneBar" class="zonebar">
     <button id="zoneEdit" type="button" class="ctl small">Editar zonas</button>
     <span id="zoneHint" class="zonehint" hidden>arraste sobre o radar para desenhar uma zona</span>
@@ -839,6 +864,18 @@ function placeDot(g, room, t){
   }
 }
 
+// ---- 3D house view: lazy-load self-hosted three.js (never on the top-down-only path) ----
+let _three = null;
+async function ensureThree(){
+  if(_three) return _three;
+  const [THREE, { OrbitControls }] = await Promise.all([
+    import("three"),
+    import("three/addons/controls/OrbitControls.js"),
+  ]);
+  _three = { THREE, OrbitControls };
+  return _three;
+}
+
 async function renderRadar(){
   await loadHouse();                        // sets HOUSE (+ DEMO_HOUSE fallback) and currentFloor
   // House-editor state, declared up front: renderHouseOverlay (below) reads SELECTED on every
@@ -848,6 +885,11 @@ async function renderRadar(){
   const EDIT_SNAP = 0.25;
   function snap(v){ return Math.round(v/EDIT_SNAP)*EDIT_SNAP; }
   const svg = document.getElementById("radar");
+  // ---- 3D view state (top-down/3D toggle) ----
+  let viewMode = "top";   // "top" | "3d"
+  const WALL_H = 2.5;     // metres, constant wall height (no per-room height data in HOUSE v2)
+  let three3d = null;     // { renderer, scene, camera, controls, roomGroup, raf, ro } — built once, lazily
+  let cancelHedDrawIfActive = () => {};   // reassigned inside initHouseEditor() when MODE==="live"
   // Layer order (document order = paint order, first = bottom): true house geometry, zones,
   // room rects + dots, then the in-progress zone-drawing preview on top of everything.
   const houseLayer = document.createElementNS(SVG_NS, "g"); houseLayer.id = "houseLayer";
@@ -934,6 +976,186 @@ async function renderRadar(){
     renderHouseOverlay(f);
   }
 
+  // ---- 3D house view (self-hosted three.js): singleton renderer, built once on first
+  // entry into 3D mode; never recreated on subsequent toggles (avoids leaking WebGL
+  // contexts on repeated toggling). Only the render loop starts/stops.
+  async function ensure3D(){
+    if(three3d) return three3d;
+    const { THREE, OrbitControls } = await ensureThree();
+    const canvas = document.getElementById("radar3d");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x171c22);   // matches --surface
+    scene.fog = new THREE.Fog(0x171c22, 14, 42);
+    const camera = new THREE.PerspectiveCamera(45, 4/3, 0.1, 200);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 2;
+    controls.maxDistance = 60;
+    controls.maxPolarAngle = Math.PI/2 - 0.03;   // camera can't dip below the floor plane
+    scene.add(new THREE.AmbientLight(0x8fa3ad, 0.7));
+    const sun = new THREE.DirectionalLight(0xfff2df, 1.4);
+    sun.position.set(8, 12, 6);
+    scene.add(sun);
+    const rim = new THREE.DirectionalLight(0x3db54a, 0.18);   // subtle brand-green fill light
+    rim.position.set(-6, 4, -8);
+    scene.add(rim);
+    const roomGroup = new THREE.Group(); scene.add(roomGroup);
+    // Ground + grid just under floor level, for depth/scale reference while orbiting. Built
+    // once here (ensure3D itself only ever runs once — see the `if(three3d) return` guard
+    // above) and added directly to scene, not roomGroup, so the per-floor clear in render3D()
+    // never touches them and they don't need to be recreated (and leaked) on every call.
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400),
+      new THREE.MeshLambertMaterial({ color: 0x11161b }));
+    ground.rotation.x = -Math.PI/2; ground.position.y = -0.02;
+    scene.add(ground);
+    const grid = new THREE.GridHelper(400, 200, 0x2a323b, 0x1c2229);
+    grid.position.y = -0.01;
+    scene.add(grid);
+    const ro = new ResizeObserver(() => resize3D());
+    ro.observe(canvas);
+    three3d = { THREE, renderer, scene, camera, controls, roomGroup, raf: null, ro };
+    resize3D();
+    return three3d;
+  }
+
+  function resize3D(){
+    if(!three3d) return;
+    const canvas = three3d.renderer.domElement;
+    const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
+    three3d.renderer.setSize(w, h, false);
+    three3d.camera.aspect = w / h;
+    three3d.camera.updateProjectionMatrix();
+  }
+
+  function startLoop3D(){
+    if(!three3d || three3d.raf) return;
+    const tick = () => {
+      three3d.raf = requestAnimationFrame(tick);
+      three3d.controls.update();
+      three3d.renderer.render(three3d.scene, three3d.camera);
+    };
+    three3d.raf = requestAnimationFrame(tick);
+  }
+  function stopLoop3D(){
+    if(!three3d || !three3d.raf) return;
+    cancelAnimationFrame(three3d.raf);
+    three3d.raf = null;
+  }
+
+  // house (x, y_meters) -> world (x, z), height on Y — explicit mapping used everywhere
+  // below (floors, walls, features, camera), never a rotation trick, so nothing can
+  // silently drift/mirror between the floor plates and the walls.
+  function addWallSegment3D(THREE, roomGroup, mats, ax, ay, bx, by){
+    const verts = new Float32Array([
+      ax,0,ay,  bx,0,by,  bx,WALL_H,by,
+      ax,0,ay,  bx,WALL_H,by,  ax,WALL_H,ay,
+    ]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+    geo.computeVertexNormals();
+    roomGroup.add(new THREE.Mesh(geo, mats.wall));
+    roomGroup.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), mats.edge));
+  }
+
+  async function render3D(){
+    const { THREE } = await ensure3D();
+    const { roomGroup } = three3d;
+    // Clear the previous floor's meshes AND free their GPU buffers — remove() alone only
+    // detaches them from the scene graph, it never calls dispose(), so repeated floor
+    // switches / 3D re-entries leaked geometry+material every time without this.
+    while(roomGroup.children.length){
+      const child = roomGroup.children[0];
+      roomGroup.remove(child);
+      child.geometry?.dispose();
+      if(Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+      else child.material?.dispose();
+    }
+
+    const f = floorFor(currentFloor);
+    if(!f){ resize3D(); if(viewMode==="3d") startLoop3D(); return; }
+
+    const mats = {
+      floor: new THREE.MeshLambertMaterial({ color: 0x232a32, side: THREE.DoubleSide }),
+      // See-inside (dollhouse) technique: semi-transparent walls + depthWrite:false (avoids
+      // z-sort flicker between overlapping panels) + a steep camera angle (set below) so
+      // far fewer transparent layers stack between the camera and each room.
+      wall: new THREE.MeshStandardMaterial({
+        color: 0x3db54a, opacity: 0.4, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }),
+      edge: new THREE.LineBasicMaterial({ color: 0x9fb0b8 }),
+    };
+
+    const bbox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    const track = (x, y) => { bbox.minX=Math.min(bbox.minX,x); bbox.minY=Math.min(bbox.minY,y);
+                               bbox.maxX=Math.max(bbox.maxX,x); bbox.maxY=Math.max(bbox.maxY,y); };
+
+    (f.rooms || []).forEach(r => {
+      if(!r.polygon || r.polygon.length < 3) return;
+      r.polygon.forEach(([x,y]) => track(x,y));
+
+      // Floor plate: remap the ShapeGeometry's own vertices to (x, 0, y) directly instead of
+      // a mesh.rotation.x=-PI/2 trick, so floors use the *identical* signed mapping the walls
+      // use below — sidesteps a whole class of mirrored/offset-floor bugs. DoubleSide covers
+      // any winding-direction flip introduced by the axis remap.
+      const shape = new THREE.Shape(r.polygon.map(([x,y]) => new THREE.Vector2(x,y)));
+      const floorGeo = new THREE.ShapeGeometry(shape);
+      const pos = floorGeo.attributes.position;
+      for(let i=0;i<pos.count;i++) pos.setXYZ(i, pos.getX(i), 0, pos.getY(i));
+      pos.needsUpdate = true;
+      floorGeo.computeVertexNormals();
+      roomGroup.add(new THREE.Mesh(floorGeo, mats.floor));
+
+      for(let i=0;i<r.polygon.length;i++){
+        const [ax,ay] = r.polygon[i], [bx,by] = r.polygon[(i+1)%r.polygon.length];
+        addWallSegment3D(THREE, roomGroup, mats, ax, ay, bx, by);
+      }
+    });
+
+    // f.walls: additive interior partitions not aligned to any room boundary. DEMO_HOUSE.walls
+    // is [] — room-polygon edges above are the primary wall source, so the demo house (and any
+    // real house that never used the wall tool) still renders full walls in 3D.
+    (f.walls || []).forEach(w => {
+      if(!w.a || !w.b) return;
+      track(w.a[0], w.a[1]); track(w.b[0], w.b[1]);
+      addWallSegment3D(THREE, roomGroup, mats, w.a[0], w.a[1], w.b[0], w.b[1]);
+    });
+
+    (f.features || []).forEach(ft => {
+      if(!ft.at) return;
+      track(ft.at[0], ft.at[1]);
+      const marker = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.3,0.3),
+        new THREE.MeshLambertMaterial({ color: ft.type==="stairs" ? 0xe0b341 : 0x38bdf8 }));
+      marker.position.set(ft.at[0], 0.15, ft.at[1]);
+      roomGroup.add(marker);
+    });
+
+    // Ground + grid are built once in ensure3D() and added directly to the scene (not
+    // roomGroup), so there's nothing to (re)create here on every floor rebuild.
+
+    // Auto-frame this floor's bbox with a steep ~55-60deg down-angle (dollhouse view) —
+    // at a shallow angle the transparent wall panels stack up and grey out the interior.
+    if(isFinite(bbox.minX)){
+      const cx = (bbox.minX+bbox.maxX)/2, cy = (bbox.minY+bbox.maxY)/2;
+      const span = Math.max(bbox.maxX-bbox.minX, bbox.maxY-bbox.minY, 3);
+      three3d.camera.position.set(cx + span*0.75, span*1.15, cy + span*0.75);
+      three3d.controls.target.set(cx, 0.3, cy);
+      three3d.controls.update();
+    }
+    resize3D();
+    // Start the loop here (not from setViewMode) — on the very first entry into 3D mode,
+    // ensure3D() above hasn't resolved yet by the time setViewMode() runs synchronously,
+    // so three3d doesn't exist there and a start attempt would silently no-op. Guarded by
+    // viewMode in case the user already toggled back to "top" before this async work landed.
+    if(viewMode==="3d") startLoop3D();
+  }
+
+  async function renderCurrentView(){
+    if(viewMode === "3d") await render3D();
+    else rebuildRoomsForFloor();
+  }
   // ---- Floor selector (shown only when the house has more than one floor) ----
   function buildFloorSelect(){
     const bar = document.getElementById("floorbar");
@@ -951,9 +1173,9 @@ async function renderRadar(){
   buildFloorSelect();
   document.getElementById("floorSelect").onchange = (e)=>{
     currentFloor = parseInt(e.target.value, 10);
-    rebuildRoomsForFloor();
+    renderCurrentView();
   };
-  rebuildRoomsForFloor();
+  renderCurrentView();
 
   // ---- Zone editor overlay (draw/name/delete rectangles; label occupied zones) ----
   // zoneLayer/drawLayer are created above (fixed order); drawLayer stays on top so the
@@ -1050,6 +1272,7 @@ async function renderRadar(){
   function cancelPending(){ pending = null; clearPreview(); zoneNameForm.hidden = true; }
 
   svg.addEventListener("pointerdown", (evt) => {
+    if(viewMode!=="top") return;
     if(!editMode) return;
     const p = svgPoint(evt); if(!p) return;
     dragStart = p; clearPreview();
@@ -1060,10 +1283,12 @@ async function renderRadar(){
     evt.preventDefault();
   });
   svg.addEventListener("pointermove", (evt) => {
+    if(viewMode!=="top") return;
     if(!editMode || !dragStart) return;
     const p = svgPoint(evt); if(p) updatePreview(dragStart, p);
   });
   svg.addEventListener("pointerup", (evt) => {
+    if(viewMode!=="top") return;
     if(!editMode || !dragStart) return;
     const s = dragStart, p = svgPoint(evt); dragStart = null;
     try{ svg.releasePointerCapture(evt.pointerId); }catch{}
@@ -1110,7 +1335,7 @@ async function renderRadar(){
   function afterHouseEdit(){
     if(!floorFor(currentFloor)) currentFloor = HOUSE.floors[0].level;   // e.g. undo removed the current floor
     buildFloorSelect();
-    rebuildRoomsForFloor();
+    renderCurrentView();
     markHouseDirty(true);
     updateHedButtons();
   }
@@ -1164,7 +1389,7 @@ async function renderRadar(){
       const r = await fetch(location.origin+"/api/house", {method:"PUT",
         headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
         body: JSON.stringify(HOUSE)});
-      if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); buildFloorSelect(); rebuildRoomsForFloor(); }
+      if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); buildFloorSelect(); renderCurrentView(); }
       else { alert("Falha ao salvar (" + r.status + ")"); }
     }catch{ alert("Falha de conexão ao salvar"); }
   }
@@ -1176,6 +1401,7 @@ async function renderRadar(){
     svg.classList.add("hed-live");
     let hedStart = null, hedPreview = null;
     function cancelHedDraw(){ hedStart = null; if(hedPreview){ hedPreview.remove(); hedPreview = null; } }
+    cancelHedDrawIfActive = cancelHedDraw;   // expose to setViewMode() (defined outside this closure)
     function updateHedPreview(a, b){
       if(!hedPreview) return;
       if(TOOL === "room"){
@@ -1202,6 +1428,7 @@ async function renderRadar(){
     updateHedButtons();
 
     svg.addEventListener("pointerdown", (evt)=>{
+      if(viewMode!=="top") return;
       if(MODE!=="live" || editMode) return;             // never fight the zone editor for the same drag
       if(TOOL==="select" || TOOL==="stairs") return;     // stairs = single click, handled on pointerup
       const p = svgPoint(evt); if(!p) return;
@@ -1215,10 +1442,12 @@ async function renderRadar(){
       evt.preventDefault();
     });
     svg.addEventListener("pointermove", (evt)=>{
+      if(viewMode!=="top") return;
       if(MODE!=="live" || editMode || !hedStart) return;
       const p = svgPoint(evt); if(p) updateHedPreview(hedStart, {x: snap(p.x), y: snap(p.y)});
     });
     svg.addEventListener("pointerup", (evt)=>{
+      if(viewMode!=="top") return;
       if(MODE!=="live" || editMode) return;
       const f = floorFor(currentFloor);
       if(TOOL==="stairs"){
@@ -1259,6 +1488,40 @@ async function renderRadar(){
     });
   }
   initHouseEditor();
+
+  // ---- View toggle wiring (top-down <-> 3D). Both buttons are visible in every MODE — 3D
+  // is a read-only lens on data already loaded client-side, so the public demo gets it too. ----
+  function setViewMode(mode){
+    if(mode === viewMode) return;
+    if(editMode){ editMode=false; zoneEditBtn.classList.remove("on"); zoneEditBtn.textContent="Editar zonas";
+                  zoneHintEl.hidden=true; svg.classList.remove("editing"); cancelPending(); }
+    cancelHedDrawIfActive();
+    viewMode = mode;
+    document.getElementById("viewTop").classList.toggle("on", mode==="top");
+    document.getElementById("view3d").classList.toggle("on", mode==="3d");
+    // toggleAttribute (not the .hidden IDL property): <svg> is foreign/SVG-namespace
+    // content and setting .hidden on it does not reliably reflect to the "hidden"
+    // content attribute in every engine, which would silently break the [hidden] CSS
+    // above and the svgPoint()/getScreenCTM() null-return guard the 6 pointer listeners
+    // rely on. toggleAttribute works uniformly for both the <svg> and the <canvas>.
+    svg.toggleAttribute("hidden", mode !== "top");
+    document.getElementById("radar3d").toggleAttribute("hidden", mode !== "3d");
+    const zb = document.getElementById("zoneBar"), zp = document.getElementById("zonePanel"),
+          he = document.getElementById("houseEditor");
+    // Companion (LAN viewer) never gets zone-edit back, even after a 3D->top toggle — mirrors
+    // the init-time "viewer: zones view-only" rule (MODE==="companion" hides zoneBar once, up
+    // front); without the MODE check here this unconditional toggle would silently re-show it.
+    if(zb) zb.hidden = (mode!=="top") || (MODE==="companion");
+    if(zp) zp.hidden = (mode!=="top") || !(zones.length || editMode);
+    if(he && MODE==="live") he.hidden = (mode!=="top");
+    // Only stop here — starting is owned by render3D() itself (see its comment): on the
+    // first-ever entry into 3D, three3d doesn't exist yet at this synchronous point, so a
+    // start attempt here would silently no-op and the canvas would stay blank forever.
+    if(mode!=="3d") stopLoop3D();
+    renderCurrentView();
+  }
+  document.getElementById("viewTop").onclick = ()=> setViewMode("top");
+  document.getElementById("view3d").onclick  = ()=> setViewMode("3d");
 
   radarUpdate = (rs)=>{
     const e = roomIdx[rs.room]; if(!e) return;
