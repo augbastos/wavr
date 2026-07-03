@@ -9,3 +9,6 @@ node_modules/
 *.egg-info/
 .wrangler/
 .playwright-mcp/
+
+# graphify generated index (do not commit)
+graphify-out/
