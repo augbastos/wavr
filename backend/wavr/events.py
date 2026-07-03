@@ -81,7 +81,7 @@ def normalize_ruview(raw: dict, room: str) -> SensingEvent:
         motion=float(features.get("motion_band_power", 0.0)),
         breathing_bpm=_f(vitals.get("breathing_rate_bpm")),
         heart_bpm=_f(vitals.get("heart_rate_bpm")),
-        confidence=float(classification.get("confidence", 0.0)),
+        confidence=max(0.0, min(1.0, float(classification.get("confidence", 0.0)))),
         ts=_iso_from_unix(ts) if ts is not None else datetime.now(timezone.utc).isoformat(),
         targets=tuple(targets),
     )

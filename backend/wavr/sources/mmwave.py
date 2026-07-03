@@ -70,25 +70,34 @@ class MmWaveSource:
     seam takes any async byte-frame generator — TCP/MQTT transports later)."""
 
     def __init__(self, room: str, port: str, frames: AsyncIterator[bytes] | None = None,
-                 interval: float = 0.2):
+                 interval: float = 0.2, reconnect_delay: float = 3.0):
         self._room = room
         self._port = port
         self._frames = frames
         self._interval = interval
+        self._reconnect_delay = reconnect_delay
 
     async def events(self) -> AsyncIterator[SensingEvent]:
-        frames = self._frames if self._frames is not None else _serial_frames(self._port)
-        async with contextlib.aclosing(frames) as stream:
-            async for raw in stream:
-                targets = tuple(parse_ld2450_frame(raw))
-                speed = max((t.velocity or 0.0 for t in targets), default=0.0)
-                yield SensingEvent(
-                    room=self._room, modality="mmwave",
-                    presence=bool(targets), motion=speed,
-                    breathing_bpm=None, heart_bpm=None,
-                    confidence=0.9 if targets else 0.0,
-                    ts=datetime.now(timezone.utc).isoformat(),
-                    targets=targets,
-                )
-                if self._interval:
-                    await asyncio.sleep(self._interval)
+        while True:
+            frames = self._frames if self._frames is not None else _serial_frames(self._port)
+            try:
+                async with contextlib.aclosing(frames) as stream:
+                    async for raw in stream:
+                        targets = tuple(parse_ld2450_frame(raw))
+                        speed = max((t.velocity or 0.0 for t in targets), default=0.0)
+                        yield SensingEvent(
+                            room=self._room, modality="mmwave",
+                            presence=bool(targets), motion=speed,
+                            breathing_bpm=None, heart_bpm=None,
+                            confidence=0.9 if targets else 0.0,
+                            ts=datetime.now(timezone.utc).isoformat(),
+                            targets=targets,
+                        )
+                        if self._interval:
+                            await asyncio.sleep(self._interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.warning("MmWaveSource(%s) error; reconnecting", self._room, exc_info=True)
+            if self._reconnect_delay:
+                await asyncio.sleep(self._reconnect_delay)

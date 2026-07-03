@@ -34,6 +34,19 @@ def test_history_returns_roomstate_list():
         assert set(body[0].keys()) == {"room", "occupied", "confidence", "sources", "explanation", "ts"}
 
 
+def test_history_limit_is_clamped():
+    # A negative limit means "no LIMIT" to SQLite (full-table dump); an absurdly large
+    # one is still unbounded resource use. Both must be clamped to the [1, 1000] cap.
+    with build_client() as client:
+        import time; time.sleep(0.5)
+        assert len(client.get("/api/history?limit=-1").json()) <= 1000
+        assert len(client.get("/api/history?limit=999999").json()) <= 1000
+        # a normal limit still behaves as a limit
+        r = client.get("/api/history?limit=5")
+        assert r.status_code == 200
+        assert len(r.json()) <= 5
+
+
 def test_ws_live_streams_roomstate():
     with build_client() as client:
         with client.websocket_connect("/ws/live") as ws:
@@ -147,3 +160,27 @@ def test_ws_non_loopback_peer_closed_with_1008():
             with client.websocket_connect("/ws/live"):
                 pass
         assert exc_info.value.code == 1008
+
+
+def test_camera_rtsp_url_scheme_restricted_to_rtsp():
+    # rtsp_url is handed straight to cv2.VideoCapture -- a non-rtsp scheme (http://,
+    # file://, ...) would let a caller reach an internal/metadata endpoint (SSRF) or
+    # the local filesystem (LFI) via camera add. Only rtsp(s):// may pass.
+    with build_client() as client:
+        ssrf = client.post("/api/cameras", json={
+            "name": "cam_ssrf", "room": "sala",
+            "rtsp_url": "http://169.254.169.254/latest/meta-data/", "confidence": 0.5,
+        }, headers=LOCAL)
+        assert ssrf.status_code == 400
+
+        lfi = client.post("/api/cameras", json={
+            "name": "cam_lfi", "room": "sala",
+            "rtsp_url": "file:///etc/passwd", "confidence": 0.5,
+        }, headers=LOCAL)
+        assert lfi.status_code == 400
+
+        ok = client.post("/api/cameras", json={
+            "name": "cam_ok", "room": "sala",
+            "rtsp_url": "rtsp://10.0.0.5/stream", "confidence": 0.5,
+        }, headers=LOCAL)
+        assert ok.status_code == 200

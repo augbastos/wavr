@@ -93,8 +93,11 @@ class SourceManager:
         finally:
             # Deterministic teardown: runs the source generator's cleanup (e.g. a
             # CameraSource releasing its RTSP stream) the moment the task is cancelled.
-            with contextlib.suppress(Exception):
+            # Still non-fatal on failure, but logged instead of silently swallowed.
+            try:
                 await agen.aclose()
+            except Exception:
+                logging.warning("source %s teardown error", name, exc_info=True)
             # Self-terminated source (generator ended on its own): drop it from
             # the active set so status() reports active=False. Only pop if the
             # registered task is still THIS one (a re-enable may have replaced it;

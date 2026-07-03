@@ -61,6 +61,24 @@ async def test_ruview_skips_non_dict_frame_without_reconnect():
     assert ev.modality == "wifi_csi"
     assert calls["n"] == 1   # single connection, no reconnect
 
+async def test_ruview_skips_bad_frame_without_reconnecting():
+    calls = {"n": 0}
+    bad = {
+        "type": "sensing_update",
+        "classification": {"presence": True, "confidence": 0.5},
+        "features": {},
+        "vital_signs": {},
+        "timestamp": float("nan"),   # normalize_ruview -> _iso_from_unix raises ValueError
+    }
+    async def connect(url):
+        calls["n"] += 1
+        yield bad          # bad frame: skipped, not a reconnect
+        yield FRAME         # good frame on the SAME connection
+    src = RuViewSource("ws://x", room="sala", connect=connect)
+    [ev] = await _first_n(src, 1)
+    assert ev.modality == "wifi_csi"
+    assert calls["n"] == 1   # single connection — only the bad frame was skipped
+
 async def test_ruview_closes_inner_connect_generator_deterministically():
     closed = {"v": False}
     async def connect(url):

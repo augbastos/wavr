@@ -91,6 +91,39 @@ def test_get_room_context_unknown_room_is_none():
     assert get_room_context(FakeProvider([], {}, HOUSE), "nope") is None
 
 
+def test_get_room_context_strips_vitals_and_targets():
+    # Privacy (audit CRITICAL-1): the MCP read tool must never expose per-person
+    # breathing/heart rate or x/y tracking, even though the underlying RoomState
+    # carries both. Only room-level occupancy/confidence + the explainable why.
+    rs = {"room": "sala", "occupied": True, "confidence": 0.72,
+          "vitals": {"breathing_bpm": 14, "heart_bpm": 68},
+          "targets": [{"x": 1.2, "y": 3.4, "id": "person-1"}],
+          "sources": [{"modality": "mmwave", "presence": True, "confidence": 0.9}],
+          "explanation": "mmwave: presente -> 72% ocupado"}
+    ctx = get_room_context(FakeProvider(["sala"], {"sala": rs}, HOUSE), "sala")
+    assert "vitals" not in ctx
+    assert "targets" not in ctx
+    assert ctx["room"] == "sala"
+    assert ctx["occupied"] is True
+    assert ctx["confidence"] == 0.72
+    assert ctx["sources"][0]["modality"] == "mmwave"
+    assert "ocupado" in ctx["explanation"]
+
+
+def test_get_room_context_strips_vitals_and_targets_from_real_fusion():
+    # Same invariant against a REAL FusionEngine/RoomState (not just a fake dict).
+    fusion = FusionEngine()
+    fusion.update(SensingEvent(room="sala", modality="mmwave", presence=True, motion=1.0,
+                               breathing_bpm=14.0, heart_bpm=68.0, confidence=0.9,
+                               ts="2026-07-02T10:00:00+00:00"))
+    provider = FusionStateProvider(fusion, HOUSE)
+    # Sanity: the underlying state actually carries vitals (proves this is a real test).
+    assert provider.room_state("sala")["vitals"]
+    ctx = get_room_context(provider, "sala")
+    assert "vitals" not in ctx
+    assert "targets" not in ctx
+
+
 def test_get_house_map_passthrough():
     assert get_house_map(FakeProvider([], {}, HOUSE)) == HOUSE
 
