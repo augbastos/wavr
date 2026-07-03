@@ -4,10 +4,12 @@ A native tray app that wraps the loopback central — see
 [ADR-0007](../docs/adr/0007-desktop-shell.md) and the
 [design spec](../docs/superpowers/specs/2026-07-03-tauri-desktop-shell-design.md).
 
-> **This scaffold has not been compiled yet.** It was authored without the Rust toolchain,
-> so the Rust is correct-by-convention and needs one `npm run dev` + a Quit-leaves-no-python
-> check before it's merged to `master`. Until then, use the interim launcher
-> (`scripts/wavr-desktop.ps1`) for the click-to-open experience.
+> **Status: built + smoke-verified (2026-07-03).** Compiles clean (`cargo build`, Rust
+> 1.96.1 MSVC) and a headless launch confirmed the shell spawns the backend and serves the
+> live dashboard on loopback. The one remaining manual check is visual: run `npm run dev`,
+> confirm the window shows the dashboard, then **tray → Quit** and confirm no `python` is
+> left (`Get-Process python`). The interim launcher (`scripts/wavr-desktop.ps1`) remains a
+> zero-Rust click-to-open alternative.
 
 ## Prerequisites (one time)
 

@@ -1,8 +1,8 @@
 # Wavr Desktop — Tauri v2 shell (design)
 
-> Status: scaffold on branch `tauri-shell` (not merged). Needs the Rust toolchain to
-> build; authored on a machine without it, so the Rust is correct-by-convention and
-> **must be compiled + run once before merge**.
+> Status: built + smoke-verified (2026-07-03). Compiles clean (Rust 1.96.1 MSVC); a
+> headless launch confirmed the shell spawns the backend and serves the live dashboard on
+> loopback. One manual visual check remains (window renders + tray-Quit leaves no python).
 
 ## Goal
 
