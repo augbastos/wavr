@@ -21,8 +21,7 @@ from wavr.ha_client import HAClient, WavrHAError
 from wavr.mcp import SENSITIVE_DOMAINS, call_ha_service
 
 # The SAFE default allowlist (mirrors config.DEFAULT_HA_ALLOWED_SERVICES).
-ALLOW = {"light.turn_on", "light.turn_off", "switch.turn_on",
-         "switch.turn_off", "scene.turn_on"}
+ALLOW = {"light.turn_on", "light.turn_off", "switch.turn_on", "switch.turn_off"}
 
 
 class _SpyClient:
@@ -125,7 +124,8 @@ def test_case_variant_camera_cannot_bypass_sensitive_gate():
 
 def test_sensitive_domains_constant_is_expected_set():
     assert SENSITIVE_DOMAINS == frozenset({
-        "camera", "media_player", "lock", "alarm_control_panel"})
+        "camera", "media_player", "lock", "alarm_control_panel",
+        "cover", "valve", "siren", "lawn_mower"})
 
 
 # --- Graceful degrade: HA unconfigured (ha_client None) ----------------------------
@@ -249,3 +249,124 @@ def test_config_empty_allowlist_env_denies_all(monkeypatch):
     monkeypatch.setenv("WAVR_HA_ALLOWED_SERVICES", "")
     cfg = load_config()
     assert cfg.ha_allowed_services == set()
+
+
+# === Security-audit regression tests (HA-control write surface) ====================
+# HIGH-1 (indirect sensitive actuation), MEDIUM-2 (domain set), MEDIUM-3 (hints),
+# MEDIUM-4 (mass actuation), LOW-5 (name validation).
+
+# --- HIGH-1: the TARGET entity is gated, not just the service ----------------------
+
+def test_switch_turn_on_fronting_a_camera_is_refused():
+    # The core HIGH-1 exploit: `switch.turn_on` (allowlisted, non-sensitive service) aimed
+    # at an entity that IS a camera must be refused -- else a switch becomes a camera door.
+    spy = _SpyClient()
+    out = call_ha_service(spy, "switch", "turn_on", "camera.front_door",
+                          control_enabled=True, allowed_services=ALLOW)
+    assert out["status"] == "consent_required"
+    assert spy.calls == []            # camera boot-OFF invariant holds via the target gate
+
+
+def test_switch_named_like_a_camera_is_refused():
+    # MEDIUM-3: a switch whose id hints at a camera/mic/stream is refused even though its
+    # own domain (`switch`) is benign.
+    spy = _SpyClient()
+    for entity in ("switch.living_room_webcam", "switch.hallway_mic",
+                   "switch.front_doorbell", "switch.garden_rtsp_stream"):
+        out = call_ha_service(spy, "switch", "turn_on", entity,
+                              control_enabled=True, allowed_services=ALLOW)
+        assert out["status"] == "consent_required", entity
+    assert spy.calls == []
+
+
+def test_scene_turn_on_is_refused_as_opaque_indirection():
+    # HIGH-1: a scene is an opaque bundle that could enable a camera/unlock a door, so
+    # `scene.turn_on` on a scene entity is refused even if the pair is allowlisted.
+    spy = _SpyClient()
+    out = call_ha_service(spy, "scene", "turn_on", "scene.movie_night",
+                          control_enabled=True, allowed_services=ALLOW | {"scene.turn_on"})
+    assert out["status"] == "consent_required"
+    assert spy.calls == []
+
+
+def test_script_and_automation_targets_are_refused():
+    spy = _SpyClient()
+    for domain, entity in (("script", "script.open_garage"),
+                           ("automation", "automation.arm_at_night"),
+                           ("group", "group.all_locks")):
+        out = call_ha_service(spy, "switch", "turn_on", entity,
+                              control_enabled=True,
+                              allowed_services=ALLOW | {f"{domain}.turn_on"})
+        assert out["status"] == "consent_required", entity
+    assert spy.calls == []
+
+
+def test_plain_switch_and_light_still_actuate():
+    # The fixes must NOT break the benign happy path: a real light/switch still delegates.
+    spy = _SpyClient()
+    for domain, entity in (("light", "light.kitchen"), ("switch", "switch.desk_lamp")):
+        out = call_ha_service(spy, domain, "turn_on", entity,
+                              control_enabled=True, allowed_services=ALLOW)
+        assert out["ok"] is True and out["status"] == "called", entity
+    assert len(spy.calls) == 2
+
+
+# --- MEDIUM-2: expanded sensitive domains (cover / valve / siren / lawn_mower) ------
+
+@pytest.mark.parametrize("domain,service,entity", [
+    ("cover", "open_cover", "cover.garage_door"),
+    ("valve", "open_valve", "valve.main_water"),
+    ("siren", "turn_on", "siren.alarm"),
+    ("lawn_mower", "start_mowing", "lawn_mower.backyard"),
+])
+def test_expanded_sensitive_domains_refused_even_if_allowlisted(domain, service, entity):
+    spy = _SpyClient()
+    out = call_ha_service(spy, domain, service, entity, control_enabled=True,
+                          allowed_services=ALLOW | {f"{domain}.{service}"})
+    assert out["status"] == "consent_required"
+    assert spy.calls == []
+
+
+# --- MEDIUM-4: no mass actuation (all / empty / wildcard / list) --------------------
+
+@pytest.mark.parametrize("entity", [
+    "all", "", "   ", "light.*", "*", "none",
+    "light.kitchen,light.hall", "light.kitchen, switch.fan",
+    "kitchen",                       # missing the domain.object shape
+])
+def test_mass_or_malformed_entity_id_is_refused(entity):
+    spy = _SpyClient()
+    out = call_ha_service(spy, "light", "turn_on", entity,
+                          control_enabled=True, allowed_services=ALLOW)
+    assert out["status"] == "invalid_entity"
+    assert spy.calls == []
+
+
+def test_entity_id_gate_runs_before_allowlist_and_sensitive():
+    # A malformed entity is rejected up front (control on) regardless of the service.
+    spy = _SpyClient()
+    out = call_ha_service(spy, "light", "turn_on", "all",
+                          control_enabled=True, allowed_services=ALLOW)
+    assert out["status"] == "invalid_entity"
+
+
+# --- LOW-5: HAClient.call_service validates domain/service before building the URL ---
+
+@pytest.mark.parametrize("domain,service", [
+    ("light/../lock", "turn_on"),
+    ("light", "turn_on/../unlock"),
+    ("light ", "turn on"),
+    ("Light", "Turn_On"),            # uppercase not allowed at the transport layer
+    ("", "turn_on"),
+])
+def test_call_service_rejects_malformed_domain_or_service(domain, service):
+    called = {"n": 0}
+
+    def fake_post(url, headers, body):
+        called["n"] += 1
+        return b"[]"
+
+    with pytest.raises(WavrHAError):
+        HAClient("http://ha", "t", post=fake_post).call_service(domain, service,
+                                                                {"entity_id": "light.k"})
+    assert called["n"] == 0           # never reached the transport

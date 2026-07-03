@@ -40,10 +40,18 @@ this ADR before code.
 4. **Explicit consent for sensitive actuation.** Enabling a camera or microphone, or any
    physical actuation, requires explicit user consent — never silent. The camera
    boot-OFF invariant ([ADR-0002](0002-privacy-boundaries-ram-only.md)) holds: the MCP
-   cannot silently turn a camera on.
+   cannot silently turn a camera on. The sensitive check is applied to **both** the
+   service *and the target entity* — a benign `switch.turn_on` / `scene.turn_on` aimed at
+   a camera, lock, or opaque scene is refused just the same, so no non-sensitive service
+   can be used as a back door. Sensitive domains: camera, media_player, lock,
+   alarm_control_panel, cover, valve, siren, lawn_mower; opaque indirection (scene,
+   script, automation, group) is sensitive-by-default.
 5. **Scoped tools, no arbitrary control.** `get_ha_entities()` (read) and
    `call_ha_service(domain, service, target)` gated by an **allowlist** of permitted
-   services + the consent rule — never "run arbitrary HA action" or code execution.
+   services + the consent rule — never "run arbitrary HA action" or code execution. The
+   target must be exactly one concrete `domain.object_id`: `all`, wildcards and lists are
+   refused so a single call can never actuate a whole domain. Every call (refused or
+   allowed) is logged for audit.
 6. **Zero exfil.** Control calls stay local (Wavr → HA on the LAN). RoomState, x/y
    targets, and vitals never leave via the MCP; nothing is sent to the cloud.
 
