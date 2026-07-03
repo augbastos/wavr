@@ -106,13 +106,19 @@ INDIRECTION_DOMAINS = frozenset({
 
 # Defence-in-depth backstop: even in a non-sensitive domain, refuse any service OR target
 # entity whose name implies a camera/mic/recording/streaming device (ADR-0005 §4 "anything
-# that could enable a camera/mic"). Matched case-insensitively as substrings.
+# that could enable a camera/mic") OR a physical-access/safety device modeled as a
+# `switch`/`cover`-lookalike (a lock/garage/gate/valve/siren wired into HA as a bare
+# `switch.` entity would otherwise sail past SENSITIVE_DOMAINS -- audit HIGH:
+# lock/garage-as-switch bypass). Matched case-insensitively as substrings.
 _SENSITIVE_HINTS = (
     "camera", "cam", "webcam", "microphone", "mic", "record", "snapshot",
     "stream", "livestream", "rtsp", "onvif", "intercom", "doorbell",
     "nvr", "dvr", "cctv", "surveillance", "poe", "baby_monitor", "babymonitor",
     "reolink", "unifi", "hikvision", "dahua", "arlo", "wyze", "blink", "ring",
     "nest", "eufy", "amcrest",
+    "lock", "unlock", "deadbolt", "latch", "strike", "maglock",
+    "door", "garage", "gate", "portao", "fechadura", "barrier",
+    "valve", "siren", "alarm", "smoke", "co2",
 )
 
 

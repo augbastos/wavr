@@ -37,3 +37,29 @@ def test_narrate_503_when_key_present_but_flag_unset(monkeypatch):
     monkeypatch.delenv("WAVR_NARRATE_ENABLED", raising=False)
     with _client(narrator=None) as c:                     # key set, but no opt-in flag
         assert c.post("/api/narrate").status_code == 503
+
+
+def test_narrate_offloads_storage_recent_to_a_thread(monkeypatch):
+    # LOW: /api/narrate must offload the SQLite `_storage.recent(50)` read via
+    # asyncio.to_thread, same as /api/history -- not call it inline on the event loop.
+    import asyncio
+
+    from wavr.camera_store import CameraStore
+    from wavr.storage import Storage
+
+    calls = []
+    orig_to_thread = asyncio.to_thread
+
+    async def spy_to_thread(fn, *a, **k):
+        calls.append(getattr(fn, "__name__", fn))
+        return await orig_to_thread(fn, *a, **k)
+
+    monkeypatch.setattr(asyncio, "to_thread", spy_to_thread)
+
+    app = create_app(sources=[], storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
+                     narrator=_FakeNarrator())
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        r = c.post("/api/narrate")
+    assert r.status_code == 200
+    assert "recent" in calls      # the storage read is offloaded ...
+    assert "narrate" in calls     # ... same as the narrate call already was

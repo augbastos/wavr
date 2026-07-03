@@ -1,5 +1,8 @@
 import asyncio
 import struct
+import sys
+import threading
+import types
 
 import pytest
 
@@ -76,6 +79,46 @@ async def test_mmwave_reconnects_after_transient_error(monkeypatch):
     assert ev.presence is True
     assert calls["n"] == 2   # first serial open failed, reconnect opened a fresh one
     await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_serial_open_and_close_are_offloaded_to_a_thread(monkeypatch):
+    # MEDIUM: opening (and closing) the serial port is a blocking syscall and must not
+    # run inline on the event loop -- same class of fix as the RTSP-open offload in
+    # sources/camera.py. pyserial isn't installed in the dev/test venv, so fake the
+    # lazy `serial` module and assert Serial(...) and close() both ran off the calling
+    # (event-loop) thread.
+    from wavr.sources import mmwave
+
+    main_thread = threading.get_ident()
+    threads = {}
+
+    class FakeSerial:
+        def __init__(self, port, baud, timeout=None):
+            threads["open"] = threading.get_ident()
+            self.port, self.baud, self.timeout = port, baud, timeout
+            self._served = False
+
+        def read(self, n):
+            if self._served:
+                return b""
+            self._served = True
+            return _frame(_slot(1000, 1000, 0))
+
+        def close(self):
+            threads["close"] = threading.get_ident()
+
+    fake_mod = types.ModuleType("serial")
+    fake_mod.Serial = FakeSerial
+    monkeypatch.setitem(sys.modules, "serial", fake_mod)
+
+    gen = mmwave._serial_frames("COM3")
+    frame = await asyncio.wait_for(gen.__anext__(), 1)
+    assert frame == _frame(_slot(1000, 1000, 0))
+    await gen.aclose()
+
+    assert "open" in threads and threads["open"] != main_thread
+    assert "close" in threads and threads["close"] != main_thread
 
 
 @pytest.mark.asyncio

@@ -57,12 +57,14 @@ async def _serial_frames(port: str) -> AsyncIterator[bytes]:
             if len(buf) > 4096:
                 buf = buf[-64:]
 
-    s = serial.Serial(port, 256000, timeout=1)
+    # Opening (and closing) the port is a blocking syscall -- offload both off the
+    # event loop, same class of fix as the RTSP capture open in sources/camera.py.
+    s = await asyncio.to_thread(serial.Serial, port, 256000, timeout=1)
     try:
         while True:
             yield await asyncio.to_thread(_read_frame, s)
     finally:
-        s.close()
+        await asyncio.to_thread(s.close)
 
 
 class MmWaveSource:

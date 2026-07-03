@@ -306,6 +306,20 @@ def test_nvr_power_switch_refused_with_default_allowlist():
     assert spy.calls == []
 
 
+def test_lock_or_garage_modeled_as_a_switch_is_refused():
+    # HIGH: a physical-access device modeled in HA as a bare `switch` (a common
+    # smart-relay wiring for a lock/garage/gate) must not sail past the sensitive
+    # gate just because its own domain is `switch`. Default allowlist + control on.
+    spy = _SpyClient()
+    for entity in ("switch.front_door_lock", "switch.garage_door", "switch.gate",
+                   "switch.back_gate_portao", "switch.fechadura_principal",
+                   "switch.deadbolt", "switch.mag_lock_relay", "switch.side_door"):
+        out = call_ha_service(spy, "switch", "turn_on", entity,
+                              control_enabled=True, allowed_services=ALLOW)
+        assert out["ok"] is False and out["status"] == "consent_required", entity
+    assert spy.calls == []            # lock/garage/gate NEVER actuated via a switch
+
+
 def test_scene_turn_on_is_refused_as_opaque_indirection():
     # HIGH-1: a scene is an opaque bundle that could enable a camera/unlock a door, so
     # `scene.turn_on` on a scene entity is refused even if the pair is allowlisted.

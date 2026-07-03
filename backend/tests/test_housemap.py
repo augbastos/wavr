@@ -48,7 +48,7 @@ def test_room_names_tolerates_v1():
 
 # Task 2: Validation tests
 import pytest
-from wavr.housemap import validate_house_map, HouseMapError
+from wavr.housemap import validate_house_map, HouseMapError, MAX_STR_LEN
 
 
 def _valid():
@@ -151,3 +151,92 @@ def test_save_rejects_invalid_and_writes_nothing(tmp_path):
 def test_save_empty_path_raises(tmp_path):
     with pytest.raises(HouseMapError):
         save_house_map("", _valid())
+
+
+# === Fix 5: size/unknown-key bounds on validate_house_map ==========================
+
+def test_editor_emitted_doc_still_accepted():
+    # The exact shape frontend/index.html's DEMO_HOUSE / saveHouseDoc() emits (mirrors
+    # DEFAULT_MAP): top-level {version,units,floors}, floor {id,name,level,rooms,walls,
+    # features,backdrop}, room {id,name,polygon}. Must NOT be broken by the new bounds.
+    validate_house_map(DEFAULT_MAP)
+    validate_house_map(_valid())
+
+
+def test_backdrop_none_accepted():
+    d = _valid()
+    d["floors"][0]["backdrop"] = None
+    validate_house_map(d)   # must not raise
+
+
+def test_backdrop_small_dict_accepted():
+    d = _valid()
+    d["floors"][0]["backdrop"] = {"image_ref": "backdrop.png", "m_per_px": 0.01,
+                                   "offset": [0, 0], "opacity": 0.5}
+    validate_house_map(d)   # reserved Phase-2 shape, small -> must not raise
+
+
+def test_backdrop_oversized_dict_rejected():
+    d = _valid()
+    d["floors"][0]["backdrop"] = {"image_ref": "x" * 20000}
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
+
+
+@pytest.mark.parametrize("path", [
+    lambda d: d["floors"][0],                 # floor id/name
+    lambda d: d["floors"][0]["rooms"][0],      # room id/name
+])
+def test_over_long_id_rejected(path):
+    d = _valid()
+    path(d)["id"] = "x" * 500
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert "id" in str(e.value).lower()
+
+
+@pytest.mark.parametrize("path", [
+    lambda d: d["floors"][0],                 # floor id/name
+    lambda d: d["floors"][0]["rooms"][0],      # room id/name
+])
+def test_over_long_name_rejected(path):
+    d = _valid()
+    path(d)["name"] = "x" * 500
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert "name" in str(e.value).lower()
+
+
+def test_huge_doc_rejected():
+    # Individually-small-but-valid rooms (id/name each right at the per-field cap),
+    # spread across many floors -- neither MAX_FLOORS (64) nor MAX_ROOMS_PER_FLOOR
+    # (512) is exceeded on its own, so only the whole-doc byte guard catches this.
+    d = _valid()
+    room_tpl = dict(d["floors"][0]["rooms"][0], id="r" * MAX_STR_LEN, name="n" * MAX_STR_LEN)
+    big_rooms = [dict(room_tpl) for _ in range(500)]
+    d["floors"] = [dict(d["floors"][0], id=f"f{fi}", level=fi, rooms=big_rooms)
+                   for fi in range(60)]
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
+
+
+def test_unknown_top_level_key_rejected():
+    d = _valid()
+    d["extra"] = "nope"
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert "unknown" in str(e.value).lower()
+
+
+def test_unknown_floor_key_rejected():
+    d = _valid()
+    d["floors"][0]["extra"] = "nope"
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
+
+
+def test_unknown_room_key_rejected():
+    d = _valid()
+    d["floors"][0]["rooms"][0]["extra"] = "nope"
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
