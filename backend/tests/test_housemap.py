@@ -44,3 +44,50 @@ def test_room_names_flattens_v2_across_floors():
 
 def test_room_names_tolerates_v1():
     assert room_names({"rooms": [{"name": "sala"}]}) == ["sala"]
+
+
+# Task 2: Validation tests
+import pytest
+from wavr.housemap import validate_house_map, HouseMapError
+
+
+def _valid():
+    return {"version": 2, "units": "m", "floors": [
+        {"id": "f0", "name": "T", "level": 0,
+         "rooms": [{"id": "r1", "name": "sala", "polygon": [[0,0],[4,0],[4,3],[0,3]]}],
+         "walls": [{"id": "w1", "a": [4,0], "b": [4,3]}],
+         "features": [{"id": "s1", "type": "stairs", "at": [3.5,2.5], "to_level": 1}],
+         "backdrop": None}]}
+
+
+def test_default_map_validates():
+    validate_house_map(DEFAULT_MAP)          # must not raise
+
+
+def test_valid_doc_passes():
+    validate_house_map(_valid())
+
+
+@pytest.mark.parametrize("mutate,msg", [
+    (lambda d: d.update(version=1), "version"),
+    (lambda d: d.update(units="ft"), "units"),
+    (lambda d: d.update(floors=[]), "floors"),
+    (lambda d: d["floors"].append(dict(d["floors"][0])), "level"),           # duplicate level
+    (lambda d: d["floors"][0]["rooms"][0].update(polygon=[[0,0],[1,1]]), "polygon"),  # <3 verts
+    (lambda d: d["floors"][0]["rooms"][0]["polygon"].__setitem__(0, ["x", 0]), "finite"),
+    (lambda d: d["floors"][0]["walls"][0].update(a=[float("inf"), 0]), "finite"),
+    (lambda d: d["floors"][0]["features"][0].update(type="teleporter"), "type"),
+])
+def test_invalid_docs_raise(mutate, msg):
+    d = _valid()
+    mutate(d)
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert msg in str(e.value).lower()
+
+
+def test_over_cap_rooms_raise():
+    d = _valid()
+    d["floors"][0]["rooms"] = [{"id": f"r{i}", "name": str(i), "polygon": [[0,0],[1,0],[1,1]]} for i in range(513)]
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
