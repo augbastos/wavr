@@ -146,3 +146,30 @@ def validate_house_map(doc: dict) -> None:
             at = feat.get("at")
             if at is not None and not _point(at):
                 raise HouseMapError("feature 'at' must be a finite point")
+
+
+def _point_in_polygon(x: float, y: float, poly: list) -> bool:
+    """Ray-casting (even-odd). Boundary behaviour is not specially handled (good enough
+    for room assignment; a point exactly on an edge may go either way)."""
+    inside = False
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i][0], poly[i][1]
+        xj, yj = poly[j][0], poly[j][1]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def room_at(house: dict, level: int, x: float, y: float) -> str | None:
+    for f in house.get("floors", []):
+        if f.get("level") != level:
+            continue
+        for r in f.get("rooms", []):
+            poly = r.get("polygon") or []
+            if len(poly) >= 3 and _point_in_polygon(x, y, poly):
+                return r.get("name")
+        return None      # right floor found, no room matched
+    return None

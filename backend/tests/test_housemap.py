@@ -99,3 +99,31 @@ def test_non_list_features_raise_housemaperror():
         d["floors"][0]["features"] = bad
         with pytest.raises(HouseMapError):
             validate_house_map(d)
+
+
+# Task 3: Point-in-polygon room assignment
+from wavr.housemap import room_at
+
+
+def _house_L():
+    # concave (L-shaped) room on level 0
+    return {"version": 2, "units": "m", "floors": [
+        {"id": "f0", "name": "T", "level": 0, "walls": [], "features": [], "backdrop": None,
+         "rooms": [{"id": "r1", "name": "L", "polygon": [[0,0],[4,0],[4,2],[2,2],[2,4],[0,4]]}]}]}
+
+
+def test_point_inside_polygon():
+    assert room_at(_house_L(), 0, 1.0, 1.0) == "L"
+
+
+def test_point_in_concave_notch_is_outside():
+    # (3,3) is in the cut-out notch of the L -> not inside
+    assert room_at(_house_L(), 0, 3.0, 3.0) is None
+
+
+def test_point_outside_polygon():
+    assert room_at(_house_L(), 0, 10.0, 10.0) is None
+
+
+def test_unknown_floor_returns_none():
+    assert room_at(_house_L(), 5, 1.0, 1.0) is None
