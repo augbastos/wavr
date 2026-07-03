@@ -7,11 +7,13 @@
 
 Wavr fuses network scan, WiFi CSI, camera pose, and mmWave radar into one *explainable* `RoomState`
 per room: occupied or not, a confidence score, and the per-modality *why* behind it — plus per-person
-position (x/y) and posture on a top-down house radar.
+position (x/y) and posture on a top-down radar, over a floor plan you draw yourself.
 
 - **Private** — loopback-only, zero cloud egress; camera frames are never stored, position targets never touch disk.
 - **Explainable** — `confidence = agreement × strength`; the dashboard always shows *why* a room reads occupied.
 - **Local** — runs on your own hardware (laptop to Raspberry Pi) and degrades gracefully: network scan alone works, and it sharpens as you add sensors.
+- **Multi-device** — the desktop is the central; a phone or second PC on the same Wi-Fi pairs as an authenticated, revocable companion over local TLS — a read-only viewer, still zero cloud.
+- **Yours to shape** — draw your home's rooms, walls, and stairs (multi-floor) right in the dashboard; the map is the coordinate frame the sensors report into.
 
 **Try it locally (no backend, no hardware):** open `frontend/index.html` — off-localhost the
 dashboard self-switches to a built-in simulator (simulated data only, zero network requests).
@@ -32,10 +34,13 @@ sources (network / ruview CSI / camera / mmwave / sim)
 
 - **Backend:** Python 3.11, FastAPI, zero mandatory heavy deps — torch/cv2, pyserial, paho and
   genai are lazy optional extras (`[camera]`, `[mmwave]`, `[mqtt]`, `[genai]`).
-- **Frontend:** single static HTML file, no build step. Off-localhost it self-switches to a
-  simulator and makes zero requests to the backend.
-- **Privacy posture:** loopback-only API (peer check + Host allowlist + CSRF header), cameras
-  boot OFF, frames never persisted, position targets live-only (never SQLite/MQTT).
+- **Frontend:** single static HTML file, no build step, installable as a PWA (offline shell).
+  Off-localhost it self-switches to a simulator and makes zero requests to the backend.
+- **Privacy posture:** loopback-only by default (peer check + Host allowlist + CSRF header),
+  cameras boot OFF, frames never persisted, position targets live-only (never SQLite/MQTT).
+- **Control (opt-in, default-OFF):** an MCP "brain on Home Assistant" reads HA entities and can
+  trigger HA services through an allowlist + consent gate — camera/lock/scene refused even if
+  allowlisted, mass actuation blocked, every call audit-logged. Wavr never becomes a device driver.
 
 ## Quickstart (network presence, zero hardware)
 
@@ -48,7 +53,10 @@ python -m uvicorn wavr.app:app --host 127.0.0.1 --port 8000
 # or double-click scripts/wavr.ps1
 ```
 
-Tests: `python -m pytest backend/tests -q` (195, all hardware mock-tested).
+Tests: `python -m pytest backend/tests -q` (386, all hardware mock-tested).
+
+For the desktop app + LAN companions, see [`docs/deploy/multi-device.md`](docs/deploy/multi-device.md)
+(`python -m wavr.serve` brings up local TLS + pairing) and the Tauri shell in [`desktop/`](desktop/).
 
 ## Design stance: integration over hype
 
@@ -61,11 +69,21 @@ reads occupied. When an upstream engine's headline feature turns out to be weake
 
 ## Roadmap
 
+Recently shipped: multi-device (desktop-central + LAN companions, local TLS, pairing/revocation),
+the installable PWA companion, the MCP "brain on Home Assistant" (read + gated control), and the
+**in-app house editor** — draw multi-floor rooms/walls/stairs, saved via `PUT /api/house`.
+
+Next:
+
+- **Camera → position** — per-camera homography (image → floor x/y) so cameras place people on your
+  drawn map, not just flag which room they're in.
+- **Walls in the fusion** — use the drawn walls for occlusion (a camera can't see through a wall) to
+  sharpen the confidence weighting; wire point-in-polygon room assignment into fusion.
+- **Floor-plan import** — trace over an uploaded plan image, or auto-build the geometry from a
+  plan / CAD file.
 - **mmWave bring-up** — HLK-LD2450 over USB serial (~€15): real x/y target tracking on the radar.
   Parser + source are done and tested; needs the device.
 - **Camera posture live** — YOLO-pose (`[camera]` extra) on RTSP cameras: standing/sitting/lying.
-- **3D house view** — extrude the `house.json` floor plan with walls (isometric SVG first) + an
-  in-app floor-plan editor.
 - **Cross-source track association** — fuse targets from multiple sensors in the same room.
 - **Fallen-person detection** — lying + location + duration on top of the above.
 
@@ -81,9 +99,11 @@ contributions: roadmap items above, or a new `SensorSource` (BLE presence, zigbe
 - `PRODUCT.md` — product definition and design principles
 - `docs/deploy/bring-up-and-expansion.md` — hardening, Docker, hardware tiers (mmWave LD2450,
   ESP32 CSI, camera pose), laptop → appliance migration
+- `docs/adr/` — architecture decision records (0001–0007: RuView audit, privacy boundaries,
+  not-a-medical-device, defensive-only, MCP control boundary, authenticated LAN access, desktop shell)
 - `docs/superpowers/plans/` — every sub-plan (A fusion → B real sources → C camera CV →
-  layers 2-4 → Docker → D position/posture radar), all executed via subagent-driven development
-  with per-task adversarial review
+  layers 2-4 → Docker → D position/posture radar → multi-device auth → MCP brain-on-HA →
+  house maquette editor), all executed via subagent-driven development with per-task adversarial review
 
 ## License
 
