@@ -7,6 +7,14 @@ from dotenv import load_dotenv
 
 load_dotenv()  # reads ./.env (git-ignored) if present
 
+# Default control allowlist (ADR-0005 §5): a SAFE, non-sensitive set of `domain.service`
+# pairs. ONLY these may be actuated (unless WAVR_HA_ALLOWED_SERVICES overrides). It is
+# deliberately narrow and excludes every sensitive domain (camera / lock /
+# alarm_control_panel / media_player) — those are additionally refused in code.
+DEFAULT_HA_ALLOWED_SERVICES = (
+    "light.turn_on,light.turn_off,switch.turn_on,switch.turn_off,scene.turn_on"
+)
+
 
 @dataclass
 class Config:
@@ -49,6 +57,13 @@ class Config:
     # the user's own HA on the LAN + a locally-stored token. Both empty => disabled.
     ha_url: str
     ha_token: str
+    # Home Assistant CONTROL/WRITE side (ADR-0005) — the "brain on HA" WRITE half.
+    # OPT-IN, default OFF: the control tool is inert unless `mcp_control` is on, so the
+    # read-only default is preserved (nothing actuates). `ha_allowed_services` bounds
+    # WHAT may be actuated to explicit `domain.service` pairs; anything not in the set
+    # is refused (and sensitive domains are additionally refused in code — ADR-0005 §4).
+    mcp_control: bool
+    ha_allowed_services: set[str]
 
 
 def load_config() -> Config:
@@ -103,4 +118,15 @@ def load_config() -> Config:
         # HA read-side (ADR-0005): empty => disabled. Local HA URL + long-lived token.
         ha_url=os.getenv("WAVR_HA_URL", ""),
         ha_token=os.getenv("WAVR_HA_TOKEN", ""),
+        # HA control-side (ADR-0005): default OFF -> control tool inert, read-only as
+        # today. Allowlist unset -> the SAFE default set; set-but-empty -> deny all
+        # (fail closed). Stored lowercased so the tool's gate compares case-insensitively.
+        mcp_control=os.getenv("WAVR_MCP_CONTROL", "").lower() in ("1", "true", "yes"),
+        ha_allowed_services={
+            s.strip().lower()
+            for s in os.getenv(
+                "WAVR_HA_ALLOWED_SERVICES", DEFAULT_HA_ALLOWED_SERVICES
+            ).split(",")
+            if s.strip()
+        },
     )
