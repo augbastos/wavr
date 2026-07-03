@@ -127,3 +127,27 @@ def test_point_outside_polygon():
 
 def test_unknown_floor_returns_none():
     assert room_at(_house_L(), 5, 1.0, 1.0) is None
+
+
+# Task 4: Atomic writer save_house_map
+from wavr.housemap import save_house_map
+
+
+def test_save_then_load_roundtrips(tmp_path):
+    p = tmp_path / "house.json"
+    doc = _valid()
+    save_house_map(str(p), doc)
+    assert load_house_map(str(p)) == doc
+
+
+def test_save_rejects_invalid_and_writes_nothing(tmp_path):
+    p = tmp_path / "house.json"
+    bad = _valid(); bad["version"] = 1
+    with pytest.raises(HouseMapError):
+        save_house_map(str(p), bad)
+    assert not p.exists()
+
+
+def test_save_empty_path_raises(tmp_path):
+    with pytest.raises(HouseMapError):
+        save_house_map("", _valid())
