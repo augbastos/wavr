@@ -1,21 +1,153 @@
-import json
-
-from wavr.housemap import load_house_map, DEFAULT_MAP
+from wavr.housemap import DEFAULT_MAP, load_house_map, room_names
 
 
-def test_missing_path_returns_default():
-    assert load_house_map("") == DEFAULT_MAP
-    assert load_house_map("nope/does-not-exist.json") == DEFAULT_MAP
+def test_default_map_is_v2():
+    assert DEFAULT_MAP["version"] == 2
+    assert DEFAULT_MAP["units"] == "m"
+    assert isinstance(DEFAULT_MAP["floors"], list) and DEFAULT_MAP["floors"]
+    f0 = DEFAULT_MAP["floors"][0]
+    assert f0["level"] == 0
+    assert all("polygon" in r for r in f0["rooms"])
 
 
-def test_valid_file_loads(tmp_path):
-    p = tmp_path / "house.json"
-    m = {"rooms": [{"name": "lab", "x": 0, "y": 0, "w": 5, "h": 4}]}
-    p.write_text(json.dumps(m), encoding="utf-8")
-    assert load_house_map(str(p)) == m
+def test_load_missing_path_returns_v2_default():
+    assert load_house_map("")["version"] == 2
 
 
-def test_garbage_file_returns_default(tmp_path):
+def test_v1_rectangles_migrate_to_v2_polygons(tmp_path):
+    import json
+    p = tmp_path / "v1.json"
+    p.write_text(json.dumps({"rooms": [{"name": "sala", "x": 0, "y": 0, "w": 4, "h": 3}]}))
+    m = load_house_map(str(p))
+    assert m["version"] == 2
+    floor = m["floors"][0]
+    assert floor["level"] == 0
+    room = floor["rooms"][0]
+    assert room["name"] == "sala"
+    # rectangle -> closed polygon corners (x,y)-(x+w,y)-(x+w,y+h)-(x,y+h)
+    assert room["polygon"] == [[0, 0], [4, 0], [4, 3], [0, 3]]
+
+
+def test_malformed_falls_back_to_default(tmp_path):
     p = tmp_path / "bad.json"
-    p.write_text("{not json", encoding="utf-8")
+    p.write_text("{ not json")
     assert load_house_map(str(p)) == DEFAULT_MAP
+
+
+def test_room_names_flattens_v2_across_floors():
+    house = {"version": 2, "units": "m", "floors": [
+        {"id": "f0", "name": "T", "level": 0, "rooms": [{"id": "r1", "name": "sala", "polygon": [[0,0],[1,0],[1,1]]}], "walls": [], "features": [], "backdrop": None},
+        {"id": "f1", "name": "1", "level": 1, "rooms": [{"id": "r2", "name": "quarto", "polygon": [[0,0],[1,0],[1,1]]}], "walls": [], "features": [], "backdrop": None},
+    ]}
+    assert room_names(house) == ["sala", "quarto"]
+
+
+def test_room_names_tolerates_v1():
+    assert room_names({"rooms": [{"name": "sala"}]}) == ["sala"]
+
+
+# Task 2: Validation tests
+import pytest
+from wavr.housemap import validate_house_map, HouseMapError
+
+
+def _valid():
+    return {"version": 2, "units": "m", "floors": [
+        {"id": "f0", "name": "T", "level": 0,
+         "rooms": [{"id": "r1", "name": "sala", "polygon": [[0,0],[4,0],[4,3],[0,3]]}],
+         "walls": [{"id": "w1", "a": [4,0], "b": [4,3]}],
+         "features": [{"id": "s1", "type": "stairs", "at": [3.5,2.5], "to_level": 1}],
+         "backdrop": None}]}
+
+
+def test_default_map_validates():
+    validate_house_map(DEFAULT_MAP)          # must not raise
+
+
+def test_valid_doc_passes():
+    validate_house_map(_valid())
+
+
+@pytest.mark.parametrize("mutate,msg", [
+    (lambda d: d.update(version=1), "version"),
+    (lambda d: d.update(units="ft"), "units"),
+    (lambda d: d.update(floors=[]), "floors"),
+    (lambda d: d["floors"].append(dict(d["floors"][0])), "level"),           # duplicate level
+    (lambda d: d["floors"][0]["rooms"][0].update(polygon=[[0,0],[1,1]]), "polygon"),  # <3 verts
+    (lambda d: d["floors"][0]["rooms"][0]["polygon"].__setitem__(0, ["x", 0]), "finite"),
+    (lambda d: d["floors"][0]["walls"][0].update(a=[float("inf"), 0]), "finite"),
+    (lambda d: d["floors"][0]["features"][0].update(type="teleporter"), "type"),
+])
+def test_invalid_docs_raise(mutate, msg):
+    d = _valid()
+    mutate(d)
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert msg in str(e.value).lower()
+
+
+def test_over_cap_rooms_raise():
+    d = _valid()
+    d["floors"][0]["rooms"] = [{"id": f"r{i}", "name": str(i), "polygon": [[0,0],[1,0],[1,1]]} for i in range(513)]
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
+
+
+def test_non_list_features_raise_housemaperror():
+    for bad in (None, 5, "x"):
+        d = _valid()
+        d["floors"][0]["features"] = bad
+        with pytest.raises(HouseMapError):
+            validate_house_map(d)
+
+
+# Task 3: Point-in-polygon room assignment
+from wavr.housemap import room_at
+
+
+def _house_L():
+    # concave (L-shaped) room on level 0
+    return {"version": 2, "units": "m", "floors": [
+        {"id": "f0", "name": "T", "level": 0, "walls": [], "features": [], "backdrop": None,
+         "rooms": [{"id": "r1", "name": "L", "polygon": [[0,0],[4,0],[4,2],[2,2],[2,4],[0,4]]}]}]}
+
+
+def test_point_inside_polygon():
+    assert room_at(_house_L(), 0, 1.0, 1.0) == "L"
+
+
+def test_point_in_concave_notch_is_outside():
+    # (3,3) is in the cut-out notch of the L -> not inside
+    assert room_at(_house_L(), 0, 3.0, 3.0) is None
+
+
+def test_point_outside_polygon():
+    assert room_at(_house_L(), 0, 10.0, 10.0) is None
+
+
+def test_unknown_floor_returns_none():
+    assert room_at(_house_L(), 5, 1.0, 1.0) is None
+
+
+# Task 4: Atomic writer save_house_map
+from wavr.housemap import save_house_map
+
+
+def test_save_then_load_roundtrips(tmp_path):
+    p = tmp_path / "house.json"
+    doc = _valid()
+    save_house_map(str(p), doc)
+    assert load_house_map(str(p)) == doc
+
+
+def test_save_rejects_invalid_and_writes_nothing(tmp_path):
+    p = tmp_path / "house.json"
+    bad = _valid(); bad["version"] = 1
+    with pytest.raises(HouseMapError):
+        save_house_map(str(p), bad)
+    assert not p.exists()
+
+
+def test_save_empty_path_raises(tmp_path):
+    with pytest.raises(HouseMapError):
+        save_house_map("", _valid())
