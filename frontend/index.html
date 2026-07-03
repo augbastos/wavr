@@ -172,6 +172,21 @@
                     border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.75rem;
                     transition:border-color .15s ease-out,color .15s ease-out;}
   .pair-dev-row .rm:hover{border-color:var(--warn);color:var(--warn);}
+  /* Companion pairing screen (private-LAN viewer only; hidden in central + demo) */
+  .cpair{min-height:60vh;display:flex;align-items:center;justify-content:center;padding:32px 24px;}
+  .cpair-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+              padding:28px 26px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:14px;}
+  .cpair-card h2{margin:0;font-size:1.1rem;letter-spacing:-0.01em;}
+  .cpair-sub{margin:0;color:var(--muted);font-size:.86rem;line-height:1.5;}
+  .cpair-input{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;
+               padding:14px 16px;font-size:1.5rem;letter-spacing:.32em;text-align:center;
+               font-variant-numeric:tabular-nums;
+               font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .cpair-input::placeholder{color:var(--muted);opacity:.5;letter-spacing:.32em;}
+  .cpair-btn{padding:12px 16px;font-size:.95rem;text-align:center;}
+  .cpair-msg{margin:0;font-size:.84rem;color:var(--muted);min-height:1.2em;}
+  .cpair-msg.err{color:var(--danger);}
+  .cpair-msg.ok{color:var(--accent);}
   @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.zone-item .rm,.pair-dev-row .rm,.radar-target,.radar-zone{transition:none;}}
 </style>
 </head>
@@ -180,8 +195,20 @@
   <div class="hdr-right">
     <span id="house" class="house" aria-live="polite"></span>
     <div class="mode" id="mode"></div>
+    <button id="companionExit" class="ctl small" type="button" hidden>Desconectar</button>
   </div>
 </header>
+<!-- Companion pairing screen (private-LAN viewer, no token yet). Hidden in central + demo. -->
+<div id="companionPair" class="cpair" hidden>
+  <form id="cpairForm" class="cpair-card" aria-labelledby="cpair-h">
+    <h2 id="cpair-h">Parear com a central</h2>
+    <p class="cpair-sub">Digite o código de 8 dígitos exibido no painel da central para ver esta casa neste dispositivo.</p>
+    <input id="cpairCode" class="cpair-input" inputmode="numeric" autocomplete="one-time-code"
+           pattern="[0-9]*" maxlength="8" placeholder="00000000" aria-label="código de pareamento">
+    <button type="submit" class="ctl cpair-btn">Parear</button>
+    <p id="cpairMsg" class="cpair-msg" aria-live="polite"></p>
+  </form>
+</div>
 <div id="controls" class="controls" hidden>
   <button id="sysToggle" class="ctl"></button>
   <div id="srcToggles" class="src-toggles"></div>
@@ -321,10 +348,115 @@ function SimulatorProvider(){
 }
 
 // ---- Mode selection (PRIVACY: never "live" off localhost) ----
-const MODE = (location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "live" : "simulated";
-const provider = MODE==="live" ? WebSocketProvider() : SimulatorProvider();
-document.getElementById("mode").innerHTML = MODE==="live"
-  ? "fonte: <b>casa real</b> (local)" : "fonte: <b>demo</b> (dados fictícios)";
+// 3-way detection (Phase-3 multi-device):
+//   loopback host        -> "live"       central: full dashboard, X-Wavr-Local, no token — UNCHANGED
+//   private-LAN IP host   -> "companion" phone/2nd PC: pair once, then token-authed read-only viewer
+//   anything else        -> "simulated"  public off-LAN demo — UNCHANGED
+// Central and demo run NONE of the companion/token code below (every branch is gated on MODE).
+function isLoopbackHost(h){ return h==="localhost" || h==="127.0.0.1"; }
+function isPrivateLanHost(h){        // RFC1918 literals only; names like lvh.me are NOT private literals -> demo
+  return /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
+      || /^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)
+      || /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+const COMPANION_TOKEN_KEY = "wavr.token." + location.origin;   // per-origin (works under http & https)
+function companionToken(){ try{ return localStorage.getItem(COMPANION_TOKEN_KEY) || null; }catch{ return null; } }
+function companionSetToken(t){ try{ localStorage.setItem(COMPANION_TOKEN_KEY, t); }catch{} }
+function companionClearToken(){ try{ localStorage.removeItem(COMPANION_TOKEN_KEY); }catch{} }
+function companionDeviceName(){ try{ return "Companion · " + (navigator.platform || "web"); }catch{ return "Companion"; } }
+let companionAuthFailedOnce = false;
+function companionAuthFailed(){        // token revoked/expired (401/403) -> clear token + drop back to pairing
+  if(companionAuthFailedOnce) return;
+  companionAuthFailedOnce = true;
+  companionClearToken();
+  try{ location.reload(); }catch{}
+}
+// Companion data provider: Bearer-authed history + ticketed WS (same contract as WebSocketProvider).
+function CompanionProvider(token){
+  const base = location.origin;
+  const auth = { "Authorization": "Bearer " + token };
+  return {
+    async history(){
+      try{
+        const r = await fetch(base+"/api/history?limit=100",{headers:auth});
+        if(r.status===401||r.status===403){ companionAuthFailed(); return []; }
+        return await r.json();
+      }catch{ return []; }
+    },
+    async start(onEvent){
+      let ticket;
+      try{
+        const r = await fetch(base+"/api/ws-ticket",{method:"POST",headers:auth});   // mint a short-lived WS ticket
+        if(r.status===401||r.status===403){ companionAuthFailed(); return; }
+        if(!r.ok){ setTimeout(()=>this.start(onEvent), 2000); return; }
+        ticket = (await r.json()).ticket;
+      }catch{ setTimeout(()=>this.start(onEvent), 2000); return; }
+      const proto = location.protocol==="https:" ? "wss://" : "ws://";     // ws/wss chosen from page protocol
+      const ws = new WebSocket(proto + location.host + "/ws/live?ticket=" + encodeURIComponent(ticket));
+      ws.onmessage = (m)=> onEvent(JSON.parse(m.data));
+      ws.onclose = ()=> { if(!companionAuthFailedOnce) setTimeout(()=> this.start(onEvent), 1500); };
+    },
+  };
+}
+function NullProvider(){ return { async history(){ return []; }, start(){} }; }   // pairing state: no data yet
+
+// Companion UI bootstrap: pairing screen (no token) OR read-only viewer chrome (token present).
+function initCompanion(){
+  if(MODE!=="companion") return;      // central + demo never touch companion UI
+  const pairEl  = document.getElementById("companionPair");
+  const mainEl  = document.querySelector("main");
+  const radarEl = document.getElementById("radarWrap");
+  if(!companionToken()){
+    // --- PAIRING SCREEN: hide the whole dashboard, show only the pairing card ---
+    if(mainEl)  mainEl.hidden  = true;
+    if(radarEl) radarEl.hidden = true;
+    pairEl.hidden = false;
+    const form  = document.getElementById("cpairForm");
+    const input = document.getElementById("cpairCode");
+    const msg   = document.getElementById("cpairMsg");
+    form.onsubmit = async (e)=>{
+      e.preventDefault();
+      const code = (input.value||"").replace(/\D+/g,"");
+      if(!/^\d{8}$/.test(code)){ msg.className="cpair-msg err"; msg.textContent="digite os 8 dígitos do código"; return; }
+      msg.className="cpair-msg"; msg.textContent="pareando…";
+      let r;
+      try{
+        r = await fetch(location.origin+"/api/pair",{method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({code, device_name: companionDeviceName()})});
+      }catch{ msg.className="cpair-msg err"; msg.textContent="falha de conexão"; return; }
+      if(!r.ok){
+        msg.className="cpair-msg err";
+        msg.textContent = (r.status===400||r.status===401||r.status===403||r.status===404)
+          ? "código inválido ou expirado" : ("falha ao parear ("+r.status+")");
+        return;
+      }
+      let tok=null; try{ tok=(await r.json()).token; }catch{}
+      if(!tok){ msg.className="cpair-msg err"; msg.textContent="resposta inválida do servidor"; return; }
+      companionSetToken(tok);
+      msg.className="cpair-msg ok"; msg.textContent="pareado — carregando…";
+      try{ location.reload(); }catch{}   // reload boots straight into the token-authed viewer
+    };
+    return;
+  }
+  // --- VIEWER MODE: reveal the read-only "desconectar" control (network panel is rendered by renderNetwork) ---
+  const exit = document.getElementById("companionExit");
+  if(exit){
+    exit.hidden = false;
+    exit.onclick = ()=>{ companionClearToken(); try{ location.reload(); }catch{} };
+  }
+}
+
+const MODE = isLoopbackHost(location.hostname) ? "live"
+           : isPrivateLanHost(location.hostname) ? "companion"
+           : "simulated";
+const provider = MODE==="live" ? WebSocketProvider()
+               : MODE==="companion" ? (companionToken() ? CompanionProvider(companionToken()) : NullProvider())
+               : SimulatorProvider();
+document.getElementById("mode").innerHTML =
+    MODE==="live"      ? "fonte: <b>casa real</b> (local)"
+  : MODE==="companion" ? (companionToken() ? "fonte: <b>casa real</b> (visualizador)" : "fonte: <b>pareamento</b>")
+  :                      "fonte: <b>demo</b> (dados fictícios)";
 
 // ---- House indicator (home/away) — works in both live and demo modes ----
 const houseEl = document.getElementById("house");
@@ -429,7 +561,10 @@ function maskMac(mac){
   return mac.slice(0,keep) + "·".repeat(Math.max(2, mac.length-keep));
 }
 function renderNetwork(){
-  if(MODE!=="live") return;                 // Wavr Net reads the local backend; never in Plano B (demo)
+  // live (central) OR companion viewer (token) — both read the same local backend, read-only.
+  if(MODE!=="live" && MODE!=="companion") return;     // never in Plano B (demo)
+  if(MODE==="companion" && !companionToken()) return; // companion pairing state: no token yet
+  const auth = MODE==="companion" ? {"Authorization":"Bearer "+companionToken()} : null;  // companion-only
   document.getElementById("network").hidden = false;
   const devList = document.getElementById("devList");
   const alertList = document.getElementById("alertList");
@@ -437,8 +572,11 @@ function renderNetwork(){
   async function refresh(){
     let inv, al;
     try{
-      inv = await (await fetch(location.origin+"/api/inventory")).json();
-      al  = await (await fetch(location.origin+"/api/alerts")).json();
+      const ri = await fetch(location.origin+"/api/inventory", auth?{headers:auth}:undefined);
+      const ra = await fetch(location.origin+"/api/alerts", auth?{headers:auth}:undefined);
+      if(auth && (ri.status===401||ri.status===403||ra.status===401||ra.status===403)){ companionAuthFailed(); return; }
+      inv = await ri.json();
+      al  = await ra.json();
     }catch{ return; }                       // backend momentarily unreachable — keep last view
     const devices = Array.isArray(inv && inv.devices) ? inv.devices : [];
     const rogue   = Array.isArray(al && al.alerts)   ? al.alerts    : [];
@@ -629,6 +767,9 @@ function placeDot(g, room, t){
 async function renderRadar(){
   let map;
   if(MODE==="live"){ try{ map = await (await fetch(location.origin+"/api/house")).json(); }catch{} }
+  else if(MODE==="companion" && companionToken()){        // companion viewer: real house map, Bearer-authed
+    try{ map = await (await fetch(location.origin+"/api/house",{headers:{"Authorization":"Bearer "+companionToken()}})).json(); }catch{}
+  }
   map = map || {rooms:[{name:"sala",x:0,y:0,w:4,h:3},{name:"quarto",x:4.2,y:0,w:3.5,h:3},
                        {name:"quintal",x:0,y:3.2,w:7.7,h:2.5}]};   // demo default = backend DEFAULT_MAP
   const svg = document.getElementById("radar");
@@ -666,6 +807,7 @@ async function renderRadar(){
   const zoneListEl  = document.getElementById("zoneList");
   const zoneNameForm  = document.getElementById("zoneNameForm");
   const zoneNameInput = document.getElementById("zoneNameInput");
+  if(MODE==="companion"){ document.getElementById("zoneBar").hidden = true; }  // viewer: zones view-only (no edit)
   let editMode = false, pending = null, previewRect = null, dragStart = null;
   const round2 = (n) => Math.round(n*100)/100;
 
@@ -814,6 +956,7 @@ async function renderRadar(){
   };
 }
 renderRadar();
+initCompanion();   // companion (private-LAN) only: pairing screen OR read-only viewer chrome
 
 // ---- Rendering (RoomState) ----
 const roomsEl = document.getElementById("rooms");
