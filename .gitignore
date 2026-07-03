@@ -20,3 +20,7 @@ wavr.db-wal
 backend/wavr.db
 backend/wavr.db-shm
 backend/wavr.db-wal
+
+# tool-output dirs (never commit)
+_fable/
+.superpowers/
