@@ -24,8 +24,14 @@ Hard constraints (match the rest of Wavr's privacy-first design):
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from typing import Callable
+
+# A Home Assistant domain / service name is lowercase word-chars only. Validated here as a
+# defence-in-depth backstop (audit LOW-5) so a malformed value can never be interpolated
+# into the `/api/services/{domain}/{service}` path, regardless of what the caller passed.
+_HA_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
 # A GET transport takes (url, headers) and returns the raw response body (bytes or str).
 # Default is _urllib_get below; tests inject a fake that returns canned /api/states JSON.
@@ -154,6 +160,10 @@ class HAClient:
           * An empty/absent body (HA changed nothing) -> `[]` (not an error).
           * Malformed JSON -> WavrHAError.
         """
+        if not _HA_NAME_RE.match(domain or "") or not _HA_NAME_RE.match(service or ""):
+            raise WavrHAError(
+                f"Invalid HA domain/service name: {domain!r}/{service!r} "
+                "(must be lowercase [a-z0-9_])")
         url = f"{self._base_url}/api/services/{domain}/{service}"
         payload = json.dumps(data or {}).encode()
         try:

@@ -11,16 +11,21 @@ heavily gated, so the read-only default is preserved (with `WAVR_MCP_CONTROL` of
 inert). It never drives a device directly: on passing every gate it asks the user's own
 HA to run a service (delegation, ADR-0005 §1). The gate chain, in order:
 
-    control-flag  ->  allowlist  ->  sensitive-domain (consent) refusal  ->  HA call
+    control-flag -> entity-id shape -> sensitive (service AND target) -> allowlist -> HA call
 
   1. control-flag: inert unless `WAVR_MCP_CONTROL` is on (returns a "control disabled"
      message; never errors the server).
-  2. allowlist: only explicit `domain.service` pairs in `ha_allowed_services` pass;
+  2. entity-id shape: exactly one concrete `domain.object_id` -- `all`, wildcards, and
+     comma-lists are refused so a single call can't actuate a whole domain (audit MED-4).
+  3. sensitive refusal (ADR-0005 §4), checked before the allowlist and against BOTH the
+     service AND the target entity (audit HIGH-1): camera / media_player / lock /
+     alarm_control_panel / cover / valve / siren / lawn_mower, any camera/mic-hinting
+     name, and opaque indirection (scene / script / automation / group) are refused
+     OUTRIGHT even if allowlisted -- consent is not wired yet. So a benign-looking
+     `switch.turn_on`/`scene.turn_on` can't back-door a camera or lock. The camera
+     boot-OFF invariant (ADR-0002) holds: the MCP can NEVER turn a camera on.
+  4. allowlist: only explicit `domain.service` pairs in `ha_allowed_services` pass;
      anything else -> "service not allowed".
-  3. sensitive-domain refusal (ADR-0005 §4): camera / media_player / lock /
-     alarm_control_panel (and any service that could enable a camera/mic) are refused
-     OUTRIGHT even if somehow allowlisted -- consent for these is not wired yet. The
-     camera boot-OFF invariant (ADR-0002) holds: the MCP can NEVER turn a camera on.
 
 Local-only throughout: control calls stay Wavr -> HA on the LAN; nothing goes to cloud.
 This constraint is deliberate and mirrors the rest of Wavr's privacy-first design.
@@ -37,7 +42,11 @@ Design, matching the camera/mmwave modules:
 
 from __future__ import annotations
 
+import logging
+import re
 from typing import Protocol
+
+_log = logging.getLogger("wavr.mcp.control")
 
 
 class StateProvider(Protocol):
@@ -72,17 +81,36 @@ class HAServiceCaller(Protocol):
 # allowlist cannot re-enable them -- they are refused even if somehow allowlisted, because
 # turning a camera/mic on, unlocking a door, or disarming an alarm needs explicit human
 # consent that is not wired yet. Upholds the camera boot-OFF invariant (ADR-0002).
+#
+# This is matched against BOTH the service's own domain AND the target entity's domain
+# (a camera can be actuated via a `switch.` or `scene.` that fronts it -- audit HIGH-1),
+# so every name here refuses no matter which door the actuation comes through.
 SENSITIVE_DOMAINS = frozenset({
     "camera",              # MCP must NEVER turn a camera on
     "media_player",        # can start recording / open a mic / intercom
     "lock",                # physical security boundary (door locks)
     "alarm_control_panel",  # physical security boundary (arm/disarm)
+    "cover",               # garage doors / gates -- physical access boundary
+    "valve",               # water / gas valves -- physical safety
+    "siren",               # alarms / sirens
+    "lawn_mower",          # autonomous physical machine
 })
 
-# Defence-in-depth backstop: even in a non-sensitive domain, refuse any service whose
-# name implies enabling a camera/mic or recording (ADR-0005 §4 "anything that could
-# enable a camera/mic"). Compared case-insensitively against `domain.service`.
-_SENSITIVE_HINTS = ("camera", "microphone", "record", "snapshot")
+# Indirection domains: opaque bundles that can fan out to ANYTHING (including a camera or
+# lock) with a single innocuous-looking call. `scene.turn_on` / `script.turn_on` /
+# `automation.trigger` / a `group` can each front a sensitive device, so the entity-target
+# gate treats them as sensitive-by-default -- refused unless consent is wired (audit HIGH-1).
+INDIRECTION_DOMAINS = frozenset({
+    "scene", "script", "automation", "group",
+})
+
+# Defence-in-depth backstop: even in a non-sensitive domain, refuse any service OR target
+# entity whose name implies a camera/mic/recording/streaming device (ADR-0005 §4 "anything
+# that could enable a camera/mic"). Matched case-insensitively as substrings.
+_SENSITIVE_HINTS = (
+    "camera", "cam", "webcam", "microphone", "mic", "record", "snapshot",
+    "stream", "livestream", "rtsp", "onvif", "intercom", "doorbell",
+)
 
 
 class FusionStateProvider:
@@ -173,6 +201,34 @@ def _is_sensitive(domain: str, service: str) -> bool:
     return any(hint in pair for hint in _SENSITIVE_HINTS)
 
 
+def _entity_is_sensitive(entity_id: str) -> bool:
+    """True if the TARGET entity is sensitive, regardless of the service used to reach it
+    (audit HIGH-1). A benign-looking `switch.turn_on` / `scene.turn_on` must not become a
+    back door to a camera, lock, or an opaque scene. Refuses when the entity's own domain
+    is sensitive OR an indirection bundle, or when its id hints at a camera/mic/stream.
+    Assumes a lowercased `entity_id`."""
+    eid = (entity_id or "").strip().lower()
+    entity_domain = eid.split(".", 1)[0] if "." in eid else eid
+    if entity_domain in SENSITIVE_DOMAINS or entity_domain in INDIRECTION_DOMAINS:
+        return True
+    return any(hint in eid for hint in _SENSITIVE_HINTS)
+
+
+# A single, concrete entity id: `domain.object_id`, lowercase word-chars only. Rejects the
+# empty string, the mass-actuation wildcard `all`, comma-lists, and any shape that isn't one
+# real entity (audit MEDIUM-4) -- one gated call must never fan out to many devices.
+_ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+
+
+def _entity_id_is_valid(entity_id: str) -> bool:
+    """True only for exactly one concrete `domain.object_id`. `all`, empty, wildcards, and
+    comma-separated lists are rejected so a single call can't actuate a whole domain."""
+    eid = (entity_id or "").strip().lower()
+    if eid in ("", "all", "none", "*"):
+        return False
+    return bool(_ENTITY_ID_RE.match(eid))
+
+
 def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str,
                     entity_id: str, *, control_enabled: bool,
                     allowed_services) -> dict:
@@ -184,20 +240,34 @@ def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str
 
       1. control-flag  -- inert unless `control_enabled` (WAVR_MCP_CONTROL). Returns a
          "control disabled" message; does NOT error the server (ADR-0005 §2).
-      2. allowlist     -- `domain.service` must be in `allowed_services`, else
+      2. entity-id     -- must be exactly one concrete `domain.object_id`; `all`, wildcards
+         and comma-lists are refused so one call can't actuate a whole domain (audit MED-4).
+      3. sensitive     -- checked BEFORE the allowlist (audit LOW-6) against BOTH the
+         `domain.service` AND the target entity (audit HIGH-1): camera / media_player /
+         lock / alarm_control_panel / cover / valve / siren / lawn_mower, any camera/mic-
+         hinting name, and opaque indirection (scene / script / automation / group) are
+         refused OUTRIGHT even if allowlisted -- consent is not wired yet (ADR-0005 §4). A
+         benign `switch.turn_on`/`scene.turn_on` cannot back-door a sensitive device;
+         camera boot-OFF invariant (ADR-0002) holds.
+      4. allowlist     -- `domain.service` must be in `allowed_services`, else
          "service not allowed" (ADR-0005 §5). No "arbitrary HA action"; pairs only.
-      3. sensitive     -- camera / media_player / lock / alarm_control_panel (and any
-         camera/mic-enabling service) are refused OUTRIGHT even if allowlisted; consent
-         is not wired yet (ADR-0005 §4). Camera boot-OFF invariant (ADR-0002) holds.
-      4. HA configured -- if `ha_client is None` (HA unconfigured) degrade cleanly.
+      5. HA configured -- if `ha_client is None` (HA unconfigured) degrade cleanly.
 
     Only on passing ALL gates does it delegate to `ha_client.call_service(domain, service,
-    {"entity_id": entity_id})`. Inputs are normalized (stripped + lowercased) first, which
-    also closes any case-based bypass of the sensitive-domain gate (e.g. `Camera.turn_on`).
+    {"entity_id": entity_id})`. Every refusal and the one allowed call are logged (audit
+    LOW-7). Inputs are normalized (stripped + lowercased) first, which also closes any
+    case-based bypass of the sensitive gate (e.g. `Camera.turn_on`).
     """
     domain = (domain or "").strip().lower()
     service = (service or "").strip().lower()
+    entity_id = (entity_id or "").strip().lower()
     pair = f"{domain}.{service}"
+
+    def _deny(status: str, message: str) -> dict:
+        # Audit LOW-7: every refusal is logged (target + reason) so an operator can see
+        # what an agent tried to actuate. Logged at WARNING; no secrets in the record.
+        _log.warning("control refused: %s entity=%s status=%s", pair, entity_id, status)
+        return _refused(status, message)
 
     # Gate 1 -- control flag (default OFF). Inert, never an error.
     if not control_enabled:
@@ -205,17 +275,29 @@ def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str
             "control_disabled",
             "MCP control is disabled (WAVR_MCP_CONTROL off); no action taken.")
 
-    # Gate 2 -- allowlist. Only explicit, pre-approved (domain, service) pairs.
+    # Gate 2 -- entity-id shape. Exactly one concrete `domain.object_id`; no `all`, no
+    # wildcard, no comma-list (audit MEDIUM-4) -- one call must not fan out to a domain.
+    if not _entity_id_is_valid(entity_id):
+        return _deny(
+            "invalid_entity",
+            f"entity_id must be a single concrete 'domain.object_id'; refused: "
+            f"{entity_id!r} (no 'all', wildcard, or list).")
+
+    # Gate 3 -- sensitive-domain consent backstop, checked BEFORE the allowlist (audit
+    # LOW-6) and against BOTH the service AND the target entity (audit HIGH-1). Refused
+    # even if allowlisted: a benign `switch.turn_on`/`scene.turn_on` cannot back-door a
+    # camera/lock/opaque-scene. Consent is not wired yet (ADR-0005 §4).
+    if _is_sensitive(domain, service) or _entity_is_sensitive(entity_id):
+        return _deny(
+            "consent_required",
+            f"'{pair}' on '{entity_id}' touches a sensitive device that needs explicit "
+            f"human consent (ADR-0005 §4) not yet wired; refused. Camera/mic/lock can "
+            f"never be enabled here, not even via a switch or scene.")
+
+    # Gate 4 -- allowlist. Only explicit, pre-approved (domain, service) pairs.
     allowed = {s.strip().lower() for s in (allowed_services or ())}
     if pair not in allowed:
-        return _refused("not_allowed", f"service not allowed: {pair}")
-
-    # Gate 3 -- sensitive-domain consent backstop. Refused even if allowlisted.
-    if _is_sensitive(domain, service):
-        return _refused(
-            "consent_required",
-            f"'{pair}' targets a sensitive domain that needs explicit human consent "
-            f"(ADR-0005 §4) not yet wired; refused. Camera/mic can never be enabled here.")
+        return _deny("not_allowed", f"service not allowed: {pair}")
 
     # Graceful degrade -- HA not configured, so no call is possible.
     if ha_client is None:
@@ -224,6 +306,7 @@ def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str
             "Home Assistant is not configured (WAVR_HA_URL/WAVR_HA_TOKEN empty).")
 
     # All gates passed -> delegate the actuation to HA (ADR-0005 §1). Wavr asks; HA acts.
+    _log.info("control call: %s entity=%s", pair, entity_id)
     result = ha_client.call_service(domain, service, {"entity_id": entity_id})
     return {"ok": True, "status": "called", "domain": domain, "service": service,
             "entity_id": entity_id, "result": result}

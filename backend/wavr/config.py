@@ -10,9 +10,12 @@ load_dotenv()  # reads ./.env (git-ignored) if present
 # Default control allowlist (ADR-0005 §5): a SAFE, non-sensitive set of `domain.service`
 # pairs. ONLY these may be actuated (unless WAVR_HA_ALLOWED_SERVICES overrides). It is
 # deliberately narrow and excludes every sensitive domain (camera / lock /
-# alarm_control_panel / media_player) — those are additionally refused in code.
+# alarm_control_panel / media_player / cover / valve / siren) — those are additionally
+# refused in code, AS IS the target entity (a switch/scene fronting a sensitive device).
+# `scene.turn_on` is intentionally NOT here: a scene is an opaque bundle that can front a
+# camera or lock, so the target-entity gate treats it as sensitive-by-default (audit HIGH-1).
 DEFAULT_HA_ALLOWED_SERVICES = (
-    "light.turn_on,light.turn_off,switch.turn_on,switch.turn_off,scene.turn_on"
+    "light.turn_on,light.turn_off,switch.turn_on,switch.turn_off"
 )
 
 
