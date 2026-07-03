@@ -10,7 +10,8 @@
 <title>Wavr — Fused Home Sensing</title>
 <style>
   :root{--bg:#0f1216;--surface:#171c22;--ink:#e8edf2;--muted:#9aa7b4;
-        --accent:#3db54a;--warn:#e0b341;--line:#232a32;--radius:14px;}
+        --accent:#3db54a;--warn:#e0b341;--danger:#c65b52;--zone:#6ea8fe;
+        --line:#232a32;--radius:14px;}
   *{box-sizing:border-box;}
   body{margin:0;background:var(--bg);color:var(--ink);
        font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
@@ -86,7 +87,62 @@
                border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.75rem;
                transition:border-color .15s ease-out,color .15s ease-out;}
   .cam-row .rm:hover{border-color:var(--warn);color:var(--warn);}
-  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.radar-target{transition:none;}}
+  /* Wavr Net panel (live-only): device inventory + rogue alerts */
+  .net:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .net h3{margin:4px 0 10px;}
+  .net-hint{color:var(--muted);font-size:.82rem;padding:6px 0;}
+  .net-cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
+  .net-col h4{margin:0 0 6px;font-size:.72rem;color:var(--muted);font-weight:600;
+              text-transform:uppercase;letter-spacing:.05em;}
+  .dev-list,.alert-list{display:flex;flex-direction:column;max-height:250px;overflow:auto;}
+  .dev-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+           font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
+  .dev-row>span:first-child{min-width:0;overflow-wrap:anywhere;}
+  .dev-meta{color:var(--muted);font-variant-numeric:tabular-nums;}
+  .mac{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);}
+  .tag{flex-shrink:0;font-size:.7rem;padding:2px 9px;border-radius:999px;border:1px solid var(--line);}
+  .tag.known{color:var(--accent);border-color:rgba(61,181,74,.4);}
+  .tag.unknown{color:var(--warn);border-color:rgba(224,179,65,.45);}
+  .alert-row{font-size:.8rem;padding:7px 0;border-top:1px dashed var(--line);}
+  .alert-row .at{color:var(--danger);font-weight:600;}
+  .alert-row .ameta{color:var(--muted);font-variant-numeric:tabular-nums;
+                    display:block;margin-top:2px;overflow-wrap:anywhere;}
+  /* per-source freshness (health/age_s) in the room-card "why" rows */
+  .src.stale{opacity:.62;}
+  .src.dead{opacity:.5;}
+  .src.dead span{text-decoration:line-through;}
+  .src .h{display:inline-block;width:6px;height:6px;border-radius:50%;
+          margin-right:6px;vertical-align:middle;background:var(--muted);}
+  .src .h.stale{background:var(--warn);}
+  .src .h.dead{background:var(--danger);}
+  /* Zone editor (radar overlay) */
+  .zonebar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;}
+  .zonehint{color:var(--muted);font-size:.8rem;}
+  .zonepanel{margin-top:10px;}
+  .zone-name:not([hidden]){display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+  .zone-name input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+                   border-radius:8px;padding:8px 11px;font-size:.82rem;min-width:200px;flex:1;}
+  .zone-name input::placeholder{color:var(--muted);opacity:1;}
+  .zone-list{display:flex;flex-direction:column;}
+  .zone-empty{color:var(--muted);font-size:.8rem;padding:4px 0;}
+  .zone-item{display:flex;justify-content:space-between;align-items:center;gap:12px;
+             font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
+  .zone-item .zi{display:flex;gap:10px;align-items:baseline;min-width:0;overflow-wrap:anywhere;}
+  .zone-item .zocc{color:var(--accent);font-size:.75rem;white-space:nowrap;}
+  .zone-item .zempty{color:var(--muted);font-size:.75rem;white-space:nowrap;}
+  .zone-item .rm{flex-shrink:0;background:none;border:1px solid var(--line);color:var(--muted);
+                 border-radius:8px;padding:5px 11px;cursor:pointer;font-size:.75rem;
+                 transition:border-color .15s ease-out,color .15s ease-out;}
+  .zone-item .rm:hover{border-color:var(--warn);color:var(--warn);}
+  .radar-zone{fill:rgba(110,168,254,.06);stroke:var(--zone);stroke-width:.02;
+              stroke-dasharray:.1 .08;vector-effect:non-scaling-stroke;pointer-events:none;
+              transition:fill .25s ease-out;}
+  .radar-zone.occ{fill:rgba(110,168,254,.2);stroke-dasharray:none;}
+  .radar-zonelabel{fill:var(--zone);font-size:.22px;pointer-events:none;}
+  .radar-draw{fill:rgba(61,181,74,.1);stroke:var(--accent);stroke-width:.02;
+              stroke-dasharray:.12 .08;vector-effect:non-scaling-stroke;pointer-events:none;}
+  #radar.editing{cursor:crosshair;touch-action:none;}
+  @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.zone-item .rm,.radar-target,.radar-zone{transition:none;}}
 </style>
 </head>
 <body>
@@ -115,8 +171,34 @@
   <button id="narrateBtn" class="ctl">Narrar</button>
   <p id="narrateOut" class="narrate-out" aria-live="polite"></p>
 </div>
+<div id="network" class="net" hidden>
+  <h3>Wavr Net</h3>
+  <div id="netHint" class="net-hint">Wavr Net desligado — inicie o backend com WAVR_NET_INVENTORY=1</div>
+  <div class="net-cols">
+    <div class="net-col">
+      <h4>Dispositivos na rede</h4>
+      <div id="devList" class="dev-list" aria-live="polite"></div>
+    </div>
+    <div class="net-col">
+      <h4>Alertas de intrusão</h4>
+      <div id="alertList" class="alert-list" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
 <div id="radarWrap" class="radar"><h3 id="radar-h">Radar</h3>
   <svg id="radar" role="img" aria-labelledby="radar-h" preserveAspectRatio="xMidYMid meet"></svg>
+  <div id="zoneBar" class="zonebar">
+    <button id="zoneEdit" type="button" class="ctl small">Editar zonas</button>
+    <span id="zoneHint" class="zonehint" hidden>arraste sobre o radar para desenhar uma zona</span>
+  </div>
+  <div id="zonePanel" class="zonepanel" hidden>
+    <form id="zoneNameForm" class="zone-name" hidden>
+      <input id="zoneNameInput" placeholder="nome da zona (ex: sofá)" aria-label="nome da zona" maxlength="40" autocomplete="off">
+      <button type="submit" class="ctl small">Salvar</button>
+      <button type="button" id="zoneCancel" class="ctl small off">Cancelar</button>
+    </form>
+    <div id="zoneList" class="zone-list" aria-label="Zonas"></div>
+  </div>
 </div>
 <main>
   <div class="rooms" id="rooms" aria-label="Estado por cômodo"><div class="empty">aguardando dados dos cômodos…</div></div>
@@ -158,7 +240,13 @@ function SimulatorProvider(){
       const mass = W[m]*conf;
       den += mass;
       if(present){ num += mass; strength = Math.max(strength, mass); }
-      sources.push({modality:m, presence:present, confidence:+conf.toFixed(3)});
+      // Demo-only source freshness so the health/age indicator is visible without a
+      // backend — mirrors fusion.py's fresh(<=30s)/stale/dead(>=90s) bands. Display
+      // only: age doesn't feed the confidence math above (same as the real engine's
+      // decay is applied to trust, not shown here).
+      const age_s = ((tick + i*5) % 15) * 8;   // 0..112s, cycles through the bands
+      const health = age_s <= 30 ? "fresh" : age_s >= 90 ? "dead" : "stale";
+      sources.push({modality:m, presence:present, confidence:+conf.toFixed(3), age_s, health});
       if(present && m==="wifi_csi") vitals={breathing_bpm:+(12+3*Math.sin(tick/5)).toFixed(1), heart_bpm:+(60+10*Math.sin(tick/4)).toFixed(0)};
       if(present && (m==="wifi_csi"||m==="camera")) hasTarget = true;
     });
@@ -282,10 +370,88 @@ function renderNarrate(){
 }
 renderNarrate();
 
+// ---- Wavr Net panel (Plano A / live only): device inventory + rogue alerts ----
+function maskMac(mac){
+  // Show the vendor-OUI half, mask the device-specific half (privacy).
+  if(typeof mac!=="string" || !mac) return "—";
+  const p = mac.split(":");
+  if(p.length===6) return p.slice(0,3).join(":")+":··:··:··";
+  const keep = Math.max(2, Math.ceil(mac.length/2));
+  return mac.slice(0,keep) + "·".repeat(Math.max(2, mac.length-keep));
+}
+function renderNetwork(){
+  if(MODE!=="live") return;                 // Wavr Net reads the local backend; never in Plano B (demo)
+  document.getElementById("network").hidden = false;
+  const devList = document.getElementById("devList");
+  const alertList = document.getElementById("alertList");
+  const hint = document.getElementById("netHint");
+  async function refresh(){
+    let inv, al;
+    try{
+      inv = await (await fetch(location.origin+"/api/inventory")).json();
+      al  = await (await fetch(location.origin+"/api/alerts")).json();
+    }catch{ return; }                       // backend momentarily unreachable — keep last view
+    const devices = Array.isArray(inv && inv.devices) ? inv.devices : [];
+    const rogue   = Array.isArray(al && al.alerts)   ? al.alerts    : [];
+    // Inventory is opt-in (WAVR_NET_INVENTORY=1); an empty list means it isn't collecting.
+    hint.hidden = devices.length > 0;
+    devList.textContent = "";
+    devices.forEach(d => {
+      const row = document.createElement("div"); row.className = "dev-row";
+      const left = document.createElement("span");
+      const main = document.createElement("span");
+      main.textContent = (d.vendor || "desconhecido") + " · " + (d.device_type || "?");
+      const meta = document.createElement("span"); meta.className = "dev-meta";
+      meta.textContent = " · " + (d.ip || "sem ip") + " · ";
+      const mac = document.createElement("span"); mac.className = "mac";
+      mac.textContent = maskMac(d.mac);      // textContent only — never innerHTML with device data
+      left.appendChild(main); left.appendChild(meta); left.appendChild(mac);
+      const tag = document.createElement("span");
+      tag.className = "tag " + (d.known ? "known" : "unknown");
+      tag.textContent = d.known ? "conhecido" : "desconhecido";
+      row.appendChild(left); row.appendChild(tag);
+      devList.appendChild(row);
+    });
+    // Rogue alerts newest first (service returns newest last; ISO ts sorts lexicographically).
+    rogue.sort((a,b) => String(b.ts||"").localeCompare(String(a.ts||"")));
+    alertList.textContent = "";
+    if(!rogue.length){
+      const e = document.createElement("div"); e.className = "net-hint";
+      e.textContent = "nenhum dispositivo desconhecido recente";
+      alertList.appendChild(e);
+    } else rogue.forEach(a => {
+      const row = document.createElement("div"); row.className = "alert-row";
+      const at = document.createElement("span"); at.className = "at";
+      const when = (typeof a.ts==="string" && a.ts.length>=19) ? a.ts.slice(11,19) : (a.ts || "");
+      at.textContent = "novo dispositivo" + (when ? " " + when : "");
+      const meta = document.createElement("span"); meta.className = "ameta";
+      meta.textContent = [a.vendor||"desconhecido", a.device_type||"?",
+                          a.ip||"sem ip", maskMac(a.mac), a.hostname||""]
+                          .filter(Boolean).join(" · ");
+      row.appendChild(at); row.appendChild(meta);
+      alertList.appendChild(row);
+    });
+  }
+  refresh(); setInterval(refresh, 15000);
+}
+renderNetwork();
+
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
 const POSTURE_LABEL = {walking:"andando", standing:"em pé", sitting:"sentado", lying:"deitado"};
 let radarUpdate = null;
+
+// ---- Zones (client-side, persisted to localStorage; works in live AND demo) ----
+// A zone is a named rectangle in radar user-space (metres, same coords as rooms/targets).
+const ZONE_KEY = "wavr.zones.v1";
+const isZone = (z) => z && typeof z.name==="string" &&
+  ["x","y","w","h"].every(k => typeof z[k]==="number" && isFinite(z[k]));
+function loadZones(){
+  try{ const z = JSON.parse(localStorage.getItem(ZONE_KEY)); return Array.isArray(z) ? z.filter(isZone) : []; }
+  catch{ return []; }
+}
+function saveZones(zones){ try{ localStorage.setItem(ZONE_KEY, JSON.stringify(zones)); }catch{} }
+let zones = loadZones();
 
 function dot(room, t){
   const g = document.createElementNS(SVG_NS, "g");
@@ -356,6 +522,138 @@ async function renderRadar(){
     svg.appendChild(g);
     roomIdx[r.name] = {r, rect, layer, dots: new Map()};
   });
+  // ---- Zone editor overlay (draw/name/delete rectangles; label occupied zones) ----
+  // zoneLayer goes UNDER the room groups so live target dots always stay on top;
+  // drawLayer goes on top so the in-progress rectangle is visible while dragging.
+  const zoneLayer = document.createElementNS(SVG_NS, "g");
+  svg.insertBefore(zoneLayer, svg.firstChild);
+  const drawLayer = document.createElementNS(SVG_NS, "g");
+  svg.appendChild(drawLayer);
+  const liveTargets = {};                 // room -> [{x,y}] absolute, latest fusion frame
+  const zoneEditBtn = document.getElementById("zoneEdit");
+  const zoneHintEl  = document.getElementById("zoneHint");
+  const zonePanel   = document.getElementById("zonePanel");
+  const zoneListEl  = document.getElementById("zoneList");
+  const zoneNameForm  = document.getElementById("zoneNameForm");
+  const zoneNameInput = document.getElementById("zoneNameInput");
+  let editMode = false, pending = null, previewRect = null, dragStart = null;
+  const round2 = (n) => Math.round(n*100)/100;
+
+  function absTargetPoint(room, t){       // mirror placeDot's in-room clamp so zone hit-test matches the dot
+    const r = 0.12;
+    let x = t.x!=null ? room.x + t.x : room.x + room.w/2;
+    let y = t.y!=null ? room.y + t.y : room.y + room.h/2;
+    x = Math.min(Math.max(x, room.x + r), room.x + room.w - r);
+    y = Math.min(Math.max(y, room.y + r), room.y + room.h - r);
+    return {x, y};
+  }
+  function zoneOccupied(z){
+    for(const room in liveTargets)
+      for(const p of liveTargets[room])
+        if(p.x>=z.x && p.x<=z.x+z.w && p.y>=z.y && p.y<=z.y+z.h) return true;
+    return false;
+  }
+  function drawZones(){
+    zoneLayer.textContent = "";
+    zones.forEach(z => {
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("class", "radar-zone" + (zoneOccupied(z) ? " occ" : ""));
+      rect.setAttribute("x", z.x); rect.setAttribute("y", z.y);
+      rect.setAttribute("width", z.w); rect.setAttribute("height", z.h);
+      const label = document.createElementNS(SVG_NS, "text");
+      label.setAttribute("class", "radar-zonelabel");
+      label.setAttribute("x", z.x + 0.12); label.setAttribute("y", z.y + 0.3);
+      label.textContent = z.name;         // textContent — no markup injection from a zone name
+      zoneLayer.appendChild(rect); zoneLayer.appendChild(label);
+    });
+  }
+  function renderZoneList(){
+    zonePanel.hidden = false;
+    zoneListEl.textContent = "";
+    if(!zones.length){
+      const e = document.createElement("div"); e.className = "zone-empty";
+      e.textContent = editMode ? "arraste sobre o radar para criar uma zona"
+                               : "nenhuma zona — clique em “Editar zonas” para criar";
+      zoneListEl.appendChild(e); return;
+    }
+    zones.forEach((z, i) => {
+      const item = document.createElement("div"); item.className = "zone-item";
+      const info = document.createElement("span"); info.className = "zi";
+      const name = document.createElement("span"); name.textContent = z.name;
+      const occ = zoneOccupied(z);
+      const status = document.createElement("span");
+      status.className = occ ? "zocc" : "zempty";
+      status.textContent = occ ? "• ocupada" : "vazia";
+      info.appendChild(name); info.appendChild(status);
+      item.appendChild(info);
+      if(editMode){
+        const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
+        rm.textContent = "Remover";
+        rm.onclick = () => { zones.splice(i,1); saveZones(zones); refreshZones(); };
+        item.appendChild(rm);
+      }
+      zoneListEl.appendChild(item);
+    });
+  }
+  function refreshZones(){ drawZones(); renderZoneList(); }
+
+  function svgPoint(evt){                  // client px -> radar user-space (metres)
+    const ctm = svg.getScreenCTM(); if(!ctm) return null;
+    const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
+    const p = pt.matrixTransform(ctm.inverse());
+    return {x: p.x, y: p.y};
+  }
+  function updatePreview(a, b){
+    if(!previewRect) return;
+    previewRect.setAttribute("x", Math.min(a.x,b.x)); previewRect.setAttribute("y", Math.min(a.y,b.y));
+    previewRect.setAttribute("width", Math.abs(b.x-a.x)); previewRect.setAttribute("height", Math.abs(b.y-a.y));
+  }
+  function clearPreview(){ if(previewRect){ previewRect.remove(); previewRect = null; } }
+  function cancelPending(){ pending = null; clearPreview(); zoneNameForm.hidden = true; }
+
+  svg.addEventListener("pointerdown", (evt) => {
+    if(!editMode) return;
+    const p = svgPoint(evt); if(!p) return;
+    dragStart = p; clearPreview();
+    previewRect = document.createElementNS(SVG_NS, "rect");
+    previewRect.setAttribute("class", "radar-draw");
+    drawLayer.appendChild(previewRect); updatePreview(p, p);
+    try{ svg.setPointerCapture(evt.pointerId); }catch{}
+    evt.preventDefault();
+  });
+  svg.addEventListener("pointermove", (evt) => {
+    if(!editMode || !dragStart) return;
+    const p = svgPoint(evt); if(p) updatePreview(dragStart, p);
+  });
+  svg.addEventListener("pointerup", (evt) => {
+    if(!editMode || !dragStart) return;
+    const s = dragStart, p = svgPoint(evt); dragStart = null;
+    try{ svg.releasePointerCapture(evt.pointerId); }catch{}
+    if(!p){ clearPreview(); return; }
+    const x = Math.min(s.x,p.x), y = Math.min(s.y,p.y), w = Math.abs(p.x-s.x), h = Math.abs(p.y-s.y);
+    if(w < 0.3 || h < 0.3){ clearPreview(); return; }     // ignore stray clicks / tiny drags
+    pending = {x: round2(x), y: round2(y), w: round2(w), h: round2(h)};
+    updatePreview(s, p);                                   // keep the preview while naming
+    zoneNameForm.hidden = false; zoneNameInput.value = ""; zoneNameInput.focus();
+  });
+  zoneNameForm.onsubmit = (e) => {
+    e.preventDefault(); if(!pending) return;
+    const name = ((zoneNameInput.value || "").trim() || ("zona " + (zones.length+1))).slice(0, 40);
+    zones.push({id: Date.now(), name, x: pending.x, y: pending.y, w: pending.w, h: pending.h});
+    cancelPending(); saveZones(zones); refreshZones();
+  };
+  document.getElementById("zoneCancel").onclick = cancelPending;
+  zoneEditBtn.onclick = () => {
+    editMode = !editMode;
+    zoneEditBtn.classList.toggle("on", editMode);
+    zoneEditBtn.textContent = editMode ? "Concluir edição" : "Editar zonas";
+    zoneHintEl.hidden = !editMode;
+    svg.classList.toggle("editing", editMode);
+    if(!editMode) cancelPending();
+    renderZoneList();
+  };
+  refreshZones();
+
   radarUpdate = (rs)=>{
     const e = roomIdx[rs.room]; if(!e) return;
     e.rect.classList.toggle("occ", !!rs.occupied);
@@ -372,6 +670,9 @@ async function renderRadar(){
     [...e.dots.keys()].forEach(k=>{
       if(!seen.has(k)){ e.dots.get(k).remove(); e.dots.delete(k); }
     });
+    // Feed absolute target positions to the zone hit-test, then re-highlight zones.
+    liveTargets[rs.room] = (rs.targets||[]).map(t => absTargetPoint(e.r, t));
+    refreshZones();
   };
 }
 renderRadar();
@@ -396,8 +697,28 @@ function upsert(rs){
   pill.textContent = rs.occupied ? "ocupado" : "vazio";
   pill.className = "pill " + (rs.occupied ? "on" : "off");
   c.querySelector(".bar>i").style.transform = `scaleX(${rs.confidence})`;
-  c.querySelector(".srcs").innerHTML = rs.sources.map(s =>
-    `<div class="src"><span class="m">${s.modality}</span><span>${s.presence?"presente":"vazio"} · ${Math.round(s.confidence*100)}%</span></div>`).join("");
+  // Per-modality "why" rows. Built with textContent (not innerHTML) so source data
+  // can never inject markup, and so a dying source (stale/dead) is visibly flagged.
+  const srcs = c.querySelector(".srcs");
+  srcs.textContent = "";
+  rs.sources.forEach(s => {
+    const unhealthy = s.health && s.health !== "fresh";
+    const row = document.createElement("div");
+    row.className = "src" + (unhealthy ? " " + s.health : "");
+    const m = document.createElement("span"); m.className = "m";
+    if(unhealthy){                      // muted dot marks a fading/dead source
+      const d = document.createElement("i"); d.className = "h " + s.health;
+      d.title = s.health === "dead" ? "sem sinal" : "sinal envelhecendo";
+      m.appendChild(d);
+    }
+    m.appendChild(document.createTextNode(s.modality));
+    const val = document.createElement("span");
+    let txt = (s.presence ? "presente" : "vazio") + " · " + Math.round(s.confidence * 100) + "%";
+    if(unhealthy && s.age_s != null) txt += " · " + s.age_s + "s";   // age since last reading
+    val.textContent = txt;
+    row.appendChild(m); row.appendChild(val);
+    srcs.appendChild(row);
+  });
   const v = rs.vitals || {};
   const vit = [];
   if(v.breathing_bpm!=null) vit.push(`resp ${v.breathing_bpm} rpm`);
