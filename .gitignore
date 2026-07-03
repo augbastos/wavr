@@ -12,3 +12,11 @@ node_modules/
 
 # graphify generated index (do not commit)
 graphify-out/
+
+# SQLite runtime DB (never commit)
+wavr.db
+wavr.db-shm
+wavr.db-wal
+backend/wavr.db
+backend/wavr.db-shm
+backend/wavr.db-wal
