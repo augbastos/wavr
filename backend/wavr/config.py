@@ -71,6 +71,13 @@ class Config:
     # user's OWN ntfy topic on derived edge events only (house arrived/left,
     # rogue-device). Empty => disabled (default OFF).
     ntfy_url: str
+    # Internet/gateway outage monitor (opt-in, LOCAL) — default OFF. Empty
+    # `internet_check_host` => auto-guess the LAN gateway (never a fixed cloud
+    # endpoint by default, so zero-egress-by-default holds even when this is on).
+    internet_monitor: bool
+    internet_check_host: str
+    internet_check_interval: float
+    internet_fail_threshold: int
 
 
 def load_config() -> Config:
@@ -139,4 +146,10 @@ def load_config() -> Config:
         # ntfy (opt-in): empty => disabled. A full topic URL on the user's own
         # self-hosted ntfy server, e.g. http://nas.local:8080/wavr.
         ntfy_url=os.getenv("WAVR_NTFY_URL", ""),
+        # Internet/gateway monitor (opt-in): default OFF. Empty check host =>
+        # InternetMonitor auto-guesses the LAN gateway at construction time.
+        internet_monitor=os.getenv("WAVR_INTERNET_MONITOR", "").lower() in ("1", "true", "yes"),
+        internet_check_host=os.getenv("WAVR_INTERNET_CHECK_HOST", ""),
+        internet_check_interval=float(os.getenv("WAVR_INTERNET_CHECK_INTERVAL", "15.0")),
+        internet_fail_threshold=int(os.getenv("WAVR_INTERNET_FAIL_THRESHOLD", "3")),
     )

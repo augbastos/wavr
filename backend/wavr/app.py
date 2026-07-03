@@ -33,6 +33,8 @@ from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_gemini_generate
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
+from wavr.device_meta import DeviceMeta
+from wavr.internet_monitor import InternetMonitor
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
@@ -107,7 +109,8 @@ def _camera_factory(cam: dict, cfg):
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
-               rules_publish=None, narrator=None, notify=None) -> FastAPI:
+               rules_publish=None, narrator=None, notify=None, device_meta=None,
+               internet_monitor=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -146,15 +149,36 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     if _narrator is None and cfg.narrate_enabled and cfg.gemini_api_key:
         _narrator = Narrator(make_gemini_generate(cfg.gemini_api_key, cfg.gemini_model))
 
+    # Device metadata (Feature A): persisted per-MAC name + first/last-seen,
+    # always built (like CameraStore) -- not itself opt-in, since naming is not
+    # sensitive and the store is inert until something calls seen()/set_name().
+    _owns_device_meta = device_meta is None
+    _device_meta = device_meta or DeviceMeta(cfg.db_path)
+
     # Wavr Net: defensive LAN inventory + rogue-device alerts (own-network only,
     # loopback-read). Runs its own periodic scan loop; port-awareness stays off
     # unless WAVR_NET_PORTSCAN (ADR-0004). `on_rogue` fires the opt-in ntfy alert on
     # the SAME edge-triggered rogue sighting the alert log records -- vendor only,
-    # never the MAC/IP.
+    # never the MAC/IP. `device_meta` folds every scanned MAC into the persisted
+    # first-seen/last-seen store (Feature A).
     _inventory = NetworkInventoryService(
         cfg.net_known_macs, interval=cfg.net_scan_interval,
         on_rogue=(lambda a: _notify(f"Wavr: dispositivo desconhecido na rede ({a.vendor})"))
-        if _notify else None)
+        if _notify else None,
+        device_meta=_device_meta)
+
+    # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
+    # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
+    # default -- no monitor, no background task, no pings. Shares the same
+    # opt-in `notify` as AwayMonitor/rogue-device alerts (ntfy, derived-only).
+    _internet = internet_monitor
+    if _internet is None and cfg.internet_monitor:
+        _internet = InternetMonitor(
+            host=cfg.internet_check_host or None,
+            interval=cfg.internet_check_interval,
+            fail_threshold=cfg.internet_fail_threshold,
+            notify=_notify,
+        )
 
     # Multi-device (ADR-0006): device/token store + pairing. ONLY built when
     # WAVR_MULTIDEVICE is on — otherwise it stays None so we don't open a third
@@ -189,6 +213,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         await manager.start()
         if cfg.net_inventory:
             await _inventory.start()   # opt-in (WAVR_NET_INVENTORY): real LAN scan loop
+        if _internet:
+            await _internet.start()    # opt-in (WAVR_INTERNET_MONITOR or injected): gateway ping loop
         if cfg.ha_discovery and _rules_publish:
             from wavr.ha_discovery import publish_ha_discovery
             publish_ha_discovery(
@@ -209,17 +235,21 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     with suppress(asyncio.CancelledError, Exception):
                         await t
             await _inventory.stop()
+            if _internet:
+                await _internet.stop()
             await manager.stop()
             if _owns_cameras:
                 with suppress(Exception):
                     _cameras.close()
+            if _owns_device_meta:
+                with suppress(Exception):
+                    _device_meta.close()
             if _devices is not None:
                 with suppress(Exception):
                     _devices.close()
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
 
-    app.include_router(build_inventory_router(_inventory))
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
         # revoke devices; a 'user' is read-only (audit C1). Applied via include_router
@@ -306,6 +336,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if not can_change_state(role):
             raise HTTPException(status_code=403, detail="central role required")
 
+    # PUT /api/inventory/name is state-changing (Feature A) -- gated by the same
+    # require_local rule as the camera/system/pair-code routes, so registration
+    # happens here (after require_local is defined) rather than up near the
+    # other include_router calls.
+    app.include_router(build_inventory_router(
+        _inventory, device_meta=_device_meta, name_deps=[Depends(require_local)]))
+
     @app.get("/api/history")
     async def history(limit: int = 200):
         # Clamp: a negative limit means "no limit" to SQLite's `LIMIT ?` (full-table
@@ -371,11 +408,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # only enabled when WAVR_MULTIDEVICE is on).
                 "tls": cfg.multidevice,
                 "ntfy": bool(cfg.ntfy_url),
+                "internet_monitor": cfg.internet_monitor,
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
                 "rooms": len(room_names(_house)),
             },
+            # Feature B: current internet/gateway reachability. Null/null when
+            # the monitor is off (or hasn't completed its first check yet).
+            "internet": _internet.status() if _internet else {"ok": None, "since": None},
         }
 
     @app.get("/api/system")

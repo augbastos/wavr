@@ -204,7 +204,7 @@ def test_status_shape_and_no_secrets():
         r = client.get("/api/status")
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"version", "sources", "features", "house"}
+        assert set(body) == {"version", "sources", "features", "house", "internet"}
         assert body["version"] == __version__
 
         assert isinstance(body["sources"], list) and body["sources"]
@@ -214,7 +214,7 @@ def test_status_shape_and_no_secrets():
 
         expected_features = {
             "multidevice", "mqtt", "ha_discovery", "mcp_control",
-            "narrate", "net_inventory", "tls", "ntfy",
+            "narrate", "net_inventory", "tls", "ntfy", "internet_monitor",
         }
         assert set(body["features"]) == expected_features
         assert all(isinstance(v, bool) for v in body["features"].values())
@@ -222,6 +222,9 @@ def test_status_shape_and_no_secrets():
         assert set(body["house"]) == {"floors", "rooms"}
         assert body["house"]["floors"] >= 1
         assert body["house"]["rooms"] >= 1
+
+        # internet monitor off by default -> null/null (Feature B contract)
+        assert body["internet"] == {"ok": None, "since": None}
 
         # NO SECRETS: grep the raw JSON text for anything token/credential/MAC/rtsp shaped.
         raw = json.dumps(body).lower()
@@ -232,7 +235,7 @@ def test_status_shape_and_no_secrets():
 def test_status_features_reflect_config_defaults(monkeypatch):
     for var in ("WAVR_MULTIDEVICE", "WAVR_MQTT_ENABLED", "WAVR_HA_DISCOVERY",
                 "WAVR_MCP_CONTROL", "WAVR_NARRATE_ENABLED", "WAVR_NET_INVENTORY",
-                "WAVR_NTFY_URL"):
+                "WAVR_NTFY_URL", "WAVR_INTERNET_MONITOR"):
         monkeypatch.delenv(var, raising=False)
     with build_client() as client:
         r = client.get("/api/status")
@@ -240,7 +243,7 @@ def test_status_features_reflect_config_defaults(monkeypatch):
         assert features == {
             "multidevice": False, "mqtt": False, "ha_discovery": False,
             "mcp_control": False, "narrate": False, "net_inventory": False,
-            "tls": False, "ntfy": False,
+            "tls": False, "ntfy": False, "internet_monitor": False,
         }
 
 

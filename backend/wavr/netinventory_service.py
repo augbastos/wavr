@@ -68,19 +68,26 @@ class NetworkInventoryService:
     rogue MAC is recorded (once per MAC, same rule as the alert log) -- used
     by the opt-in ntfy notifier. Exceptions from it are caught and logged,
     never propagated (a broken callback must not break scanning).
+
+    `device_meta` is an OPTIONAL wavr.device_meta.DeviceMeta -- when given,
+    every device in a scan calls `device_meta.seen(mac)` (Feature A: persisted
+    first-seen/last-seen). A persistence failure (e.g. disk issue) is caught
+    and logged, same tolerance as `on_rogue` -- it must never break scanning.
     """
 
     def __init__(self, known_macs=None,
                  scan: Callable[[], Awaitable[str]] | None = None,
                  interval: float = 30.0, max_alerts: int = 100,
                  port_scan: bool | None = None,
-                 on_rogue: Callable[[RogueAlert], None] | None = None):
+                 on_rogue: Callable[[RogueAlert], None] | None = None,
+                 device_meta=None):
         self._known = _norm_macs(known_macs)
         self._scan = scan
         self._interval = interval
         self._max_alerts = max_alerts
         self._port_scan = port_scan
         self._on_rogue = on_rogue
+        self._device_meta = device_meta
         self._inventory: list[Device] = []
         self._alerts: list[RogueAlert] = []
         self._alerted: set[str] = set()   # MACs already alerted (edge-triggered)
@@ -99,7 +106,20 @@ class NetworkInventoryService:
             devices = await annotate_risks(devices)   # opt-in risk notes only
         self._inventory = devices
         self._record_rogues(devices)
+        self._record_seen(devices)
         return devices
+
+    def _record_seen(self, devices) -> None:
+        # Feature A: persist first-seen/last-seen for every observed MAC, not
+        # just rogue ones. Tolerant, same rule as the on_rogue callback -- a
+        # persistence failure must never break scanning.
+        if not self._device_meta:
+            return
+        for d in devices:
+            try:
+                self._device_meta.seen(d.mac)
+            except Exception:
+                _LOG.warning("device_meta.seen failed for %s", d.mac, exc_info=True)
 
     def _record_rogues(self, devices) -> None:
         ts = datetime.now(timezone.utc).isoformat()
