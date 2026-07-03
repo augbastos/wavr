@@ -1003,6 +1003,17 @@ async function renderRadar(){
     rim.position.set(-6, 4, -8);
     scene.add(rim);
     const roomGroup = new THREE.Group(); scene.add(roomGroup);
+    // Ground + grid just under floor level, for depth/scale reference while orbiting. Built
+    // once here (ensure3D itself only ever runs once — see the `if(three3d) return` guard
+    // above) and added directly to scene, not roomGroup, so the per-floor clear in render3D()
+    // never touches them and they don't need to be recreated (and leaked) on every call.
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400),
+      new THREE.MeshLambertMaterial({ color: 0x11161b }));
+    ground.rotation.x = -Math.PI/2; ground.position.y = -0.02;
+    scene.add(ground);
+    const grid = new THREE.GridHelper(400, 200, 0x2a323b, 0x1c2229);
+    grid.position.y = -0.01;
+    scene.add(grid);
     const ro = new ResizeObserver(() => resize3D());
     ro.observe(canvas);
     three3d = { THREE, renderer, scene, camera, controls, roomGroup, raf: null, ro };
@@ -1052,7 +1063,16 @@ async function renderRadar(){
   async function render3D(){
     const { THREE } = await ensure3D();
     const { roomGroup } = three3d;
-    while(roomGroup.children.length) roomGroup.remove(roomGroup.children[0]);   // clear previous floor
+    // Clear the previous floor's meshes AND free their GPU buffers — remove() alone only
+    // detaches them from the scene graph, it never calls dispose(), so repeated floor
+    // switches / 3D re-entries leaked geometry+material every time without this.
+    while(roomGroup.children.length){
+      const child = roomGroup.children[0];
+      roomGroup.remove(child);
+      child.geometry?.dispose();
+      if(Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+      else child.material?.dispose();
+    }
 
     const f = floorFor(currentFloor);
     if(!f){ resize3D(); if(viewMode==="3d") startLoop3D(); return; }
@@ -1112,14 +1132,8 @@ async function renderRadar(){
       roomGroup.add(marker);
     });
 
-    // Ground + grid just under floor level, for depth/scale reference while orbiting.
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400),
-      new THREE.MeshLambertMaterial({ color: 0x11161b }));
-    ground.rotation.x = -Math.PI/2; ground.position.y = -0.02;
-    roomGroup.add(ground);
-    const grid = new THREE.GridHelper(400, 200, 0x2a323b, 0x1c2229);
-    grid.position.y = -0.01;
-    roomGroup.add(grid);
+    // Ground + grid are built once in ensure3D() and added directly to the scene (not
+    // roomGroup), so there's nothing to (re)create here on every floor rebuild.
 
     // Auto-frame this floor's bbox with a steep ~55-60deg down-angle (dollhouse view) —
     // at a shallow angle the transparent wall panels stack up and grey out the interior.
@@ -1494,7 +1508,10 @@ async function renderRadar(){
     document.getElementById("radar3d").toggleAttribute("hidden", mode !== "3d");
     const zb = document.getElementById("zoneBar"), zp = document.getElementById("zonePanel"),
           he = document.getElementById("houseEditor");
-    if(zb) zb.hidden = (mode!=="top");
+    // Companion (LAN viewer) never gets zone-edit back, even after a 3D->top toggle — mirrors
+    // the init-time "viewer: zones view-only" rule (MODE==="companion" hides zoneBar once, up
+    // front); without the MODE check here this unconditional toggle would silently re-show it.
+    if(zb) zb.hidden = (mode!=="top") || (MODE==="companion");
     if(zp) zp.hidden = (mode!=="top") || !(zones.length || editMode);
     if(he && MODE==="live") he.hidden = (mode!=="top");
     // Only stop here — starting is owned by render3D() itself (see its comment): on the
