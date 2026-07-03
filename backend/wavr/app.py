@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
+from wavr import __version__
 from wavr.config import load_config
 from wavr.housemap import load_house_map, room_names, save_house_map, HouseMapError
 from wavr.storage import Storage
@@ -28,6 +29,7 @@ from wavr.camera_store import CameraStore
 from wavr.rules import RulesEngine
 from wavr.away import AwayMonitor
 from wavr.mqtt_publisher import make_publisher
+from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_gemini_generate
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
@@ -105,7 +107,7 @@ def _camera_factory(cam: dict, cfg):
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
-               rules_publish=None, narrator=None) -> FastAPI:
+               rules_publish=None, narrator=None, notify=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -113,13 +115,27 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     latest: dict[str, dict] = {}  # room -> last RoomState dict (Camada 4 seam)
     _house = load_house_map(cfg.house_map)
 
+    # Notifier: opt-in via injected `notify` (tests) or WAVR_NTFY_URL (self-hosted
+    # ntfy, stdlib POST, lazily built). Off by default -- no notifier, no HTTP calls.
+    # Sends ONLY derived edge events (house arrived/left, rogue-device) -- never
+    # targets/vitals/frames/MACs.
+    _notify = notify
+    if _notify is None and cfg.ntfy_url:
+        _notify = make_notifier(cfg.ntfy_url)
+
     # Rules/MQTT engine: opt-in via injected `rules_publish` (tests) or WAVR_MQTT_ENABLED
     # (real paho publisher, lazily connected). Off by default -- no publisher, no engine.
     _rules_publish = rules_publish
     if _rules_publish is None and cfg.mqtt_enabled:
         _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port)
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
-    _away = AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace) if _rules_publish else None
+    # AwayMonitor runs whenever MQTT OR ntfy is opt-in'd -- both consumers need the
+    # SAME house-level arrived/left edge detection. `_rules_publish` stays optional
+    # (AwayMonitor no-ops its own `publish` when None) so an ntfy-only setup gets
+    # notified without also needing WAVR_MQTT_ENABLED.
+    _away = (AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace,
+                         notify=_notify)
+             if (_rules_publish or _notify) else None)
 
     # Narrator: opt-in via injected `narrator` (tests) or BOTH WAVR_NARRATE_ENABLED and
     # GEMINI_API_KEY (real Gemini generator, lazily imported). Off by default -- no
@@ -132,8 +148,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     # Wavr Net: defensive LAN inventory + rogue-device alerts (own-network only,
     # loopback-read). Runs its own periodic scan loop; port-awareness stays off
-    # unless WAVR_NET_PORTSCAN (ADR-0004).
-    _inventory = NetworkInventoryService(cfg.net_known_macs, interval=cfg.net_scan_interval)
+    # unless WAVR_NET_PORTSCAN (ADR-0004). `on_rogue` fires the opt-in ntfy alert on
+    # the SAME edge-triggered rogue sighting the alert log records -- vendor only,
+    # never the MAC/IP.
+    _inventory = NetworkInventoryService(
+        cfg.net_known_macs, interval=cfg.net_scan_interval,
+        on_rogue=(lambda a: _notify(f"Wavr: dispositivo desconhecido na rede ({a.vendor})"))
+        if _notify else None)
 
     # Multi-device (ADR-0006): device/token store + pairing. ONLY built when
     # WAVR_MULTIDEVICE is on — otherwise it stays None so we don't open a third
@@ -312,6 +333,39 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             logging.exception("narrate failed")
             raise HTTPException(status_code=502, detail="narration backend error")
         return {"narration": text}
+
+    @app.get("/healthz")
+    async def healthz():
+        return {"ok": True, "version": __version__}
+
+    @app.get("/api/status")
+    async def status():
+        # READ-ONLY, NO SECRETS: sources are name+active only (no rtsp/mac), features
+        # are opt-in booleans only (no urls/tokens), house is a bare count. Gated by
+        # the same loopback_or_authed middleware as every other GET route.
+        return {
+            "version": __version__,
+            "sources": [
+                {"name": s["name"], "active": s["active"]}
+                for s in manager.status()["sources"]
+            ],
+            "features": {
+                "multidevice": cfg.multidevice,
+                "mqtt": cfg.mqtt_enabled,
+                "ha_discovery": cfg.ha_discovery,
+                "mcp_control": cfg.mcp_control,
+                "narrate": cfg.narrate_enabled,
+                "net_inventory": cfg.net_inventory,
+                # TLS is coupled 1:1 to multidevice mode (see serve.py: HTTPS/WSS is
+                # only enabled when WAVR_MULTIDEVICE is on).
+                "tls": cfg.multidevice,
+                "ntfy": bool(cfg.ntfy_url),
+            },
+            "house": {
+                "floors": len(_house.get("floors", [])),
+                "rooms": len(room_names(_house)),
+            },
+        }
 
     @app.get("/api/system")
     async def system():

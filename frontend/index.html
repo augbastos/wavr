@@ -146,6 +146,20 @@
   .alert-row .at{color:var(--danger);font-weight:600;}
   .alert-row .ameta{color:var(--muted);font-variant-numeric:tabular-nums;
                     display:block;margin-top:2px;overflow-wrap:anywhere;}
+  /* Status panel (live-only, read-only): GET /api/status — version, sources, feature chips, house counts */
+  .statuspanel:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .statuspanel h3{margin:4px 0 10px;}
+  .status-version{color:var(--muted);font-size:.82rem;margin-bottom:10px;}
+  .status-cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:10px;}
+  .status-col h4{margin:0 0 6px;font-size:.72rem;color:var(--muted);font-weight:600;
+                 text-transform:uppercase;letter-spacing:.05em;}
+  .status-src-row{display:flex;align-items:center;gap:8px;font-size:.82rem;padding:4px 0;}
+  .status-src-row .h{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);}
+  .status-src-row .h.active{background:var(--accent);}
+  .status-chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .status-chip{font-size:.72rem;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);}
+  .status-chip.on{color:var(--accent);border-color:rgba(61,181,74,.4);}
+  .status-house{font-size:.82rem;color:var(--muted);}
   /* per-source freshness (health/age_s) in the room-card "why" rows */
   .src.stale{opacity:.62;}
   .src.dead{opacity:.5;}
@@ -257,6 +271,21 @@
   <button id="sysToggle" class="ctl"></button>
   <div id="srcToggles" class="src-toggles"></div>
 </div>
+<div id="statusPanel" class="statuspanel" hidden aria-labelledby="status-h">
+  <h3 id="status-h">Status</h3>
+  <div id="statusVersion" class="status-version"></div>
+  <div class="status-cols">
+    <div class="status-col">
+      <h4>Fontes</h4>
+      <div id="statusSources"></div>
+    </div>
+    <div class="status-col">
+      <h4>Recursos</h4>
+      <div id="statusFeatures" class="status-chips"></div>
+    </div>
+  </div>
+  <div id="statusHouse" class="status-house"></div>
+</div>
 <div id="cameras" class="cams" hidden>
   <h3 id="cams-h">Câmeras</h3>
   <form id="camForm" class="cam-form" aria-labelledby="cams-h">
@@ -340,6 +369,9 @@
     <button type="button" id="hedRedo" class="ctl small" disabled>↷ Refazer</button>
     <button type="button" id="hedAddFloor" class="ctl small">+ Andar</button>
     <button type="button" id="hedSave" class="ctl small primary">Salvar</button>
+    <button type="button" id="hedExport" class="ctl small">Baixar planta</button>
+    <button type="button" id="hedImportBtn" class="ctl small">Importar planta</button>
+    <input type="file" id="hedImportFile" accept="application/json,.json" hidden>
     <span id="hedDirty" class="hed-dirty" hidden aria-live="polite">não salvo</span>
   </div>
   <p class="hed-hint">Selecionar: clique num cômodo/parede/escada para marcar e apagar · + Cômodo/+ Parede: arraste no radar · + Escada: clique no radar</p>
@@ -536,6 +568,50 @@ function updateHouse(rs){
   houseEl.className = "house " + (home ? "home" : "away");
 }
 
+// ---- Status panel (Plano A / live only, read-only): GET /api/status ----
+// version, per-source active/inactive, feature on/off chips, house floor/room counts.
+// Read-only mirror of backend state — built with createElement/textContent only (no
+// innerHTML with server data), same XSS discipline as the Wavr Net panel above.
+let refreshStatus = null;
+const STATUS_FEATURE_LABEL = {
+  multidevice:"multi-dispositivo", mqtt:"MQTT", ha_discovery:"Home Assistant",
+  mcp_control:"controle MCP", narrate:"narração", net_inventory:"inventário de rede",
+  tls:"TLS", ntfy:"notificações",
+};
+function renderStatus(){
+  if(MODE!=="live") return;                 // live-only; never in Plano B (demo) or companion
+  document.getElementById("statusPanel").hidden = false;
+  const versionEl  = document.getElementById("statusVersion");
+  const sourcesEl  = document.getElementById("statusSources");
+  const featuresEl = document.getElementById("statusFeatures");
+  const houseEl    = document.getElementById("statusHouse");
+  async function refresh(){
+    let s; try{ s = await (await fetch(location.origin+"/api/status")).json(); }catch{ return; }
+    versionEl.textContent = "versão " + (s.version ?? "?");
+    sourcesEl.textContent = "";
+    (Array.isArray(s.sources) ? s.sources : []).forEach(src=>{
+      const row = document.createElement("div"); row.className = "status-src-row";
+      const dot = document.createElement("i"); dot.className = "h" + (src.active ? " active" : "");
+      const name = document.createElement("span"); name.textContent = src.name;
+      row.appendChild(dot); row.appendChild(name);
+      sourcesEl.appendChild(row);
+    });
+    featuresEl.textContent = "";
+    const feats = s.features && typeof s.features==="object" ? s.features : {};
+    Object.keys(feats).forEach(k=>{
+      const chip = document.createElement("span");
+      chip.className = "status-chip" + (feats[k] ? " on" : "");
+      chip.textContent = (STATUS_FEATURE_LABEL[k] || k) + (feats[k] ? ": on" : ": off");
+      featuresEl.appendChild(chip);
+    });
+    const h = s.house && typeof s.house==="object" ? s.house : {};
+    houseEl.textContent = "casa: " + (h.floors ?? "?") + " andar(es) · " + (h.rooms ?? "?") + " cômodo(s)";
+  }
+  refreshStatus = refresh;
+  refresh();
+}
+renderStatus();
+
 // ---- Control plane (Plano A / live only): global on/off + per-source on/off ----
 async function renderControls(){
   if(MODE!=="live") return;               // the control plane is a backend feature
@@ -558,7 +634,9 @@ async function renderControls(){
       wrap.appendChild(b);
     });
   }
-  refresh(); setInterval(refresh, 3000);
+  // Status panel mirrors the same backend state — refresh it on the same cadence/trigger
+  // as this system panel (per the spec: "refresh it when the system panel refreshes").
+  refresh(); setInterval(()=>{ refresh(); refreshStatus?.(); }, 3000);
 }
 renderControls();
 
@@ -1020,6 +1098,14 @@ async function renderRadar(){
           rim.position.set(-6, 4, -8);
           scene.add(rim);
           const roomGroup = new THREE.Group(); scene.add(roomGroup);
+          // Live PEOPLE markers: own group (never touched by render3D()'s roomGroup clear), so
+          // per-frame live updates don't need to wait for/interact with floor-mesh rebuilds.
+          // Geometry + material are built ONCE here and reused by every marker on every frame
+          // (never disposed) — updatePeople3D() below only adds/removes Mesh instances that
+          // reference these same shared buffers, so there's nothing to leak.
+          const peopleGroup = new THREE.Group(); scene.add(peopleGroup);
+          const personGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.3, 12);
+          const personMat = new THREE.MeshStandardMaterial({ color: 0x3db54a });
           // Ground + grid just under floor level, for depth/scale reference while orbiting. Built
           // once here (this construction only ever runs once — see the promise-cache guard
           // above) and added directly to scene, not roomGroup, so the per-floor clear in render3D()
@@ -1033,7 +1119,8 @@ async function renderRadar(){
           scene.add(grid);
           const ro = new ResizeObserver(() => resize3D());
           ro.observe(canvas);
-          three3d = { THREE, renderer, scene, camera, controls, roomGroup, raf: null, ro };
+          three3d = { THREE, renderer, scene, camera, controls, roomGroup,
+                      peopleGroup, personGeo, personMat, raf: null, ro };
           resize3D();
           return three3d;
         } catch (err) {
@@ -1186,6 +1273,30 @@ async function renderRadar(){
       console.error("Wavr: 3D view unavailable, falling back to top-down view.", err);
       if(viewMode === "3d") setViewMode("top");   // re-shows the SVG and hides the 3D canvas
     }
+    updatePeople3D();
+  }
+
+  // ---- 3D people markers: live targets on the current floor's ground plane ----
+  // Reuses the SAME room-relative -> absolute-meters mapping as the 2D radar dots
+  // (liveTargets, fed by absTargetPoint() in the live-update path below — placeDot's
+  // clamp logic, mirrored). Maps room x/y (meters) -> world (x, z), person height y=0.9.
+  // No-ops until the user has entered 3D at least once (three3d built lazily by ensure3D()).
+  function updatePeople3D(){
+    if(!three3d) return;
+    const { THREE, peopleGroup, personGeo, personMat } = three3d;
+    // Clear last frame's markers. personGeo/personMat are shared + reused across every
+    // frame (created once in ensure3D(), never disposed) — only the Mesh wrapper objects
+    // are per-frame, so removing them from the group is all that's needed here.
+    while(peopleGroup.children.length) peopleGroup.remove(peopleGroup.children[0]);
+    const f = floorFor(currentFloor);
+    const roomNames = new Set((f && f.rooms || []).map(r => r.name));
+    roomNames.forEach(room => {
+      (liveTargets[room] || []).forEach(p => {
+        const m = new THREE.Mesh(personGeo, personMat);
+        m.position.set(p.x, 0.9, p.y);
+        peopleGroup.add(m);
+      });
+    });
   }
 
   async function renderCurrentView(){
@@ -1461,6 +1572,34 @@ async function renderRadar(){
     document.getElementById("hedSave").onclick = saveHouseDoc;
     document.getElementById("hedAddFloor").onclick = addHouseFloor;
     document.getElementById("hedDelete").onclick = deleteSelectedHouseEl;
+
+    // ---- Export / import the house map (client-side only; import re-uses the save path) ----
+    document.getElementById("hedExport").onclick = ()=>{
+      const blob = new Blob([JSON.stringify(HOUSE, null, 2)], {type: "application/json"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "wavr-house.json";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    };
+    const importFile = document.getElementById("hedImportFile");
+    document.getElementById("hedImportBtn").onclick = ()=> importFile.click();
+    importFile.onchange = async ()=>{
+      const file = importFile.files && importFile.files[0];
+      importFile.value = "";          // reset so importing the same filename again still fires onchange
+      if(!file) return;
+      let parsed;
+      try{ parsed = JSON.parse(await file.text()); }
+      catch{ alert("Falha ao importar: JSON inválido"); return; }
+      if(!parsed || !Array.isArray(parsed.floors) || !parsed.floors.length){
+        alert("Falha ao importar: planta inválida (faltam andares)"); return;
+      }
+      HOUSE = parsed;
+      SELECTED = null;
+      if(!floorFor(currentFloor)) currentFloor = HOUSE.floors[0].level;
+      await saveHouseDoc();           // existing save path: PUT /api/house; re-renders on ok, alerts on failure
+    };
+
     updateHedButtons();
 
     svg.addEventListener("pointerdown", (evt)=>{
@@ -1578,6 +1717,7 @@ async function renderRadar(){
     // Feed absolute target positions to the zone hit-test, then re-highlight zones.
     liveTargets[rs.room] = (rs.targets||[]).map(t => absTargetPoint(e.r, t));
     updateZoneOcc();   // per-frame: only re-highlight (no DOM rebuild); structure rebuilt on zone change
+    updatePeople3D();  // keep the 3D people markers in sync with the same live target data
   };
 }
 renderRadar();
