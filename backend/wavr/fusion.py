@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+import os
+from datetime import datetime, timezone
+
 from wavr.events import SensingEvent
 from wavr.roomstate import RoomState
 
 # Default trust weights per modality. Camera (video) is most precise; network
 # (device presence) is house-level and coarse. Tunable via config later.
-DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "network": 0.5, "sim": 0.6}
+# `ble` (Bluetooth presence) sits between wifi_csi and network: room-ish, coarser
+# than CSI but tighter than house-wide ARP.
+DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
+                   "network": 0.5, "sim": 0.6}
+
+# Freshness decay window (seconds). A source votes at full trust up to
+# FRESHNESS_S, then its trust decays linearly to zero at STALE_S — so a source
+# that stopped reporting gradually loses its vote instead of freezing the fused
+# confidence on a dead reading. Overridable via env.
+_DEFAULT_FRESHNESS_S = float(os.getenv("WAVR_SOURCE_FRESHNESS_S", "30"))
+_DEFAULT_STALE_S = float(os.getenv("WAVR_SOURCE_STALE_S", "90"))
+
+
+def _as_utc(value) -> datetime:
+    """Coerce an ISO-8601 string (or datetime) to an aware UTC datetime."""
+    dt = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 class FusionEngine:
@@ -13,11 +32,25 @@ class FusionEngine:
     `agreement` is the fraction of trusted mass saying "present" and `strength`
     is the best present evidence (weight × the source's own confidence). This stops
     a lone weak source (e.g. coarse network) from ever reporting 100%, and lets a
-    trusted source dominate when modalities disagree."""
+    trusted source dominate when modalities disagree.
 
-    def __init__(self, weights: dict | None = None, threshold: float = 0.5):
+    Each source's trust is additionally scaled by a freshness decay: full weight
+    while the reading is fresh, fading to zero once it is stale, so a source that
+    stopped reporting honestly loses its vote (and the fused confidence drops)
+    rather than freezing on its last reading."""
+
+    def __init__(self, weights: dict | None = None, threshold: float = 0.5,
+                 now_fn=None, freshness_s: float | None = None,
+                 stale_s: float | None = None):
         self._weights = weights if weights is not None else DEFAULT_WEIGHTS
         self._threshold = threshold
+        # Injectable clock returning an aware UTC "now". When None (default) each
+        # source is aged against the room's newest event, which keeps a live
+        # stream fully fresh and stays deterministic for fixed-timestamp tests.
+        # Pass now_fn=lambda: datetime.now(timezone.utc) for wall-clock aging.
+        self._now_fn = now_fn
+        self._freshness_s = _DEFAULT_FRESHNESS_S if freshness_s is None else freshness_s
+        self._stale_s = _DEFAULT_STALE_S if stale_s is None else stale_s
         self._latest: dict[str, dict[str, SensingEvent]] = {}  # room -> modality -> event
 
     def update(self, event: SensingEvent) -> RoomState:
@@ -30,21 +63,36 @@ class FusionEngine:
         last_ts = max(e.ts for e in self._latest[room].values())
         return self._fuse(room, last_ts)
 
+    def _freshness(self, age_s: float) -> tuple[float, str]:
+        """Map a source's age to (trust multiplier 0..1, health label).
+        fresh → full weight; stale → linearly decayed; dead → zero weight."""
+        if age_s <= self._freshness_s:
+            return 1.0, "fresh"
+        if age_s >= self._stale_s or self._stale_s <= self._freshness_s:
+            return 0.0, "dead"
+        return (self._stale_s - age_s) / (self._stale_s - self._freshness_s), "stale"
+
     def _fuse(self, room: str, ts: str) -> RoomState:
         events = self._latest[room]
+        # Reference "now" for ageing: injected clock, else the room's newest event
+        # (identity for fresh events → existing fusion math is unchanged).
+        ref = _as_utc(self._now_fn()) if self._now_fn is not None else _as_utc(ts)
         num = 0.0        # weighted mass saying "present"
         den = 0.0        # total weighted mass
         strength = 0.0   # best present evidence (weight × confidence)
         sources = []
         vitals: dict = {}
         for modality, e in events.items():
-            mass = self._weights.get(modality, 0.5) * e.confidence
+            age_s = max(0.0, (ref - _as_utc(e.ts)).total_seconds())
+            decay, health = self._freshness(age_s)
+            mass = self._weights.get(modality, 0.5) * e.confidence * decay
             den += mass
             if e.presence:
                 num += mass
                 strength = max(strength, mass)
             sources.append({"modality": modality, "presence": e.presence,
-                            "confidence": round(e.confidence, 3)})
+                            "confidence": round(e.confidence, 3),
+                            "age_s": round(age_s), "health": health})
             if e.presence and e.breathing_bpm is not None:
                 vitals = {"breathing_bpm": e.breathing_bpm, "heart_bpm": e.heart_bpm}
         agreement = num / den if den > 0 else 0.0
