@@ -67,10 +67,9 @@ register **boot-OFF** (safety). Suggested:
 ## Per-camera notes
 - **C210 (quarto):** standard indoor cam, continuous RTSP + ONVIF — the continuous
   CameraSource model fits. Good first device; start here.
-- **TC40 (quintal):** battery/solar cam — may NOT hold a continuous RTSP stream (low-power
-  clip-push / event-only). Test it: if it won't keep a stream open, it doesn't fit the
-  continuous model yet — park it and lead with the C210. (Flagged in the roadmap as a
-  hardware caveat.)
+- **TC40 (quintal):** **mains-powered (plugged into the wall)** — so it holds a continuous
+  RTSP stream like the C210 (no battery clip-push behaviour). Same setup: enable its RTSP
+  camera account and add it. Both cameras are solid continuous sources.
 
 ## Config note
 - The operator set `WAVR_FUSION_THRESHOLD=0.35` for the network-only phase (network alone caps
