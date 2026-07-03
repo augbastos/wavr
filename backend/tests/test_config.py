@@ -56,3 +56,20 @@ def test_config_narrate_enabled_defaults_false(monkeypatch):
     monkeypatch.delenv("WAVR_NARRATE_ENABLED", raising=False)
     from wavr.config import load_config
     assert load_config().narrate_enabled is False
+
+def test_config_has_ha_read_defaults(monkeypatch):
+    # HA read-side (ADR-0005): both empty by default -> read tool disabled.
+    for v in ("WAVR_HA_URL", "WAVR_HA_TOKEN"):
+        monkeypatch.delenv(v, raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.ha_url == ""
+    assert cfg.ha_token == ""
+
+def test_config_reads_ha_env(monkeypatch):
+    monkeypatch.setenv("WAVR_HA_URL", "http://homeassistant.local:8123")
+    monkeypatch.setenv("WAVR_HA_TOKEN", "long-lived-token")
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.ha_url == "http://homeassistant.local:8123"
+    assert cfg.ha_token == "long-lived-token"
