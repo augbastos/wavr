@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 log = logging.getLogger(__name__)
 
@@ -71,3 +72,74 @@ def room_names(house: dict) -> list[str]:
     if isinstance(house.get("floors"), list):
         return [r["name"] for f in house["floors"] for r in f.get("rooms", []) if "name" in r]
     return [r["name"] for r in house.get("rooms", []) if "name" in r]
+
+
+# Validation
+MAX_FLOORS = 64
+MAX_ROOMS_PER_FLOOR = 512
+MAX_WALLS_PER_FLOOR = 4096
+MAX_VERTICES = 512
+_FEATURE_TYPES = {"stairs", "door", "window"}
+
+
+class HouseMapError(ValueError):
+    """Raised by validate_house_map on any structural violation."""
+
+
+def _finite(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _point(p) -> bool:
+    return isinstance(p, (list, tuple)) and len(p) == 2 and _finite(p[0]) and _finite(p[1])
+
+
+def validate_house_map(doc: dict) -> None:
+    if not isinstance(doc, dict):
+        raise HouseMapError("house map must be an object")
+    if doc.get("version") != 2:
+        raise HouseMapError("version must be 2")
+    if doc.get("units") != "m":
+        raise HouseMapError("units must be 'm'")
+    floors = doc.get("floors")
+    if not isinstance(floors, list) or not floors:
+        raise HouseMapError("floors must be a non-empty list")
+    if len(floors) > MAX_FLOORS:
+        raise HouseMapError(f"too many floors (> {MAX_FLOORS})")
+    seen_levels, seen_ids = set(), set()
+    for f in floors:
+        if not isinstance(f, dict):
+            raise HouseMapError("each floor must be an object")
+        level = f.get("level")
+        if not isinstance(level, int) or isinstance(level, bool):
+            raise HouseMapError("floor level must be an integer")
+        if level in seen_levels:
+            raise HouseMapError(f"duplicate floor level {level}")
+        seen_levels.add(level)
+        fid = f.get("id")
+        if not isinstance(fid, str) or fid in seen_ids:
+            raise HouseMapError("floor id must be a unique string")
+        seen_ids.add(fid)
+        rooms = f.get("rooms", [])
+        if not isinstance(rooms, list) or len(rooms) > MAX_ROOMS_PER_FLOOR:
+            raise HouseMapError(f"rooms must be a list (<= {MAX_ROOMS_PER_FLOOR})")
+        for r in rooms:
+            poly = r.get("polygon") if isinstance(r, dict) else None
+            if not isinstance(poly, list) or len(poly) < 3:
+                raise HouseMapError("room polygon must have >= 3 vertices")
+            if len(poly) > MAX_VERTICES:
+                raise HouseMapError(f"polygon too large (> {MAX_VERTICES} vertices)")
+            if not all(_point(p) for p in poly):
+                raise HouseMapError("polygon vertices must be finite [x, y] pairs")
+        walls = f.get("walls", [])
+        if not isinstance(walls, list) or len(walls) > MAX_WALLS_PER_FLOOR:
+            raise HouseMapError(f"walls must be a list (<= {MAX_WALLS_PER_FLOOR})")
+        for w in walls:
+            if not (isinstance(w, dict) and _point(w.get("a")) and _point(w.get("b"))):
+                raise HouseMapError("wall a/b must be finite points")
+        for feat in f.get("features", []):
+            if not isinstance(feat, dict) or feat.get("type") not in _FEATURE_TYPES:
+                raise HouseMapError(f"feature type must be one of {sorted(_FEATURE_TYPES)}")
+            at = feat.get("at")
+            if at is not None and not _point(at):
+                raise HouseMapError("feature 'at' must be a finite point")
