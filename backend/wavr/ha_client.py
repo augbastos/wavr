@@ -31,6 +31,8 @@ from typing import Callable
 # A Home Assistant domain / service name is lowercase word-chars only. Validated here as a
 # defence-in-depth backstop (audit LOW-5) so a malformed value can never be interpolated
 # into the `/api/services/{domain}/{service}` path, regardless of what the caller passed.
+# NOTE: matched with re.fullmatch (not .match + trailing `$`) -- `$` matches just before a
+# trailing '\n', which would let a smuggled newline slip past a `.match()` check.
 _HA_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
 # A GET transport takes (url, headers) and returns the raw response body (bytes or str).
@@ -160,7 +162,7 @@ class HAClient:
           * An empty/absent body (HA changed nothing) -> `[]` (not an error).
           * Malformed JSON -> WavrHAError.
         """
-        if not _HA_NAME_RE.match(domain or "") or not _HA_NAME_RE.match(service or ""):
+        if not _HA_NAME_RE.fullmatch(domain or "") or not _HA_NAME_RE.fullmatch(service or ""):
             raise WavrHAError(
                 f"Invalid HA domain/service name: {domain!r}/{service!r} "
                 "(must be lowercase [a-z0-9_])")

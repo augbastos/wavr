@@ -173,8 +173,10 @@ def release_model() -> None:
 async def rtsp_frames(url: str) -> "AsyncIterator[object]":
     """Pull frames from an RTSP capture. Blocking reads run in a thread so they
     never block the loop; the capture is released in the finally, so aclose()
-    on disable is a hard RTSP kill."""
-    cap = _open_capture(url)
+    on disable is a hard RTSP kill. Opening the capture is offloaded too — a
+    hung/unreachable camera would otherwise freeze the whole backend for the
+    OS TCP timeout on every (re)connect."""
+    cap = await asyncio.to_thread(_open_capture, url)
     try:
         while True:
             ok, frame = await asyncio.to_thread(_read, cap)

@@ -110,6 +110,9 @@ INDIRECTION_DOMAINS = frozenset({
 _SENSITIVE_HINTS = (
     "camera", "cam", "webcam", "microphone", "mic", "record", "snapshot",
     "stream", "livestream", "rtsp", "onvif", "intercom", "doorbell",
+    "nvr", "dvr", "cctv", "surveillance", "poe", "baby_monitor", "babymonitor",
+    "reolink", "unifi", "hikvision", "dahua", "arlo", "wyze", "blink", "ring",
+    "nest", "eufy", "amcrest",
 )
 
 
@@ -159,9 +162,17 @@ def list_rooms(provider: StateProvider) -> list[dict]:
 
 
 def get_room_context(provider: StateProvider, room: str) -> dict | None:
-    """Full RoomState for one room, including the explainable "why": the per-modality
-    `sources` and the human-readable `explanation`. None if the room is unknown."""
-    return provider.room_state(room)
+    """RoomState for one room, including the explainable "why": the per-modality
+    `sources` and the human-readable `explanation`. None if the room is unknown.
+
+    PRIVACY (audit CRITICAL-1): strips `vitals` (breathing/heart rate) and `targets`
+    (per-person x/y tracking) before returning. MCP read tools must never expose
+    per-person biometric or positional data -- only room-level occupancy, confidence,
+    and the explainable sources/explanation are exposed here."""
+    state = provider.room_state(room)
+    if state is None:
+        return None
+    return {k: v for k, v in state.items() if k not in ("vitals", "targets")}
 
 
 def get_house_map(provider: StateProvider) -> dict:
@@ -217,6 +228,8 @@ def _entity_is_sensitive(entity_id: str) -> bool:
 # A single, concrete entity id: `domain.object_id`, lowercase word-chars only. Rejects the
 # empty string, the mass-actuation wildcard `all`, comma-lists, and any shape that isn't one
 # real entity (audit MEDIUM-4) -- one gated call must never fan out to many devices.
+# NOTE: matched with re.fullmatch (not .match + trailing `$`) -- `$` matches just before a
+# trailing '\n', which would let a smuggled newline slip past a `.match()` check.
 _ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 
 
@@ -226,7 +239,7 @@ def _entity_id_is_valid(entity_id: str) -> bool:
     eid = (entity_id or "").strip().lower()
     if eid in ("", "all", "none", "*"):
         return False
-    return bool(_ENTITY_ID_RE.match(eid))
+    return bool(_ENTITY_ID_RE.fullmatch(eid))
 
 
 def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str,
@@ -266,7 +279,10 @@ def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str
     def _deny(status: str, message: str) -> dict:
         # Audit LOW-7: every refusal is logged (target + reason) so an operator can see
         # what an agent tried to actuate. Logged at WARNING; no secrets in the record.
-        _log.warning("control refused: %s entity=%s status=%s", pair, entity_id, status)
+        # `%r` (not `%s`) on the user-controlled pair/entity_id -- audit LOW: `.strip()`
+        # only trims the ends, so an embedded newline/control char could otherwise forge
+        # fake log lines (log injection). repr() escapes them into a single safe line.
+        _log.warning("control refused: %r entity=%r status=%s", pair, entity_id, status)
         return _refused(status, message)
 
     # Gate 1 -- control flag (default OFF). Inert, never an error.
@@ -306,7 +322,8 @@ def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str
             "Home Assistant is not configured (WAVR_HA_URL/WAVR_HA_TOKEN empty).")
 
     # All gates passed -> delegate the actuation to HA (ADR-0005 §1). Wavr asks; HA acts.
-    _log.info("control call: %s entity=%s", pair, entity_id)
+    # `%r` for the same log-injection reason as `_deny` above.
+    _log.info("control call: %r entity=%r", pair, entity_id)
     result = ha_client.call_service(domain, service, {"entity_id": entity_id})
     return {"ok": True, "status": "called", "domain": domain, "service": service,
             "entity_id": entity_id, "result": result}

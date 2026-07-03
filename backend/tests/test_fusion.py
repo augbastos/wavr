@@ -53,3 +53,43 @@ def test_weak_lone_source_scores_below_strong_lone_source():
     cam = f.update(ev("quintal", "camera", True, 0.9))  # strength 1.0 * 0.9 = 0.90
     assert net.confidence < cam.confidence
     assert cam.confidence > 0.5
+
+
+def test_negative_source_confidence_is_clamped_in_fused_result():
+    # A source reporting a negative confidence must not drive the fused
+    # confidence negative (e.g. an explanation of "-64% ocupado").
+    f = FusionEngine()
+    rs = f.update(ev("sala", "wifi_csi", True, -3.0))
+    assert 0.0 <= rs.confidence <= 1.0
+
+
+def test_overlarge_source_confidence_is_clamped_in_fused_result():
+    # A source reporting confidence far above 1.0 must not drive the fused
+    # confidence above 1.0.
+    f = FusionEngine()
+    rs = f.update(ev("sala", "wifi_csi", True, 999.0))
+    assert 0.0 <= rs.confidence <= 1.0
+
+
+def test_malformed_timestamp_does_not_cascade_and_kill_later_good_events():
+    # update() must not store an event with an unparseable ts — otherwise
+    # every later fuse touching the room (from other, healthy modalities)
+    # would raise on that poisoned slot.
+    f = FusionEngine()
+    bad = SensingEvent(room="sala", modality="network", presence=True, motion=0.0,
+                       breathing_bpm=None, heart_bpm=None, confidence=0.6,
+                       ts="not-a-timestamp")
+    f.update(bad)  # must not raise
+    rs = f.update(ev("sala", "camera", True, 0.9))  # later good event, another modality
+    assert rs.occupied is True
+    assert rs.sources == [{"modality": "camera", "presence": True,
+                           "confidence": 0.9, "age_s": 0, "health": "fresh"}]
+
+
+def test_none_timestamp_does_not_cascade_and_kill_later_good_events():
+    f = FusionEngine()
+    bad = SensingEvent(room="sala", modality="network", presence=True, motion=0.0,
+                       breathing_bpm=None, heart_bpm=None, confidence=0.6, ts=None)
+    f.update(bad)  # must not raise
+    rs = f.update(ev("sala", "camera", True, 0.9))
+    assert rs.occupied is True

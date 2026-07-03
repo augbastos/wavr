@@ -279,6 +279,33 @@ def test_switch_named_like_a_camera_is_refused():
     assert spy.calls == []
 
 
+def test_switch_named_like_surveillance_gear_is_refused():
+    # MEDIUM-3 expanded: NVR/DVR/CCTV/baby-monitor/brand-name power switches must be
+    # refused too -- an allowlisted `switch.turn_on` must not power a camera/DVR/NVR
+    # just because it's fronted by a "switch" entity.
+    spy = _SpyClient()
+    for entity in ("switch.nvr_power", "switch.cctv_relay", "switch.dvr_plug",
+                   "switch.baby_monitor", "switch.reolink_poe", "switch.unifi_protect",
+                   "switch.hikvision_relay", "switch.dahua_cam_power",
+                   "switch.arlo_base", "switch.wyze_plug", "switch.blink_sync_module",
+                   "switch.ring_doorbell_power", "switch.nest_cam_power",
+                   "switch.eufy_hub", "switch.amcrest_relay"):
+        out = call_ha_service(spy, "switch", "turn_on", entity,
+                              control_enabled=True, allowed_services=ALLOW)
+        assert out["status"] == "consent_required", entity
+    assert spy.calls == []
+
+
+def test_nvr_power_switch_refused_with_default_allowlist():
+    # The exact scenario from the audit finding: an allowlisted switch.turn_on aimed at
+    # switch.nvr_power (default allowlist + control on) must be refused, not actuated.
+    spy = _SpyClient()
+    out = call_ha_service(spy, "switch", "turn_on", "switch.nvr_power",
+                          control_enabled=True, allowed_services=ALLOW)
+    assert out["ok"] is False and out["status"] == "consent_required"
+    assert spy.calls == []
+
+
 def test_scene_turn_on_is_refused_as_opaque_indirection():
     # HIGH-1: a scene is an opaque bundle that could enable a camera/unlock a door, so
     # `scene.turn_on` on a scene entity is refused even if the pair is allowlisted.

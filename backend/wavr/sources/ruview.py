@@ -41,8 +41,19 @@ class RuViewSource:
             try:
                 async with contextlib.aclosing(self._connect(self._url)) as stream:
                     async for frame in stream:
-                        if isinstance(frame, dict) and frame.get("type") == "sensing_update":
-                            yield normalize_ruview(frame, self._room)
+                        if not (isinstance(frame, dict) and frame.get("type") == "sensing_update"):
+                            continue
+                        try:
+                            ev = normalize_ruview(frame, self._room)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            # Per-frame error (e.g. a bad timestamp): skip just this
+                            # frame and keep the connection alive — only a
+                            # connection-level error below should trigger a reconnect.
+                            logging.warning("RuViewSource bad frame; skipping", exc_info=True)
+                            continue
+                        yield ev
             except asyncio.CancelledError:
                 raise
             except Exception:
