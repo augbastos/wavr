@@ -16,6 +16,7 @@ class Config:
     net_known_macs: set[str]
     net_interval: float
     net_grace: int
+    net_scan_interval: float
     away_grace: int
     ruview_url: str
     ruview_room: str
@@ -46,6 +47,7 @@ def load_config() -> Config:
         },
         net_interval=float(os.getenv("WAVR_NET_INTERVAL", "15.0")),
         net_grace=int(os.getenv("WAVR_NET_GRACE", "2")),
+        net_scan_interval=float(os.getenv("WAVR_NET_SCAN_INTERVAL", "30.0")),
         away_grace=int(os.getenv("WAVR_AWAY_GRACE", "3")),
         ruview_url=os.getenv("WAVR_RUVIEW_URL", "ws://localhost:3000/ws/sensing"),
         ruview_room=os.getenv("WAVR_RUVIEW_ROOM", "sala"),
