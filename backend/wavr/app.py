@@ -333,6 +333,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             pass   # not registered (e.g. removed before a restart re-registered it)
         return _masked_cameras()
 
+    if cfg.multidevice:
+        @app.post("/api/pair-code")
+        async def pair_code(role: str = Body("user", embed=True), _=Depends(require_local)):
+            # Operator (loopback root / central) mints a one-time pairing code that a
+            # companion then redeems at POST /api/pair. Gated by require_local.
+            if role not in ("central", "user"):
+                raise HTTPException(status_code=400, detail="role must be central or user")
+            return {"code": _pairing.mint_code(role)}
+
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
         host = ws.client.host if ws.client else None
