@@ -71,6 +71,18 @@ def test_out_of_subnet_peer_is_forbidden(app):   # audit M2 / subnet
     assert outsider.post("/api/pair", json={"code": "1", "device_name": "x"}).status_code == 403
 
 
+def test_pwa_shell_loads_in_subnet_without_token(app):
+    # A companion must be able to LOAD the page (+ install the PWA) before it has a token;
+    # the static shell is exempt for in-subnet peers, but DATA still needs the token.
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    for path in ("/", "/manifest.webmanifest", "/sw.js", "/icon.svg"):
+        assert peer.get(path).status_code == 200, path
+    assert peer.get("/api/state").status_code == 403          # data still gated
+    # out-of-subnet cannot even load the shell
+    outsider = TestClient(app, client=("10.0.0.5", 12345))
+    assert outsider.get("/").status_code == 403
+
+
 def test_revoked_token_is_denied(app):
     peer, auth = _pair(app, "user")
     central = TestClient(app)
