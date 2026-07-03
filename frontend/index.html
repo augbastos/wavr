@@ -80,6 +80,18 @@
   .radar-dot{fill:var(--accent);}
   .radar-target{transition:transform .25s cubic-bezier(.22,1,.36,1);}
   .radar-posture{fill:var(--muted);font-size:.28px;text-anchor:middle;}
+  /* House geometry overlay (true polygons/walls/features, meter coords — same viewBox as rooms/dots) */
+  .room-poly{fill:rgba(61,181,74,.05);stroke:var(--line);stroke-width:.02;
+             vector-effect:non-scaling-stroke;pointer-events:none;}
+  .wall{stroke:var(--ink);stroke-width:.05;stroke-linecap:round;vector-effect:non-scaling-stroke;}
+  .feat{vector-effect:non-scaling-stroke;}
+  .feat-stairs{fill:var(--warn);}
+  .feat-door{fill:#38bdf8;}
+  .feat-window{fill:var(--muted);}
+  .floorbar{padding:8px 24px;border-bottom:1px solid var(--line);font-size:.85rem;color:var(--muted);}
+  .floorbar:not([hidden]){display:flex;align-items:center;gap:8px;}
+  .floorbar select{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+                   border-radius:8px;padding:6px 10px;font-size:.82rem;}
   .cam-form{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
   .cam-form input{background:var(--surface);color:var(--ink);border:1px solid var(--line);
                   border-radius:8px;padding:8px 11px;font-size:.82rem;}
@@ -262,6 +274,9 @@
   <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
 </div>
 <div id="radarWrap" class="radar"><h3 id="radar-h">Radar</h3>
+  <div class="floorbar" id="floorbar" hidden>
+    <label>Andar: <select id="floorSelect" aria-label="andar"></select></label>
+  </div>
   <svg id="radar" role="img" aria-labelledby="radar-h" preserveAspectRatio="xMidYMid meet"></svg>
   <div id="zoneBar" class="zonebar">
     <button id="zoneEdit" type="button" class="ctl small">Editar zonas</button>
@@ -709,6 +724,38 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const POSTURE_LABEL = {walking:"andando", standing:"em pé", sitting:"sentado", lying:"deitado"};
 let radarUpdate = null;
 
+// ---- House map (v2: floors -> room polygons + walls + features; meters throughout) ----
+let HOUSE = { version: 2, units: "m", floors: [] };
+let currentFloor = 0;
+// Built-in default (mirrors backend housemap.DEFAULT_MAP exactly) — the public demo renders
+// this client-side with NO backend call; it also doubles as the live/companion fetch fallback.
+const DEMO_HOUSE = {
+  version: 2, units: "m",
+  floors: [{
+    id: "f0", name: "Térreo", level: 0,
+    rooms: [
+      {id:"r_sala",    name:"sala",    polygon:[[0.0,0.0],[4.0,0.0],[4.0,3.0],[0.0,3.0]]},
+      {id:"r_quarto",  name:"quarto",  polygon:[[4.2,0.0],[7.7,0.0],[7.7,3.0],[4.2,3.0]]},
+      {id:"r_quintal", name:"quintal", polygon:[[0.0,3.2],[7.7,3.2],[7.7,5.7],[0.0,5.7]]},
+    ],
+    walls: [], features: [], backdrop: null,
+  }],
+};
+async function loadHouse(){
+  if(MODE === "live"){
+    try{ const r = await fetch(location.origin+"/api/house"); if(r.ok) HOUSE = await r.json(); }catch{}
+  } else if(MODE === "companion" && companionToken()){        // companion viewer: real house map, Bearer-authed
+    try{
+      const r = await fetch(location.origin+"/api/house", {headers:{"Authorization":"Bearer "+companionToken()}});
+      if(r.status===401||r.status===403){ companionAuthFailed(); }
+      else if(r.ok) HOUSE = await r.json();
+    }catch{}
+  }
+  // simulated (public demo) and unpaired companion: no backend call, ever — built-in default.
+  if(!HOUSE || !Array.isArray(HOUSE.floors) || !HOUSE.floors.length) HOUSE = DEMO_HOUSE;
+  currentFloor = HOUSE.floors[0].level;
+}
+
 // ---- Zones (client-side, persisted to localStorage; works in live AND demo) ----
 // A zone is a named rectangle in radar user-space (metres, same coords as rooms/targets).
 const ZONE_KEY = "wavr.zones.v1";
@@ -765,41 +812,112 @@ function placeDot(g, room, t){
 }
 
 async function renderRadar(){
-  let map;
-  if(MODE==="live"){ try{ map = await (await fetch(location.origin+"/api/house")).json(); }catch{} }
-  else if(MODE==="companion" && companionToken()){        // companion viewer: real house map, Bearer-authed
-    try{ map = await (await fetch(location.origin+"/api/house",{headers:{"Authorization":"Bearer "+companionToken()}})).json(); }catch{}
-  }
-  map = map || {rooms:[{name:"sala",x:0,y:0,w:4,h:3},{name:"quarto",x:4.2,y:0,w:3.5,h:3},
-                       {name:"quintal",x:0,y:3.2,w:7.7,h:2.5}]};   // demo default = backend DEFAULT_MAP
+  await loadHouse();                        // sets HOUSE (+ DEMO_HOUSE fallback) and currentFloor
   const svg = document.getElementById("radar");
-  const W = Math.max(...map.rooms.map(r=>r.x+r.w)), H = Math.max(...map.rooms.map(r=>r.y+r.h));
-  // Bottom margin is larger than the other sides as a second safety net (on top of the
-  // dot()-level label flip/clamp above) for posture-caption footprint near room edges.
-  svg.setAttribute("viewBox", `-0.2 -0.2 ${W+0.4} ${H+0.8}`);
+  // Layer order (document order = paint order, first = bottom): true house geometry, zones,
+  // room rects + dots, then the in-progress zone-drawing preview on top of everything.
+  const houseLayer = document.createElementNS(SVG_NS, "g"); houseLayer.id = "houseLayer";
+  const zoneLayer  = document.createElementNS(SVG_NS, "g");
+  const roomsLayer = document.createElementNS(SVG_NS, "g"); roomsLayer.id = "roomsLayer";
+  const drawLayer  = document.createElementNS(SVG_NS, "g");
+  svg.appendChild(houseLayer); svg.appendChild(zoneLayer); svg.appendChild(roomsLayer); svg.appendChild(drawLayer);
+
   const roomIdx = {};
-  map.rooms.forEach(r=>{
-    const g = document.createElementNS(SVG_NS, "g");
-    const rect = document.createElementNS(SVG_NS, "rect");
-    rect.setAttribute("class", "radar-room");
-    rect.setAttribute("x", r.x); rect.setAttribute("y", r.y);
-    rect.setAttribute("width", r.w); rect.setAttribute("height", r.h);
-    const label = document.createElementNS(SVG_NS, "text");
-    label.setAttribute("class", "radar-roomlabel");
-    label.setAttribute("x", r.x + 0.15); label.setAttribute("y", r.y + 0.35);
-    label.textContent = r.name;
-    const layer = document.createElementNS(SVG_NS, "g");
-    g.appendChild(rect); g.appendChild(label); g.appendChild(layer);
-    svg.appendChild(g);
-    roomIdx[r.name] = {r, rect, layer, dots: new Map()};
-  });
+
+  // ---- v2 floor -> v1-compatible rect adapter (bounding box of each room polygon) ----
+  // Feeds the existing rect-based room rendering / dot placement / zone hit-test unchanged;
+  // the true polygon/wall/feature geometry is drawn separately by renderHouseOverlay() below.
+  function floorFor(level){ return HOUSE.floors.find(f => f.level === level) || HOUSE.floors[0] || null; }
+  function rectsFor(f){
+    if(!f) return [];
+    return (f.rooms||[]).map(r=>{
+      const poly = r.polygon || [];
+      const xs = poly.map(p=>p[0]), ys = poly.map(p=>p[1]);
+      const x = xs.length ? Math.min(...xs) : 0, y = ys.length ? Math.min(...ys) : 0;
+      const w = xs.length ? Math.max(...xs) - x : 0, h = ys.length ? Math.max(...ys) - y : 0;
+      return {name: r.name, x, y, w, h, polygon: poly};
+    });
+  }
+  function renderHouseOverlay(f){
+    houseLayer.textContent = "";
+    if(!f) return;
+    (f.rooms||[]).forEach(r=>{
+      if(!r.polygon || r.polygon.length < 3) return;
+      const poly = document.createElementNS(SVG_NS, "polygon");
+      poly.setAttribute("points", r.polygon.map(p=>p[0]+","+p[1]).join(" "));
+      poly.setAttribute("class", "room-poly");
+      if(r.name) poly.dataset.name = r.name;
+      houseLayer.appendChild(poly);
+    });
+    (f.walls||[]).forEach(w=>{
+      if(!w.a || !w.b) return;
+      const ln = document.createElementNS(SVG_NS, "line");
+      ln.setAttribute("x1", w.a[0]); ln.setAttribute("y1", w.a[1]);
+      ln.setAttribute("x2", w.b[0]); ln.setAttribute("y2", w.b[1]);
+      ln.setAttribute("class", "wall");
+      houseLayer.appendChild(ln);
+    });
+    (f.features||[]).forEach(ft=>{
+      if(!ft.at) return;
+      const c = document.createElementNS(SVG_NS, "circle");
+      c.setAttribute("cx", ft.at[0]); c.setAttribute("cy", ft.at[1]);
+      c.setAttribute("r", 0.15);
+      c.setAttribute("class", "feat feat-"+ft.type);
+      houseLayer.appendChild(c);
+    });
+  }
+  function rebuildRoomsForFloor(){
+    const f = floorFor(currentFloor);
+    const rects = rectsFor(f);
+    roomsLayer.textContent = "";
+    for(const k in roomIdx) delete roomIdx[k];
+    const W = rects.length ? Math.max(...rects.map(r=>r.x+r.w)) : 7.7;
+    const H = rects.length ? Math.max(...rects.map(r=>r.y+r.h)) : 5.7;
+    // Bottom margin is larger than the other sides as a second safety net (on top of the
+    // dot()-level label flip/clamp above) for posture-caption footprint near room edges.
+    svg.setAttribute("viewBox", `-0.2 -0.2 ${W+0.4} ${H+0.8}`);
+    rects.forEach(r=>{
+      const g = document.createElementNS(SVG_NS, "g");
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("class", "radar-room");
+      rect.setAttribute("x", r.x); rect.setAttribute("y", r.y);
+      rect.setAttribute("width", r.w); rect.setAttribute("height", r.h);
+      const label = document.createElementNS(SVG_NS, "text");
+      label.setAttribute("class", "radar-roomlabel");
+      label.setAttribute("x", r.x + 0.15); label.setAttribute("y", r.y + 0.35);
+      label.textContent = r.name;
+      const layer = document.createElementNS(SVG_NS, "g");
+      g.appendChild(rect); g.appendChild(label); g.appendChild(layer);
+      roomsLayer.appendChild(g);
+      roomIdx[r.name] = {r, rect, layer, dots: new Map()};
+    });
+    renderHouseOverlay(f);
+  }
+
+  // ---- Floor selector (shown only when the house has more than one floor) ----
+  function buildFloorSelect(){
+    const bar = document.getElementById("floorbar");
+    const sel = document.getElementById("floorSelect");
+    if(!sel || !bar) return;
+    sel.innerHTML = "";
+    HOUSE.floors.forEach(fl=>{
+      const o = document.createElement("option");
+      o.value = fl.level; o.textContent = fl.name || ("nível " + fl.level);
+      sel.appendChild(o);
+    });
+    sel.value = currentFloor;
+    bar.hidden = HOUSE.floors.length < 2;
+  }
+  buildFloorSelect();
+  document.getElementById("floorSelect").onchange = (e)=>{
+    currentFloor = parseInt(e.target.value, 10);
+    rebuildRoomsForFloor();
+  };
+  rebuildRoomsForFloor();
+
   // ---- Zone editor overlay (draw/name/delete rectangles; label occupied zones) ----
-  // zoneLayer goes UNDER the room groups so live target dots always stay on top;
-  // drawLayer goes on top so the in-progress rectangle is visible while dragging.
-  const zoneLayer = document.createElementNS(SVG_NS, "g");
-  svg.insertBefore(zoneLayer, svg.firstChild);
-  const drawLayer = document.createElementNS(SVG_NS, "g");
-  svg.appendChild(drawLayer);
+  // zoneLayer/drawLayer are created above (fixed order); drawLayer stays on top so the
+  // in-progress rectangle is visible while dragging, and room dots stay on top of both.
   const liveTargets = {};                 // room -> [{x,y}] absolute, latest fusion frame
   const zoneEditBtn = document.getElementById("zoneEdit");
   const zoneHintEl  = document.getElementById("zoneHint");
