@@ -28,6 +28,9 @@ from wavr.rules import RulesEngine
 from wavr.away import AwayMonitor
 from wavr.mqtt_publisher import make_publisher
 from wavr.narrator import Narrator, make_gemini_generate
+from wavr.netinventory_service import NetworkInventoryService
+from wavr.api_inventory import build_inventory_router
+from wavr.sources.ble import BLESource
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -56,6 +59,10 @@ def _default_sources(cfg):
     if cfg.mmwave_port:
         sources.append(
             ("mmwave", lambda: MmWaveSource(cfg.mmwave_room, cfg.mmwave_port), True))
+    if cfg.ble_known:
+        sources.append(("ble", lambda: BLESource(
+            cfg.ble_known, room=cfg.ble_room, rssi_min=cfg.ble_rssi_min,
+            interval=cfg.ble_interval), True))
     return sources
 
 
@@ -110,6 +117,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     if _narrator is None and cfg.narrate_enabled and cfg.gemini_api_key:
         _narrator = Narrator(make_gemini_generate(cfg.gemini_api_key, cfg.gemini_model))
 
+    # Wavr Net: defensive LAN inventory + rogue-device alerts (own-network only,
+    # loopback-read). Runs its own periodic scan loop; port-awareness stays off
+    # unless WAVR_NET_PORTSCAN (ADR-0004).
+    _inventory = NetworkInventoryService(cfg.net_known_macs, interval=cfg.net_scan_interval)
+
     async def _ingest(event):
         rs = _fusion.update(event)
         d = rs.to_dict()
@@ -132,6 +144,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await manager.start()
+        if cfg.net_inventory:
+            await _inventory.start()   # opt-in (WAVR_NET_INVENTORY): real LAN scan loop
+        if cfg.ha_discovery and _rules_publish:
+            from wavr.ha_discovery import publish_ha_discovery
+            publish_ha_discovery(
+                _rules_publish,
+                [r["name"] for r in _house.get("rooms", [])],
+                prefix=cfg.mqtt_prefix,
+            )
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
         away_task = asyncio.create_task(_away.run(_hub)) if _away else None
         try:
@@ -144,12 +165,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
                         await t
+            await _inventory.stop()
             await manager.stop()
             if _owns_cameras:
                 with suppress(Exception):
                     _cameras.close()
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
+
+    app.include_router(build_inventory_router(_inventory))
 
     # PRIVACY: reject any request whose peer isn't loopback. Enforced in code so it
     # holds even if someone runs uvicorn with --host 0.0.0.0. ("testclient" is the
