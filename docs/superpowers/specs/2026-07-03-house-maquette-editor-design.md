@@ -125,10 +125,13 @@ but it is still a state change, so writes are gated exactly like the other contr
 
 ## How Phase 1 improves detection (and where it stops)
 
-- **Now:** a target's `x/y` is assigned to a room by **point-in-polygon** against the drawn
-  rooms — accurate for L-shapes / non-rectangular rooms where the old `x,y,w,h` rectangle
-  was wrong. The map is also the coordinate frame that makes camera homography (spec A) and
-  mmWave x/y meaningful and comparable.
+- **Built now, wired later:** `room_at` does **point-in-polygon** room assignment — accurate
+  for L-shapes / non-rectangular rooms where the old `x,y,w,h` rectangle was wrong. It is a
+  tested building block but is **not yet wired into fusion**: today fusion still assigns a
+  target to the room its source reports (`event.room`), not by geometry. Wiring point-in-
+  polygon assignment (so a source's x/y picks the room) lands with spec A/B2. What Phase 1
+  delivers now is the **authored coordinate frame** that makes camera homography (spec A) and
+  mmWave x/y meaningful and comparable — plus the editor + rendering.
 - **Not yet (B2):** using walls for occlusion / weighting. Phase 1 stores walls and draws
   them; it does not change fusion weights. This is called out so "more precise detection"
   is not oversold — the wall-driven precision is the next spec.
