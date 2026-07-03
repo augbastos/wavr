@@ -29,14 +29,15 @@
 <style>
   :root{--bg:#0f1216;--surface:#171c22;--ink:#e8edf2;--muted:#9aa7b4;
         --accent:#3db54a;--warn:#e0b341;--danger:#e8726a;--zone:#6ea8fe;
-        --line:#232a32;--radius:14px;}
+        --line:#232a32;--radius:14px;--content-max:1100px;}
   *{box-sizing:border-box;}
   body{margin:0;background:var(--bg);color:var(--ink);
        font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
        overscroll-behavior-y:contain;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;}
-  header{padding:max(20px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) 20px max(24px, env(safe-area-inset-left));
-         border-bottom:1px solid var(--line);
-         display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;}
+  header{padding:max(20px, env(safe-area-inset-top)) 0 20px;border-bottom:1px solid var(--line);}
+  .header-inner{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;
+                max-width:var(--content-max);margin-inline:auto;
+                padding:0 max(24px, env(safe-area-inset-right)) 0 max(24px, env(safe-area-inset-left));}
   h1{font-size:1.25rem;margin:0;letter-spacing:-0.01em;}
   .mode{font-size:.8rem;color:var(--muted);}
   .mode b{color:var(--accent);}
@@ -48,18 +49,39 @@
   .house.stale{opacity:.6;}
   /* Above-the-fold hero (all modes): the glanceable "who's home" answer, computed from
      the same RoomState the #house pill uses. */
-  #homeHero{padding:18px max(24px, env(safe-area-inset-right)) 4px max(24px, env(safe-area-inset-left));}
+  #homeHero{padding:18px max(24px, env(safe-area-inset-right)) 4px max(24px, env(safe-area-inset-left));
+            max-width:var(--content-max);margin-inline:auto;}
   #homeHero[hidden]{display:none;}
+  .demo-intro{padding:10px max(24px, env(safe-area-inset-right)) 10px max(24px, env(safe-area-inset-left));
+              background:rgba(61,181,74,.08);border-bottom:1px solid var(--line);
+              font-size:.82rem;color:var(--ink);line-height:1.5;}
+  .demo-intro b{color:var(--accent);}
+  .demo-intro[hidden]{display:none;}
   .hero-line1{margin:0;font-size:1.7rem;font-weight:700;letter-spacing:-0.01em;
               transition:color .25s ease-out;}
   .hero-line1.home{color:var(--accent);}
   .hero-line1.away{color:var(--ink);}
   .hero-line1.stale{opacity:.6;}
   .hero-line2{margin:6px 0 0;font-size:.95rem;color:var(--muted);min-height:1.2em;}
-  .narrate:not([hidden]){display:flex;align-items:flex-start;gap:14px;padding:12px 24px;border-bottom:1px solid var(--line);}
+  .narrate:not([hidden]){border-bottom:1px solid var(--line);}
+  .narrate .panel-inner{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;}
   .narrate-out{margin:0;font-size:.9rem;color:var(--ink);max-width:70ch;line-height:1.5;}
   .narrate-out.muted{color:var(--muted);}
-  main{padding:24px;padding-bottom:max(24px, env(safe-area-inset-bottom));max-width:1000px;margin:0 auto;}
+  main{padding:24px;padding-bottom:max(24px, env(safe-area-inset-bottom));}
+  /* Content-first wrapper: map + rooms/timeline, right under the hero. Handles its own
+     max-width/centering so #radarWrap and <main> no longer need to (see item 12). */
+  .live-content{max-width:var(--content-max);margin-inline:auto;}
+  @media(min-width:1000px){
+    .live-content{display:grid;grid-template-columns:minmax(320px,460px) 1fr;gap:0 24px;align-items:start;}
+    .live-content .net{grid-column:1/-1;}   /* companion moves #network here via JS; span full width */
+  }
+  .config-divider{margin-top:4px;padding:14px max(24px, env(safe-area-inset-right)) 10px max(24px, env(safe-area-inset-left));
+                  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+                  background:rgba(255,255,255,.02);
+                  font-size:.75rem;font-weight:700;color:var(--muted);
+                  text-transform:uppercase;letter-spacing:.08em;}
+  .config-divider[hidden]{display:none;}
+  .panel-inner{padding:12px 24px;max-width:var(--content-max);margin-inline:auto;}
   .rooms{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;}
   .card h2{margin:0 0 4px;font-size:1rem;text-transform:capitalize;}
@@ -83,7 +105,8 @@
   .row:last-child{border-bottom:0;}
   .row .t{color:var(--muted);min-width:88px;}
   .row .r{text-transform:capitalize;min-width:80px;}
-  .controls:not([hidden]){display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid var(--line);}
+  .controls:not([hidden]){border-bottom:1px solid var(--line);}
+  .controls .panel-inner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
   .ctl{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.8rem;cursor:pointer;
        transition:border-color .15s ease-out,color .15s ease-out,transform .1s ease-out,background-color .15s ease-out;}
   .ctl:hover{border-color:var(--muted);}
@@ -95,10 +118,12 @@
   .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
   .empty{color:var(--muted);font-size:.82rem;padding:14px 18px;}
-  .cams:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .cams:not([hidden]){border-bottom:1px solid var(--line);}
   .cams h3{margin:4px 0 12px;}
+  .cams-hint{margin:0 0 12px;font-size:.82rem;color:var(--muted);max-width:70ch;line-height:1.4;}
   .radar{padding:12px 24px;border-bottom:1px solid var(--line);}
-  .radar h3{margin:4px 0 12px;}
+  .radar h3{margin:4px 0 4px;}
+  .radar-sub{margin:0 0 14px;font-size:.82rem;color:var(--muted);}
   #radar{width:100%;max-width:760px;aspect-ratio:4/3;display:block;background:var(--surface);
          border:1px solid var(--line);border-radius:var(--radius);}
   /* 3D house view (self-hosted three.js): sibling <canvas> to #radar's <svg>, shown
@@ -148,8 +173,9 @@
                transition:border-color .15s ease-out,color .15s ease-out;}
   .cam-row .rm:hover{border-color:var(--warn);color:var(--warn);}
   /* Wavr Net panel (live-only): device inventory + rogue alerts */
-  .net:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
-  .net h3{margin:4px 0 10px;}
+  .net:not([hidden]){border-bottom:1px solid var(--line);}
+  .net h3{margin:4px 0 4px;}
+  .net-sub{margin:0 0 10px;font-size:.82rem;color:var(--muted);max-width:70ch;line-height:1.4;}
   .net-hint{color:var(--muted);font-size:.82rem;padding:6px 0;}
   .net-cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
   .net-col h4{margin:0 0 6px;font-size:.72rem;color:var(--muted);font-weight:600;
@@ -168,7 +194,7 @@
   .alert-row .ameta{color:var(--muted);font-variant-numeric:tabular-nums;
                     display:block;margin-top:2px;overflow-wrap:anywhere;}
   /* Status panel (live-only, read-only): GET /api/status — version, sources, feature chips, house counts */
-  .statuspanel:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .statuspanel:not([hidden]){border-bottom:1px solid var(--line);}
   .statuspanel h3{margin:4px 0 10px;}
   .status-version{color:var(--muted);font-size:.82rem;margin-bottom:10px;}
   .status-cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:10px;}
@@ -217,7 +243,7 @@
               stroke-dasharray:.12 .08;vector-effect:non-scaling-stroke;pointer-events:none;}
   #radar.editing{cursor:crosshair;touch-action:none;}
   /* House editor (live-only, central): draw/edit rooms/walls/stairs, multi-floor, undo/redo, save */
-  .hed:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .hed:not([hidden]){border-bottom:1px solid var(--line);}
   .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .hed-tools .primary{border-color:var(--accent);color:var(--accent);}
   .hed h3{margin:4px 0 12px;}
@@ -229,7 +255,7 @@
   .wall.selected{stroke:var(--warn);stroke-width:.08;}
   .feat.selected{stroke:var(--ink);stroke-width:.06;}
   /* Pairing panel (live-only, multidevice-gated): mint pairing code + list/revoke devices */
-  .pair:not([hidden]){padding:12px 24px;border-bottom:1px solid var(--line);}
+  .pair:not([hidden]){border-bottom:1px solid var(--line);}
   .pair h3{margin:4px 0 12px;}
   .pair-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;}
   .pair-role{display:flex;gap:8px;align-items:center;font-size:.82rem;color:var(--muted);}
@@ -269,9 +295,30 @@
   .cpair-msg{margin:0;font-size:.84rem;color:var(--muted);min-height:1.2em;}
   .cpair-msg.err{color:var(--danger);}
   .cpair-msg.ok{color:var(--accent);}
+  /* Progressive disclosure: per-sensor "why" rows + vitals, collapsed behind a summary
+     (item 6) — the pill/confidence/bar above stay always visible. */
+  .why{margin-top:8px;}
+  .why summary{cursor:pointer;font-size:.78rem;color:var(--muted);list-style:revert;padding:2px 0;
+              transition:color .15s ease-out;}
+  .why summary:hover,.why[open] summary{color:var(--ink);}
+  .why[open] summary{margin-bottom:4px;}
+  /* Visible action feedback (item 4): "✓ feito" / plain error next to the action that caused it. */
+  .action-fb{font-size:.78rem;margin-left:10px;font-weight:600;}
+  .action-fb.ok{color:var(--accent);}
+  .action-fb.err{color:var(--danger);}
+  /* Sistema on/off switch (item 7): a real switch affordance instead of a "Sistema: LIGADO" label. */
+  .ctl.switch{position:relative;padding-left:46px;}
+  .ctl.switch::before{content:"";position:absolute;left:12px;top:50%;transform:translateY(-50%);
+    width:28px;height:16px;border-radius:999px;background:var(--line);transition:background .15s ease-out;}
+  .ctl.switch::after{content:"";position:absolute;left:14px;top:50%;transform:translate(0,-50%);
+    width:12px;height:12px;border-radius:50%;background:var(--muted);
+    transition:transform .15s ease-out,background .15s ease-out;}
+  .ctl.switch.on::before{background:rgba(61,181,74,.35);}
+  .ctl.switch.on::after{background:var(--accent);transform:translate(12px,-50%);}
   @media (prefers-reduced-motion:reduce){.bar>i,.ctl,.cam-row .rm,.zone-item .rm,.pair-dev-row .rm,.radar-target,.radar-zone,
     .pill,.house,.hero-line1,.radar-room{transition:none;}
-    .ctl:active{transform:none;}}
+    .ctl:active{transform:none;}
+    .ctl.switch::after{transition:background .15s ease-out;}}
   /* ---- Mobile: touch target sizing + iOS zoom-on-focus fix ---- */
   @media (pointer:coarse){
     .ctl{min-height:44px;padding:11px 16px;display:inline-flex;align-items:center;justify-content:center;}
@@ -282,13 +329,12 @@
   }
   /* ---- Mobile: narrower gutters + a friendlier timeline row at phone widths ---- */
   @media (max-width:480px){
-    header{padding-left:max(16px, env(safe-area-inset-left));padding-right:max(16px, env(safe-area-inset-right));}
+    .header-inner{padding-left:max(16px, env(safe-area-inset-left));padding-right:max(16px, env(safe-area-inset-right));}
     #homeHero{padding-left:max(16px, env(safe-area-inset-left));padding-right:max(16px, env(safe-area-inset-right));}
+    .demo-intro{padding-left:max(16px, env(safe-area-inset-left));padding-right:max(16px, env(safe-area-inset-right));}
     main{padding-left:16px;padding-right:16px;}
-    .controls:not([hidden]),.cams:not([hidden]),.radar,.net:not([hidden]),.pair:not([hidden]),
-    .hed:not([hidden]),.narrate:not([hidden]),.statuspanel:not([hidden]){
-      padding-left:16px;padding-right:16px;
-    }
+    .radar,.config-divider{padding-left:16px;padding-right:16px;}
+    .panel-inner{padding-left:16px;padding-right:16px;}
     .row{gap:8px;padding:7px 14px;}
     .row .t{min-width:60px;}
     .row .r{min-width:56px;}
@@ -296,13 +342,19 @@
 </style>
 </head>
 <body>
-<header><h1>Wavr</h1>
-  <div class="hdr-right">
-    <span id="house" class="house" aria-live="polite"></span>
-    <div class="mode" id="mode"></div>
-    <button id="companionExit" class="ctl small" type="button" hidden>Desconectar</button>
+<header>
+  <div class="header-inner">
+    <h1>Wavr</h1>
+    <div class="hdr-right">
+      <span id="house" class="house" aria-live="polite"></span>
+      <div class="mode" id="mode"></div>
+      <button id="companionExit" class="ctl small" type="button" hidden>Desconectar</button>
+    </div>
   </div>
 </header>
+<!-- First-run onboarding (simulated/demo only, item 5): explains up front that this is fake
+     data and what Wavr actually does. Shown via JS when MODE==="simulated". -->
+<div id="demoIntro" class="demo-intro" hidden><b>Demonstração</b> — dados fictícios. O Wavr combina câmera + Wi-Fi pra saber quem está em casa, cômodo a cômodo.</div>
 <!-- Above-the-fold hero (all modes): glanceable "who's home" answer, before anything else. -->
 <section id="homeHero" aria-live="polite">
   <p id="heroLine1" class="hero-line1"></p>
@@ -319,76 +371,11 @@
     <p id="cpairMsg" class="cpair-msg" aria-live="polite"></p>
   </form>
 </div>
-<div id="controls" class="controls" hidden>
-  <button id="sysToggle" class="ctl"></button>
-  <div id="srcToggles" class="src-toggles"></div>
-</div>
-<div id="statusPanel" class="statuspanel" hidden aria-labelledby="status-h">
-  <h3 id="status-h">Status</h3>
-  <div id="statusVersion" class="status-version"></div>
-  <div class="status-cols">
-    <div class="status-col">
-      <h4>Fontes</h4>
-      <div id="statusSources"></div>
-    </div>
-    <div class="status-col">
-      <h4>Recursos</h4>
-      <div id="statusFeatures" class="status-chips"></div>
-    </div>
-  </div>
-  <div id="statusHouse" class="status-house"></div>
-</div>
-<div id="cameras" class="cams" hidden>
-  <h3 id="cams-h">Câmeras</h3>
-  <form id="camForm" class="cam-form" aria-labelledby="cams-h">
-    <input name="name" placeholder="nome (ex: cam_sala)" required aria-label="nome da câmera">
-    <input name="room" placeholder="cômodo (ex: sala)" required aria-label="cômodo">
-    <input name="rtsp_url" placeholder="rtsp://user:senha@ip:554/stream" required aria-label="URL RTSP">
-    <input name="confidence" type="number" step="0.05" min="0" max="1" value="0.4" aria-label="confiança mínima" title="confiança mínima de detecção (0–1)">
-    <button type="submit" class="ctl">Adicionar</button>
-  </form>
-  <div id="camList" class="cam-list"></div>
-</div>
-<div id="narrate" class="narrate" hidden>
-  <button id="narrateBtn" class="ctl">Narrar</button>
-  <p id="narrateOut" class="narrate-out" aria-live="polite"></p>
-</div>
-<div id="network" class="net" hidden>
-  <h3>Wavr Net</h3>
-  <div id="netHint" class="net-hint">Wavr Net desligado — inicie o backend com WAVR_NET_INVENTORY=1</div>
-  <div class="net-cols">
-    <div class="net-col">
-      <h4>Dispositivos na rede</h4>
-      <div id="devList" class="dev-list" aria-live="polite"></div>
-    </div>
-    <div class="net-col">
-      <h4>Alertas de intrusão</h4>
-      <div id="alertList" class="alert-list" aria-live="polite"></div>
-    </div>
-  </div>
-</div>
-<div id="pairing" class="pair" hidden>
-  <h3 id="pair-h">Parear dispositivo</h3>
-  <form id="pairForm" class="pair-form" aria-labelledby="pair-h">
-    <label class="pair-role">Papel
-      <select name="role" aria-label="papel do dispositivo">
-        <option value="user">usuário</option>
-        <option value="central">central</option>
-      </select>
-    </label>
-    <button type="submit" class="ctl">Gerar código de pareamento</button>
-  </form>
-  <div id="pairCodeBox" class="pair-code-box" hidden>
-    <span id="pairCode" class="pair-code" aria-live="polite"></span>
-    <button type="button" id="pairCopy" class="ctl small">Copiar</button>
-    <span class="pair-hint">digite este código no app do dispositivo em até 2 min · rede local</span>
-  </div>
-  <h4 class="pair-sub">Dispositivos pareados</h4>
-  <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
-</div>
-<div id="radarWrap" class="radar"><h3 id="radar-h">Radar</h3>
+<div class="live-content" id="liveContent">
+<div id="radarWrap" class="radar"><h3 id="radar-h">Mapa da casa</h3>
+  <p class="radar-sub">Sua casa vista de cima — os pontos são pessoas.</p>
   <div class="viewToggle" role="group" aria-label="modo de visualização">
-    <button id="viewTop" type="button" class="ctl small on">Topo</button>
+    <button id="viewTop" type="button" class="ctl small on">2D</button>
     <button id="view3d" type="button" class="ctl small">3D</button>
   </div>
   <div class="floorbar" id="floorbar" hidden>
@@ -409,30 +396,119 @@
     <div id="zoneList" class="zone-list" aria-label="Zonas"></div>
   </div>
 </div>
-<section id="houseEditor" class="hed" hidden aria-labelledby="hed-h">
-  <h3 id="hed-h">Editor da planta</h3>
-  <div class="hed-tools">
-    <button type="button" data-tool="select" class="ctl small on">Selecionar</button>
-    <button type="button" data-tool="room" class="ctl small">+ Cômodo</button>
-    <button type="button" data-tool="wall" class="ctl small">+ Parede</button>
-    <button type="button" data-tool="stairs" class="ctl small">+ Escada</button>
-    <button type="button" id="hedDelete" class="ctl small" disabled>Apagar</button>
-    <button type="button" id="hedUndo" class="ctl small" disabled>↶ Desfazer</button>
-    <button type="button" id="hedRedo" class="ctl small" disabled>↷ Refazer</button>
-    <button type="button" id="hedAddFloor" class="ctl small">+ Andar</button>
-    <button type="button" id="hedSave" class="ctl small primary">Salvar</button>
-    <button type="button" id="hedExport" class="ctl small">Baixar planta</button>
-    <button type="button" id="hedImportBtn" class="ctl small">Importar planta</button>
-    <input type="file" id="hedImportFile" accept="application/json,.json" hidden>
-    <span id="hedDirty" class="hed-dirty" hidden aria-live="polite">não salvo</span>
-  </div>
-  <p class="hed-hint">Selecionar: clique num cômodo/parede/escada para marcar e apagar · + Cômodo/+ Parede: arraste no radar · + Escada: clique no radar</p>
-</section>
 <main>
+  <h3 id="rooms-h">Cômodos</h3>
   <div class="rooms" id="rooms" aria-label="Estado por cômodo"><div class="empty">aguardando dados dos cômodos…</div></div>
-  <h3 id="tl-h">Timeline</h3>
+  <h3 id="tl-h">Histórico</h3>
   <div class="timeline" id="timeline" role="log" aria-labelledby="tl-h"><div class="empty">sem eventos ainda</div></div>
 </main>
+</div>
+<div id="configDivider" class="config-divider" hidden><span>Configuração</span></div>
+<div id="controls" class="controls" hidden>
+  <div class="panel-inner">
+    <button id="sysToggle" class="ctl"></button>
+    <div id="srcToggles" class="src-toggles"></div>
+  </div>
+</div>
+<div id="statusPanel" class="statuspanel" hidden aria-labelledby="status-h">
+  <div class="panel-inner">
+    <h3 id="status-h">Status</h3>
+    <div id="statusVersion" class="status-version"></div>
+    <div class="status-cols">
+      <div class="status-col">
+        <h4>Sensores</h4>
+        <div id="statusSources"></div>
+      </div>
+      <div class="status-col">
+        <h4>Recursos</h4>
+        <div id="statusFeatures" class="status-chips"></div>
+      </div>
+    </div>
+    <div id="statusHouse" class="status-house"></div>
+  </div>
+</div>
+<div id="cameras" class="cams" hidden>
+  <div class="panel-inner">
+    <h3 id="cams-h">Câmeras</h3>
+    <p class="cams-hint">Câmeras IP alimentam a detecção. Cole o endereço RTSP (está no app/manual da câmera).</p>
+    <form id="camForm" class="cam-form" aria-labelledby="cams-h">
+      <input name="name" placeholder="nome (ex: cam_sala)" required aria-label="nome da câmera">
+      <input name="room" placeholder="cômodo (ex: sala)" required aria-label="cômodo">
+      <input name="rtsp_url" placeholder="rtsp://user:senha@ip:554/stream" required aria-label="URL RTSP">
+      <input name="confidence" type="number" step="0.05" min="0" max="1" value="0.4" aria-label="confiança mínima" title="confiança mínima de detecção (0–1)">
+      <button type="submit" class="ctl">Adicionar</button>
+      <span id="camFb" class="action-fb" aria-live="polite"></span>
+    </form>
+    <div id="camList" class="cam-list"></div>
+  </div>
+</div>
+<div id="narrate" class="narrate" hidden>
+  <div class="panel-inner">
+    <button id="narrateBtn" class="ctl">Gerar resumo</button>
+    <p id="narrateOut" class="narrate-out muted">Gera um resumo em texto do que está acontecendo na casa agora, a partir dos sensores.</p>
+  </div>
+</div>
+<div id="network" class="net" hidden>
+  <div class="panel-inner">
+    <h3>Rede e dispositivos</h3>
+    <p class="net-sub">Aparelhos conectados ao seu Wi-Fi e avisos sobre aparelhos desconhecidos.</p>
+    <div id="netHint" class="net-hint">Ainda sem dispositivos detectados na rede.</div>
+    <div class="net-cols">
+      <div class="net-col">
+        <h4>Dispositivos na rede</h4>
+        <div id="devList" class="dev-list" aria-live="polite"></div>
+      </div>
+      <div class="net-col">
+        <h4>Alertas de intrusão</h4>
+        <div id="alertList" class="alert-list" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="pairing" class="pair" hidden>
+  <div class="panel-inner">
+    <h3 id="pair-h">Parear dispositivo</h3>
+    <form id="pairForm" class="pair-form" aria-labelledby="pair-h">
+      <label class="pair-role">Tipo de dispositivo
+        <select name="role" aria-label="tipo de dispositivo">
+          <option value="user">Celular / visualizador (só ver)</option>
+          <option value="central">Outra central</option>
+        </select>
+      </label>
+      <button type="submit" class="ctl">Gerar código de pareamento</button>
+      <span id="pairFb" class="action-fb" aria-live="polite"></span>
+    </form>
+    <div id="pairCodeBox" class="pair-code-box" hidden>
+      <span id="pairCode" class="pair-code" aria-live="polite"></span>
+      <button type="button" id="pairCopy" class="ctl small">Copiar</button>
+      <span class="pair-hint">digite este código no app do dispositivo em até 2 min · rede local</span>
+    </div>
+    <h4 class="pair-sub">Dispositivos autorizados</h4>
+    <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
+  </div>
+</div>
+<section id="houseEditor" class="hed" hidden aria-labelledby="hed-h">
+  <div class="panel-inner">
+    <h3 id="hed-h">Editor da planta</h3>
+    <div class="hed-tools">
+      <button type="button" data-tool="select" class="ctl small on">Selecionar</button>
+      <button type="button" data-tool="room" class="ctl small">+ Cômodo</button>
+      <button type="button" data-tool="wall" class="ctl small">+ Parede</button>
+      <button type="button" data-tool="stairs" class="ctl small">+ Escada</button>
+      <button type="button" id="hedDelete" class="ctl small" disabled>Apagar</button>
+      <button type="button" id="hedUndo" class="ctl small" disabled>↶ Desfazer</button>
+      <button type="button" id="hedRedo" class="ctl small" disabled>↷ Refazer</button>
+      <button type="button" id="hedAddFloor" class="ctl small">+ Andar</button>
+      <button type="button" id="hedSave" class="ctl small primary">Salvar</button>
+      <span id="hedFb" class="action-fb" aria-live="polite"></span>
+      <button type="button" id="hedExport" class="ctl small">Baixar planta</button>
+      <button type="button" id="hedImportBtn" class="ctl small">Importar planta</button>
+      <input type="file" id="hedImportFile" accept="application/json,.json" hidden>
+      <span id="hedDirty" class="hed-dirty" hidden aria-live="polite">não salvo</span>
+    </div>
+    <p class="hed-hint">Selecionar: clique num cômodo/parede/escada para marcar e apagar · + Cômodo/+ Parede: arraste no radar · + Escada: clique no radar</p>
+  </div>
+</section>
 <script>
 // ---- Reconnection UI (live + companion): dim the house pill/hero + label "reconectando…"
 // while the WS is down; cleared on the very next onmessage frame (see handle() below).
@@ -639,6 +715,23 @@ document.getElementById("mode").innerHTML =
     MODE==="live"      ? "fonte: <b>casa real</b> (local)"
   : MODE==="companion" ? (companionToken() ? "fonte: <b>casa real</b> (visualizador)" : "fonte: <b>pareamento</b>")
   :                      "fonte: <b>demo</b> (dados fictícios)";
+// Content-first reorder (item 2): the config panels below the divider are all live-only
+// (or companion-only for #network), so only reveal the divider itself in live mode.
+if(MODE==="live"){
+  const cd = document.getElementById("configDivider"); if(cd) cd.hidden = false;
+} else if(MODE==="simulated"){
+  // First-run onboarding (item 5): the public demo intro strip.
+  const di = document.getElementById("demoIntro"); if(di) di.hidden = false;
+}
+// Visible action feedback (item 4): "✓ feito" next to the button/form that triggered a
+// successful write, or a plain error message on failure. Shared by cameras/pairing/house-editor.
+function actionFeedback(el, ok, msg){
+  if(!el) return;
+  clearTimeout(el._fbTimer);
+  el.className = "action-fb " + (ok ? "ok" : "err");
+  el.textContent = ok ? "✓ feito" : (msg || "falha — tente novamente");
+  if(ok) el._fbTimer = setTimeout(()=>{ el.textContent = ""; el.className = "action-fb"; }, 2000);
+}
 
 // ---- House indicator (home/away) — works in both live and demo modes ----
 const houseEl = document.getElementById("house");
@@ -697,7 +790,7 @@ function renderStatus(){
     (Array.isArray(s.sources) ? s.sources : []).forEach(src=>{
       const row = document.createElement("div"); row.className = "status-src-row";
       const dot = document.createElement("i"); dot.className = "h" + (src.active ? " active" : "");
-      const name = document.createElement("span"); name.textContent = src.name;
+      const name = document.createElement("span"); name.textContent = MODALITY_LABEL[src.name] || src.name;
       row.appendChild(dot); row.appendChild(name);
       sourcesEl.appendChild(row);
     });
@@ -727,14 +820,19 @@ async function renderControls(){
   async function refresh(){
     let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
     const sys = document.getElementById("sysToggle");
-    sys.textContent = s.running ? "Sistema: LIGADO" : "Sistema: DESLIGADO";
-    sys.className = "ctl " + (s.running ? "on" : "off");
+    // Item 7: a real switch affordance ("Sistema" + on/off track) instead of an ambiguous
+    // "Sistema: LIGADO" state label — role=switch + aria-checked keep it accessible.
+    sys.textContent = "Sistema";
+    sys.className = "ctl switch " + (s.running ? "on" : "off");
+    sys.setAttribute("role", "switch");
+    sys.setAttribute("aria-checked", s.running ? "true" : "false");
+    sys.setAttribute("aria-label", "Sistema: " + (s.running ? "ligado" : "desligado"));
     sys.onclick = async ()=>{ await post("/api/system/toggle",{on:!s.running}); refresh(); };
     const wrap = document.getElementById("srcToggles"); wrap.innerHTML = "";
     s.sources.forEach(src=>{
       const b = document.createElement("button");
       b.className = "ctl small " + (src.enabled ? "on" : "off");
-      b.textContent = `${src.name}: ${src.enabled ? "on" : "off"}`;
+      b.textContent = `${MODALITY_LABEL[src.name] || src.name}: ${src.enabled ? "ligado" : "desligado"}`;
       b.onclick = async ()=>{ await post(`/api/sources/${src.name}/toggle`,{enabled:!src.enabled}); refresh(); };
       wrap.appendChild(b);
     });
@@ -749,6 +847,7 @@ renderControls();
 async function renderCameras(){
   if(MODE!=="live") return;                 // live-only; never in Plano B
   document.getElementById("cameras").hidden = false;
+  const camFb = document.getElementById("camFb");
   const post = (url,body)=> fetch(location.origin+url,{method:"POST",
     headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
   async function refresh(){
@@ -765,19 +864,33 @@ async function renderCameras(){
       label.appendChild(confEl);
       row.appendChild(label);
       const rm = document.createElement("button"); rm.className="rm"; rm.textContent="Remover";
-      rm.onclick = async ()=>{ await fetch(location.origin+`/api/cameras/${encodeURIComponent(c.name)}`,
-        {method:"DELETE", headers:{"X-Wavr-Local":"1"}}).catch(()=>{}); refresh(); };
+      rm.onclick = async ()=>{
+        let r;
+        try{ r = await fetch(location.origin+`/api/cameras/${encodeURIComponent(c.name)}`,
+          {method:"DELETE", headers:{"X-Wavr-Local":"1"}}); }catch{}
+        // Item 4: visible result — success collapses the row (refresh); failure shows why, not silence.
+        if(r && r.ok){ actionFeedback(camFb, true); refresh(); }
+        else { actionFeedback(camFb, false, "falha ao remover câmera"); }
+      };
       row.appendChild(rm); list.appendChild(row);
     });
   }
   document.getElementById("camForm").onsubmit = async (e)=>{
     e.preventDefault();
     const f = e.target;
-    await post("/api/cameras", {
-      name: f.name.value, room: f.room.value, rtsp_url: f.rtsp_url.value,
-      confidence: parseFloat(f.confidence.value),
-    }).catch(()=>{});
-    f.reset(); f.confidence.value = "0.4"; refresh();
+    let r;
+    try{
+      r = await post("/api/cameras", {
+        name: f.name.value, room: f.room.value, rtsp_url: f.rtsp_url.value,
+        confidence: parseFloat(f.confidence.value),
+      });
+    }catch{}
+    if(r && r.ok){
+      f.reset(); f.confidence.value = "0.4"; refresh();
+      actionFeedback(camFb, true);
+    } else {
+      actionFeedback(camFb, false, "falha ao adicionar câmera");
+    }
   };
   refresh();
 }
@@ -894,6 +1007,7 @@ async function renderPairing(){
   const devList = document.getElementById("pairDevList");
   const codeBox = document.getElementById("pairCodeBox");
   const codeEl  = document.getElementById("pairCode");
+  const pairFb  = document.getElementById("pairFb");
 
   async function refresh(devices){
     if(devices === undefined){              // no cached list passed in — fetch a fresh one
@@ -921,9 +1035,11 @@ async function renderPairing(){
       const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
       rm.textContent = "Revogar";
       rm.onclick = async ()=>{
-        await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id),
-          {method:"DELETE", headers:hdr}).catch(()=>{});
-        refresh();                          // re-sync after revoking
+        let r;
+        try{ r = await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id),
+          {method:"DELETE", headers:hdr}); }catch{}
+        if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after revoking
+        else { actionFeedback(pairFb, false, "falha ao revogar dispositivo"); }
       };
       row.appendChild(rm); devList.appendChild(row);
     });
@@ -932,15 +1048,17 @@ async function renderPairing(){
   document.getElementById("pairForm").onsubmit = async (e)=>{
     e.preventDefault();
     const role = e.target.role.value;
+    let r;
     try{
-      const r = await fetch(location.origin+"/api/pair-code",{method:"POST",
+      r = await fetch(location.origin+"/api/pair-code",{method:"POST",
         headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
         body:JSON.stringify({role})});
-      if(!r.ok) return;                     // e.g. multidevice turned off mid-session
-      const d = await r.json();
-      codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
-      codeBox.hidden = false;
-    }catch{ return; }                       // network hiccup — leave the last code shown
+    }catch{ actionFeedback(pairFb, false, "falha de conexão"); return; }
+    if(!r.ok){ actionFeedback(pairFb, false, "não foi possível gerar o código"); return; }   // e.g. multidevice turned off mid-session
+    let d; try{ d = await r.json(); }catch{ actionFeedback(pairFb, false, "resposta inválida do servidor"); return; }
+    codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
+    codeBox.hidden = false;
+    actionFeedback(pairFb, true);
     refresh();                              // a fresh code may register a slot; keep list current
   };
 
@@ -958,6 +1076,11 @@ renderPairing();
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
 const POSTURE_LABEL = {walking:"andando", standing:"em pé", sitting:"sentado", lying:"deitado"};
+// Item 1: kill sensor jargon — every place a raw modality name would otherwise show
+// (room-card "why" rows, source toggles, Status list) renders this friendly label instead,
+// falling back to the raw name for anything not yet mapped.
+const MODALITY_LABEL = {wifi_csi:"Wi-Fi", ruview:"Wi-Fi CSI", camera:"Câmera", network:"Rede",
+                         sim:"Simulado", mmwave:"Radar", ble:"Bluetooth"};
 let radarUpdate = null;
 // SVG font-size scales with the viewBox transform like any other geometric length, so a
 // fixed user-space font-size shrinks/grows with room/viewport size. rebuildRoomsForFloor()
@@ -1033,7 +1156,7 @@ function placeDot(g, room, t){
   // .radar-target transition animates movement between updates.
   g.style.transform = `translate(${x}px, ${y}px)`;
   g.querySelector("title").textContent =
-    `alvo ${t.id ?? "?"} · confiança ${Math.round((t.confidence ?? 0)*100)}%`;
+    `pessoa ${t.id ?? "?"} · confiança ${Math.round((t.confidence ?? 0)*100)}%`;
   const txt = g.querySelector("text");
   // Compensate the viewBox's user-space scaling so the caption reads at a real ~10px
   // regardless of room/viewport size (see radarPxPerM comment above).
@@ -1657,13 +1780,14 @@ async function renderRadar(){
     afterHouseEdit();
   }
   async function saveHouseDoc(){
+    const fb = document.getElementById("hedFb");
     try{
       const r = await fetch(location.origin+"/api/house", {method:"PUT",
         headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
         body: JSON.stringify(HOUSE)});
-      if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); buildFloorSelect(); renderCurrentView(); }
-      else { alert("Falha ao salvar (" + r.status + ")"); }
-    }catch{ alert("Falha de conexão ao salvar"); }
+      if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); buildFloorSelect(); renderCurrentView(); actionFeedback(fb, true); }
+      else { actionFeedback(fb, false, "falha ao salvar (" + r.status + ")"); }
+    }catch{ actionFeedback(fb, false, "falha de conexão ao salvar"); }
   }
 
   function initHouseEditor(){
@@ -1865,7 +1989,9 @@ function upsert(rs){
     el.appendChild(h2);
     el.insertAdjacentHTML("beforeend", `<div class="conf"></div>
       <span class="pill"></span><div class="bar"><i></i></div>
-      <div class="srcs"></div><div class="vit"></div>`);
+      <details class="why"><summary>Por quê?</summary>
+        <div class="srcs"></div><div class="vit"></div>
+      </details>`);
     roomsEl.appendChild(el); c = cards[rs.room] = el;
   }
   c.querySelector(".conf").textContent = `confiança ${Math.round(rs.confidence*100)}%`;
@@ -1887,7 +2013,7 @@ function upsert(rs){
       d.title = s.health === "dead" ? "sem sinal" : "sinal envelhecendo";
       m.appendChild(d);
     }
-    m.appendChild(document.createTextNode(s.modality));
+    m.appendChild(document.createTextNode(MODALITY_LABEL[s.modality] || s.modality));
     const val = document.createElement("span");
     let txt = (s.presence ? "presente" : "vazio") + " · " + Math.round(s.confidence * 100) + "%";
     if(unhealthy && s.age_s != null) txt += " · " + s.age_s + "s";   // age since last reading
@@ -1897,8 +2023,8 @@ function upsert(rs){
   });
   const v = rs.vitals || {};
   const vit = [];
-  if(v.breathing_bpm!=null) vit.push(`resp ${v.breathing_bpm} rpm`);
-  if(v.heart_bpm!=null) vit.push(`bpm ${v.heart_bpm}`);
+  if(v.breathing_bpm!=null) vit.push(`Respiração ${v.breathing_bpm}/min`);
+  if(v.heart_bpm!=null) vit.push(`Coração ${v.heart_bpm} bpm`);
   c.querySelector(".vit").textContent = vit.join(" · ");
   c.dataset.occupied = rs.occupied ? "1" : "0";
   c.dataset.confidence = rs.confidence;
@@ -1934,6 +2060,19 @@ function pushTimeline(rs){
   row.appendChild(t); row.appendChild(r); row.appendChild(status);
   timelineEl.prepend(row);
   while(timelineEl.children.length>60) timelineEl.lastChild.remove();
+}
+
+// Item 5: honest first-run empty state for live installs with no sensors reporting yet —
+// replaces the forever-"Carregando…"/"aguardando dados" wording with something actionable,
+// but only if no RoomState has actually arrived by then (real data always wins).
+if(MODE==="live"){
+  setTimeout(()=>{
+    if(Object.keys(roomOcc).length) return;   // data already arrived — nothing to do
+    if(heroLine1El){ heroLine1El.textContent = "Nenhum sensor enviando dados ainda"; heroLine1El.className = "hero-line1"; }
+    if(heroLine2El){ heroLine2El.textContent = "Adicione uma câmera abaixo ou rode um scan de rede."; }
+    const emptyEl = roomsEl.querySelector(".empty");
+    if(emptyEl) emptyEl.textContent = "Nenhum sensor enviando dados ainda — adicione uma câmera abaixo ou rode um scan de rede.";
+  }, 6000);
 }
 
 const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); updateHouse(rs); radarUpdate?.(rs); };
