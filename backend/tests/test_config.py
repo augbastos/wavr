@@ -73,3 +73,11 @@ def test_config_reads_ha_env(monkeypatch):
     cfg = load_config()
     assert cfg.ha_url == "http://homeassistant.local:8123"
     assert cfg.ha_token == "long-lived-token"
+
+def test_config_port_default_and_env(monkeypatch):
+    # Serve port (WAVR_PORT) — used by `python -m wavr.serve` in both modes.
+    monkeypatch.delenv("WAVR_PORT", raising=False)
+    from wavr.config import load_config
+    assert load_config().port == 8000
+    monkeypatch.setenv("WAVR_PORT", "8443")
+    assert load_config().port == 8443
