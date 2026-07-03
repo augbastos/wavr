@@ -31,7 +31,7 @@ def test_history_returns_roomstate_list():
         assert r.status_code == 200
         body = r.json()
         assert isinstance(body, list) and body
-        assert set(body[0].keys()) == {"room", "occupied", "confidence", "vitals", "sources", "explanation", "ts"}
+        assert set(body[0].keys()) == {"room", "occupied", "confidence", "sources", "explanation", "ts"}
 
 
 def test_ws_live_streams_roomstate():

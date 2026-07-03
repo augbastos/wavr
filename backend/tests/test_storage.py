@@ -17,7 +17,8 @@ def test_insert_and_recent_roundtrips_chronologically():
     assert [r["room"] for r in rows] == ["sala", "quarto"]
     assert rows[0]["occupied"] is True and rows[1]["occupied"] is False
     assert rows[0]["sources"][0]["modality"] == "wifi_csi"   # JSON columns round-trip
-    assert set(rows[0].keys()) == {"room", "occupied", "confidence", "vitals", "sources", "explanation", "ts"}
+    assert set(rows[0].keys()) == {"room", "occupied", "confidence", "sources", "explanation", "ts"}
+    assert "vitals" not in rows[0]   # ADR-0002: vitals are live-only, never persisted
     st.close()
 
 
