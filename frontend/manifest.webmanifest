@@ -1,0 +1,21 @@
+{
+  "name": "Wavr",
+  "short_name": "Wavr",
+  "description": "Wavr — sensoriamento residencial multi-modal com fusão explicável por cômodo.",
+  "lang": "pt-br",
+  "dir": "ltr",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1216",
+  "theme_color": "#0f1216",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ]
+}
