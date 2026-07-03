@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import tempfile
 
 log = logging.getLogger(__name__)
 
@@ -173,3 +175,24 @@ def room_at(house: dict, level: int, x: float, y: float) -> str | None:
                 return r.get("name")
         return None      # right floor found, no room matched
     return None
+
+
+def save_house_map(path: str, doc: dict) -> None:
+    """Validate then atomically persist the house doc. Raises HouseMapError on an empty
+    path or an invalid doc (writing nothing). Temp file + os.replace = no torn writes."""
+    if not path:
+        raise HouseMapError("no house_map path configured (set WAVR_HOUSE_MAP)")
+    validate_house_map(doc)
+    d = os.path.dirname(os.path.abspath(path))
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
