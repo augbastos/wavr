@@ -1317,12 +1317,12 @@
     "id": "aqara-water-leak-sensor",
     "name": "Water Leak Sensor",
     "brand": "Aqara",
-    "category": "environmental",
+    "category": "safety-alarm",
     "modality": "water/moisture detection on floor",
     "wavr_ingress": "home-assistant",
     "coverage": "point",
     "detects": [
-      "environment"
+      "hazard"
     ],
     "control": "none",
     "status": "via-home-assistant",
@@ -1333,12 +1333,12 @@
     "id": "fibaro-flood-sensor",
     "name": "Flood Sensor",
     "brand": "Fibaro",
-    "category": "environmental",
+    "category": "safety-alarm",
     "modality": "water leak + temperature",
     "wavr_ingress": "home-assistant",
     "coverage": "point",
     "detects": [
-      "environment"
+      "hazard"
     ],
     "control": "none",
     "status": "via-home-assistant",
@@ -1365,12 +1365,12 @@
     "id": "aqara-smoke-detector",
     "name": "Smoke Detector",
     "brand": "Aqara",
-    "category": "environmental",
+    "category": "safety-alarm",
     "modality": "photoelectric smoke detection",
     "wavr_ingress": "home-assistant",
     "coverage": "room",
     "detects": [
-      "environment"
+      "hazard"
     ],
     "control": "none",
     "status": "via-home-assistant",
@@ -1381,12 +1381,12 @@
     "id": "sonoff-snzb-05p-temp-alarm",
     "name": "SNZB-05P Water Leak Sensor",
     "brand": "Sonoff",
-    "category": "environmental",
+    "category": "safety-alarm",
     "modality": "water leak detection",
     "wavr_ingress": "home-assistant",
     "coverage": "point",
     "detects": [
-      "environment"
+      "hazard"
     ],
     "control": "none",
     "status": "via-home-assistant",

@@ -4912,16 +4912,16 @@ try {
     camera:"Camera", contact:"Opening (door/window)", pir:"Motion (PIR)",
     environmental:"Environment", sound:"Sound", "lock-control":"Lock",
     "plug-control":"Smart plug", adapter:"Accessory", "hub-bridge":"Hub / bridge",
-    mmwave:"mmWave radar", "wifi-csi":"Wi-Fi CSI" };
+    mmwave:"mmWave radar", "wifi-csi":"Wi-Fi CSI", "safety-alarm":"Safety alarm" };
   var CAT_ICON = { ble:"ic-bt", "esp-diy":"ic-chip", uwb:"ic-radar", network:"ic-net",
     camera:"ic-camera", contact:"ic-door", pir:"ic-motion", environmental:"ic-thermo",
     sound:"ic-sound", "lock-control":"ic-lock", "plug-control":"ic-plug", adapter:"ic-usb",
-    "hub-bridge":"ic-hub", mmwave:"ic-radar", "wifi-csi":"ic-wifi" };
+    "hub-bridge":"ic-hub", mmwave:"ic-radar", "wifi-csi":"ic-wifi", "safety-alarm":"ic-alert" };
   var COV_EN = { point:"Point", room:"Room", zone:"Zone", perimeter:"Perimeter", "whole-home":"Whole home" };
   var COV_LOW = { point:"a point", room:"a room", zone:"a zone", perimeter:"the perimeter", "whole-home":"the whole home" };
   var COV_SAME = { point:"point", room:"room", zone:"zone", perimeter:"perimeter", "whole-home":"space" };
   var DET_EN = { presence:"presence", identity:"identity", motion:"motion", environment:"environment",
-    person:"person", sound:"sound", contact:"contact", vitals:"vitals", fall:"fall" };
+    person:"person", sound:"sound", contact:"contact", vitals:"vitals", fall:"fall", hazard:"hazard" };
   var CTRL_EN = { siren:"siren", lock:"lock", switch:"switch", plug:"plug",
     garage:"garage", valve:"valve", light:"light" };
   var CTRL_VERB = { siren:"trigger the siren", lock:"lock/unlock the door",
@@ -4993,6 +4993,9 @@ try {
     else if((c.category === "ble" || c.category === "network") && det.indexOf("identity") >= 0)
       s = "Adds identity (who, not just whether someone's there) — improves fusion confidence when " +
           "combined with another sensor's presence.";
+    else if(c.category === "safety-alarm")
+      s = "Life-safety hazard alarm (smoke/leak) — surfaced as a high-priority alert, " +
+          "not an occupancy signal; it never inflates or lowers presence confidence.";
     else if(c.category === "environmental")
       s = "Additional context (temperature/humidity/air), not presence — enriches the summary, " +
           "doesn't count toward occupancy confidence.";
