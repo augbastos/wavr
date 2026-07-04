@@ -115,16 +115,17 @@ def guess_device_type(vendor: str, hostname: str | None = None,
 def apply_recognition(device: Device, pin: str | None = None,
                       bonjour: dict | None = None, upnp: dict | None = None,
                       snmp: dict | None = None, netbios: dict | None = None,
-                      dhcp: dict | None = None) -> Device:
+                      dhcp: dict | None = None, ha: dict | None = None) -> Device:
     """Return a NEW Device with the identity fields re-fused from everything
     currently known about it (vendor/hostname/MAC/open_ports + the optional
     user type-pin, which always wins) plus any passive/active protocol self-
     description handed in for this scan cycle (`bonjour` from
     wavr.sources.mdns, `upnp` from wavr.sources.ssdp, `snmp` from
     wavr.sources.snmp, `netbios` from wavr.sources.netbios, `dhcp` from
-    wavr.sources.dhcp_fp -- all optional, all keyed per-device by the caller,
-    e.g. wavr.netinventory_service). Pure/offline -- call again after the
-    opt-in port pass fills `open_ports` (or fresh collector signals arrive)
+    wavr.sources.dhcp_fp, `ha` imported from the local Home Assistant device
+    registry via wavr.ha_import -- all optional, all keyed per-device by the
+    caller, e.g. wavr.netinventory_service). Pure/offline -- call again after
+    the opt-in port pass fills `open_ports` (or fresh collector signals arrive)
     to fold new hints in."""
     ident = recognize({
         "mac": device.mac,
@@ -137,6 +138,7 @@ def apply_recognition(device: Device, pin: str | None = None,
         "snmp": snmp,
         "netbios": netbios,
         "dhcp": dhcp,
+        "ha": ha,
     })
     return replace(
         device,

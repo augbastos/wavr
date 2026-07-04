@@ -60,6 +60,13 @@ their key, no engine change needed):
                wavr.sources.netbios's docstring)
     dhcp       dict -- DHCP fingerprint hook: {"device_type": taxonomy?,
                "os": str?}
+    ha         dict -- Home Assistant registry import hook (A4.0/wavr.ha_import):
+               {"device_type": taxonomy?, "make": str?, "model": str?,
+               "os": str?}. A `self_report`-family signal (capped medium-alone,
+               like upnp/bonjour/snmp/netbios) -- HA model strings are the user's
+               own curated hub yet ultimately derived from the same spoofable
+               device self-reports, so they must not forge "high" without a 2nd
+               independent (non-self_report) family agreeing.
 """
 from __future__ import annotations
 
@@ -84,6 +91,14 @@ _WEIGHTS: dict[str, float] = {
     "user_pin": 1.0,
     "upnp": 0.9,
     "bonjour": 0.85,
+    # `ha` (A4.0): a make/model/os/device_type opinion IMPORTED from the user's own
+    # local Home Assistant device+entity registry (wavr.ha_import). Ranked just below
+    # bonjour and above snmp -- HA's model strings are curated-ish (the user's own hub)
+    # BUT are themselves produced by HA integrations that often derived them from the
+    # SAME spoofable mDNS/SSDP self-reports, so it is a `self_report`-family signal
+    # capped at "medium" alone (see `_FAMILY` + the medium-cap loop below) and only
+    # reaches "high" via the family-gated consensus bump. It never outranks a user pin.
+    "ha": 0.82,
     "snmp": 0.8,
     "netbios": 0.75,
     "hostname": 0.65,
@@ -103,6 +118,7 @@ _FAMILY: dict[str, str] = {
     "bonjour": "self_report",
     "snmp": "self_report",
     "netbios": "self_report",
+    "ha": "self_report",
     "dhcp": "self_report",
     "hostname": "self_report",
     "port_hint": "observed",
@@ -173,12 +189,14 @@ def _candidates(signals: Mapping) -> list[dict]:
     # at "medium" ALONE -- see the module docstring's collector threat-model note;
     # a 2nd agreeing signal still reaches "high" via the normal consensus bump
     # (now family-gated -- see `_FAMILY`/audit fix #2).
-    for key in ("upnp", "bonjour", "snmp", "netbios"):
+    for key in ("upnp", "bonjour", "ha", "snmp", "netbios"):
         info = signals.get(key)
         if isinstance(info, Mapping):
             dtype = _valid_type(info.get("device_type"))
             if dtype:
-                add(key, dtype, "medium", f"self-described as {dtype}")
+                label = (f"Home Assistant reports {dtype}" if key == "ha"
+                         else f"self-described as {dtype}")
+                add(key, dtype, "medium", label)
 
     dhcp = signals.get("dhcp")
     if isinstance(dhcp, Mapping):
@@ -240,12 +258,12 @@ def recognize(signals: Mapping) -> DeviceIdentity:
         for c in cands
     )
 
-    make = _first_str(signals, ("upnp", "bonjour", "snmp", "netbios"), "make")
+    make = _first_str(signals, ("upnp", "bonjour", "ha", "snmp", "netbios"), "make")
     if make is None:
         vendor = signals.get("vendor") or ""
         make = vendor if vendor not in ("", "unknown") else None
-    model = _first_str(signals, ("upnp", "bonjour", "snmp", "netbios"), "model")
-    os_name = _first_str(signals, ("upnp", "bonjour", "snmp", "netbios", "dhcp"), "os")
+    model = _first_str(signals, ("upnp", "bonjour", "ha", "snmp", "netbios"), "model")
+    os_name = _first_str(signals, ("upnp", "bonjour", "ha", "snmp", "netbios", "dhcp"), "os")
 
     if not cands:
         return DeviceIdentity(make=make, model=model, os=os_name, sources=sources)
