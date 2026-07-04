@@ -157,6 +157,18 @@ class Config:
     # comes from gateway + extra targets only); set WAVR_HEALTH_RESOLVERS=1 to
     # opt in to the full 5-tier ladder.
     health_resolvers_enabled: bool
+    # Standalone tools (A3) -- all opt-in, default OFF, surfaced in
+    # /api/status.features. `net_wol` gates POST /api/wol (a LAN-local WoL
+    # actuator, zero egress). `net_diagnostics` gates the ping/traceroute/dns
+    # family (LAN/local). `net_speedtest` (also read by netutils.speedtest_
+    # enabled) is the ONE sanctioned external egress -- gated additionally by a
+    # per-invocation confirm=true and, for the IP-publishing M-Lab path, by
+    # `speedtest_provider=ndt7` (default `cloudflare`, the lower-disclosure
+    # option). The single WAVR_NET_SPEEDTEST flag alone can never publish the IP.
+    net_wol: bool
+    net_diagnostics: bool
+    net_speedtest: bool
+    speedtest_provider: str
 
 
 def load_config() -> Config:
@@ -279,4 +291,15 @@ def load_config() -> Config:
         ),
         # Audit fix #1: the public-resolver egress leg is opt-in, default OFF.
         health_resolvers_enabled=os.getenv("WAVR_HEALTH_RESOLVERS", "").lower() in ("1", "true", "yes"),
+        # Standalone tools (A3) -- opt-in, default OFF. `speedtest_provider`
+        # defaults to the lower-disclosure `cloudflare`; only `ndt7` reaches the
+        # IP-publishing M-Lab path, and only alongside confirm=true at the route.
+        net_wol=os.getenv("WAVR_NET_WOL", "").lower() in ("1", "true", "yes", "on"),
+        net_diagnostics=os.getenv("WAVR_NET_DIAGNOSTICS", "").lower() in ("1", "true", "yes", "on"),
+        net_speedtest=os.getenv("WAVR_NET_SPEEDTEST", "").lower() in ("1", "true", "yes", "on"),
+        speedtest_provider=(
+            os.getenv("WAVR_SPEEDTEST_PROVIDER", "cloudflare").strip().lower()
+            if os.getenv("WAVR_SPEEDTEST_PROVIDER", "cloudflare").strip().lower()
+            in ("cloudflare", "ndt7") else "cloudflare"
+        ),
     )

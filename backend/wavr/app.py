@@ -42,6 +42,7 @@ from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_coll
 from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
 from wavr.presence_report import build_report
+from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
@@ -134,7 +135,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                rules_publish=None, narrator=None, notify=None, device_meta=None,
                internet_monitor=None, health_check=None, dhcp_monitor=None,
                health_resolvers=None, gateway_monitor=None,
-               ha_import_store=None) -> FastAPI:
+               ha_import_store=None,
+               wol_send=None, ping_probe=None, traceroute_runner=None,
+               dns_query_fn=None, speedtest_fn=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -548,6 +551,97 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             import_devices, registry, _catalog, _ha_import_store, dry_run)
         return summary
 
+    @app.post("/api/wol")
+    async def wake_on_lan(mac: str = Body(..., embed=True),
+                          broadcast: str = Body("255.255.255.255", embed=True),
+                          port: int = Body(9, embed=True),
+                          _=Depends(require_local)):
+        # A3.1 Wake-on-LAN: a LAN-LOCAL actuator (zero external egress). Opt-in
+        # (WAVR_NET_WOL, default OFF -> 503) + require_local CSRF. The MAC +
+        # broadcast (LAN/private only) + port (0/7/9 only) are validated in
+        # wavr.wol, so this can't become a unicast-to-internet UDP primitive.
+        if not wol.wol_enabled():
+            raise HTTPException(status_code=503,
+                                detail="Wake-on-LAN disabled (set WAVR_NET_WOL=1)")
+        try:
+            return wol.wake(mac, broadcast=broadcast, port=port, send=wol_send)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/api/diag/{kind}")
+    async def diag(kind: str, host: str = Body("", embed=True),
+                   count: int = Body(3, embed=True),
+                   resolvers: list[str] | None = Body(None, embed=True),
+                   _=Depends(require_local)):
+        # A3.2 diagnostics: ping / traceroute / dns. LAN/local family, opt-in
+        # (WAVR_NET_DIAGNOSTICS, default OFF -> 503) + require_local CSRF. NO
+        # command injection: the target is regex-validated (rejecting every shell
+        # metacharacter) and traceroute is invoked with an argv LIST (shell=False)
+        # in wavr.diagnostics. Transports are injectable for tests.
+        if not diagnostics.diagnostics_enabled():
+            raise HTTPException(status_code=503,
+                                detail="diagnostics disabled (set WAVR_NET_DIAGNOSTICS=1)")
+        try:
+            if kind == "ping":
+                return await diagnostics.ping(host, count=count, probe=ping_probe)
+            if kind == "traceroute":
+                return await diagnostics.traceroute(host, runner=traceroute_runner)
+            if kind == "dns":
+                return await diagnostics.dnsbench(
+                    name=host or "example.com", resolvers=resolvers, query_fn=dns_query_fn)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=404, detail=f"unknown diagnostic: {kind}")
+
+    @app.post("/api/speedtest")
+    async def run_speedtest(confirm: bool = Body(False, embed=True),
+                            _=Depends(require_local)):
+        # A3.3 speed test: THE single sanctioned external egress -- treated like
+        # the narrator, with one extra gate because the M-Lab/ndt7 provider
+        # PUBLISHES the caller's public IP. THREE gates: (1) WAVR_NET_SPEEDTEST
+        # opt-in (503 when off); (2) the IP-publishing ndt7 path is only reachable
+        # when WAVR_SPEEDTEST_PROVIDER=ndt7 (default cloudflare) -- decided by
+        # config, never by request body, so the single flag can't publish the IP;
+        # (3) per-invocation confirm=true (409 without it). The response DISCLOSES
+        # exactly what leaves the box (speedtest.describe). Never called by any
+        # background task.
+        if not speedtest_mod.speedtest_enabled():
+            raise HTTPException(status_code=503,
+                                detail="speed test disabled (set WAVR_NET_SPEEDTEST=1)")
+        if confirm is not True:
+            raise HTTPException(
+                status_code=409,
+                detail=("speed test requires explicit confirm=true -- it contacts an "
+                        "external server; see the disclosure before confirming"))
+        provider = speedtest_mod.speedtest_provider()
+        runner = speedtest_fn or speedtest_mod.run_speedtest
+        try:
+            result = await asyncio.to_thread(runner, provider)
+        except Exception:
+            logging.exception("speedtest failed")
+            raise HTTPException(status_code=502, detail="speed test backend error")
+        result["disclosure"] = speedtest_mod.describe(result.get("provider", provider))
+        return result
+
+    @app.get("/api/speedtest/info")
+    async def speedtest_info():
+        # A3.3 PRE-egress disclosure source (audit fix). Side-effect-free, ZERO
+        # egress, no secrets: it makes NO external call, it only reports the
+        # configured provider + its egress disclosure so the frontend consent
+        # modal can render the EXACT provider-specific M-Lab public-IP-publication
+        # warning BEFORE the user sends confirm=true. Without this the disclosure
+        # was only knowable AFTER the egress (attached to the POST response), which
+        # broke disclose-before-confirm. `publishes_ip` is true only for the
+        # ndt7/M-Lab path. Gated by the same loopback_or_authed middleware as
+        # /api/status (read-only, so no require_local/confirm needed).
+        provider = speedtest_mod.speedtest_provider()
+        return {
+            "enabled": speedtest_mod.speedtest_enabled(),
+            "provider": provider,
+            "publishes_ip": provider == "ndt7",
+            "disclosure": speedtest_mod.describe(provider),
+        }
+
     @app.get("/healthz")
     async def healthz():
         return {"ok": True, "version": __version__}
@@ -593,6 +687,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # DNS-resolver legs, opt-in via WAVR_HEALTH_RESOLVERS. Surfaced
                 # here so the Privacy & Egress dashboard stays honest about it.
                 "health_resolvers": cfg.health_resolvers_enabled,
+                # Standalone tools (A3) -- opt-in, default OFF. `wol` +
+                # `diagnostics` are LAN/local; `speedtest` is the ONE sanctioned
+                # external egress (double-gated + per-invocation confirm). The
+                # configured provider + its egress disclosure are returned in the
+                # POST /api/speedtest response itself (features stays bool-only).
+                "wol": cfg.net_wol,
+                "diagnostics": cfg.net_diagnostics,
+                "speedtest": cfg.net_speedtest,
             },
             "house": {
                 "floors": len(_house.get("floors", [])),

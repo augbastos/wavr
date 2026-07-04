@@ -243,6 +243,9 @@ def test_status_shape_and_no_secrets():
             # opt-in via WAVR_HEALTH_RESOLVERS -- surfaced so the Privacy &
             # Egress dashboard stays honest about this one egress path too.
             "health_resolvers",
+            # Standalone tools (A3) -- opt-in, default OFF. wol/diagnostics are
+            # LAN/local; speedtest is the ONE sanctioned external egress.
+            "wol", "diagnostics", "speedtest",
         }
         assert set(body["features"]) == expected_features
         assert all(isinstance(v, bool) for v in body["features"].values())
@@ -277,6 +280,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             # gateway-MAC-identity tracker is the one default-ON feature
             # (zero-egress, on-box -- inventory feature #2).
             "gateway_monitor": True,
+            # Standalone tools (A3) -- opt-in, default OFF.
+            "wol": False, "diagnostics": False, "speedtest": False,
         }
 
 
