@@ -131,10 +131,14 @@ def test_inventory_endpoint_returns_device_json():
     }
     apple = by_mac["a4:83:e7:11:22:33"]
     # name/first_seen/last_seen are always present (Feature A/C) -- None when
-    # no device_meta store is wired in, as here.
-    assert set(apple) == {"mac", "ip", "vendor", "device_type", "known",
-                           "name", "first_seen", "last_seen"}
+    # no device_meta store is wired in, as here. type_confidence/make are the
+    # recog additions ("make" appears because the vendor is known; sources
+    # appear because recog recorded evidence).
+    assert set(apple) == {"mac", "ip", "vendor", "device_type", "type_confidence",
+                           "known", "name", "first_seen", "last_seen", "make",
+                           "sources"}
     assert apple["known"] is True and apple["vendor"] == "Apple"
+    assert apple["type_confidence"] in ("low", "medium", "high")
     assert apple["name"] is None and apple["first_seen"] is None and apple["last_seen"] is None
     assert "risks" not in apple                    # port-scan off -> no risk notes
 
@@ -184,7 +188,8 @@ def test_put_name_endpoint_persists_and_returns_entry():
         r = c.put("/api/inventory/name", json={"mac": "A4-83-E7-11-22-33", "name": "Sala TV"})
     assert r.status_code == 200
     assert r.json() == {"mac": "a4:83:e7:11:22:33", "name": "Sala TV",
-                         "first_seen": None, "last_seen": None}
+                         "first_seen": None, "last_seen": None,
+                         "device_type": None}
     assert dm.get("a4:83:e7:11:22:33")["name"] == "Sala TV"
 
 

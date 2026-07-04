@@ -75,7 +75,7 @@ def test_pwa_shell_loads_in_subnet_without_token(app):
     # A companion must be able to LOAD the page (+ install the PWA) before it has a token;
     # the static shell is exempt for in-subnet peers, but DATA still needs the token.
     peer = TestClient(app, client=("192.168.1.50", 12345))
-    for path in ("/", "/manifest.webmanifest", "/sw.js", "/icon.svg"):
+    for path in ("/", "/index.html", "/manifest.webmanifest", "/sw.js", "/icon.svg"):
         assert peer.get(path).status_code == 200, path
     assert peer.get("/api/state").status_code == 403          # data still gated
     # out-of-subnet cannot even load the shell

@@ -300,8 +300,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # in-subnet peer WITHOUT a token, because the companion must LOAD the page to pair
         # and these carry nothing sensitive (the page shows only the pairing screen until a
         # token is entered). The DATA endpoints (/api/*, /ws/*) still require the token.
+        # "/index.html" is the same shell as "/" (H3 audit fix: sw.js precaches it by name).
         _p = request.url.path
-        if _p == "/" or _p in ("/manifest.webmanifest", "/sw.js", "/icon.svg") or _p.startswith("/vendor/"):
+        if _p in ("/", "/index.html", "/manifest.webmanifest", "/sw.js", "/icon.svg") or _p.startswith("/vendor/"):
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 return await call_next(request)
@@ -535,6 +536,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.get("/")
     async def dashboard():
+        return FileResponse(_INDEX)
+
+    # sw.js precaches "./index.html" by name (Cache.addAll is all-or-nothing), but only
+    # "/" was ever registered -- so that entry 404'd and the service worker never
+    # installed on the live origin (H3 audit fix). Same response as "/"; exempted from
+    # the token gate the same way "/" is (see loopback_or_authed above).
+    @app.get("/index.html")
+    async def dashboard_index_html():
         return FileResponse(_INDEX)
 
     # PWA shell files, served same-origin so the app installs + caches without any

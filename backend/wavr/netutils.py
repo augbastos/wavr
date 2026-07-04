@@ -7,8 +7,24 @@ deps. Every network touch is behind an injectable transport so the whole module
 is mock-tested with zero real network.
 
 Config flags (all default OFF):
-  WAVR_NET_PORTSCAN   -> enable risky-port awareness (port_scan_enabled())
-  WAVR_NET_SPEEDTEST  -> enable the internet-health probe (speedtest_enabled())
+  WAVR_NET_PORTSCAN        -> enable risky-port awareness (port_scan_enabled())
+                              OPERATOR WARNING: this connect-scans EVERY host the
+                              ARP inventory discovers on the local /24 -- not just
+                              the owner's own devices. On a shared/guest subnet
+                              (e.g. an apartment building router, a shared office
+                              LAN) that includes neighbors' hosts the operator
+                              does not own. Each probe is connect-only -- a plain
+                              TCP connect immediately closed, no banner grab, no
+                              payload ever sent, no bytes ever read (see
+                              _tcp_open_probe) -- but the CONNECTION ATTEMPT
+                              itself still reaches every host on the subnet.
+  WAVR_NET_PORTSCAN_SCOPE=known -> restrict WAVR_NET_PORTSCAN to devices already
+                              on the known-MAC allowlist instead of every
+                              discovered host (port_scan_known_only_enabled());
+                              trades rogue-device port awareness for a smaller
+                              footprint on shared subnets. Default OFF (scans
+                              every discovered host, unchanged behaviour).
+  WAVR_NET_SPEEDTEST       -> enable the internet-health probe (speedtest_enabled())
 
 PRIVACY (ADR-0002): presence history is MAC-level join/leave only, kept
 in-memory. No per-person / per-target location data is ever recorded here.
@@ -24,6 +40,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
+from wavr.data.ports import QUICK_SCAN_PORTS
 from wavr.netinventory import Device
 
 
@@ -32,8 +49,27 @@ def _env_flag(name: str) -> bool:
 
 
 def port_scan_enabled() -> bool:
-    """True only if WAVR_NET_PORTSCAN is explicitly enabled. OFF by default."""
+    """True only if WAVR_NET_PORTSCAN is explicitly enabled. OFF by default.
+
+    OPERATOR WARNING (L3 audit fix): when on, this connect-scans EVERY host the
+    ARP inventory discovers on the local /24 -- not just the owner's own
+    devices. On a shared/guest subnet that includes hosts the operator does not
+    own. Each probe is connect-only (a plain TCP connect immediately closed --
+    no banner grab, no payload, no bytes ever read; see _tcp_open_probe), but
+    the connection attempt itself still reaches every discovered host. Set
+    WAVR_NET_PORTSCAN_SCOPE=known (port_scan_known_only_enabled()) to restrict
+    the pass to the known-MAC allowlist instead."""
     return _env_flag("WAVR_NET_PORTSCAN")
+
+
+def port_scan_known_only_enabled() -> bool:
+    """True only if WAVR_NET_PORTSCAN_SCOPE=known. OFF by default (scans every
+    ARP-discovered host, i.e. unchanged behaviour). When on, the opt-in port
+    pass (wavr.netinventory_service) is scoped to devices already on the
+    known-MAC allowlist, so a neighbor's device on a shared/guest subnet is
+    never connect-scanned -- at the cost of losing port-derived type hints for
+    genuinely rogue/unknown devices."""
+    return os.getenv("WAVR_NET_PORTSCAN_SCOPE", "").strip().lower() == "known"
 
 
 def speedtest_enabled() -> bool:
@@ -95,6 +131,29 @@ async def annotate_risks(devices, ports=tuple(RISKY_PORTS), timeout: float = 0.5
                       if d.ip else [])
         notes = tuple(RISKY_PORTS[p] for p in open_ports if p in RISKY_PORTS)
         out.append(replace(d, risks=notes))
+    return out
+
+
+async def annotate_ports(devices, ports=None, timeout: float = 0.5,
+                         probe: PortProbe | None = None) -> list[Device]:
+    """ONE connect-only pass per device filling BOTH `open_ports` (the full
+    open subset of the quick-scan + risky sets) and `risks` (RISKY_PORTS
+    notes). Supersedes annotate_risks in the inventory loop -- same HARD
+    LIMITS: TCP connect only (no raw sockets, no banner grab, no payloads),
+    report-only, and OPT-IN behind the same WAVR_NET_PORTSCAN gate
+    (port_scan_enabled()) -- never call it unless that gate is on.
+
+    The open-port list feeds wavr.recog's port-derived device-type hint
+    (wavr.data.ports.DEVICE_TYPE_HINTS). Devices without an IP pass through
+    untouched. Never mutates the input."""
+    scan_ports = tuple(sorted(set(ports if ports is not None
+                                  else set(QUICK_SCAN_PORTS) | set(RISKY_PORTS))))
+    out: list[Device] = []
+    for d in devices:
+        opens = (await scan_risky_ports(d.ip, scan_ports, timeout, probe)
+                 if d.ip else [])
+        notes = tuple(RISKY_PORTS[p] for p in opens if p in RISKY_PORTS)
+        out.append(replace(d, risks=notes, open_ports=tuple(opens)))
     return out
 
 
