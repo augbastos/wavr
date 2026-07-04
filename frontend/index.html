@@ -1166,16 +1166,19 @@
           <div class="net-cols">
             <div class="net-col">
               <h4>Currently present <span id="presPresentCount" class="pres-n"></span></h4>
-              <div id="presPresentList" class="dev-list" aria-live="polite"></div>
+              <!-- deliberately NOT aria-live: this list rebuilds on a 15s poll and its
+                   times tick every cycle — a live region would chatter at screen readers
+                   (same precedent as #mapSrSummary). The user-triggered #healthResult IS live. -->
+              <div id="presPresentList" class="dev-list"></div>
             </div>
             <div class="net-col">
               <h4>Most present</h4>
               <div id="presTopList" class="dev-list"></div>
             </div>
           </div>
-          <details id="presRecentlyAway" class="why"><summary>Recently away (<span id="presAwayCount" class="pres-n"></span>)</summary>
+          <details id="presRecentlyAway" class="why"><summary>Recently away <span id="presAwayCount" class="pres-n"></span></summary>
             <div id="presAwayList" class="dev-list"></div></details>
-          <details id="presStale" class="why"><summary>Not seen in a while (<span id="presStaleCount" class="pres-n"></span>)</summary>
+          <details id="presStale" class="why"><summary>Not seen in a while <span id="presStaleCount" class="pres-n"></span></summary>
             <div id="presStaleList" class="dev-list"></div></details>
           <p class="panel-note" id="presenceNote" hidden>Presence report needs a Wavr hub connected.</p>
         </div>
@@ -1425,7 +1428,7 @@
              comment at the click handler below. -->
         <div id="healthCheck" class="tile" hidden aria-labelledby="health-h">
           <div class="tile-head"><h2 id="health-h">Health check</h2>
-            <span id="healthChecking" class="egress-live" hidden><i aria-hidden="true"></i>checking…</span>
+            <span id="healthChecking" class="egress-live" role="status" hidden><i aria-hidden="true"></i>checking…</span>
           </div>
           <div class="narrate-row">
             <button id="healthBtn" type="button" class="ctl" data-tip="Checks your gateway and, if enabled on the hub, 3 public DNS resolvers — the only way to see if the internet itself is down">Check now</button>
@@ -6499,9 +6502,19 @@ try {
     });
   }
   async function presenceRefresh(){
-    var d;
-    try{ d = await (await fetch(location.origin + "/api/presence/report")).json(); }
+    var r;
+    try{ r = await fetch(location.origin + "/api/presence/report"); }
     catch(e){ return; }   // backend momentarily unreachable — keep last view
+    if(!r.ok){
+      // route missing = a hub running pre-A2 code (404) — say so honestly instead
+      // of rendering the error body as "0 devices tracked"
+      var sum0 = $("presenceSummary");
+      if(sum0 && !sum0.textContent) sum0.textContent =
+        "unavailable on this hub version — restart/update the Wavr hub to enable the presence report";
+      return;
+    }
+    var d;
+    try{ d = await r.json(); }catch(e){ return; }
     if(!d || typeof d !== "object") return;
     presBuildInvIdx();
     var sum = $("presenceSummary");
@@ -6515,9 +6528,11 @@ try {
         : " · no activity recorded yet";
       sum.textContent = txt;
     }
-    var pc = $("presPresentCount"); if(pc) pc.textContent = String((d.currently_present || []).length);
-    var ac = $("presAwayCount"); if(ac) ac.textContent = String((d.recently_away || []).length);
-    var sc = $("presStaleCount"); if(sc) sc.textContent = String((d.stale || []).length);
+    // parens live in the VALUE, not the static markup — empty spans (old hub /
+    // pre-first-fetch) render nothing instead of a bare "()"
+    var pc = $("presPresentCount"); if(pc) pc.textContent = "(" + (d.currently_present || []).length + ")";
+    var ac = $("presAwayCount"); if(ac) ac.textContent = "(" + (d.recently_away || []).length + ")";
+    var sc = $("presStaleCount"); if(sc) sc.textContent = "(" + (d.stale || []).length + ")";
     renderPresenceList($("presPresentList"), d.currently_present, "present", "no devices currently present");
     renderPresenceList($("presTopList"), d.most_present, "present", "not enough data yet");
     renderPresenceList($("presAwayList"), d.recently_away, "away", "none");
@@ -6956,13 +6971,18 @@ try {
       // repeat click always re-triggers a real check instead of risking a stale browser-
       // cached GET response (this route can have a genuine external side effect per call).
       fetch(location.origin + "/api/health", { headers: { "X-Wavr-Local": "1" }, cache: "no-store" })
-        .then(function(r){ if(!r.ok) throw new Error("http " + r.status); return r.json(); })
+        .then(function(r){ if(!r.ok) throw new Error(String(r.status)); return r.json(); })
         .then(function(d){
           renderHealthResult(d || {});
           if(out){ out.className = "narrate-out muted"; out.textContent = DEFAULT_OUT; }
         })
-        .catch(function(){
-          if(out){ out.className = "narrate-out muted"; out.textContent = "connection failed — couldn't reach the hub"; }
+        .catch(function(err){
+          if(out){
+            out.className = "narrate-out muted";
+            out.textContent = (err && err.message === "404")
+              ? "not available on this hub version — restart/update the Wavr hub"
+              : "connection failed — couldn't reach the hub";
+          }
         })
         .finally(function(){
           inflight = false;
