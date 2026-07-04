@@ -34,6 +34,9 @@ from wavr.narrator import Narrator, make_gemini_generate
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
 from wavr.device_meta import DeviceMeta
+from wavr.ha_client import client_from_config
+from wavr.ha_import import fetch_registry, import_devices
+from wavr.ha_import_store import HAImportStore
 from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
 from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
 from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
@@ -48,6 +51,21 @@ from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_de
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 _VENDOR_DIR = _INDEX.parent / "vendor"
+_CATALOG_PATH = _VENDOR_DIR / "device-catalog.json"
+
+
+def _load_device_catalog() -> list:
+    """Read the static offline device catalog (a repo asset -- safe to read
+    server-side) for HA-import catalog matching. Defensive: any read/parse
+    failure or an unexpected shape -> `[]`, never a crash (A4.1 catalog match is
+    advisory UI enrichment, never load-bearing)."""
+    try:
+        import json
+        data = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        logging.warning("device catalog unavailable for HA import", exc_info=True)
+        return []
 
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "testclient"})
@@ -115,7 +133,8 @@ def _camera_factory(cam: dict, cfg):
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
                internet_monitor=None, health_check=None, dhcp_monitor=None,
-               health_resolvers=None, gateway_monitor=None) -> FastAPI:
+               health_resolvers=None, gateway_monitor=None,
+               ha_import_store=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -159,6 +178,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # sensitive and the store is inert until something calls seen()/set_name().
     _owns_device_meta = device_meta is None
     _device_meta = device_meta or DeviceMeta(cfg.db_path)
+
+    # HA-import store (A4.1): persisted per-MAC identity imported from the local
+    # Home Assistant device registry, always built (like device_meta) -- inert
+    # until POST /api/ha/import runs. Fed back into every LAN scan as the recog
+    # `ha` signal (A4.0). Lives in wavr.db (git-ignored) so HA-derived home data
+    # never lands in this public repo.
+    _owns_ha_store = ha_import_store is None
+    _ha_import_store = ha_import_store or HAImportStore(cfg.db_path)
+    # Static device catalog (loaded once) for HA-import catalog matching.
+    _catalog = _load_device_catalog()
 
     # Gateway-MAC-identity tracker (gateway-identity-rogue-dhcp, inventory feature #2):
     # ON by default (cfg.net_gateway_monitor) -- unlike every active collector it
@@ -221,7 +250,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         gateway_detect_enabled=True,
         # Gateway-MAC-identity tracker (inventory feature #2): each scan feeds this
         # cycle's is_gateway binding into the debounced monitor built above.
-        gateway_monitor=_gateway_monitor)
+        gateway_monitor=_gateway_monitor,
+        # HA-import identity (A4.1): each scan folds the user-imported HA
+        # registry back in as the recog `ha` signal (medium-capped, A4.0).
+        ha_store=_ha_import_store)
 
     # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
     # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
@@ -343,6 +375,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_device_meta:
                 with suppress(Exception):
                     _device_meta.close()
+            if _owns_ha_store:
+                with suppress(Exception):
+                    _ha_import_store.close()
             if _owns_gateway_store and _gateway_store is not None:
                 with suppress(Exception):
                     _gateway_store.close()
@@ -485,6 +520,33 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             logging.exception("narrate failed")
             raise HTTPException(status_code=502, detail="narration backend error")
         return {"narration": text}
+
+    @app.post("/api/ha/import")
+    async def ha_import(dry_run: bool = Body(False, embed=True),
+                        _=Depends(require_local)):
+        # A4.1 HA -> Wavr registry import. USER-TRIGGERED ONLY (never a timer),
+        # gated by require_local (CSRF), local-HA-only + SSRF-safe (wavr.ha_import
+        # only ever contacts the configured ha_url). The HA token is read from
+        # config here and passed to the transport only -- it is NEVER in the
+        # response or any error string below.
+        if not cfg.ha_import:
+            raise HTTPException(status_code=403,
+                                detail="HA import disabled (WAVR_HA_IMPORT=0)")
+        if client_from_config(cfg) is None:
+            # HA not configured (empty ha_url/ha_token) -> nothing to import, no write.
+            raise HTTPException(status_code=400,
+                                detail="Home Assistant not configured (set WAVR_HA_URL + WAVR_HA_TOKEN)")
+        try:
+            registry = await fetch_registry(cfg.ha_url, cfg.ha_token)
+        except Exception as exc:
+            # WavrHAError (unreachable / bad token / bad url) -- the message never
+            # carries the token (wavr.ha_import guarantees it); surface as 502.
+            logging.warning("HA import fetch failed: %s", exc)
+            raise HTTPException(status_code=502,
+                                detail="Home Assistant registry unreachable")
+        summary = await asyncio.to_thread(
+            import_devices, registry, _catalog, _ha_import_store, dry_run)
+        return summary
 
     @app.get("/healthz")
     async def healthz():

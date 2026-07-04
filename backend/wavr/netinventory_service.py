@@ -163,7 +163,7 @@ class NetworkInventoryService:
                  hostname_resolve_enabled: bool = False, hostname_resolver=None,
                  latency_enabled: bool = False, ping=None,
                  gateway_detect_enabled: bool = False, gateway_detector=None,
-                 gateway_monitor=None):
+                 gateway_monitor=None, ha_store=None):
         self._known = _norm_macs(known_macs)
         self._scan = scan
         self._interval = interval
@@ -210,6 +210,14 @@ class NetworkInventoryService:
         # a two-factor-debounced gateway-identity change surfaces as its own
         # GatewayAlert. None -> no gateway-identity tracking (unchanged).
         self._gateway_monitor = gateway_monitor
+        # HA-import identity (A4.1) -- OPTIONAL wavr.ha_import_store.HAImportStore.
+        # User-triggered POST /api/ha/import persists per-MAC make/model/os/type
+        # imported from the local Home Assistant registry; each scan folds it back
+        # in as the recog `ha` signal (a self_report-family, medium-capped signal --
+        # wavr.recog A4.0). Read fresh each cycle (like `_type_pins`) so an import
+        # takes effect on the very next scan; tolerant -- a store error must never
+        # break scanning.
+        self._ha_store = ha_store
         # NetBIOS/SNMP (active, targeted -- see module docstring for the
         # shared-subnet "known-only" mitigation and no-log-community rule).
         self._netbios_enabled = netbios_enabled
@@ -270,8 +278,9 @@ class NetworkInventoryService:
                 devices = await annotate_ports(devices, probe=self._port_probe)
 
         signals = await self._collect_protocol_signals(devices)
+        ha_sigs = self._ha_signals()
 
-        if self._port_scan_on() or signals:
+        if self._port_scan_on() or signals or ha_sigs:
             devices = [
                 apply_recognition(
                     d, pin=pins.get(d.mac),
@@ -280,6 +289,7 @@ class NetworkInventoryService:
                     snmp=signals.get(d.mac, {}).get("snmp"),
                     netbios=signals.get(d.mac, {}).get("netbios"),
                     dhcp=signals.get(d.mac, {}).get("dhcp"),
+                    ha=ha_sigs.get(d.mac),
                 )
                 for d in devices
             ]
@@ -489,6 +499,20 @@ class NetworkInventoryService:
             return self._device_meta.type_pins()
         except Exception:
             _LOG.warning("device_meta.type_pins failed", exc_info=True)
+            return {}
+
+    def _ha_signals(self) -> dict:
+        """Per-MAC HA-imported identity as {mac: {device_type?, make?, model?,
+        os?}} from the optional ha_store -- the recog `ha` signal (A4.1). Read
+        fresh each scan so a user-triggered import applies on the next cycle.
+        Tolerant, same rule as `_type_pins`: a broken store must never break
+        scanning."""
+        if not self._ha_store:
+            return {}
+        try:
+            return self._ha_store.signals()
+        except Exception:
+            _LOG.warning("ha_store.signals failed", exc_info=True)
             return {}
 
     def _record_seen(self, devices) -> None:

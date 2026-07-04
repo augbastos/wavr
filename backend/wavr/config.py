@@ -60,6 +60,12 @@ class Config:
     # the user's own HA on the LAN + a locally-stored token. Both empty => disabled.
     ha_url: str
     ha_token: str
+    # HA-import kill-switch (A4.1). Default ON: when HA is configured, the
+    # user-triggered POST /api/ha/import may pull the local HA device registry
+    # to enrich recog. Set WAVR_HA_IMPORT=0 for operators who want read-only HA
+    # (mcp read/control) WITHOUT the registry-import path. Import is never
+    # automatic/timed regardless -- this only gates the manual endpoint.
+    ha_import: bool
     # Home Assistant CONTROL/WRITE side (ADR-0005) — the "brain on HA" WRITE half.
     # OPT-IN, default OFF: the control tool is inert unless `mcp_control` is on, so the
     # read-only default is preserved (nothing actuates). `ha_allowed_services` bounds
@@ -205,6 +211,10 @@ def load_config() -> Config:
         # HA read-side (ADR-0005): empty => disabled. Local HA URL + long-lived token.
         ha_url=os.getenv("WAVR_HA_URL", ""),
         ha_token=os.getenv("WAVR_HA_TOKEN", ""),
+        # HA-import kill-switch (A4.1): default ON (only reachable once HA is
+        # configured + require_local passes). Set WAVR_HA_IMPORT=0 to disable.
+        ha_import=os.getenv("WAVR_HA_IMPORT", "1").strip().lower()
+            in ("1", "true", "yes", "on"),
         # HA control-side (ADR-0005): default OFF -> control tool inert, read-only as
         # today. Allowlist unset -> the SAFE default set; set-but-empty -> deny all
         # (fail closed). Stored lowercased so the tool's gate compares case-insensitively.
