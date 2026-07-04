@@ -78,6 +78,16 @@ class Config:
     internet_check_host: str
     internet_check_interval: float
     internet_fail_threshold: int
+    # Passive protocol collectors (defensive-inventory collectors) -- opt-in, default OFF.
+    # mDNS/SSDP are standard/public (RFC 6762 / UPnP) LAN multicast listeners
+    # feeding richer make/model/os signals into wavr.recog; the LOC-XML fetch
+    # is a strictly more active probe than passive listening, so it is its OWN
+    # separate opt-in flag on top of `net_ssdp`. `net_collect_duration` bounds
+    # how long each scan cycle listens (both collectors run concurrently).
+    net_mdns: bool
+    net_ssdp: bool
+    net_ssdp_location: bool
+    net_collect_duration: float
 
 
 def load_config() -> Config:
@@ -152,4 +162,12 @@ def load_config() -> Config:
         internet_check_host=os.getenv("WAVR_INTERNET_CHECK_HOST", ""),
         internet_check_interval=float(os.getenv("WAVR_INTERNET_CHECK_INTERVAL", "15.0")),
         internet_fail_threshold=int(os.getenv("WAVR_INTERNET_FAIL_THRESHOLD", "3")),
+        # Passive collectors (opt-in, default OFF): join the standard mDNS/SSDP
+        # multicast groups and feed self-description signals into recog.
+        net_mdns=os.getenv("WAVR_NET_MDNS", "").lower() in ("1", "true", "yes"),
+        net_ssdp=os.getenv("WAVR_NET_SSDP", "").lower() in ("1", "true", "yes"),
+        # A strictly more active probe (one same-LAN HTTP GET per host) on top
+        # of passive SSDP listening -- its own opt-in, independent of net_ssdp.
+        net_ssdp_location=os.getenv("WAVR_NET_SSDP_LOCATION", "").lower() in ("1", "true", "yes"),
+        net_collect_duration=float(os.getenv("WAVR_NET_COLLECT_DURATION", "3.0")),
     )

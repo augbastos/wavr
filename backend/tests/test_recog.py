@@ -122,6 +122,37 @@ def test_oui_alone_low_or_medium_table_confidence_is_unaffected():
     assert recognize({"vendor": "Wyze"}).confidence == "medium"
 
 
+# ---- collector threat model: self-description ALONE caps at medium ------------
+
+def test_bonjour_alone_capped_at_medium():
+    # mDNS/SSDP/SNMP are self-broadcast on the open LAN multicast group -- any
+    # host can announce anything, so ONE self-description signal must never
+    # claim "high" alone (same rationale as the M1 OUI-alone cap).
+    ident = recognize({"bonjour": {"device_type": "camera", "make": "Wyze"}})
+    assert ident.device_type == "camera"
+    assert ident.confidence == "medium"
+    assert [s["signal"] for s in ident.sources] == ["bonjour"]
+
+
+def test_upnp_alone_capped_at_medium():
+    ident = recognize({"upnp": {"device_type": "tv", "make": "Sony"}})
+    assert ident.confidence == "medium"
+
+
+def test_snmp_alone_capped_at_medium():
+    ident = recognize({"snmp": {"device_type": "router"}})
+    assert ident.confidence == "medium"
+
+
+def test_self_description_plus_second_signal_reaches_high():
+    # A 2nd independent signal agreeing on the same type restores "high" via
+    # the normal consensus bump -- only the ALONE case is capped.
+    ident = recognize({"bonjour": {"device_type": "camera"}, "open_ports": [554]})
+    assert ident.device_type == "camera"
+    assert ident.confidence == "high"
+    assert {s["signal"] for s in ident.sources} == {"bonjour", "port_hint"}
+
+
 # ---- make / model / os --------------------------------------------------------
 
 def test_make_falls_back_to_known_vendor():

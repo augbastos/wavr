@@ -10,17 +10,21 @@ from wavr.hub import Hub
 from wavr.fusion import FusionEngine
 from wavr.sources.simulated import SimulatedSource
 from wavr.camera_store import CameraStore
+from wavr.device_meta import DeviceMeta
 
 
-def build_client(client=None):
+def build_client(client=None, device_meta=None, health_check=None):
     # `client`: optional (host, port) tuple forwarded to TestClient, which uses it
     # verbatim as scope["client"] for every request/websocket it issues. This lets
     # tests forge a non-loopback peer to exercise the *real* enforcement path
     # (middleware / route guard) instead of just the `_is_loopback` helper.
+    # `device_meta`/`health_check`: injectable seams for the presence-report and
+    # health-check routes -- keeps every test off the real db file / real network.
     app = create_app(
         sources=[("sim", lambda: SimulatedSource(interval=0.01), True)],
         storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
         camera_store=CameraStore(":memory:"),
+        device_meta=device_meta, health_check=health_check,
     )
     kwargs = {"client": client} if client is not None else {}
     return TestClient(app, **kwargs)
@@ -268,3 +272,81 @@ def test_status_source_list_matches_system_endpoint():
         system_sources = {s["name"]: s["active"] for s in client.get("/api/system").json()["sources"]}
         status_sources = {s["name"]: s["active"] for s in client.get("/api/status").json()["sources"]}
         assert status_sources == system_sources
+
+
+# --- /api/presence/report -------------------------------------------------------
+
+def test_presence_report_shape_on_empty_store():
+    dm = DeviceMeta(":memory:")
+    with build_client(device_meta=dm) as client:
+        r = client.get("/api/presence/report")
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "generated_at", "device_count", "first_activity_at", "last_activity_at",
+            "quiet_period_seconds", "currently_present", "recently_away", "stale",
+            "most_present",
+        }
+        assert body["device_count"] == 0
+        assert body["currently_present"] == []
+
+
+def test_presence_report_reflects_device_meta_sightings():
+    dm = DeviceMeta(":memory:")
+    dm.seen("a4:83:e7:11:22:33")
+    dm.set_name("a4:83:e7:11:22:33", "MacBook")
+    with build_client(device_meta=dm) as client:
+        body = client.get("/api/presence/report").json()
+        assert body["device_count"] == 1
+        assert body["currently_present"][0]["mac"] == "a4:83:e7:11:22:33"
+        assert body["currently_present"][0]["name"] == "MacBook"
+
+
+def test_presence_report_get_requires_no_local_header():
+    # Read-only route -- no CSRF/X-Wavr-Local needed, same as every other GET.
+    dm = DeviceMeta(":memory:")
+    with build_client(device_meta=dm) as client:
+        assert client.get("/api/presence/report").status_code == 200
+
+
+# --- /api/health -----------------------------------------------------------------
+
+async def _fake_health_up() -> bool:
+    return True
+
+
+async def _fake_health_down() -> bool:
+    return False
+
+
+def test_health_shape_and_gateway_reachable():
+    with build_client(health_check=_fake_health_up) as client:
+        r = client.get("/api/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {"gateway", "internet_monitor"}
+        assert set(body["gateway"]) == {"ok", "host"}
+        assert body["gateway"]["ok"] is True
+        # internet_monitor is off by default (Feature B contract, same as /api/status)
+        assert body["internet_monitor"] is None
+
+
+def test_health_reports_gateway_down():
+    with build_client(health_check=_fake_health_down) as client:
+        body = client.get("/api/health").json()
+        assert body["gateway"]["ok"] is False
+
+
+def test_health_never_triggers_real_network_when_injected():
+    # The injected checker never touches a socket -- confirms the route uses
+    # the injected transport (not the real ping) when one is provided.
+    calls = []
+
+    async def spy() -> bool:
+        calls.append(1)
+        return True
+
+    with build_client(health_check=spy) as client:
+        client.get("/api/health")
+        client.get("/api/health")
+    assert len(calls) == 2   # on-demand: one real call per GET, no caching

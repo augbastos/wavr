@@ -34,7 +34,8 @@ from wavr.narrator import Narrator, make_gemini_generate
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
 from wavr.device_meta import DeviceMeta
-from wavr.internet_monitor import InternetMonitor
+from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
+from wavr.presence_report import build_report
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
@@ -110,7 +111,7 @@ def _camera_factory(cam: dict, cfg):
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
-               internet_monitor=None) -> FastAPI:
+               internet_monitor=None, health_check=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -165,7 +166,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         cfg.net_known_macs, interval=cfg.net_scan_interval,
         on_rogue=(lambda a: _notify(f"Wavr: dispositivo desconhecido na rede ({a.vendor})"))
         if _notify else None,
-        device_meta=_device_meta)
+        device_meta=_device_meta,
+        # Passive protocol collectors (defensive-inventory collectors) -- opt-in, default
+        # OFF; only ever run when the operator sets WAVR_NET_MDNS/WAVR_NET_SSDP.
+        mdns_enabled=cfg.net_mdns, ssdp_enabled=cfg.net_ssdp,
+        ssdp_location_enabled=cfg.net_ssdp_location,
+        collect_duration=cfg.net_collect_duration)
 
     # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
     # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
@@ -179,6 +185,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             fail_threshold=cfg.internet_fail_threshold,
             notify=_notify,
         )
+
+    # GET /api/health (basic health check, generalizing internet_monitor): an
+    # on-demand, read-only gateway-reachability probe -- NOT gated behind the
+    # internet_monitor opt-in, since it is a single caller-triggered check (a
+    # GET), not a new background scanner. Same LOCAL-ONLY default as
+    # InternetMonitor: with zero config it pings the LAN gateway (never a
+    # fixed cloud host), so hitting this route makes zero new cloud egress.
+    # `health_check` is the injectable transport (tests inject a fake -- no
+    # real network); default reuses internet_monitor's own ping helper.
+    _health_host = cfg.internet_check_host or guess_gateway()
+    _health_check = health_check or make_checker(_health_host or "127.0.0.1")
 
     # Multi-device (ADR-0006): device/token store + pairing. ONLY built when
     # WAVR_MULTIDEVICE is on — otherwise it stays None so we don't open a third
@@ -418,6 +435,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # Feature B: current internet/gateway reachability. Null/null when
             # the monitor is off (or hasn't completed its first check yet).
             "internet": _internet.status() if _internet else {"ok": None, "since": None},
+        }
+
+    @app.get("/api/presence/report")
+    async def presence_report():
+        # Pure aggregation of wavr.device_meta's first/last-seen store (Feature
+        # A) -- no new scanning, no I/O beyond the existing sqlite read (same
+        # synchronous-call convention netinventory_service already uses for
+        # this same store). Safe to call on every GET.
+        return build_report(_device_meta)
+
+    @app.get("/api/health")
+    async def health():
+        # On-demand only -- no background task, no new opt-in flag (see the
+        # _health_check construction above for the LOCAL-ONLY rationale).
+        ok = await _health_check()
+        return {
+            "gateway": {"ok": ok, "host": _health_host},
+            "internet_monitor": _internet.status() if _internet else None,
         }
 
     @app.get("/api/system")
