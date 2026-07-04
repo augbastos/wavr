@@ -75,8 +75,9 @@ _register(
     "98:fa:e3", "f0:b4:29", "f8:a4:5f", "fc:64:ba",
 )
 _register(
-    "Aqara",  # Lumi United Technology (Aqara's legal entity)
-    "54:ef:44",
+    "Aqara",  # Lumi United Technology (Aqara's legal entity) -- 2 public MA-L
+    # blocks confirmed against the live IEEE registry (2026-07-05)
+    "18:c2:3c", "54:ef:44",
 )
 _register(
     "Espressif",  # ESP32 / ESP8266 -- the dominant DIY-IoT silicon.
@@ -112,10 +113,18 @@ _register(
     "ac:7b:a1", "b4:6b:fc", "e4:a7:a0", "f8:63:3f",
 )
 _register(
-    "Ubiquiti",
-    "00:15:6d", "04:18:d6", "18:e8:29", "24:5a:4c", "24:a4:3c", "44:d9:e7",
-    "68:d7:9a", "74:83:c2", "78:8a:20", "80:2a:a8", "b4:fb:e4", "dc:9f:db",
-    "f0:9f:c2", "fc:ec:da",
+    "Ubiquiti",  # all 48 MA-L blocks currently registered to "Ubiquiti Inc"
+    # (IEEE public registry, verified 2026-07-05) -- covers UniFi APs/switches/
+    # gateways AND the UniFi Protect camera line (G3/G4/G5), closing a chunk of
+    # the camera/hub confidence gap UniFi's own fingerprinting wins on today.
+    "00:15:6d", "00:27:22", "04:18:d6", "0c:ea:14", "18:e8:29", "1c:0b:8b",
+    "1c:6a:1b", "24:5a:4c", "24:a4:3c", "28:70:4e", "2c:e5:bd", "44:d9:e7",
+    "58:d6:1f", "60:22:32", "68:2e:3c", "68:72:51", "68:d7:9a", "6c:63:f8",
+    "70:a7:41", "74:83:c2", "74:ac:b9", "74:f9:2c", "74:fa:29", "78:45:58",
+    "78:8a:20", "80:2a:a8", "84:78:48", "8c:30:66", "8c:ed:e1", "90:41:b2",
+    "94:2a:6f", "9c:05:d6", "a4:f8:ff", "a8:9c:6c", "ac:8b:a9", "b4:fb:e4",
+    "cc:35:d9", "d0:21:f9", "d4:89:c1", "d8:b3:70", "d8:c2:62", "dc:9f:db",
+    "e0:63:da", "e4:38:83", "f0:9f:c2", "f4:92:bf", "f4:e2:c6", "fc:ec:da",
 )
 _register(
     "Netgear",
@@ -192,7 +201,12 @@ _register(
     "50:46:5d", "60:45:cb", "74:d0:2b", "ac:22:0b", "bc:ee:7b", "d8:50:e6",
     "f0:2f:74",
 )
-_register("Nvidia", "00:04:4b", "00:41:5a", "48:b0:2d", "e0:63:da")
+_register("Nvidia", "00:04:4b", "00:41:5a", "48:b0:2d")
+# NOTE: "e0:63:da" was removed from here -- the live IEEE MA-L registry
+# (verified 2026-07-05) shows it registered to Ubiquiti Inc, not Nvidia; it now
+# lives in the Ubiquiti block above. Pre-existing data error found as a
+# byproduct of the OUI-expansion pass, fixed in the same commit to avoid two
+# vendors silently fighting over one dict key.
 _register(
     "Roku",
     "00:0d:4b", "08:05:81", "ac:3a:7a", "b0:a7:37", "b8:3e:59", "cc:6d:a0",
@@ -207,8 +221,29 @@ _register(
     "Dahua",
     "08:ed:ed", "14:a7:8b", "74:c9:29", "9c:14:63", "e4:24:6c",
 )
-_register("Reolink", "ec:71:db")
-_register("Wyze", "2c:aa:8e", "7c:78:b2", "a4:da:22", "d0:3f:27")
+_register(
+    "Reolink",  # Reolink Innovation Limited's sole public MA-L block --
+    # verified against the live IEEE registry (2026-07-05); no second block
+    # exists to add, so this stays a 1-prefix entry rather than an invented one.
+    "ec:71:db",
+)
+_register(
+    "Wyze",  # Wyze Labs Inc -- 5 public MA-L blocks (IEEE registry, verified
+    # 2026-07-05); "a4:da:22" is a 28-bit MA-M sub-block Wyze owns only part
+    # of (pre-existing entry, left as-is -- see file header on granularity).
+    "2c:aa:8e", "7c:78:b2", "80:48:2c", "a4:da:22", "d0:3f:27", "f0:c8:8b",
+)
+_register(
+    "Eufy",  # Anker's smart-home/security-camera brand. IEEE has no MA-L block
+    # registered to "Anker"/"Eufy" directly -- these 10 blocks are registered to
+    # Anker's two US distribution entities for eufy-branded hardware, Fantasia
+    # Trading LLC and Smart Innovation LLC (same Bellevue, WA HQ address as
+    # Anker Innovations; both entities are named as eufy camera distributors in
+    # the NY Attorney General's Jan-2025 eufy-camera privacy settlement).
+    # Verified against the live IEEE registry (2026-07-05).
+    "00:7f:1d", "04:17:b6", "10:2c:b1", "2c:8d:48", "7c:e9:13", "8c:85:80",
+    "90:bf:d9", "ac:12:2f", "e8:ee:cc", "f4:9d:8a",
+)
 _register("Fitbit", "08:df:1f", "20:9b:a5", "6c:20:56", "e0:03:e1")
 _register("Garmin", "10:c6:fc")
 _register("OnePlus", "94:65:2d", "c0:ee:fb")
@@ -253,6 +288,7 @@ VENDOR_DEFAULT_TYPE: dict[str, tuple[str, str]] = {
     # dominant-but-not-only product lines -> medium
     "Wyze": ("camera", "medium"),          # also sells plugs/locks
     "Ring": ("camera", "medium"),          # doorbells/cams
+    "Eufy": ("camera", "medium"),          # also sells robovacs/locks/baby monitors
     "Aqara": ("iot_sensor", "medium"),     # sensors are the plurality; hostname overrides hubs/plugs
     "Ecobee": ("iot_sensor", "medium"),    # thermostats/sensors
     "Nest": ("iot_sensor", "medium"),      # thermostats/protect/cams
