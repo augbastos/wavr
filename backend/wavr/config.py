@@ -113,6 +113,10 @@ class Config:
     # gateway resolver (wavr.hostname_resolver). LOCAL-ONLY: queries only the
     # gateway, never a public resolver.
     net_hostnames: bool
+    # Per-device LAN latency probe (WiFiman-style live ping, wifiman.md #1) --
+    # opt-in, default OFF. Actively TCP-connects each host (netutils.ping_host),
+    # same shared-subnet footprint class as the port pass, so it is gated.
+    net_latency: bool
     # Rogue / multiple-DHCP-server detector (defensive-inventory #7) -- opt-in,
     # default OFF. `net_dhcp_probe` is a SECOND opt-in on top (an active
     # broadcast DHCPDISCOVER), same "active probing is opt-in on top of
@@ -124,6 +128,16 @@ class Config:
     net_dhcp_known_servers: set[str]
     net_dhcp_interval: float
     net_dhcp_alert_threshold: int
+    # Gateway-MAC-identity tracker (gateway-identity-rogue-dhcp, inventory feature #2).
+    # ON by default -- unlike every active collector it opens NO socket and makes
+    # ZERO egress (it only reads the is_gateway binding the routing-table pass
+    # already produced), and it is Wavr's headline privacy differentiator vs
+    # a proprietary tool's cloud-brained version, so it earns being on out of the box. Set
+    # WAVR_NET_GATEWAY_MONITOR=0 to disable. `net_gateway_known_macs` seeds the
+    # trusted-gateway-MAC allowlist (router swap / failover pair); empty =>
+    # auto-learn the first-seen gateway MAC, persisted across restarts.
+    net_gateway_monitor: bool
+    net_gateway_known_macs: set[str]
     # Health-check ladder (defensive-inventory #12) -- extra operator-configured
     # targets on top of the fixed gateway + public-resolver checks. Empty by
     # default (no extra egress beyond the resolver checks themselves).
@@ -232,6 +246,8 @@ def load_config() -> Config:
         net_dhcp_fp=os.getenv("WAVR_NET_DHCP_FP", "").lower() in ("1", "true", "yes"),
         # Reverse-DNS hostname resolution (opt-in, default OFF).
         net_hostnames=os.getenv("WAVR_NET_HOSTNAMES", "").lower() in ("1", "true", "yes"),
+        # Per-device latency probe (WiFiman-style live ping) -- opt-in, default OFF.
+        net_latency=os.getenv("WAVR_NET_LATENCY", "").lower() in ("1", "true", "yes"),
         # Rogue/multiple-DHCP-server detector (opt-in, default OFF).
         net_dhcp_monitor=os.getenv("WAVR_NET_DHCP_MONITOR", "").lower() in ("1", "true", "yes"),
         net_dhcp_probe=os.getenv("WAVR_NET_DHCP_PROBE", "").lower() in ("1", "true", "yes"),
@@ -240,6 +256,13 @@ def load_config() -> Config:
         },
         net_dhcp_interval=float(os.getenv("WAVR_NET_DHCP_INTERVAL", "30.0")),
         net_dhcp_alert_threshold=int(os.getenv("WAVR_NET_DHCP_ALERT_THRESHOLD", "2")),
+        # Gateway-MAC-identity tracker: ON by default (zero-egress, on-box).
+        net_gateway_monitor=os.getenv("WAVR_NET_GATEWAY_MONITOR", "1").strip().lower()
+            in ("1", "true", "yes", "on"),
+        net_gateway_known_macs={
+            m.strip().replace("-", ":").lower()
+            for m in os.getenv("WAVR_NET_GATEWAY_MACS", "").split(",") if m.strip()
+        },
         # Health-check ladder: extra targets beyond gateway + public resolvers.
         health_extra_targets=tuple(
             s.strip() for s in os.getenv("WAVR_HEALTH_EXTRA_TARGETS", "").split(",") if s.strip()

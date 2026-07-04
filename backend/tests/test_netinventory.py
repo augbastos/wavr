@@ -99,6 +99,7 @@ def test_build_inventory_shape_and_fields():
     assert set(inv[0].to_dict().keys()) == {
         "mac", "ip", "vendor", "device_type", "known", "hostname", "risks",
         "type_confidence", "make", "model", "os", "open_ports", "sources",
+        "is_gateway", "latency_ms",
     }
     assert inv[0].to_dict()["risks"] == []      # empty until the opt-in port pass runs
     assert inv[0].to_dict()["open_ports"] == []

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import ipaddress
 import logging
+import os
 import re
 import socket
 from datetime import datetime, timezone
@@ -57,6 +58,85 @@ async def arp_scan() -> set[str]:
                     await _run("ping", "-n", "1", "-w", "200", addr)
         await asyncio.gather(*(ping(str(h)) for h in net.hosts()))
     return parse_arp_table(await _run("arp", "-a"))
+
+
+_IPV4_RE = r"\d{1,3}(?:\.\d{1,3}){3}"
+_GW_LINUX_RE = re.compile(r"\bdefault\s+via\s+(" + _IPV4_RE + r")")
+_GW_MAC_RE = re.compile(r"\bgateway:\s+(" + _IPV4_RE + r")")
+
+
+def _valid_nonzero_ipv4(ip: str) -> bool:
+    """True for a dotted IPv4 quad with every octet 0-255 and not all-zero
+    (0.0.0.0 is the placeholder Windows prints for a gateway-less interface)."""
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return False
+    return all(0 <= o <= 255 for o in octets) and any(octets)
+
+
+def _parse_win_gateway(output: str) -> "str | None":
+    """Windows `ipconfig`: the first real IPv4 after a "Default Gateway ... :"
+    label. Handles the dual-stack layout where an IPv6 gateway sits on the label
+    line and the IPv4 on an indented continuation line below it. Skips empty /
+    0.0.0.0 gateways and IPv6-only entries. Under-claims (returns None) rather
+    than guessing on an unusual layout -- is_gateway is then honestly False,
+    never a false positive."""
+    lines = output.splitlines()
+    for i, line in enumerate(lines):
+        if "Default Gateway" not in line or ":" not in line:
+            continue
+        m = re.search(_IPV4_RE, line.split(":", 1)[1])
+        if m and _valid_nonzero_ipv4(m.group(0)):
+            return m.group(0)
+        # The IPv4 may continue on indented, label-less lines under this one; an
+        # IPv4 continuation starts with a digit, an IPv6 one may too ("2001:") --
+        # keep scanning digit-first lines, stop at a new labelled field or an
+        # IPv6-letter-first line ("fe80:"), both of which start with a non-digit.
+        for cont in lines[i + 1:]:
+            stripped = cont.strip()
+            if not stripped or not stripped[0].isdigit():
+                break
+            m = re.search(_IPV4_RE, cont)
+            if m and _valid_nonzero_ipv4(m.group(0)):
+                return m.group(0)
+    return None
+
+
+def parse_default_gateway(output: str) -> "str | None":
+    """Extract the first real IPv4 default-gateway address from routing-table
+    text -- Linux `ip route` ("default via X"), macOS/BSD `route -n get default`
+    ("gateway: X"), or Windows `ipconfig` ("Default Gateway ... : X"). Returns
+    None when none is present. Pure/offline, defensive -- never raises."""
+    for rx in (_GW_LINUX_RE, _GW_MAC_RE):
+        for m in rx.finditer(output):
+            if _valid_nonzero_ipv4(m.group(1)):
+                return m.group(1)
+    return _parse_win_gateway(output)
+
+
+async def default_gateway() -> "str | None":
+    """Best-effort REAL default-gateway IP, read from THIS host's own routing
+    table via a subprocess (Windows `ipconfig`, else Linux `ip route` then
+    macOS/BSD `route -n get default`). Never a guess -- contrast
+    wavr.internet_monitor.guess_gateway's ".1" heuristic. LOCAL-ONLY: reads this
+    host's routing state, zero network egress, touches no other host. Returns
+    None when it can't be determined (honest: callers must never fabricate a
+    gateway). Reuses the _run subprocess seam so it is mock-testable."""
+    cmds = ([("ipconfig",)] if os.name == "nt"
+            else [("ip", "route"), ("route", "-n", "get", "default")])
+    for cmd in cmds:
+        try:
+            out = await _run(*cmd)
+        except Exception:
+            continue
+        gw = parse_default_gateway(out)
+        if gw:
+            return gw
+    return None
 
 
 class NetworkSource:

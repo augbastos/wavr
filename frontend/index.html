@@ -379,6 +379,19 @@
   .alert-row .at{color:var(--danger);font-weight:600;}
   .alert-row .ameta{color:var(--dim);font-variant-numeric:tabular-nums;
                     display:block;margin-top:2px;overflow-wrap:anywhere;}
+  /* gateway-identity-rogue-dhcp (inventory feature #2): ONE severity ladder for every
+     alert kind (info<note<watch<alert<critical) -> one badge, never a per-kind
+     gradient fork. Colours reuse the existing palette (dim/warn/danger). */
+  .sev-badge{display:inline-block;font-size:.6rem;font-weight:700;text-transform:uppercase;
+             letter-spacing:.04em;padding:1px 6px;border-radius:6px;margin-right:7px;
+             vertical-align:1px;color:#0B0E12;}
+  .sev-badge.sev-info{background:var(--dim);opacity:.65;}
+  .sev-badge.sev-note{background:var(--dim);}
+  .sev-badge.sev-watch{background:var(--warn);}
+  .sev-badge.sev-alert{background:var(--danger);}
+  .sev-badge.sev-critical{background:var(--danger);color:#fff;box-shadow:0 0 0 2px var(--danger-soft);}
+  .alert-row.sev-info .at,.alert-row.sev-note .at{color:var(--dim);font-weight:500;}
+  .alert-row.sev-watch .at{color:var(--warn);}
 
   /* v2 device auto-ID: type icon badge + honest confidence cues (guessed = dashed/dim, low adds "?") */
   .dev-ico{flex:none;display:inline-flex;align-items:center;justify-content:center;
@@ -711,6 +724,9 @@
   .egress-summary.ok{color:var(--accent);}
   .egress-summary.warn{color:var(--warn);}
   .egress-summary.na{color:var(--dim);font-weight:400;}
+  /* A2.3: health check's major/critical tiers — same family as ok/warn/na above, just the
+     one red already defined for .status-internet.down (no new palette). */
+  .egress-summary.danger{color:var(--danger);}
   /* P6 fix 3: demo-mode note is its OWN dim line, visually apart from the permanent
      guarantee sentence above it — the guarantee never reads as demo-only. */
   .egress-demonote{margin:0 0 4px;font-size:.78rem;color:var(--dim);line-height:1.5;}
@@ -745,6 +761,33 @@
   .eg-tag.lan{color:var(--zone);border-color:rgba(110,168,254,.5);}
   .eg-tag.local{color:var(--accent);border-color:rgba(61,181,74,.4);}
   .eg-state{display:block;font-size:.84rem;color:var(--dim);line-height:1.45;}
+  /* A2.1: network-sensing collectors (System, below the egress list) — OWN namespace, never
+     #egressList/.eg-row. Icon reuses the .local "stays home" accent token either way (these
+     never leave the LAN, active-probe or passive-listen); the distinction is carried in the
+     tag TEXT (F3), not a second color, so it can't be read as "this one can leave". */
+  .sensing-list{display:flex;flex-direction:column;}
+  .sn-row{display:flex;gap:12px;align-items:flex-start;padding:9px 0;border-top:1px dashed var(--line);}
+  .sn-icon{width:32px;height:32px;border-radius:50%;flex:none;display:flex;align-items:center;
+           justify-content:center;background:var(--elevated);border:1px solid var(--line-strong);
+           color:var(--dim);}
+  .sn-icon svg{width:17px;height:17px;}
+  .sn-icon.on{background:var(--accent-soft);border-color:rgba(61,181,74,.45);color:var(--accent);}
+  .sn-icon.na{opacity:.6;}
+  .sn-main{min-width:0;flex:1;}
+  .sn-name{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:.84rem;font-weight:560;}
+  .sn-tag{font-size:.66rem;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
+          color:var(--dim);white-space:nowrap;font-weight:400;}
+  .sn-tag.on{color:var(--accent);border-color:rgba(61,181,74,.4);}
+  .sn-tag.probe{color:var(--zone);border-color:rgba(110,168,254,.5);}
+  .sn-state{display:block;font-size:.84rem;color:var(--dim);line-height:1.45;}
+  /* A2.2: presence report — live counts get tabular-nums (design-token rule for live numbers). */
+  .pres-n{font-variant-numeric:tabular-nums;}
+  #presenceSummary{font-variant-numeric:tabular-nums;}
+  /* A2.3: health check's per-check breakdown reuses .diag-list/.diag-row (below) verbatim.
+     Severity line = icon + words (never color alone); reuses the ok/warn/danger palette. */
+  .health-result{margin-top:6px;}
+  .health-sev{display:flex;gap:8px;align-items:center;}
+  .health-sev svg{width:16px;height:16px;flex:none;}
   .diag-list{display:flex;flex-direction:column;}
   .diag-row{display:flex;gap:12px;justify-content:space-between;align-items:baseline;
             padding:7px 0;border-top:1px dashed var(--line);font-size:.82rem;font-variant-numeric:tabular-nums;}
@@ -752,6 +795,7 @@
   .diag-row .dv{text-align:right;min-width:0;overflow-wrap:anywhere;}
   .diag-row .dv.ok{color:var(--accent);}
   .diag-row .dv.warn{color:var(--warn);}
+  .diag-row .dv.danger{color:var(--danger);}
   /* gear → Privacy & security: the 4 invariants (trust screen, ALL modes) */
   .inv-list{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;}
   .inv-list li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;
@@ -1114,6 +1158,27 @@
           </div>
           <p class="egress-note">This is the only feature in the basic flow that sends data outside your home — and only when you click “Generate summary”. Other optional hub egress paths appear in System → “What can leave this home”.</p>
         </div>
+        <!-- A2.2: presence report — pure LOCAL aggregation (GET /api/presence/report), read-only,
+             live-mode only. Reuses dev-row markup + maskMac()/dtypeLabel() from the Network tab. -->
+        <div id="presenceReport" class="tile" hidden aria-labelledby="presence-h">
+          <div class="tile-head"><h2 id="presence-h">Presence report</h2><span class="hint">who's around</span></div>
+          <p id="presenceSummary" class="panel-note"></p>
+          <div class="net-cols">
+            <div class="net-col">
+              <h4>Currently present <span id="presPresentCount" class="pres-n"></span></h4>
+              <div id="presPresentList" class="dev-list" aria-live="polite"></div>
+            </div>
+            <div class="net-col">
+              <h4>Most present</h4>
+              <div id="presTopList" class="dev-list"></div>
+            </div>
+          </div>
+          <details id="presRecentlyAway" class="why"><summary>Recently away (<span id="presAwayCount" class="pres-n"></span>)</summary>
+            <div id="presAwayList" class="dev-list"></div></details>
+          <details id="presStale" class="why"><summary>Not seen in a while (<span id="presStaleCount" class="pres-n"></span>)</summary>
+            <div id="presStaleList" class="dev-list"></div></details>
+          <p class="panel-note" id="presenceNote" hidden>Presence report needs a Wavr hub connected.</p>
+        </div>
         <div class="tile">
           <div class="tile-head"><h2 id="tl-h">History</h2></div>
           <!-- Stage 3b (§7#4): client-side filters over the rows already loaded -->
@@ -1338,6 +1403,43 @@
           </div>
           <div id="egressList" class="egress-list"></div>
           <p class="panel-note" id="egressNote" hidden>Each feature is opt-in per install (hub environment variables). Without a connected hub, every feature shows as “inactive” — that's not an error.</p>
+        </div>
+        <!-- A2.1: network-sensing collectors — LOCAL listeners/probes, rendered off the
+             existing /api/status poll (zero new network calls). Own namespace (.sn-row),
+             never mixed into #egressList — these never leave the LAN either way. Sits right
+             below the egress list ON PURPOSE: the trust receipt says what CAN leave, this
+             tile says what only ever senses inside your own network. -->
+        <div id="netSensing" class="tile" aria-labelledby="netSensing-h">
+          <div class="tile-head"><h2 id="netSensing-h">Network sensing</h2><span class="hint">local sensing — nothing leaves home</span></div>
+          <p class="panel-note">These read standard network-discovery traffic already on your LAN (mDNS,
+            UPnP, DHCP, etc.) to identify your devices better. Unlike the list above, these are not egress
+            paths — they scan only your own network and nothing leaves home. Set from the hub's
+            configuration; changing one needs a hub restart (no in-app switch yet).</p>
+          <div id="sensingList" class="sensing-list"></div>
+        </div>
+        <!-- A2.3: health check — user-triggered ONLY. When the hub has public-resolver checks
+             on (or their state is still unknown), the button arms a two-step confirm identical
+             in shape to the AI Narrator's, because GET /api/health then pings public DNS hosts
+             (same egress class). When the hub confirms resolvers OFF, the check is gateway-only
+             (local) and runs directly. NEVER wire this into a timer/poll — see the load-bearing
+             comment at the click handler below. -->
+        <div id="healthCheck" class="tile" hidden aria-labelledby="health-h">
+          <div class="tile-head"><h2 id="health-h">Health check</h2>
+            <span id="healthChecking" class="egress-live" hidden><i aria-hidden="true"></i>checking…</span>
+          </div>
+          <div class="narrate-row">
+            <button id="healthBtn" type="button" class="ctl" data-tip="Checks your gateway and, if enabled on the hub, 3 public DNS resolvers — the only way to see if the internet itself is down">Check now</button>
+            <p id="healthOut" class="narrate-out muted">Runs an on-demand check of your gateway plus, if enabled on the hub, three public DNS resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9) to tell LAN problems from internet problems.</p>
+          </div>
+          <div id="healthConfirm" class="narrate-confirm" hidden role="group" aria-label="confirm health check">
+            <p class="narrate-confirm-txt">This checks your gateway<span id="healthConfirmResolvers"> plus 3 public DNS servers <b>outside your home</b> (1.1.1.1, 8.8.8.8, 9.9.9.9)</span> — confirm?</p>
+            <div class="controls-row">
+              <button id="healthYes" type="button" class="ctl small narrate-yes">Confirm and check</button>
+              <button id="healthNo" type="button" class="ctl small off">Cancel</button>
+            </div>
+          </div>
+          <div id="healthResult" class="health-result" hidden aria-live="polite"></div>
+          <p class="egress-note" id="healthNote">This check contacts your gateway and 3 public DNS servers outside your home — only when you click “Check now”, and only once per click.</p>
         </div>
         <div id="statusPanel" class="statuspanel tile" hidden aria-labelledby="status-h">
           <div class="tile-head"><h2 id="status-h">Status</h2></div>
@@ -2039,6 +2141,7 @@ function renderNarrate(){
 renderNarrate();
 
 // ---- Wavr Net panel (Plano A / live only): device inventory + rogue alerts ----
+const MIDDOT = "·";   // shared separator glyph
 function maskMac(mac){
   // Show the vendor-OUI half, mask the device-specific half (privacy).
   if(typeof mac!=="string" || !mac) return "—";
@@ -2229,19 +2332,39 @@ function renderNetwork(){
       e.textContent = "no recent unknown devices";
       alertList.appendChild(e);
     } else rogue.forEach(a => {
-      const row = document.createElement("div"); row.className = "alert-row";
+      // ONE severity ladder (info<note<watch<alert<critical) drives the badge
+      // for EVERY alert kind, so a guest phone (info/note) and a spoofed gateway
+      // (alert/critical) never render identically (gateway-identity-rogue-dhcp).
+      const sev = (typeof a.severity === "string" && a.severity) ? a.severity : "note";
+      const kind = a.kind || "rogue_device";
+      const row = document.createElement("div"); row.className = "alert-row sev-" + sev;
+      const badge = document.createElement("span");
+      badge.className = "sev-badge sev-" + sev; badge.textContent = sev;   // textContent — untrusted
       const at = document.createElement("span"); at.className = "at";
       const when = (typeof a.ts==="string" && a.ts.length>=19) ? a.ts.slice(11,19) : (a.ts || "");
-      at.textContent = "new device" + (when ? " " + when : "");
       const meta = document.createElement("span"); meta.className = "ameta";
-      // v2: same type icon + honest label as the device rows (alerts carry type_confidence too).
-      // Audit M1: a rogue alert is BY DEFINITION an unknown device — always the guessed treatment.
-      meta.appendChild(dtypeIconEl(a.device_type, a.type_confidence, true, true));
-      meta.appendChild(document.createTextNode((a.vendor || "unknown") + " · "));
-      meta.appendChild(dtypeLabelEl(a.device_type, a.type_confidence, true));
-      const rest = [a.ip||"no IP", maskMac(a.mac), a.hostname||""].filter(Boolean).join(" · ");
-      meta.appendChild(document.createTextNode(" · " + rest));
-      row.appendChild(at); row.appendChild(meta);
+      if(kind === "gateway_identity"){
+        // Network-level event: the default gateway's MAC identity changed.
+        at.textContent = "gateway identity changed" + (when ? " " + when : "");
+        meta.appendChild(dtypeIconEl("router", "low", true, true));
+        meta.appendChild(document.createTextNode(
+          "gateway " + (a.gateway_ip || "?") + " now answers from a new MAC " + MIDDOT + " " + maskMac(a.observed_mac)));
+      } else if(kind === "rogue_dhcp"){
+        at.textContent = "rogue DHCP server" + (when ? " " + when : "");
+        meta.appendChild(dtypeIconEl("router", "low", true, true));
+        meta.appendChild(document.createTextNode("unexpected DHCP server " + MIDDOT + " " + (a.extra_server || "?")));
+      } else {
+        // Per-device rogue sighting (unknown MAC).
+        at.textContent = "new device" + (when ? " " + when : "");
+        // v2: same type icon + honest label as the device rows (alerts carry type_confidence too).
+        // Audit M1: a rogue alert is BY DEFINITION an unknown device -- always the guessed treatment.
+        meta.appendChild(dtypeIconEl(a.device_type, a.type_confidence, true, true));
+        meta.appendChild(document.createTextNode((a.vendor || "unknown") + " " + MIDDOT + " "));
+        meta.appendChild(dtypeLabelEl(a.device_type, a.type_confidence, true));
+        const rest = [a.ip||"no IP", maskMac(a.mac), a.hostname||""].filter(Boolean).join(" " + MIDDOT + " ");
+        meta.appendChild(document.createTextNode(" " + MIDDOT + " " + rest));
+      }
+      row.appendChild(badge); row.appendChild(at); row.appendChild(meta);
       alertList.appendChild(row);
     });
   }
@@ -5941,6 +6064,12 @@ try {
     { k: "internet_monitor", label: "Internet monitor", icon: "ic-wifi",
       on:  "sends periodic outbound pings just to check the connection is up",
       off: "off — no pings go out" },
+    // A2.3 companion row: WAVR_HEALTH_RESOLVERS makes the user-triggered health check
+    // ping public DNS hosts — that IS a (user-invoked) egress path, so it belongs in
+    // this trust receipt. The passive LAN collectors do NOT belong here (see #netSensing).
+    { k: "health_resolvers", label: "Health check — public resolvers", icon: "ic-wifi",
+      on:  "a health check also pings 3 public DNS servers (1.1.1.1, 8.8.8.8, 9.9.9.9) — only when you click “Check now”, never in the background",
+      off: "off — health checks test your gateway only (local)" },
     { k: "mcp_control", label: "MCP control (AI agent)", icon: "ic-chip",
       on:  "an agent can read state and act, limited to the action allowlist configured on the hub",
       off: "off — no agent connected" },
@@ -6078,6 +6207,82 @@ try {
       if(demoNote) demoNote.hidden = true;
       if(note) note.hidden = false;
     }
+  }
+
+  // =====================================================================
+  // A2.1 — Network-sensing collectors (System, below the egress list — LOCAL
+  // sensing, deliberately NOT an egress row): read-only surface of
+  // /api/status.features.{mdns,ssdp,netbios,snmp,dhcp_fp,rogue_dhcp}, rendered
+  // off the SAME 3s poll renderStatus() already runs (window.__wavrStatus,
+  // wired below) — zero new network calls. F1: these 6 flags are env-only
+  // today (no runtime toggle exists), so the copy is honest about needing a
+  // hub restart to change, never implying an in-app switch. F3: netbios/snmp
+  // are active targeted probes (one packet per known device); the others are
+  // passive listeners — the tag TEXT says so, the badge color does not
+  // differ (both stay on-LAN either way, see the CSS comment above).
+  // =====================================================================
+  var SENSING_ITEMS = [
+    { k:"mdns", label:"mDNS / Bonjour", icon:"ic-wifi", active:false,
+      on:  "listening for Apple/IoT device announcements (UDP 5353) — passive, local only",
+      off: "off — enable with WAVR_NET_MDNS=1 on the hub (restart required)" },
+    { k:"ssdp", label:"SSDP / UPnP", icon:"ic-grid", active:false,
+      on:  "listening for UPnP devices announcing themselves (TVs, printers, routers) — passive, local only",
+      off: "off — enable with WAVR_NET_SSDP=1 on the hub (restart required)" },
+    { k:"netbios", label:"NetBIOS", icon:"ic-devices", active:true,
+      on:  "sends one lookup to each device already on your network to read its Windows/workgroup name — local only, never leaves your LAN",
+      off: "off — enable with WAVR_NET_NETBIOS=1 on the hub (restart required)" },
+    { k:"snmp", label:"SNMP", icon:"ic-chip", active:true,
+      on:  "sends one read-only query to each device already on your network to identify make/model — local only, never leaves your LAN",
+      off: "off — enable with WAVR_NET_SNMP=1 on the hub (restart required)" },
+    { k:"dhcp_fp", label:"DHCP fingerprint", icon:"ic-radar", active:false,
+      on:  "reads the DHCP requests devices already broadcast on your network to guess OS/hostname — passive, local only",
+      off: "off — enable with WAVR_NET_DHCP_FP=1 on the hub (restart required)" },
+    { k:"rogue_dhcp", label:"Rogue DHCP-server detection", icon:"ic-alert", active:false,
+      on:  "watches for a second/unexpected DHCP server on your network (a common attack) — passive, local only; alerts appear in the Network tab",
+      off: "off — enable with WAVR_NET_DHCP_MONITOR=1 on the hub (restart required)" },
+  ];
+  function snBadge(sym, on, tip){
+    var b = elc("span", "sn-icon" + (on ? " on" : " na"));
+    b.setAttribute("aria-hidden", "true");
+    b.setAttribute("data-tip", tip == null ? "" : tip);
+    var NS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("aria-hidden", "true");
+    var use = document.createElementNS(NS, "use");
+    use.setAttribute("href", "#" + (sym || "ic-qmark"));
+    svg.appendChild(use);
+    b.appendChild(svg);
+    return b;
+  }
+  // Own row builder (never egRow) — can never end up rendered into #egressList by accident.
+  function snRow(label, stateTxt, on, tagTxt, tagCls, iconSym){
+    var row = elc("div", "sn-row");
+    row.setAttribute("data-tip", "");
+    row.appendChild(snBadge(iconSym, on, stateTxt));
+    var main = elc("div", "sn-main");
+    var name = elc("div", "sn-name");
+    name.appendChild(document.createTextNode(label));
+    name.appendChild(elc("span", "sn-tag" + (tagCls ? " " + tagCls : ""), tagTxt));
+    main.appendChild(name);
+    main.appendChild(elc("span", "sn-state", stateTxt));
+    row.appendChild(main);
+    return row;
+  }
+  function renderSensing(){
+    var list = $("sensingList");
+    if(!list) return;
+    var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
+      ? statusInfo.features : null;
+    list.textContent = "";
+    SENSING_ITEMS.forEach(function(it){
+      var on = feats ? !!feats[it.k] : null;
+      var tagTxt, txt, iconOn;
+      if(on === null){ iconOn = false; tagTxt = "inactive"; txt = "no hub connected — feature inactive (not an error)"; }
+      else if(!on){ iconOn = false; tagTxt = "off"; txt = it.off; }
+      else { iconOn = true; tagTxt = it.active ? "active probe" : "passive listen"; txt = it.on; }
+      var tagCls = iconOn ? (it.active ? "probe" : "on") : "";
+      list.appendChild(snRow(it.label, txt, iconOn, tagTxt, tagCls, it.icon));
+    });
   }
 
   // =====================================================================
@@ -6230,6 +6435,103 @@ try {
       if(ok && tlNoneEl) tlNoneEl.hidden = true;
     }catch(e){}
   };
+
+  // =====================================================================
+  // A2.2 — Presence report (History tab): pure LOCAL aggregation off
+  // GET /api/presence/report ("safe to call on every GET" per the module's
+  // own docstring — no new scanning/I-O). Polls on the same 15s cadence
+  // renderNetwork() uses for /api/inventory; live-mode only — demo/companion
+  // show the honest "needs a hub" note (same convention as redeNote/
+  // dispNote/sisNote). Rows reuse the Network tab's dev-row markup +
+  // maskMac()/dtypeLabel()/dtypeIconEl() (global top-level helpers) so a
+  // MAC is never printed unmasked in a new component.
+  // =====================================================================
+  var presenceStarted = false;
+  // The report's own device_type is the user PIN only (device_meta) — for unpinned
+  // devices, borrow the fused type+confidence from the /api/inventory payload the
+  // Network tab already polls (zero new fetches; falls back honestly when absent).
+  var presInvIdx = {};
+  function presBuildInvIdx(){
+    presInvIdx = {};
+    invList.forEach(function(v){ if(v && v.mac) presInvIdx[v.mac] = v; });
+  }
+  function presRow(d, kind){
+    var inv = presInvIdx[d.mac];
+    var dtype = d.device_type || (inv && inv.device_type) || null;
+    // a pin always reads back "high" on /api/inventory; mirror that rule here
+    var conf = d.device_type ? "high" : (inv ? (inv.type_confidence || null) : null);
+    var row = elc("div", "dev-row");
+    row.appendChild(dtypeIconEl(dtype, conf, false, false));
+    var left = elc("div", "dev-left");
+    var nameLine = elc("div", "dev-name-line");
+    if(d.name){
+      nameLine.appendChild(elc("span", "dev-main named", d.name));
+      nameLine.appendChild(elc("span", "dev-sub", " · " + dtypeLabel(dtype)));
+    } else {
+      nameLine.appendChild(elc("span", "dev-main", dtypeLabel(dtype)));
+    }
+    left.appendChild(nameLine);
+    var metaLine = elc("div", "dev-meta-line");
+    metaLine.appendChild(elc("span", "mac", maskMac(d.mac)));
+    var secs = kind === "present" ? d.tenure_seconds : d.quiet_for_seconds;
+    if(secs != null){
+      var prefix = kind === "present" ? " · here " : " · away ";
+      metaLine.appendChild(elc("span", "dev-seen", prefix + fmtAgo(secs * 1000).replace(/ ago$/, "")));
+    }
+    left.appendChild(metaLine);
+    row.appendChild(left);
+    return row;
+  }
+  function renderPresenceList(el, arr, kind, emptyTxt){
+    if(!el) return;
+    el.textContent = "";
+    if(!arr || !arr.length){ el.appendChild(elc("div", "net-hint", emptyTxt)); return; }
+    arr.forEach(function(d){ el.appendChild(presRow(d, kind)); });
+  }
+  function presenceOffState(){
+    var note = $("presenceNote"); if(note) note.hidden = false;
+    var sum = $("presenceSummary"); if(sum) sum.textContent = "";
+    ["presPresentCount", "presAwayCount", "presStaleCount"].forEach(function(id){
+      var e = $(id); if(e) e.textContent = "";
+    });
+    ["presPresentList", "presTopList", "presAwayList", "presStaleList"].forEach(function(id){
+      var e = $(id); if(e) e.textContent = "";
+    });
+  }
+  async function presenceRefresh(){
+    var d;
+    try{ d = await (await fetch(location.origin + "/api/presence/report")).json(); }
+    catch(e){ return; }   // backend momentarily unreachable — keep last view
+    if(!d || typeof d !== "object") return;
+    presBuildInvIdx();
+    var sum = $("presenceSummary");
+    if(sum){
+      var n = d.device_count || 0;
+      var txt = n + " device" + (n === 1 ? "" : "s") + " tracked";
+      // quiet_period_seconds = time since ANY device was last seen — phrase it as
+      // "last network activity", not "house quiet" (scans land every few seconds).
+      txt += (d.quiet_period_seconds != null)
+        ? " · last network activity " + fmtAgo(d.quiet_period_seconds * 1000)
+        : " · no activity recorded yet";
+      sum.textContent = txt;
+    }
+    var pc = $("presPresentCount"); if(pc) pc.textContent = String((d.currently_present || []).length);
+    var ac = $("presAwayCount"); if(ac) ac.textContent = String((d.recently_away || []).length);
+    var sc = $("presStaleCount"); if(sc) sc.textContent = String((d.stale || []).length);
+    renderPresenceList($("presPresentList"), d.currently_present, "present", "no devices currently present");
+    renderPresenceList($("presTopList"), d.most_present, "present", "not enough data yet");
+    renderPresenceList($("presAwayList"), d.recently_away, "away", "none");
+    renderPresenceList($("presStaleList"), d.stale, "away", "none");
+  }
+  function renderPresence(){
+    var tile = $("presenceReport");
+    if(!tile) return;
+    tile.hidden = false;   // visible in every mode (own honest note when not live, like egressPanel)
+    if(M !== "live"){ presenceOffState(); return; }
+    var note = $("presenceNote"); if(note) note.hidden = true;
+    presenceRefresh();
+    if(!presenceStarted){ presenceStarted = true; setInterval(presenceRefresh, 15000); }
+  }
 
   // =====================================================================
   // P1 §7#6 — Data export (gear → Privacy & security): client-side
@@ -6548,6 +6850,149 @@ try {
   }, 2000);
 
   // =====================================================================
+  // A2.3 — Health check (System): USER-TRIGGERED ONLY. GET /api/health pings
+  // the gateway and, when the hub has WAVR_HEALTH_RESOLVERS on, three public
+  // DNS resolvers (1.1.1.1/8.8.8.8/9.9.9.9) on EVERY call — same egress class
+  // as the AI Narrator, so the confirm shape is identical (two-step, focus
+  // moves to Confirm on open / back to the trigger on cancel).
+  //
+  // LOAD-BEARING: this fires EXACTLY ONE /api/health call per confirmed
+  // click. Do NOT add a setInterval/poll around this — that would turn a
+  // disclosed, user-invoked check into a silent recurring egress ping
+  // (invariant violation; mirrors the narrator's own "only egress" rule).
+  // Any future topbar mirror must read the last client-side result only,
+  // never fetch on its own.
+  // =====================================================================
+  var HEALTH_SEV_CLASS = { ok:"ok", minor:"warn", degraded:"warn", major:"danger", critical:"danger" };
+  // Tri-state on purpose: statusInfo not yet loaded (no /api/status response since page open)
+  // is UNKNOWN, not "off" — defaulting an unknown resolver state to "off" would understate a
+  // possible egress, so "unknown" gets the same full-disclosure copy as "known on". Only a
+  // CONFIRMED features.health_resolvers===false counts as known-off.
+  function healthResolversState(){
+    if(!(statusInfo && statusInfo.features && typeof statusInfo.features === "object")) return "unknown";
+    return statusInfo.features.health_resolvers === false ? "off" : "on";
+  }
+  function renderHealthTile(){
+    var tile = $("healthCheck");
+    if(!tile) return;
+    tile.hidden = (M !== "live");
+    var state = healthResolversState();
+    var cr = $("healthConfirmResolvers");
+    if(cr) cr.hidden = (state === "off");
+    var note = $("healthNote");
+    if(note){
+      note.textContent = state === "off"
+        ? "Local checks only — this hub has public-resolver checks off (WAVR_HEALTH_RESOLVERS), so “Check now” only tests your gateway. Nothing leaves home."
+        : state === "on"
+        ? "This check contacts your gateway and 3 public DNS servers outside your home — only when you click “Check now” and confirm, and only once per click."
+        : "This check contacts your gateway and, if the hub has public-resolver checks on, 3 public DNS servers outside your home — only when you click “Check now” and confirm, and only once per click.";
+    }
+  }
+  // 5 tiers → icon + plain words, never color alone (A2.5 #1 / WCAG 1.4.1).
+  var HEALTH_SEV_TEXT = {
+    ok: "everything reachable",
+    minor: "one check failed",
+    degraded: "several checks failing",
+    major: "gateway OK — the internet looks down",
+    critical: "gateway unreachable — no LAN routing",
+  };
+  function renderHealthResult(d){
+    var box = $("healthResult");
+    if(!box) return;
+    box.hidden = false;
+    box.textContent = "";
+    var sevCls = HEALTH_SEV_CLASS[d.severity] || "na";
+    // Icon + text label carry the tier, never color alone (A2.5 #1) — 5 tiers roll
+    // into the codebase's existing ok/warn/danger palette (no new colors invented).
+    var line = elc("p", "egress-summary health-sev " + sevCls);
+    var NS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("aria-hidden", "true");
+    var use = document.createElementNS(NS, "use");
+    use.setAttribute("href", d.severity === "ok" ? "#ic-check" : "#ic-alert");
+    svg.appendChild(use);
+    line.appendChild(svg);
+    var sev = d.severity || "unknown";
+    line.appendChild(document.createTextNode("Health: " + sev
+      + (HEALTH_SEV_TEXT[sev] ? " — " + HEALTH_SEV_TEXT[sev] : "")));
+    box.appendChild(line);
+    var list = elc("div", "diag-list");
+    var gw = (d.gateway && typeof d.gateway === "object") ? d.gateway : {};
+    list.appendChild(diagRow((gw.host || "gateway") + " (gateway)",
+      gw.ok ? "reachable" : "unreachable", gw.ok ? "ok" : "danger"));
+    var resolvers = (d.resolvers && typeof d.resolvers === "object") ? d.resolvers : {};
+    Object.keys(resolvers).forEach(function(host){
+      list.appendChild(diagRow(host + " (public resolver)",
+        resolvers[host] ? "reachable" : "unreachable", resolvers[host] ? "ok" : "warn"));
+    });
+    var extra = (d.extra && typeof d.extra === "object") ? d.extra : {};
+    Object.keys(extra).forEach(function(host){
+      list.appendChild(diagRow(host + " (extra target)",
+        extra[host] ? "reachable" : "unreachable", extra[host] ? "ok" : "warn"));
+    });
+    box.appendChild(list);
+    if(!Object.keys(resolvers).length){
+      // data-driven, not flag-driven: an empty resolvers dict in the RESPONSE means
+      // this check really only touched the gateway — say so where the result is read.
+      box.appendChild(elc("p", "panel-note", "local checks only — public-resolver checks are off on this hub"));
+    }
+    box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()
+      + " — point-in-time snapshot, never refreshes on its own"));
+  }
+  (function(){
+    var btn = $("healthBtn"), out = $("healthOut"), box = $("healthConfirm");
+    var yes = $("healthYes"), no = $("healthNo"), checking = $("healthChecking");
+    if(!btn || !box) return;
+    var inflight = false;   // spam guard alongside btn.disabled (belt + suspenders)
+    function runHealthCheck(){
+      if(inflight) return;
+      inflight = true;
+      box.hidden = true;
+      btn.disabled = true;
+      if(checking) checking.hidden = false;
+      var DEFAULT_OUT = "Runs an on-demand check of your gateway plus, if enabled on the hub, three public DNS resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9) to tell LAN problems from internet problems.";
+      // Exactly ONE /api/health call per invocation — see the load-bearing block
+      // comment above. Never add a poll/interval around this fetch. cache:"no-store" so a
+      // repeat click always re-triggers a real check instead of risking a stale browser-
+      // cached GET response (this route can have a genuine external side effect per call).
+      fetch(location.origin + "/api/health", { headers: { "X-Wavr-Local": "1" }, cache: "no-store" })
+        .then(function(r){ if(!r.ok) throw new Error("http " + r.status); return r.json(); })
+        .then(function(d){
+          renderHealthResult(d || {});
+          if(out){ out.className = "narrate-out muted"; out.textContent = DEFAULT_OUT; }
+        })
+        .catch(function(){
+          if(out){ out.className = "narrate-out muted"; out.textContent = "connection failed — couldn't reach the hub"; }
+        })
+        .finally(function(){
+          inflight = false;
+          if(checking) checking.hidden = true;
+          btn.disabled = false;
+          // keyboard users: disabling the focused trigger dropped focus to <body> —
+          // restore it, but never steal focus from anywhere else the user went.
+          var ae = document.activeElement;
+          if(!ae || ae === document.body) btn.focus();
+        });
+    }
+    // Step 1: resolvers CONFIRMED off (features.health_resolvers === false) → the check
+    // is gateway-only/local, no egress to disclose — run directly. On or unknown → arm
+    // the two-step confirm with the full public-DNS disclosure (never fetches by itself).
+    btn.onclick = function(){
+      if(inflight) return;
+      if(healthResolversState() === "off"){ runHealthCheck(); return; }
+      box.hidden = false; btn.disabled = true;
+      if(yes) yes.focus();
+    };
+    if(no) no.onclick = function(){ box.hidden = true; btn.disabled = false; btn.focus(); };
+    // Step 2 (confirmed): the ONLY caller of runHealthCheck besides the local-only shortcut.
+    if(yes) yes.onclick = runHealthCheck;
+    // A2.5 #2: Esc cancels the confirm, focus returns to the trigger button.
+    document.addEventListener("keydown", function(e){
+      if(e.key === "Escape" && box && !box.hidden){ box.hidden = true; btn.disabled = false; btn.focus(); }
+    });
+  })();
+
+  // =====================================================================
   // P1 §7#14 — PWA install prompt (gear → Sobre): browser event capture
   // only, zero network. Gracefully absent where unsupported/ineligible.
   // =====================================================================
@@ -6619,6 +7064,8 @@ try {
   window.__wavrStatus = function(s){
     statusInfo = (s && typeof s === "object") ? s : null;
     renderEgress();
+    renderSensing();     // A2.1 — same payload, zero new fetches
+    renderHealthTile();  // A2.3 — only (re)paints visibility/copy; never fetches
     var sv = $("sobreVersion");
     if(sv && statusInfo && statusInfo.version != null) sv.textContent = " · version " + statusInfo.version;
   };
@@ -6635,9 +7082,12 @@ try {
 
   // ---------- initial paint (every mode) ----------
   renderEgress();
+  renderSensing();     // A2.1 — paints the honest "no hub connected" state in demo/companion
+  renderHealthTile();  // A2.3 — hidden outside live; never fetches on its own
   renderKill();
   renderDiag();
   applyTlFilter();
+  renderPresence();    // A2.2 — live-only poller; no-ops (shows the note) elsewhere
 })();
 </script>
 <script>

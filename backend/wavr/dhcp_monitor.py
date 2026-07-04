@@ -55,6 +55,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
+from wavr.alert_severity import SEVERITY_ALERT
+
 _LOG = logging.getLogger(__name__)
 
 CollectFn = Callable[[], Awaitable[dict]]
@@ -64,15 +66,17 @@ CollectFn = Callable[[], Awaitable[dict]]
 class DhcpRogueAlert:
     """One rogue/extra-DHCP-server sighting. Kept in-memory only, same
     bounded-ring convention as `netinventory_service.RogueAlert`. `severity`
-    is fixed at "major" (see wavr.health_check's ladder vocabulary) -- a
-    second DHCP server is a real security-relevant LAN event but, unlike a
-    dead gateway, is not by itself confirmed malicious (could be an
-    un-allowlisted legitimate box), so it never claims "critical"."""
+    rides wavr.alert_severity's ONE alert ladder (the same ladder RogueAlert
+    and GatewayAlert use, so /api/alerts never forks into three gradients) at
+    `alert`: a second DHCP server is a real security-relevant LAN event but,
+    unlike a confirmed-and-persisting gateway-identity spoof, is not by itself
+    confirmed malicious (could be an un-allowlisted legitimate box), so it
+    never claims `critical`."""
     ts: str
     extra_server: str
     known_servers: tuple[str, ...]
     observed_servers: tuple[str, ...]
-    severity: str = "major"
+    severity: str = SEVERITY_ALERT
 
     def to_dict(self) -> dict:
         return {

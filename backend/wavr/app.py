@@ -36,6 +36,7 @@ from wavr.api_inventory import build_inventory_router
 from wavr.device_meta import DeviceMeta
 from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
 from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
+from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
 from wavr.presence_report import build_report
 from wavr.sources.ble import BLESource
@@ -114,7 +115,7 @@ def _camera_factory(cam: dict, cfg):
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
                internet_monitor=None, health_check=None, dhcp_monitor=None,
-               health_resolvers=None) -> FastAPI:
+               health_resolvers=None, gateway_monitor=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -159,6 +160,29 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _owns_device_meta = device_meta is None
     _device_meta = device_meta or DeviceMeta(cfg.db_path)
 
+    # Gateway-MAC-identity tracker (gateway-identity-rogue-dhcp, inventory feature #2):
+    # ON by default (cfg.net_gateway_monitor) -- unlike every active collector it
+    # opens NO socket and makes ZERO egress (it only consumes the is_gateway
+    # binding scan_inventory already produced from THIS host's routing table), so
+    # it needs no shared-subnet opt-in and is Wavr's headline privacy edge vs
+    # a proprietary tool's cloud-brained version. Injected `gateway_monitor` (tests) wins;
+    # otherwise built with a GatewayBindingStore so the trusted baseline survives
+    # restarts (inventory feature #7 -- an in-memory baseline would re-adopt a spoof at
+    # restart). on_alert shares the SAME opt-in ntfy `notify` as every other
+    # alert, derived-only (gateway IP, never the MAC/credential).
+    _owns_gateway_store = False
+    _gateway_store = None
+    _gateway_monitor = gateway_monitor
+    if _gateway_monitor is None and cfg.net_gateway_monitor:
+        _gateway_store = GatewayBindingStore(cfg.db_path)
+        _owns_gateway_store = True
+        _gateway_monitor = GatewayIdentityMonitor(
+            store=_gateway_store,
+            known_macs=cfg.net_gateway_known_macs or None,
+            on_alert=(lambda a: _notify(f"Wavr: identidade do gateway mudou ({a.gateway_ip})"))
+            if _notify else None,
+        )
+
     # Wavr Net: defensive LAN inventory + rogue-device alerts (own-network only,
     # loopback-read). Runs its own periodic scan loop; port-awareness stays off
     # unless WAVR_NET_PORTSCAN (ADR-0004). `on_rogue` fires the opt-in ntfy alert on
@@ -188,7 +212,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         dhcp_fp_enabled=cfg.net_dhcp_fp,
         # Reverse-DNS hostname resolution (gateway-anchored PTR) -- opt-in,
         # default OFF; only queries the LAN gateway resolver when enabled.
-        hostname_resolve_enabled=cfg.net_hostnames)
+        hostname_resolve_enabled=cfg.net_hostnames,
+        # Per-device latency (WiFiman parity, wifiman.md #1) -- opt-in, default
+        # OFF; actively TCP-connects each host so it is gated like the port pass.
+        latency_enabled=cfg.net_latency,
+        # Gateway-identity flag (wifiman.md #2) -- reads THIS host's routing
+        # table only (zero egress, no neighbour touch), so on unconditionally.
+        gateway_detect_enabled=True,
+        # Gateway-MAC-identity tracker (inventory feature #2): each scan feeds this
+        # cycle's is_gateway binding into the debounced monitor built above.
+        gateway_monitor=_gateway_monitor)
 
     # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
     # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
@@ -310,6 +343,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_device_meta:
                 with suppress(Exception):
                     _device_meta.close()
+            if _owns_gateway_store and _gateway_store is not None:
+                with suppress(Exception):
+                    _gateway_store.close()
             if _devices is not None:
                 with suppress(Exception):
                     _devices.close()
@@ -409,7 +445,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # other include_router calls.
     app.include_router(build_inventory_router(
         _inventory, device_meta=_device_meta, name_deps=[Depends(require_local)],
-        dhcp_monitor=_dhcp_monitor))
+        dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor))
 
     @app.get("/api/history")
     async def history(limit: int = 200):
@@ -486,6 +522,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 "snmp": cfg.net_snmp,
                 "dhcp_fp": cfg.net_dhcp_fp,
                 "rogue_dhcp": cfg.net_dhcp_monitor,
+                # Gateway-MAC-identity tracker (inventory feature #2) -- the one signal
+                # here that is ON by default (zero-egress, on-box); surfaced so
+                # the Privacy & Egress view stays honest about what is live.
+                "gateway_monitor": cfg.net_gateway_monitor,
                 # Audit fix #1: the ONLY egress path in this dict that isn't a
                 # dedicated background collector -- GET /api/health's public-
                 # DNS-resolver legs, opt-in via WAVR_HEALTH_RESOLVERS. Surfaced

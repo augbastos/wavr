@@ -236,6 +236,9 @@ def test_status_shape_and_no_secrets():
             # Passive/active protocol collectors (defensive-inventory collectors +
             # collectors-lote2) -- every one opt-in, default OFF.
             "mdns", "ssdp", "netbios", "snmp", "dhcp_fp", "rogue_dhcp",
+            # Gateway-MAC-identity tracker (inventory feature #2) -- ON by default,
+            # zero-egress; surfaced in features like every other live signal.
+            "gateway_monitor",
             # Audit fix #1: GET /api/health's public-resolver egress leg,
             # opt-in via WAVR_HEALTH_RESOLVERS -- surfaced so the Privacy &
             # Egress dashboard stays honest about this one egress path too.
@@ -271,6 +274,9 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "tls": False, "ntfy": False, "internet_monitor": False,
             "mdns": False, "ssdp": False, "netbios": False, "snmp": False,
             "dhcp_fp": False, "rogue_dhcp": False, "health_resolvers": False,
+            # gateway-MAC-identity tracker is the one default-ON feature
+            # (zero-egress, on-box -- inventory feature #2).
+            "gateway_monitor": True,
         }
 
 
