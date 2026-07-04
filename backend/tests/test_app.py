@@ -246,6 +246,8 @@ def test_status_shape_and_no_secrets():
             # Standalone tools (A3) -- opt-in, default OFF. wol/diagnostics are
             # LAN/local; speedtest is the ONE sanctioned external egress.
             "wol", "diagnostics", "speedtest",
+            # ONVIF camera probe (A4.2) -- opt-in, default OFF (active LAN probe).
+            "onvif_probe",
         }
         assert set(body["features"]) == expected_features
         assert all(isinstance(v, bool) for v in body["features"].values())
@@ -282,6 +284,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "gateway_monitor": True,
             # Standalone tools (A3) -- opt-in, default OFF.
             "wol": False, "diagnostics": False, "speedtest": False,
+            # ONVIF camera probe (A4.2) -- opt-in, default OFF.
+            "onvif_probe": False,
         }
 
 

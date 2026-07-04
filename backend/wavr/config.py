@@ -169,6 +169,14 @@ class Config:
     net_diagnostics: bool
     net_speedtest: bool
     speedtest_provider: str
+    # ONVIF camera probe (A4.2) -- opt-in, default OFF. Gates POST /api/onvif/probe,
+    # an ACTIVE WS-Discovery multicast probe + unicast SOAP calls that auto-discovers
+    # LAN cameras and pre-fills their RTSP URL for the rung-2 add form. Same "active
+    # probing is opt-in on top of opt-in" rule as `net_ssdp_location`: a strictly more
+    # active probe than the passive collectors. SSRF-hard (the probe only ever contacts
+    # LAN-IP-literal hosts) and it NEVER auto-adds a camera -- the user still confirms
+    # via POST /api/cameras, and cameras always boot OFF.
+    net_onvif_probe: bool
 
 
 def load_config() -> Config:
@@ -302,4 +310,7 @@ def load_config() -> Config:
             if os.getenv("WAVR_SPEEDTEST_PROVIDER", "cloudflare").strip().lower()
             in ("cloudflare", "ndt7") else "cloudflare"
         ),
+        # ONVIF camera probe (A4.2) -- opt-in, default OFF (active probe on top of
+        # the passive collectors).
+        net_onvif_probe=os.getenv("WAVR_ONVIF_PROBE", "").lower() in ("1", "true", "yes", "on"),
     )
