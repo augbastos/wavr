@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Callable
 
+from wavr.mqtt_topics import room_event_topic, room_state_topic
+
 
 class RulesEngine:
     """Consumes fused RoomState from the Hub and emits MQTT for home automation.
@@ -28,14 +30,18 @@ class RulesEngine:
     def handle(self, rs: dict) -> None:
         room = rs["room"]
         occupied = bool(rs["occupied"])
+        # Topics are built via mqtt_topics so the room segment is slugged the SAME
+        # way ha_discovery slugs it -- a room named e.g. "Sala + Cozinha" or
+        # "Kids #1" would otherwise produce an illegal MQTT wildcard topic that
+        # paho rejects, silently dropping that room from Home Assistant.
         self._publish(
-            f"{self._prefix}/rooms/{room}/state",
+            room_state_topic(self._prefix, room),
             json.dumps({"occupied": occupied, "confidence": rs["confidence"], "ts": rs["ts"]}),
             True,   # retained: latest state persists on the broker
         )
         prev = self._last.get(room)
         if prev is not None and prev != occupied:
-            self._publish(f"{self._prefix}/rooms/{room}/event",
+            self._publish(room_event_topic(self._prefix, room),
                           "occupied" if occupied else "vacant", False)
         self._last[room] = occupied
 

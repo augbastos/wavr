@@ -135,7 +135,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # (real paho publisher, lazily connected). Off by default -- no publisher, no engine.
     _rules_publish = rules_publish
     if _rules_publish is None and cfg.mqtt_enabled:
-        _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port)
+        _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port, cfg.mqtt_prefix)
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
     # AwayMonitor runs whenever MQTT OR ntfy is opt-in'd -- both consumers need the
     # SAME house-level arrived/left edge detection. `_rules_publish` stays optional

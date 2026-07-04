@@ -125,3 +125,53 @@ def test_config_ha_discovery_defaults_off(monkeypatch):
     monkeypatch.delenv("WAVR_HA_DISCOVERY", raising=False)
     from wavr.config import load_config
     assert load_config().ha_discovery is False   # opt-in gate, off by default
+
+
+def test_every_payload_declares_availability():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ROOMS)
+    assert msgs
+    for topic, payload, _ in msgs:
+        cfg = json.loads(payload)
+        assert cfg["availability_topic"] == "wavr/status", topic
+        assert cfg["payload_available"] == "online"
+        assert cfg["payload_not_available"] == "offline"
+
+
+def test_availability_topic_follows_prefix():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ["sala"], prefix="casa")
+    for _, payload, _ in msgs:
+        assert json.loads(payload)["availability_topic"] == "casa/status"
+
+
+def test_room_with_wildcard_is_slugged_in_topic_and_object_id():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ["Kids#1"])
+    cfg, _ = _payload(msgs, "homeassistant/binary_sensor/wavr_kids_1/config")
+    assert cfg["state_topic"] == "wavr/rooms/kids_1/state"
+    assert cfg["name"] == "Kids#1 occupancy"     # human name keeps the raw room label
+    for _, payload, _ in msgs:
+        assert "#" not in json.loads(payload)["state_topic"]
+
+
+def test_publisher_and_discovery_agree_on_slugged_state_topic():
+    # The silent-drop fix: discovery must subscribe to EXACTLY the topic the rules
+    # engine publishes, even for an MQTT-hostile room name.
+    from wavr.rules import RulesEngine
+
+    room = "Sala + Cozinha/Kids#1"
+    disc_msgs, disc_pub = _record()
+    publish_ha_discovery(disc_pub, [room])
+    disc_state = next(
+        json.loads(p)["state_topic"]
+        for _, p, _ in disc_msgs
+        if "/rooms/" in json.loads(p).get("state_topic", "")
+    )
+    rules_msgs = []
+    RulesEngine(lambda t, p, r: rules_msgs.append(t)).handle(
+        {"room": room, "occupied": True, "confidence": 0.5, "ts": "t"})
+    rules_state = next(t for t in rules_msgs if t.endswith("/state"))
+    assert disc_state == rules_state             # lockstep -- no divergence
+    assert "+" not in rules_state and "#" not in rules_state
+    assert rules_state.count("/") == 3           # no injected topic level
