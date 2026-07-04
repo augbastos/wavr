@@ -39,6 +39,18 @@ def test_lookup_vendor_unknown_prefix_returns_unknown():
     assert lookup_vendor("de:ad:be:ef:00:01") == "unknown"
 
 
+def test_lookup_vendor_camera_hub_oui_expansion():
+    # unifi.md #2 -- camera/hub-bridge vendor prefixes pulled from the live
+    # public IEEE MA-L registry, not invented. Eufy/Anker was entirely missing
+    # before; Reolink/Wyze/Aqara/Ubiquiti were seeded but shallow.
+    assert lookup_vendor("f4:9d:8a:11:22:33") == "Eufy"       # Fantasia Trading LLC
+    assert lookup_vendor("8c:85:80:11:22:33") == "Eufy"       # Smart Innovation LLC
+    assert lookup_vendor("f0:c8:8b:11:22:33") == "Wyze"       # newly-added Wyze block
+    assert lookup_vendor("18:c2:3c:11:22:33") == "Aqara"      # Lumi United's 2nd block
+    assert lookup_vendor("e0:63:da:11:22:33") == "Ubiquiti"   # was mis-registered as Nvidia
+    assert lookup_vendor("1c:0b:8b:11:22:33") == "Ubiquiti"   # newly-added UniFi block
+
+
 def test_locally_administered_bit_detection():
     assert is_locally_administered("02:00:00:00:00:01") is True   # bit 0x02 set
     assert is_locally_administered("a4:83:e7:11:22:33") is False  # globally unique

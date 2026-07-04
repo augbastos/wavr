@@ -87,6 +87,15 @@ def test_single_signal_never_bumps():
     assert ident.confidence == "medium"
 
 
+def test_eufy_oui_resolves_to_camera_via_fusion():
+    # unifi.md #2: Eufy/Anker was entirely missing from the OUI table -- an
+    # Eufy MAC used to fall through to "unknown". Same shape as the existing
+    # Wyze/Ring camera-vendor entries: OUI alone -> medium confidence.
+    ident = recognize({"vendor": "Eufy"})
+    assert ident.device_type == "camera"
+    assert ident.confidence == "medium"
+
+
 def test_disagreeing_signal_does_not_bump():
     # printer port vs router OUI: winner is the port hint, no agreement
     ident = recognize({"vendor": "Netgear", "open_ports": [9100]})
