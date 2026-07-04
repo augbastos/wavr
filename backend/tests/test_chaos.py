@@ -71,7 +71,10 @@ def test_wifi_drop_stays_occupied_while_camera_holds():
 
 
 def test_wifi_drop_goes_vacant_only_when_all_trusted_sources_gone():
-    pairs = _replay(wifi_drop())
+    # vacate_s=0 disables the occupancy dwell so this exercises the RAW
+    # confidence->boolean crossing it was written for; the asymmetric dwell has
+    # its own dedicated tests in test_fusion.py.
+    pairs = _replay(wifi_drop(), engine=FusionEngine(vacate_s=0))
     assert pairs[1][1].occupied is True                      # after first tick's camera event
     assert pairs[-1][1].occupied is False                    # ends vacant (camera also gone)
 
@@ -99,7 +102,11 @@ def test_camera_flicker_never_reaches_full_confidence():
 
 
 def test_camera_flicker_oscillates_but_is_bounded():
-    states = [rs for _, rs in _replay(camera_flicker())]
+    # vacate_s=0: assert the RAW per-frame boolean oscillation. With the dwell
+    # on (default) the room would legitimately stay occupied across the odd
+    # false-negative frames -- that debounced behaviour is covered in
+    # test_fusion.py; here we isolate the underlying confidence math.
+    states = [rs for _, rs in _replay(camera_flicker(), engine=FusionEngine(vacate_s=0))]
     assert any(rs.occupied for rs in states)      # false-positive frames
     assert any(not rs.occupied for rs in states)  # false-negative frames
 

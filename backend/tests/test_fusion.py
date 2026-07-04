@@ -1,5 +1,8 @@
+from datetime import datetime, timedelta, timezone
+
 from wavr.events import SensingEvent
 from wavr.fusion import FusionEngine
+from wavr.rules import RulesEngine
 
 
 def ev(room, modality, presence, conf, br=None, hr=None):
@@ -93,3 +96,125 @@ def test_none_timestamp_does_not_cascade_and_kill_later_good_events():
     f.update(bad)  # must not raise
     rs = f.update(ev("sala", "camera", True, 0.9))
     assert rs.occupied is True
+
+
+# ---------------------------------------------------------------------------
+# Occupancy dwell / hysteresis (smartthings.md #1 -- asymmetric wall-clock dwell)
+# Fast to occupied, slow/debounced to vacant. Only the boolean is debounced;
+# confidence stays continuous and the pending exit is surfaced in `explanation`.
+# ---------------------------------------------------------------------------
+
+_BASE = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _at(seconds):
+    """ISO-8601 UTC timestamp `seconds` after the fixed base."""
+    return (_BASE + timedelta(seconds=seconds)).isoformat()
+
+
+def _cam(room, presence, conf, seconds):
+    # weight camera=1.0 so fused confidence ~= the source confidence (agreement
+    # is 1.0 for a lone source), making the threshold crossings easy to script.
+    return SensingEvent(room=room, modality="camera", presence=presence, motion=1.0,
+                        breathing_bpm=None, heart_bpm=None, confidence=conf,
+                        ts=_at(seconds))
+
+
+def _lone():
+    # Lone-camera engine: with weight 1.0 a present source's fused confidence
+    # equals its own confidence, so 0.6 -> occupied, 0.3 -> below threshold.
+    return FusionEngine(weights={"camera": 1.0})
+
+
+def test_occupied_is_immediate_no_dwell_on_the_way_up():
+    # Fast to occupied: the very first above-threshold reading flips occupied now.
+    f = _lone()
+    rs = f.update(_cam("sala", True, 0.6, 0))
+    assert rs.occupied is True
+    assert "confirmando" not in rs.explanation
+
+
+def test_single_frame_dip_does_not_flip_room_vacant():
+    # A one-frame confidence dip (0.6 -> 0.3 -> 0.6) must NOT flip the room vacant:
+    # the dwell holds occupied through the dip. Confidence stays honest (drops).
+    f = _lone()
+    up = f.update(_cam("sala", True, 0.6, 0))
+    dip = f.update(_cam("sala", True, 0.3, 1))     # below threshold, but held
+    back = f.update(_cam("sala", True, 0.6, 2))
+
+    assert up.occupied is True
+    assert dip.occupied is True                    # HELD, not flipped
+    assert dip.confidence < 0.5                     # confidence NOT debounced -- honest
+    assert back.occupied is True
+    assert "confirmando" not in back.explanation    # pending cancelled on re-cross
+
+
+def test_pending_vacate_is_surfaced_in_the_explanation():
+    # Honesty invariant: while held, the explanation shows the low confidence AND
+    # the confirming-exit countdown -- uncertainty is shown, not hidden.
+    f = _lone()
+    f.update(_cam("sala", True, 0.6, 0))
+    held = f.update(_cam("sala", False, 0.0, 1))
+    assert held.occupied is True
+    assert "ocupado" in held.explanation
+    assert "confirmando" in held.explanation
+
+
+def test_vacate_grace_expires_flips_to_vacant():
+    # Once confidence has STAYED below threshold for the full wall-clock grace,
+    # occupied finally flips to vacant (default WAVR_ROOM_VACATE_S = 45 s).
+    f = _lone()
+    f.update(_cam("sala", True, 0.9, 0))
+    held = f.update(_cam("sala", False, 0.0, 10))   # 10 s < 45 s -> still held
+    gone = f.update(_cam("sala", False, 0.0, 60))   # 60 s since drop -> vacant
+    assert held.occupied is True
+    assert gone.occupied is False
+    assert "confirmando" not in gone.explanation
+
+
+def test_reoccupy_during_grace_resets_the_dwell():
+    # A re-cross above threshold during the grace cancels the pending vacate, so
+    # a later drop must serve the FULL grace again (not the leftover from before).
+    f = _lone()
+    f.update(_cam("sala", True, 0.9, 0))
+    f.update(_cam("sala", False, 0.0, 30))          # 30 s into a 45 s grace
+    f.update(_cam("sala", True, 0.9, 31))           # re-occupied -> cancel pending
+    # Drop again; only 20 s later -> must still be held (grace restarted at 31 s).
+    still = f.update(_cam("sala", False, 0.0, 51))
+    assert still.occupied is True
+    assert "confirmando" in still.explanation
+
+
+def test_vacate_s_zero_disables_the_dwell():
+    # Opt-out: WAVR_ROOM_VACATE_S=0 restores the pre-dwell raw threshold crossing.
+    f = FusionEngine(weights={"camera": 1.0}, vacate_s=0)
+    f.update(_cam("sala", True, 0.9, 0))
+    gone = f.update(_cam("sala", False, 0.0, 1))
+    assert gone.occupied is False
+    assert "confirmando" not in gone.explanation
+
+
+def test_single_frame_dip_emits_no_vacant_mqtt_edge():
+    # End-to-end (trap #1): the dwell must stop a one-frame dip from firing a
+    # `vacant` edge event downstream (which would kill a real occupant's lights).
+    # Drive the fused RoomStates through RulesEngine and assert no vacant edge.
+    msgs = []
+    rules = RulesEngine(lambda t, p, r: msgs.append((t, p)))
+    f = _lone()
+    for i, (pres, conf) in enumerate([(True, 0.6), (True, 0.3), (True, 0.6)]):
+        rules.handle(f.update(_cam("sala", pres, conf, i)).to_dict())
+    edge_events = [p for t, p in msgs if t.endswith("/event")]
+    assert "vacant" not in edge_events
+
+
+def test_dwell_is_per_room_independent():
+    # Two rooms debounce independently -- one going vacant must not disturb the
+    # other holding occupied (the transition state is keyed per room).
+    f = _lone()
+    f.update(_cam("sala", True, 0.9, 0))
+    f.update(_cam("quarto", True, 0.9, 0))
+    f.update(_cam("sala", False, 0.0, 1))           # sala drops (held)
+    quarto = f.update(_cam("quarto", True, 0.9, 2))  # quarto still present
+    sala = f.state("sala")
+    assert quarto.occupied is True and "confirmando" not in quarto.explanation
+    assert sala.occupied is True and "confirmando" in sala.explanation

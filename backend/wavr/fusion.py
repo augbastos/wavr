@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timezone
 
@@ -20,6 +21,17 @@ DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
 _DEFAULT_FRESHNESS_S = float(os.getenv("WAVR_SOURCE_FRESHNESS_S", "30"))
 _DEFAULT_STALE_S = float(os.getenv("WAVR_SOURCE_STALE_S", "90"))
 
+# Occupancy dwell / hysteresis window (seconds). Asymmetric debounce on the
+# per-room `occupied` boolean: a room flips to occupied the instant confidence
+# clears the threshold (lights-on responsiveness), but once confidence falls
+# back below it, `occupied` is HELD until confidence has stayed below for
+# VACATE_S wall-clock seconds -- so a single dropped frame / momentary low
+# reading cannot flick a room vacant and fire a "vacant" automation on someone
+# still sitting there. Only the boolean is debounced; `confidence` stays
+# continuous and the pending exit is surfaced in the explanation. Set
+# WAVR_ROOM_VACATE_S=0 to disable (raw threshold crossing). Overridable via env.
+_DEFAULT_VACATE_S = float(os.getenv("WAVR_ROOM_VACATE_S", "45"))
+
 
 def _as_utc(value) -> datetime:
     """Coerce an ISO-8601 string (or datetime) to an aware UTC datetime."""
@@ -37,11 +49,17 @@ class FusionEngine:
     Each source's trust is additionally scaled by a freshness decay: full weight
     while the reading is fresh, fading to zero once it is stale, so a source that
     stopped reporting honestly loses its vote (and the fused confidence drops)
-    rather than freezing on its last reading."""
+    rather than freezing on its last reading.
+
+    The per-room `occupied` boolean is additionally run through an asymmetric
+    wall-clock dwell (fast to occupied, slow to vacant) so a single-frame
+    confidence dip cannot flap a room -- see `_debounce_occupancy`. This is the
+    one place occupancy is decided, so the dashboard, rules.py and away.py all
+    consume the SAME debounced boolean."""
 
     def __init__(self, weights: dict | None = None, threshold: float = 0.5,
                  now_fn=None, freshness_s: float | None = None,
-                 stale_s: float | None = None):
+                 stale_s: float | None = None, vacate_s: float | None = None):
         self._weights = weights if weights is not None else DEFAULT_WEIGHTS
         self._threshold = threshold
         # Injectable clock returning an aware UTC "now". When None (default) each
@@ -51,7 +69,13 @@ class FusionEngine:
         self._now_fn = now_fn
         self._freshness_s = _DEFAULT_FRESHNESS_S if freshness_s is None else freshness_s
         self._stale_s = _DEFAULT_STALE_S if stale_s is None else stale_s
+        # Asymmetric occupancy dwell: how long `occupied` is held after
+        # confidence falls below threshold before it may flip to vacant
+        # (0 disables the dwell).
+        self._vacate_s = _DEFAULT_VACATE_S if vacate_s is None else vacate_s
         self._latest: dict[str, dict[str, SensingEvent]] = {}  # room -> modality -> event
+        self._occupied_state: dict[str, bool] = {}     # room -> last debounced occupied
+        self._vacate_since: dict[str, datetime] = {}   # room -> when a pending vacate began
 
     def update(self, event: SensingEvent) -> RoomState:
         room_events = self._latest.setdefault(event.room, {})
@@ -89,6 +113,45 @@ class FusionEngine:
         if age_s >= self._stale_s or self._stale_s <= self._freshness_s:
             return 0.0, "dead"
         return (self._stale_s - age_s) / (self._stale_s - self._freshness_s), "stale"
+
+    def _debounce_occupancy(self, room: str, raw_occupied: bool,
+                            ref: datetime) -> tuple[bool, float | None]:
+        """Asymmetric wall-clock dwell on the per-room `occupied` boolean.
+
+        Fast to occupied: flip the instant confidence clears the threshold
+        (lights-on responsiveness is non-negotiable). Slow to vacant: once
+        confidence drops below the threshold, HOLD `occupied` until it has
+        stayed below for `self._vacate_s` wall-clock seconds; any re-cross above
+        the threshold in that window cancels the pending vacate. Only the
+        boolean is debounced -- `confidence` stays continuous and honest.
+
+        Returns `(occupied, pending_s)` where `pending_s` is the seconds still
+        remaining on a pending vacate (None when not counting down), surfaced in
+        the explanation so the uncertainty is shown, never hidden. Measured
+        against the SAME `ref` clock the freshness decay uses, so the dwell and
+        ageing stay consistent and deterministic under a fixed/injected clock."""
+        prev = self._occupied_state.get(room)
+        if raw_occupied:
+            # Fast path to occupied; abandon any in-flight vacate.
+            self._vacate_since.pop(room, None)
+            self._occupied_state[room] = True
+            return True, None
+        if prev is not True:
+            # Already vacant, or first-ever reading for the room: nothing to hold.
+            self._vacate_since.pop(room, None)
+            self._occupied_state[room] = False
+            return False, None
+        # Was occupied and has now dropped below threshold -> run the vacate dwell.
+        started = self._vacate_since.setdefault(room, ref)
+        elapsed = max(0.0, (ref - started).total_seconds())
+        if self._vacate_s <= 0 or elapsed >= self._vacate_s:
+            # Dwell disabled, or the grace has fully elapsed -> confirm vacant.
+            self._vacate_since.pop(room, None)
+            self._occupied_state[room] = False
+            return False, None
+        # Still within the grace window -> hold occupied, report the countdown.
+        self._occupied_state[room] = True
+        return True, self._vacate_s - elapsed
 
     def _fuse(self, room: str, ts: str) -> RoomState:
         events = self._latest[room]
@@ -136,9 +199,15 @@ class FusionEngine:
         # Defensive clamp: a single out-of-range source confidence (negative or
         # >1) must never drive the fused confidence outside [0, 1].
         confidence = round(min(1.0, max(0.0, agreement * strength)), 3)
-        occupied = confidence >= self._threshold
+        raw_occupied = confidence >= self._threshold
+        occupied, pending_s = self._debounce_occupancy(room, raw_occupied, ref)
         parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
         explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
+        if pending_s is not None:
+            # Confidence has dropped below threshold but the room is still HELD
+            # occupied by the dwell -- show the countdown, do not hide the doubt.
+            rem = math.ceil(pending_s)
+            explanation += f", confirmando saída {rem // 60}:{rem % 60:02d}"
 
         best_targets: list = []
         best_w = -1.0
