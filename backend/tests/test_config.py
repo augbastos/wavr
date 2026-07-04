@@ -173,6 +173,41 @@ def test_config_netbios_snmp_scope_known_only_is_the_default_without_env_var(mon
     assert cfg.net_snmp_scope_known_only is True
 
 
+def test_config_has_a3_tools_defaults(monkeypatch):
+    # A3 standalone tools -- WoL / diagnostics / speed test all opt-in, off by
+    # default; the speed-test provider defaults to the lower-disclosure
+    # `cloudflare` (only `ndt7` reaches the IP-publishing M-Lab path).
+    for v in ("WAVR_NET_WOL", "WAVR_NET_DIAGNOSTICS", "WAVR_NET_SPEEDTEST",
+              "WAVR_SPEEDTEST_PROVIDER"):
+        monkeypatch.delenv(v, raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.net_wol is False
+    assert cfg.net_diagnostics is False
+    assert cfg.net_speedtest is False
+    assert cfg.speedtest_provider == "cloudflare"
+
+
+def test_config_reads_a3_tools_env(monkeypatch):
+    monkeypatch.setenv("WAVR_NET_WOL", "1")
+    monkeypatch.setenv("WAVR_NET_DIAGNOSTICS", "1")
+    monkeypatch.setenv("WAVR_NET_SPEEDTEST", "1")
+    monkeypatch.setenv("WAVR_SPEEDTEST_PROVIDER", "ndt7")
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.net_wol is True
+    assert cfg.net_diagnostics is True
+    assert cfg.net_speedtest is True
+    assert cfg.speedtest_provider == "ndt7"
+
+
+def test_config_speedtest_provider_bad_value_falls_back_to_cloudflare(monkeypatch):
+    # A typo / hostile value must never silently reach the IP-publishing path.
+    monkeypatch.setenv("WAVR_SPEEDTEST_PROVIDER", "mlab-please")
+    from wavr.config import load_config
+    assert load_config().speedtest_provider == "cloudflare"
+
+
 def test_config_netbios_snmp_scope_known_explicit_still_narrows(monkeypatch):
     # SCOPE=known (the old explicit opt-in) is still accepted and still narrows.
     monkeypatch.setenv("WAVR_NET_NETBIOS_SCOPE", "known")
