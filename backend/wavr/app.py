@@ -43,6 +43,7 @@ from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
+from wavr.sources.onvif import ONVIFProbe
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
@@ -137,7 +138,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                health_resolvers=None, gateway_monitor=None,
                ha_import_store=None,
                wol_send=None, ping_probe=None, traceroute_runner=None,
-               dns_query_fn=None, speedtest_fn=None) -> FastAPI:
+               dns_query_fn=None, speedtest_fn=None,
+               onvif_discover=None, onvif_soap=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -695,6 +697,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 "wol": cfg.net_wol,
                 "diagnostics": cfg.net_diagnostics,
                 "speedtest": cfg.net_speedtest,
+                # ONVIF camera probe (A4.2) -- opt-in, default OFF. Active WS-
+                # Discovery + unicast SOAP that pre-fills a camera's RTSP URL for
+                # the rung-2 add form; never auto-adds. Surfaced so the Privacy &
+                # Egress view stays honest that an active LAN probe is available.
+                "onvif_probe": cfg.net_onvif_probe,
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
@@ -775,6 +782,37 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             raise HTTPException(status_code=409, detail=f"camera exists: {name}")
         manager.register(name, _camera_factory(_cameras.get(name), cfg), False)  # boots OFF
         return _masked_cameras()
+
+    @app.post("/api/onvif/probe")
+    async def onvif_probe(targets: list[str] | None = Body(None, embed=True),
+                          username: str | None = Body(None, embed=True),
+                          password: str | None = Body(None, embed=True),
+                          timeout: float = Body(3.0, embed=True),
+                          _=Depends(require_local)):
+        # A4.2 ONVIF camera probe: auto-discovers LAN cameras (WS-Discovery) and
+        # fetches their RTSP URI (GetProfiles/GetStreamUri) to PRE-FILL the rung-2
+        # add form. It NEVER auto-adds a camera -- the user still confirms via
+        # POST /api/cameras (which keeps the rtsp-scheme guard) and cameras boot OFF.
+        # Opt-in (WAVR_ONVIF_PROBE, default OFF -> 503) + require_local CSRF. SSRF-
+        # hard: wavr.sources.onvif validates BOTH the device-service XAddrs host and
+        # the returned rtsp host to a LAN-IP literal before any connection / before
+        # surfacing (public/DNS/cloud-metadata refused, redirects blocked, XXE
+        # rejected). Camera creds are request-scoped only: used to build the WS-
+        # UsernameToken digest and NEVER persisted/logged/echoed; the response rtsp
+        # URLs are masked. Clamp the per-call timeout so a request can't hang.
+        if not cfg.net_onvif_probe:
+            raise HTTPException(status_code=503,
+                                detail="ONVIF probe disabled (set WAVR_ONVIF_PROBE=1)")
+        probe = ONVIFProbe(discover=onvif_discover, soap=onvif_soap)
+        clamped = max(0.5, min(float(timeout), 10.0))
+        result = await probe.probe(targets=targets, username=username,
+                                   password=password, timeout=clamped)
+        # Defence in depth: never let creds ride back out even if a transport bug
+        # tried to. The result dicts are built creds-free by design (masked rtsp);
+        # this strips any stray top-level echo without touching the camera list.
+        result.pop("username", None)
+        result.pop("password", None)
+        return result
 
     @app.delete("/api/cameras/{name}")
     async def delete_camera(name: str, _=Depends(require_local)):
