@@ -3,10 +3,10 @@
 ``recognize(signals)`` merges every available per-device signal into ONE
 DeviceIdentity using PRECEDENCE (strongest opinion wins), not averaging:
 
-    user_pin  >  protocol self-description (UPnP > Bonjour > SNMP)
-              >  DHCP fingerprint  >  hostname pattern  >  open-port hint
-              >  OUI vendor default  >  mobile-heavy vendor
-              >  randomized-MAC heuristic
+    user_pin  >  protocol self-description (UPnP > Bonjour > SNMP > NetBIOS)
+              >  hostname pattern  >  open-port hint  >  OUI vendor default
+              >  DHCP fingerprint (down-weighted, unverified -- see below)
+              >  mobile-heavy vendor  >  randomized-MAC heuristic
 
 Collector threat model (mDNS/SSDP/SNMP): every one of these protocols is a
 device SELF-description broadcast on the open LAN multicast group -- any
@@ -15,12 +15,32 @@ spoofability the M1 OUI-alone fix already treats as a security-relevant
 fact (a MAC's OUI is just its first 3 octets, freely settable). So a
 protocol self-description signal ALONE is capped at "medium" confidence
 here, exactly like an OUI-alone verdict -- it only reaches "high" via the
-same consensus bump (a 2nd independent signal agreeing on the same type).
+same consensus bump (a 2nd INDEPENDENT signal agreeing on the same type).
 
-Confidence is the winning signal's own confidence, bumped ONE level when a
-second independent signal agrees on the same type -- the same
-"consensus-raises-confidence" ethos Wavr's sensor fusion uses. The full
-evidence trail is returned in ``sources`` so the UI can explain WHY.
+DHCP fingerprint is WORSE than a self-description: `sources.dhcp_fp` keys
+its output by the packet's own `chaddr`, an unauthenticated, client-chosen
+field -- unlike snmp/netbios (keyed by ARP ground-truth `ip_to_mac`), an
+off-path attacker can broadcast ONE spoofed-`chaddr` DISCOVER naming a
+currently-present device's MAC and inject a chosen device_type/os onto it
+with no on-path position needed at all (collectors-lote2 audit fix #3). So
+`dhcp` is down-weighted below `oui` (still above the low-confidence
+heuristics -- it is real signal, just untrusted) and its evidence-trail
+entry is flagged ``"unverified": True``.
+
+Consensus bump (audit fix #2): a signal's confidence is bumped ONE level
+only when >=2 agreeing candidates span >=2 DISTINCT evidence FAMILIES, not
+merely 2 distinct signal *names*. A single rogue LAN host can answer SNMP
+`sysName`, NBSTAT, mDNS AND SSDP simultaneously -- all attacker-set, all in
+the same `self_report` family -- so two self-reports agreeing must NOT
+forge "high" on their own (that defeats the very cap above). Families:
+``pin`` (user_pin, always-high, never spoofable off-path), ``self_report``
+(upnp/bonjour/snmp/netbios/dhcp/hostname -- all device self-descriptions,
+`dhcp` doubly so per above), ``observed`` (port_hint -- Wavr's own
+first-party connect probe), ``oui`` (the MAC's first 3 octets), and
+``heuristic`` (mobile_vendor/random_mac -- low-confidence guesses). An
+oui+port_hint or bonjour+port_hint pair still spans 2 families -> high;
+snmp+netbios or upnp+bonjour do not -> stay medium. The full evidence trail
+is returned in ``sources`` so the UI can explain WHY.
 
 100% LOCAL: pure functions, zero network I/O, public-data heuristics only
 (IEEE OUI prefixes, IANA port conventions, hostname conventions). There is no
@@ -30,12 +50,14 @@ Signal keys accepted (all optional -- future passive collectors just add
 their key, no engine change needed):
     mac        str  -- for the randomized-MAC heuristic
     vendor     str  -- OUI-resolved manufacturer ("unknown" is fine)
-    hostname   str  -- DHCP/NetBIOS/mDNS announced name
+    hostname   str  -- DHCP/mDNS announced name
     open_ports iterable[int] -- from the OPT-IN connect-only port pass
     user_pin   str  -- taxonomy value the OWNER pinned; always wins
-    upnp | bonjour | snmp  dict -- protocol SELF-description hooks (future
-               collectors): {"device_type": taxonomy?, "make": str?,
-               "model": str?, "os": str?}
+    upnp | bonjour | snmp | netbios  dict -- protocol SELF-description hooks:
+               {"device_type": taxonomy?, "make": str?, "model": str?,
+               "os": str?} (netbios's make/model/os are always None -- NBSTAT
+               carries no such fields, kept only for shape symmetry -- see
+               wavr.sources.netbios's docstring)
     dhcp       dict -- DHCP fingerprint hook: {"device_type": taxonomy?,
                "os": str?}
 """
@@ -54,17 +76,39 @@ from wavr.data.ports import port_type_hint
 
 # Precedence as explicit weights (documented ordering above). Weights are for
 # RANKING + the explainability trail -- the merge is precedence, not a sum.
+# `dhcp` sits BELOW `oui` (audit fix #3): it is keyed by the unauthenticated
+# packet `chaddr`, not ARP ground-truth, so it must never outrank a signal
+# derived from the device's own (also spoofable, but at-least ARP-observed)
+# MAC prefix.
 _WEIGHTS: dict[str, float] = {
     "user_pin": 1.0,
     "upnp": 0.9,
     "bonjour": 0.85,
     "snmp": 0.8,
-    "dhcp": 0.7,
+    "netbios": 0.75,
     "hostname": 0.65,
     "port_hint": 0.5,
     "oui": 0.4,
+    "dhcp": 0.35,
     "mobile_vendor": 0.3,
     "random_mac": 0.2,
+}
+
+# Evidence FAMILY per signal (audit fix #2) -- the consensus bump below only
+# fires when agreeing candidates span >=2 DISTINCT families, not merely 2
+# distinct signal names (see module docstring for the threat this closes).
+_FAMILY: dict[str, str] = {
+    "user_pin": "pin",
+    "upnp": "self_report",
+    "bonjour": "self_report",
+    "snmp": "self_report",
+    "netbios": "self_report",
+    "dhcp": "self_report",
+    "hostname": "self_report",
+    "port_hint": "observed",
+    "oui": "oui",
+    "mobile_vendor": "heuristic",
+    "random_mac": "heuristic",
 }
 
 _CONF_ORDER = ("low", "medium", "high")
@@ -116,18 +160,20 @@ def _candidates(signals: Mapping) -> list[dict]:
     irrelevant -- ranking is by weight."""
     out: list[dict] = []
 
-    def add(signal: str, dtype: str, conf: str, value: str) -> None:
+    def add(signal: str, dtype: str, conf: str, value: str, unverified: bool = False) -> None:
         out.append({"signal": signal, "dtype": dtype, "conf": conf,
-                    "value": value, "weight": _WEIGHTS[signal]})
+                    "value": value, "weight": _WEIGHTS[signal],
+                    "unverified": unverified})
 
     pin = _valid_type(signals.get("user_pin"))
     if pin:
         add("user_pin", pin, "high", pin)
 
-    # Protocol self-description hooks (mDNS/SSDP/SNMP collectors). Capped at
-    # "medium" ALONE -- see the module docstring's collector threat-model note;
-    # a 2nd agreeing signal still reaches "high" via the normal consensus bump.
-    for key in ("upnp", "bonjour", "snmp"):
+    # Protocol self-description hooks (mDNS/SSDP/SNMP/NetBIOS collectors). Capped
+    # at "medium" ALONE -- see the module docstring's collector threat-model note;
+    # a 2nd agreeing signal still reaches "high" via the normal consensus bump
+    # (now family-gated -- see `_FAMILY`/audit fix #2).
+    for key in ("upnp", "bonjour", "snmp", "netbios"):
         info = signals.get(key)
         if isinstance(info, Mapping):
             dtype = _valid_type(info.get("device_type"))
@@ -138,7 +184,10 @@ def _candidates(signals: Mapping) -> list[dict]:
     if isinstance(dhcp, Mapping):
         dtype = _valid_type(dhcp.get("device_type"))
         if dtype:
-            add("dhcp", dtype, "medium", f"DHCP fingerprint: {dtype}")
+            # Audit fix #3: keyed by the unauthenticated packet `chaddr`, not
+            # ARP ground-truth -- flagged unverified in the evidence trail on
+            # top of the down-weighting above (`_WEIGHTS["dhcp"]`).
+            add("dhcp", dtype, "medium", f"DHCP fingerprint: {dtype}", unverified=True)
 
     hostname = signals.get("hostname")
     dtype = hostname_type(hostname)
@@ -177,23 +226,26 @@ def recognize(signals: Mapping) -> DeviceIdentity:
     """Fuse all populated signals for one device into a DeviceIdentity.
 
     Pure/offline. The winner is the highest-precedence type opinion; its own
-    confidence is bumped one level when >=2 independent signals agree on the
-    same type. ``make`` falls back to the OUI vendor (the manufacturer IS the
-    best local make guess); ``model``/``os`` only ever come from
-    self-describing collectors (never invented).
+    confidence is bumped one level when >=2 agreeing candidates span >=2
+    DISTINCT evidence families (audit fix #2 -- see module docstring's
+    `_FAMILY` note; two same-family self-reports, e.g. snmp+netbios, must
+    NOT forge "high" on their own). ``make`` falls back to the OUI vendor
+    (the manufacturer IS the best local make guess); ``model``/``os`` only
+    ever come from self-describing collectors (never invented).
     """
     cands = _candidates(signals)
     sources = tuple(
-        {"signal": c["signal"], "value": c["value"], "weight": c["weight"]}
+        {"signal": c["signal"], "value": c["value"], "weight": c["weight"],
+         **({"unverified": True} if c.get("unverified") else {})}
         for c in cands
     )
 
-    make = _first_str(signals, ("upnp", "bonjour", "snmp"), "make")
+    make = _first_str(signals, ("upnp", "bonjour", "snmp", "netbios"), "make")
     if make is None:
         vendor = signals.get("vendor") or ""
         make = vendor if vendor not in ("", "unknown") else None
-    model = _first_str(signals, ("upnp", "bonjour", "snmp"), "model")
-    os_name = _first_str(signals, ("upnp", "bonjour", "snmp", "dhcp"), "os")
+    model = _first_str(signals, ("upnp", "bonjour", "snmp", "netbios"), "model")
+    os_name = _first_str(signals, ("upnp", "bonjour", "snmp", "netbios", "dhcp"), "os")
 
     if not cands:
         return DeviceIdentity(make=make, model=model, os=os_name, sources=sources)
@@ -207,8 +259,12 @@ def recognize(signals: Mapping) -> DeviceIdentity:
         # and blend into rogue-alert triage). A 2nd independent agreeing signal can
         # still restore "high" via the consensus bump below.
         confidence = min(confidence, "medium", key=_CONF_ORDER.index)
-    agreeing = {c["signal"] for c in cands if c["dtype"] == winner["dtype"]}
-    if len(agreeing) >= 2:
+    # Audit fix #2: count distinct evidence FAMILIES agreeing on the winning
+    # type, not distinct signal names -- a rogue host answering SNMP+NBSTAT+
+    # mDNS+SSDP simultaneously is still just ONE family (`self_report`) and
+    # must not forge "high" alone.
+    agreeing_families = {_FAMILY[c["signal"]] for c in cands if c["dtype"] == winner["dtype"]}
+    if len(agreeing_families) >= 2:
         confidence = _bump(confidence)
 
     return DeviceIdentity(

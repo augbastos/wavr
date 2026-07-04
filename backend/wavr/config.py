@@ -88,6 +88,55 @@ class Config:
     net_ssdp: bool
     net_ssdp_location: bool
     net_collect_duration: float
+    # NetBIOS/SNMP (defensive-inventory #5/#8) -- active, TARGETED unicast probes (not
+    # passive multicast listeners like mdns/ssdp), sent only to hosts THIS
+    # scan cycle's ARP sweep already resolved (never their own subnet sweep).
+    # Opt-in, default OFF. `net_netbios_scope_known_only`/
+    # `net_snmp_scope_known_only` default ON -- audit fix #4: unlike
+    # `netutils.WAVR_NET_PORTSCAN_SCOPE` (a connect-only pass), an ACTIVE
+    # unicast NBSTAT/SNMP probe is a more intrusive footprint on a
+    # shared/guest subnet, so it defaults to the known-MAC allowlist only;
+    # set `WAVR_NET_NETBIOS_SCOPE`/`WAVR_NET_SNMP_SCOPE=all` to explicitly
+    # widen to every ARP-discovered host. `net_snmp_community` is
+    # read-only-by-construction (the collector has no SET-Request encoder)
+    # and is never logged.
+    net_netbios: bool
+    net_netbios_scope_known_only: bool
+    net_snmp: bool
+    net_snmp_community: str
+    net_snmp_scope_known_only: bool
+    # DHCP option-55/60 fingerprint (defensive-inventory #6) -- passive listener,
+    # same opt-in/default-OFF rule as mdns/ssdp.
+    net_dhcp_fp: bool
+    # Reverse-DNS hostname resolution (gateway-anchored PTR) -- opt-in, default
+    # OFF. Feeds the recog hostname signal with real device names via the LAN
+    # gateway resolver (wavr.hostname_resolver). LOCAL-ONLY: queries only the
+    # gateway, never a public resolver.
+    net_hostnames: bool
+    # Rogue / multiple-DHCP-server detector (defensive-inventory #7) -- opt-in,
+    # default OFF. `net_dhcp_probe` is a SECOND opt-in on top (an active
+    # broadcast DHCPDISCOVER), same "active probing is opt-in on top of
+    # opt-in" rule as `net_ssdp_location`. `net_dhcp_known_servers` seeds the
+    # allowlist baseline (e.g. the router's own IP); empty => auto-baseline
+    # on first cycle (see wavr.dhcp_monitor.RogueDhcpMonitor docstring).
+    net_dhcp_monitor: bool
+    net_dhcp_probe: bool
+    net_dhcp_known_servers: set[str]
+    net_dhcp_interval: float
+    net_dhcp_alert_threshold: int
+    # Health-check ladder (defensive-inventory #12) -- extra operator-configured
+    # targets on top of the fixed gateway + public-resolver checks. Empty by
+    # default (no extra egress beyond the resolver checks themselves).
+    health_extra_targets: tuple[str, ...]
+    # Collectors-lote2 audit fix #1: the resolver legs (1.1.1.1/8.8.8.8/9.9.9.9)
+    # are the ONLY part of `GET /api/health` that makes real public-internet
+    # egress. Every other Wavr egress path is opt-in + surfaced in
+    # `/api/status.features` -- this one wasn't, so a bare Docker HEALTHCHECK/
+    # k8s liveness probe/uptime monitor hitting the route would silently ping
+    # three US cloud providers. Default OFF (empty resolver dict -> severity
+    # comes from gateway + extra targets only); set WAVR_HEALTH_RESOLVERS=1 to
+    # opt in to the full 5-tier ladder.
+    health_resolvers_enabled: bool
 
 
 def load_config() -> Config:
@@ -170,4 +219,31 @@ def load_config() -> Config:
         # of passive SSDP listening -- its own opt-in, independent of net_ssdp.
         net_ssdp_location=os.getenv("WAVR_NET_SSDP_LOCATION", "").lower() in ("1", "true", "yes"),
         net_collect_duration=float(os.getenv("WAVR_NET_COLLECT_DURATION", "3.0")),
+        # NetBIOS/SNMP active probes (opt-in, default OFF); scope defaults to
+        # known-MAC-only (audit fix #4) -- explicit SCOPE=all is required to
+        # widen to every ARP-discovered host (SCOPE=known is still accepted,
+        # same as the known-only default it now names explicitly).
+        net_netbios=os.getenv("WAVR_NET_NETBIOS", "").lower() in ("1", "true", "yes"),
+        net_netbios_scope_known_only=os.getenv("WAVR_NET_NETBIOS_SCOPE", "").strip().lower() != "all",
+        net_snmp=os.getenv("WAVR_NET_SNMP", "").lower() in ("1", "true", "yes"),
+        net_snmp_community=os.getenv("WAVR_NET_SNMP_COMMUNITY", "public"),
+        net_snmp_scope_known_only=os.getenv("WAVR_NET_SNMP_SCOPE", "").strip().lower() != "all",
+        # DHCP fingerprint passive collector (opt-in, default OFF).
+        net_dhcp_fp=os.getenv("WAVR_NET_DHCP_FP", "").lower() in ("1", "true", "yes"),
+        # Reverse-DNS hostname resolution (opt-in, default OFF).
+        net_hostnames=os.getenv("WAVR_NET_HOSTNAMES", "").lower() in ("1", "true", "yes"),
+        # Rogue/multiple-DHCP-server detector (opt-in, default OFF).
+        net_dhcp_monitor=os.getenv("WAVR_NET_DHCP_MONITOR", "").lower() in ("1", "true", "yes"),
+        net_dhcp_probe=os.getenv("WAVR_NET_DHCP_PROBE", "").lower() in ("1", "true", "yes"),
+        net_dhcp_known_servers={
+            s.strip() for s in os.getenv("WAVR_NET_DHCP_KNOWN_SERVERS", "").split(",") if s.strip()
+        },
+        net_dhcp_interval=float(os.getenv("WAVR_NET_DHCP_INTERVAL", "30.0")),
+        net_dhcp_alert_threshold=int(os.getenv("WAVR_NET_DHCP_ALERT_THRESHOLD", "2")),
+        # Health-check ladder: extra targets beyond gateway + public resolvers.
+        health_extra_targets=tuple(
+            s.strip() for s in os.getenv("WAVR_HEALTH_EXTRA_TARGETS", "").split(",") if s.strip()
+        ),
+        # Audit fix #1: the public-resolver egress leg is opt-in, default OFF.
+        health_resolvers_enabled=os.getenv("WAVR_HEALTH_RESOLVERS", "").lower() in ("1", "true", "yes"),
     )

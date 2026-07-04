@@ -33,6 +33,35 @@ the real `wavr.sources.mdns.MDNSCollector`/`wavr.sources.ssdp.SSDPCollector`
 only once actually enabled, so the multicast sockets are never opened
 otherwise). A collector raising is caught and logged, same tolerance as
 `on_rogue`/`device_meta` -- one collector's failure must never break scanning.
+
+DHCP fingerprint collector (defensive-inventory #6): same passive-listener shape as
+mDNS/SSDP -- `dhcp_fp_enabled`/`dhcp_fp` -- except its output is already
+keyed by MAC (parsed straight from the DHCP packet's own `chaddr`, see
+`wavr.sources.dhcp_fp`'s docstring for why), so it needs no IP->MAC mapping
+step.
+
+NetBIOS/SNMP collectors (defensive-inventory #5/#8): unlike mDNS/SSDP/DHCP-fp, these
+are ACTIVE, TARGETED unicast probes, not passive listeners -- there is no
+"the real collector" singleton to lazily build once; a NEW
+`NetBIOSCollector`/`SNMPCollector` is built EVERY scan cycle, targeted at
+exactly this cycle's ARP-resolved host IPs (never a subnet sweep of their
+own -- same rule as the opt-in port-scan pass). `netbios_enabled`/
+`snmp_enabled` gate whether they run at all (default OFF, unlike the
+constructor's OWN `netbios_scope_known_only`/`snmp_scope_known_only`
+parameter defaults below, `config.py`'s wiring defaults the SCOPE to
+known-only -- audit fix #4: an ACTIVE unicast probe is more intrusive than
+passive listening, so widening to every ARP-discovered host on a
+shared/guest subnet requires an explicit `SCOPE=all` opt-in). `snmp_community`
+is passed straight to `SNMPCollector` (read-only by construction -- it has no
+SET-Request encoder) and is NEVER logged, including on collector failure (the
+warning log below names only the collector, never its arguments) -- a
+NON-default community configured alongside a widened (non-known-only) scope
+additionally logs one construction-time warning (audit fix #4: it would be
+sent in SNMPv1 cleartext to hosts outside the known-MAC allowlist).
+`netbios_prober`/`snmp_prober` are the injectable low-level transports (same
+seam as `port_probe` below) -- tests inject a canned async function, zero
+real sockets; production leaves them None so each collector opens its own
+real UDP socket per target.
 """
 from __future__ import annotations
 
@@ -113,7 +142,13 @@ class NetworkInventoryService:
                  device_meta=None, port_probe=None,
                  mdns_enabled: bool = False, ssdp_enabled: bool = False,
                  ssdp_location_enabled: bool = False,
-                 mdns=None, ssdp=None, collect_duration: float = 3.0):
+                 mdns=None, ssdp=None, collect_duration: float = 3.0,
+                 netbios_enabled: bool = False, netbios_scope_known_only: bool = False,
+                 snmp_enabled: bool = False, snmp_community: str = "public",
+                 snmp_scope_known_only: bool = False,
+                 netbios_prober=None, snmp_prober=None,
+                 dhcp_fp_enabled: bool = False, dhcp_fp=None,
+                 hostname_resolve_enabled: bool = False, hostname_resolver=None):
         self._known = _norm_macs(known_macs)
         self._scan = scan
         self._interval = interval
@@ -135,6 +170,38 @@ class NetworkInventoryService:
         self._mdns = mdns
         self._ssdp = ssdp
         self._collect_duration = collect_duration
+        # DHCP fingerprint (passive, MAC-keyed -- see module docstring).
+        self._dhcp_fp_enabled = dhcp_fp_enabled
+        self._dhcp_fp = dhcp_fp
+        # Reverse-DNS hostname resolver (gateway-anchored PTR) -- opt-in, default
+        # OFF. Feeds the hostnames= build parameter so the recog hostname
+        # classifier fires on real device names. Injected resolver wins (tests);
+        # otherwise the real one is built lazily, only once actually enabled.
+        self._hostname_resolve_enabled = hostname_resolve_enabled
+        self._hostname_resolver = hostname_resolver
+        # NetBIOS/SNMP (active, targeted -- see module docstring for the
+        # shared-subnet "known-only" mitigation and no-log-community rule).
+        self._netbios_enabled = netbios_enabled
+        self._netbios_scope_known_only = netbios_scope_known_only
+        self._netbios_prober = netbios_prober
+        self._snmp_enabled = snmp_enabled
+        self._snmp_community = snmp_community
+        self._snmp_scope_known_only = snmp_scope_known_only
+        self._snmp_prober = snmp_prober
+        # Audit fix #4: a NON-DEFAULT community is a credential for the
+        # operator's OWN gear; sending it in SNMPv1 cleartext to every
+        # ARP-discovered host (scope=all) reaches hosts on a shared/guest
+        # subnet the operator doesn't own, where it can be captured. Warn
+        # once at construction (never logs the community itself -- same
+        # no-log-community rule as the collector-failure warning below).
+        if snmp_enabled and snmp_community != "public" and not snmp_scope_known_only:
+            _LOG.warning(
+                "SNMP scope is widened to every ARP-discovered host "
+                "(WAVR_NET_SNMP_SCOPE=all) with a non-default community "
+                "configured -- that community will be sent in cleartext to "
+                "hosts outside the known-MAC allowlist; set "
+                "WAVR_NET_SNMP_SCOPE=known (the default) to avoid this"
+            )
         self._inventory: list[Device] = []
         self._alerts: list[RogueAlert] = []
         self._alerted: set[str] = set()   # MACs already alerted (edge-triggered)
@@ -155,7 +222,7 @@ class NetworkInventoryService:
         callable (deterministic) for tests."""
         pins = self._type_pins()
         devices = await scan_inventory(known_macs=self._known, scan=self._scan,
-                                       pins=pins)
+                                       pins=pins, resolve=self._make_hostname_resolver())
         if self._port_scan_on():
             # Opt-in connect-only pass: risk notes + open_ports, then re-fuse
             # identity so port-derived type hints fold into device_type.
@@ -178,6 +245,9 @@ class NetworkInventoryService:
                     d, pin=pins.get(d.mac),
                     bonjour=signals.get(d.mac, {}).get("bonjour"),
                     upnp=signals.get(d.mac, {}).get("upnp"),
+                    snmp=signals.get(d.mac, {}).get("snmp"),
+                    netbios=signals.get(d.mac, {}).get("netbios"),
+                    dhcp=signals.get(d.mac, {}).get("dhcp"),
                 )
                 for d in devices
             ]
@@ -200,15 +270,47 @@ class NetworkInventoryService:
             self._ssdp = SSDPCollector(fetch_location=self._ssdp_location_enabled)
         return self._ssdp
 
+    def _get_dhcp_fp(self):
+        # Lazily built, same rationale as _get_mdns/_get_ssdp -- the UDP/67
+        # socket is only ever opened once WAVR_NET_DHCP_FP is actually on.
+        if self._dhcp_fp is None:
+            from wavr.sources.dhcp_fp import DHCPFingerprintCollector
+            self._dhcp_fp = DHCPFingerprintCollector()
+        return self._dhcp_fp
+
+    def _make_hostname_resolver(self):
+        """The reverse-DNS resolve hook passed to scan_inventory, or None when
+        the feature is OFF (so zero PTR queries happen by default). An injected
+        `hostname_resolver` wins (tests); otherwise the real
+        wavr.hostname_resolver.resolve_hostnames is imported lazily so no DNS
+        socket is ever opened unless the feature is actually enabled."""
+        if not self._hostname_resolve_enabled:
+            return None
+        if self._hostname_resolver is not None:
+            return self._hostname_resolver
+        from wavr.hostname_resolver import resolve_hostnames
+        return resolve_hostnames
+
+    def _active_probe_targets(self, devices: list[Device], scope_known_only: bool) -> list[str]:
+        """IPs for THIS cycle's active per-host probes (NetBIOS/SNMP) --
+        always scoped to hosts the ARP sweep already resolved this cycle
+        (never a subnet sweep of their own). `scope_known_only` narrows
+        further to the known-MAC allowlist -- the shared-subnet mitigation
+        mirroring `netutils.port_scan_known_only_enabled`."""
+        pool = [d for d in devices if d.known] if scope_known_only else devices
+        return [d.ip for d in pool if d.ip]
+
     async def _collect_protocol_signals(self, devices: list[Device]) -> dict[str, dict]:
-        """Run whichever passive collectors are enabled (concurrently, bounded
-        to `collect_duration` seconds) and return {mac: {"bonjour": dict?,
-        "upnp": dict?}} for macs already present in THIS cycle's ARP-resolved
-        `devices` -- a signal for an IP not in that set has no device to
+        """Run whichever collectors are enabled (concurrently) and return
+        {mac: {"bonjour": dict?, "upnp": dict?, "snmp": dict?, "netbios": dict?,
+        "dhcp": dict?}} for macs already present in THIS cycle's ARP-resolved
+        `devices` -- a signal for a host not in that set has no device to
         attach to and is dropped (never invented into a phantom entry).
-        Tolerant: a collector raising is logged and simply contributes nothing,
-        never aborts the scan."""
-        if not (self._mdns_enabled or self._ssdp_enabled):
+        Tolerant: a collector raising is logged (never its arguments -- the
+        SNMP community string in particular is never logged) and simply
+        contributes nothing, never aborts the scan."""
+        if not (self._mdns_enabled or self._ssdp_enabled or self._netbios_enabled
+                or self._snmp_enabled or self._dhcp_fp_enabled):
             return {}
         ip_to_mac = {d.ip: d.mac for d in devices if d.ip}
 
@@ -226,18 +328,62 @@ class NetworkInventoryService:
                 _LOG.warning("ssdp collector failed", exc_info=True)
                 return "upnp", {}
 
+        async def _dhcp_fp_task() -> tuple[str, dict]:
+            try:
+                # Already MAC-keyed (parsed from chaddr) -- see module docstring.
+                return "dhcp", await self._get_dhcp_fp().collect(duration=self._collect_duration)
+            except Exception:
+                _LOG.warning("dhcp fingerprint collector failed", exc_info=True)
+                return "dhcp", {}
+
+        async def _netbios_task() -> tuple[str, dict]:
+            try:
+                from wavr.sources.netbios import NetBIOSCollector
+                targets = self._active_probe_targets(devices, self._netbios_scope_known_only)
+                collector = NetBIOSCollector(targets=targets, ip_to_mac=ip_to_mac,
+                                             prober=self._netbios_prober)
+                return "netbios", await collector.collect()
+            except Exception:
+                _LOG.warning("netbios collector failed", exc_info=True)
+                return "netbios", {}
+
+        async def _snmp_task() -> tuple[str, dict]:
+            try:
+                from wavr.sources.snmp import SNMPCollector
+                targets = self._active_probe_targets(devices, self._snmp_scope_known_only)
+                # NEVER log self._snmp_community (no-log-community mitigation) --
+                # the warning below names only the collector, no arguments.
+                collector = SNMPCollector(targets=targets, community=self._snmp_community,
+                                          ip_to_mac=ip_to_mac, prober=self._snmp_prober)
+                return "snmp", await collector.collect()
+            except Exception:
+                _LOG.warning("snmp collector failed", exc_info=True)
+                return "snmp", {}
+
         tasks = []
         if self._mdns_enabled:
             tasks.append(_mdns_task())
         if self._ssdp_enabled:
             tasks.append(_ssdp_task())
+        if self._dhcp_fp_enabled:
+            tasks.append(_dhcp_fp_task())
+        if self._netbios_enabled:
+            tasks.append(_netbios_task())
+        if self._snmp_enabled:
+            tasks.append(_snmp_task())
 
         out: dict[str, dict] = {}
         for kind, raw in await asyncio.gather(*tasks):
             for key, sig in raw.items():
-                mac = ip_to_mac.get(key)
-                if mac is None:
-                    continue   # not resolved by ARP this cycle -- nothing to attach to
+                if kind in ("netbios", "snmp", "dhcp"):
+                    # Already MAC-keyed by the collector itself (dhcp parses
+                    # chaddr directly; netbios/snmp are only ever targeted at
+                    # this cycle's own ip_to_mac, so every target resolves).
+                    mac = key
+                else:
+                    mac = ip_to_mac.get(key)
+                    if mac is None:
+                        continue   # not resolved by ARP this cycle -- nothing to attach to
                 out.setdefault(mac, {})[kind] = sig
         return out
 
