@@ -68,12 +68,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
+from wavr.alert_severity import SEVERITY_INFO, SEVERITY_NOTE
+from wavr.data.oui import is_locally_administered
 from wavr.netinventory import Device, apply_recognition, scan_inventory
-from wavr.netutils import annotate_ports, port_scan_enabled, port_scan_known_only_enabled
+from wavr.netutils import (annotate_ports, ping_host, port_scan_enabled,
+                           port_scan_known_only_enabled)
 
 _LOG = logging.getLogger(__name__)
 
@@ -83,7 +86,14 @@ class RogueAlert:
     """One rogue-device sighting: an unknown MAC that appeared on the LAN. Kept
     in-memory only. `ts` is ISO-8601 UTC of first sighting. `device_type` /
     `type_confidence` carry the recog fusion verdict (taxonomy value +
-    high/medium/low) so alert rows can render the same identity as inventory."""
+    high/medium/low) so alert rows can render the same identity as inventory.
+    `severity` rides wavr.alert_severity's ONE ladder (info/note/watch/alert/
+    critical) so a benign guest phone and a real intrusion never render alike:
+    a randomized (locally-administered) MAC -- the classic hopped-on guest
+    phone -- is `info`; any other new unknown device is `note`. It NEVER
+    reaches alert/critical here: those top tiers are reserved for the
+    network-level rogue_dhcp / gateway_identity events (honesty -- a
+    per-device sighting must not overstate its own severity)."""
     ts: str
     mac: str
     vendor: str
@@ -91,6 +101,7 @@ class RogueAlert:
     device_type: str = "unknown"
     hostname: str | None = None
     type_confidence: str = "low"
+    severity: str = SEVERITY_NOTE
 
     def to_dict(self) -> dict:
         return {
@@ -101,6 +112,7 @@ class RogueAlert:
             "device_type": self.device_type,
             "hostname": self.hostname,
             "type_confidence": self.type_confidence,
+            "severity": self.severity,
         }
 
 
@@ -148,7 +160,10 @@ class NetworkInventoryService:
                  snmp_scope_known_only: bool = False,
                  netbios_prober=None, snmp_prober=None,
                  dhcp_fp_enabled: bool = False, dhcp_fp=None,
-                 hostname_resolve_enabled: bool = False, hostname_resolver=None):
+                 hostname_resolve_enabled: bool = False, hostname_resolver=None,
+                 latency_enabled: bool = False, ping=None,
+                 gateway_detect_enabled: bool = False, gateway_detector=None,
+                 gateway_monitor=None):
         self._known = _norm_macs(known_macs)
         self._scan = scan
         self._interval = interval
@@ -179,6 +194,22 @@ class NetworkInventoryService:
         # otherwise the real one is built lazily, only once actually enabled.
         self._hostname_resolve_enabled = hostname_resolve_enabled
         self._hostname_resolver = hostname_resolver
+        # Per-device latency (opt-in, default OFF) + gateway-identity flag.
+        # `ping` is the injectable latency probe (tests); `gateway_detector`
+        # the injectable default-gateway detector. Latency actively
+        # TCP-connects each host so it is gated like the port pass; gateway
+        # detection only reads THIS host's routing table (zero egress) so
+        # app.py leaves it on unconditionally.
+        self._latency_enabled = latency_enabled
+        self._ping = ping
+        self._gateway_detect_enabled = gateway_detect_enabled
+        self._gateway_detector = gateway_detector
+        # Gateway-MAC-identity tracker (gateway-identity-rogue-dhcp,
+        # inventory feature #2) -- OPTIONAL wavr.gateway_monitor.GatewayIdentityMonitor.
+        # When given, each scan feeds this cycle's is_gateway binding into it so
+        # a two-factor-debounced gateway-identity change surfaces as its own
+        # GatewayAlert. None -> no gateway-identity tracking (unchanged).
+        self._gateway_monitor = gateway_monitor
         # NetBIOS/SNMP (active, targeted -- see module docstring for the
         # shared-subnet "known-only" mitigation and no-log-community rule).
         self._netbios_enabled = netbios_enabled
@@ -222,7 +253,8 @@ class NetworkInventoryService:
         callable (deterministic) for tests."""
         pins = self._type_pins()
         devices = await scan_inventory(known_macs=self._known, scan=self._scan,
-                                       pins=pins, resolve=self._make_hostname_resolver())
+                                       pins=pins, resolve=self._make_hostname_resolver(),
+                                       gateway=self._gateway_hook())
         if self._port_scan_on():
             # Opt-in connect-only pass: risk notes + open_ports, then re-fuse
             # identity so port-derived type hints fold into device_type.
@@ -251,7 +283,10 @@ class NetworkInventoryService:
                 )
                 for d in devices
             ]
+        if self._latency_enabled:
+            devices = await self._annotate_latency(devices)
         self._inventory = devices
+        self._observe_gateway(devices)
         self._record_rogues(devices)
         self._record_seen(devices)
         return devices
@@ -290,6 +325,63 @@ class NetworkInventoryService:
             return self._hostname_resolver
         from wavr.hostname_resolver import resolve_hostnames
         return resolve_hostnames
+
+    def _gateway_hook(self):
+        """The default-gateway detector passed to scan_inventory, or None when
+        gateway detection is off (so no ipconfig/route subprocess runs and no
+        device is ever flagged is_gateway). An injected detector wins (tests);
+        otherwise the real wavr.sources.network.default_gateway is imported
+        lazily. Reading the local routing table is zero-egress and touches no
+        other host, so app.py enables it unconditionally -- unlike the active
+        latency/port passes it needs no shared-subnet opt-in."""
+        if not self._gateway_detect_enabled:
+            return None
+        if self._gateway_detector is not None:
+            return self._gateway_detector
+        from wavr.sources.network import default_gateway
+        return default_gateway
+
+    def _observe_gateway(self, devices: list[Device]) -> None:
+        """Feed this cycle's gateway_ip -> gateway_mac binding (the is_gateway
+        device the prior task flags from THIS host's routing table) into the
+        optional gateway-identity monitor. Tolerant: a monitor error must never
+        break scanning, same rule as on_rogue/device_meta. A cycle with no
+        resolved gateway passes None -> the monitor treats it as a neutral
+        (non-)event, never a spurious change."""
+        if self._gateway_monitor is None:
+            return
+        gw = next((d for d in devices if d.is_gateway), None)
+        try:
+            self._gateway_monitor.observe(gw.ip if gw else None,
+                                          gw.mac if gw else None)
+        except Exception:
+            _LOG.warning("gateway identity monitor failed", exc_info=True)
+
+    async def _annotate_latency(self, devices: list[Device]) -> list[Device]:
+        """Opt-in per-device LAN latency: TCP-connect round-trip in ms via
+        wavr.netutils.ping_host (no ICMP, no elevated privileges), filling
+        Device.latency_ms. OFF by default (latency_enabled) -- like the port
+        pass it actively connects to each host, so it is gated, not automatic.
+        Devices without an IP pass through untouched (latency stays None); a
+        probe failure is a None latency, never an exception. Bounded
+        concurrency mirrors the ARP ping sweep so a large /24 can't open
+        hundreds of sockets at once. `ping` is the injectable probe (tests);
+        production uses ping_host. Never mutates the input."""
+        ping = self._ping or ping_host
+        sem = asyncio.Semaphore(32)
+
+        async def _one(d: Device) -> Device:
+            if not d.ip:
+                return d
+            async with sem:
+                try:
+                    ms = await ping(d.ip)
+                except Exception:
+                    _LOG.warning("latency probe failed for %s", d.mac, exc_info=True)
+                    ms = None
+            return replace(d, latency_ms=ms)
+
+        return list(await asyncio.gather(*(_one(d) for d in devices)))
 
     def _active_probe_targets(self, devices: list[Device], scope_known_only: bool) -> list[str]:
         """IPs for THIS cycle's active per-host probes (NetBIOS/SNMP) --
@@ -417,10 +509,17 @@ class NetworkInventoryService:
             if d.known or d.mac in self._alerted:   # allowlisted or already seen
                 continue
             self._alerted.add(d.mac)
+            # Severity on wavr.alert_severity's ONE ladder: a randomized
+            # (locally-administered bit set) MAC is the classic guest-phone
+            # rejoin -> `info`; any other new unknown device -> `note`. The
+            # locally-administered bit is a public IEEE 802 signal (license-safe,
+            # inventory feature #3), never a a proprietary asset.
+            severity = (SEVERITY_INFO if is_locally_administered(d.mac)
+                        else SEVERITY_NOTE)
             alert = RogueAlert(
                 ts=ts, mac=d.mac, vendor=d.vendor,
                 ip=d.ip, device_type=d.device_type, hostname=d.hostname,
-                type_confidence=d.type_confidence,
+                type_confidence=d.type_confidence, severity=severity,
             )
             self._alerts.append(alert)
             if self._on_rogue:

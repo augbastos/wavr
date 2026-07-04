@@ -17,8 +17,10 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  `kind: "rogue_device"`), merged chronologically
                                  with `dhcp_monitor`'s rogue/multiple-DHCP-server
                                  alerts (`kind: "rogue_dhcp"`, collectors-lote2
-                                 #7) when a monitor is given -- omitted entirely
-                                 (same as before) when it is None.
+                                 #7) and `gateway_monitor`'s gateway-identity
+                                 change alerts (`kind: "gateway_identity"`,
+                                 inventory feature #2) -- each omitted entirely (same as
+                                 before) when its monitor is None.
   * PUT /api/inventory/name  -- {mac, name} -> persists a friendly device name.
   * PUT /api/inventory/type  -- {mac, device_type} -> persists the user
                                  device-type pin (taxonomy value; null/"" to
@@ -44,7 +46,9 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     metadata. `risks`/`open_ports`/`make`/`model`/`os`/`sources` are included
     only when populated -- i.e. only when the opt-in port pass or a richer
     recog signal produced them. A persisted user type-pin overrides
-    device_type immediately (even between scans)."""
+    device_type immediately (even between scans). `is_gateway` is included
+    only when True and `latency_ms` only when the opt-in ping pass measured
+    one (both additive -- every existing field unchanged)."""
     view = {
         "mac": d.mac,
         "ip": d.ip,
@@ -65,6 +69,10 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
         view["os"] = d.os
     if d.sources:
         view["sources"] = [dict(s) for s in d.sources]
+    if d.is_gateway:
+        view["is_gateway"] = True
+    if d.latency_ms is not None:
+        view["latency_ms"] = d.latency_ms
     meta = device_meta.get(d.mac) if device_meta else None
     view["name"] = meta["name"] if meta else None
     view["first_seen"] = meta["first_seen"] if meta else None
@@ -80,7 +88,8 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
 
 def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
-                            name_deps=None, dhcp_monitor=None) -> APIRouter:
+                            name_deps=None, dhcp_monitor=None,
+                            gateway_monitor=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
@@ -97,6 +106,11 @@ def build_inventory_router(service: NetworkInventoryService,
         merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
         if dhcp_monitor is not None:
             merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
+        # Gateway-identity change alerts (gateway-identity-rogue-dhcp, the inventory roadmap
+        # #2), `kind: "gateway_identity"`; omitted entirely when no monitor is
+        # wired in (unchanged shape), same rule as the dhcp merge above.
+        if gateway_monitor is not None:
+            merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
         merged.sort(key=lambda a: a["ts"])
         return {"alerts": merged}
 

@@ -77,7 +77,7 @@ async def test_extra_server_alerts_after_consecutive_threshold_met():
     assert isinstance(alert, DhcpRogueAlert)
     assert alert.extra_server == "10.0.0.66"
     assert alert.known_servers == ("192.168.1.1",)
-    assert alert.severity == "major"
+    assert alert.severity == "alert"   # unified wavr.alert_severity ladder
     assert alert.to_dict()["kind"] == "rogue_dhcp"
 
 
