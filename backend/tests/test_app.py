@@ -110,7 +110,17 @@ def test_root_serves_dashboard_html():
         r = client.get("/")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/html")
-        assert "Fused Home Sensing" in r.text  # distinctive marker from frontend/index.html
+        assert "Wavr" in r.text  # stable marker from frontend/index.html (<title>)
+
+
+def test_index_html_serves_same_shell_as_root():
+    # H3 audit fix: sw.js precaches "./index.html" by name; without this route the
+    # Cache.addAll precache 404s (all-or-nothing) and the SW never installs.
+    with build_client() as client:
+        r = client.get("/index.html")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/html")
+        assert "Wavr" in r.text
 
 
 def test_vendor_serves_self_hosted_threejs():

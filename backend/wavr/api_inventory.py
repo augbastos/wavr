@@ -1,5 +1,6 @@
 """Wavr Net HTTP surface: the running inventory + rogue alerts (read-only),
-plus the one state-changing write this module owns (naming a device).
+plus the state-changing writes this module owns (naming and type-pinning a
+device).
 
 `build_inventory_router(service, device_meta=None, name_deps=None)` returns a
 FastAPI APIRouter exposing:
@@ -7,14 +8,20 @@ FastAPI APIRouter exposing:
                                  merged with persisted metadata (`name`,
                                  `first_seen`, `last_seen`) when `device_meta`
                                  is given -- all three are None otherwise.
-  * GET /api/alerts          -- rogue-device alerts (unchanged).
-  * PUT /api/inventory/name  -- {mac, name} -> persists a friendly device name
-                                 and returns the updated {mac, name, first_seen,
-                                 last_seen} entry. Only registered when
-                                 `device_meta` is given; gated by `name_deps`
-                                 (the app's require_local CSRF guard), same
-                                 rule as every other state-changing route
-                                 (mirrors build_devices_router's `delete_deps`).
+                                 ADDITIVE identity fields from the local recog
+                                 fusion: `type_confidence` always; `make`,
+                                 `model`, `os`, `open_ports`, `sources` only
+                                 when populated. Every pre-existing field is
+                                 unchanged.
+  * GET /api/alerts          -- rogue-device alerts (+ `type_confidence`).
+  * PUT /api/inventory/name  -- {mac, name} -> persists a friendly device name.
+  * PUT /api/inventory/type  -- {mac, device_type} -> persists the user
+                                 device-type pin (taxonomy value; null/"" to
+                                 clear). The pin is recog's highest-precedence
+                                 signal and is reflected on the very next GET.
+Both PUTs are only registered when `device_meta` is given and are gated by
+`name_deps` (the app's require_local CSRF guard), same rule as every other
+state-changing route.
 
 GETs need no CSRF header -- the app's global loopback-only middleware is the
 load-bearing access control, same as before.
@@ -29,21 +36,40 @@ from wavr.netinventory_service import NetworkInventoryService
 
 def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     """Trim a Device to the fields the dashboard needs, merged with persisted
-    metadata. `risks` is included only when non-empty -- i.e. only when the
-    opt-in port-awareness pass ran."""
+    metadata. `risks`/`open_ports`/`make`/`model`/`os`/`sources` are included
+    only when populated -- i.e. only when the opt-in port pass or a richer
+    recog signal produced them. A persisted user type-pin overrides
+    device_type immediately (even between scans)."""
     view = {
         "mac": d.mac,
         "ip": d.ip,
         "vendor": d.vendor,
         "device_type": d.device_type,
+        "type_confidence": d.type_confidence,
         "known": d.known,
     }
     if d.risks:
         view["risks"] = list(d.risks)
+    if d.open_ports:
+        view["open_ports"] = list(d.open_ports)
+    if d.make:
+        view["make"] = d.make
+    if d.model:
+        view["model"] = d.model
+    if d.os:
+        view["os"] = d.os
+    if d.sources:
+        view["sources"] = [dict(s) for s in d.sources]
     meta = device_meta.get(d.mac) if device_meta else None
     view["name"] = meta["name"] if meta else None
     view["first_seen"] = meta["first_seen"] if meta else None
     view["last_seen"] = meta["last_seen"] if meta else None
+    # The user's pin wins instantly -- the scan loop folds it in on the next
+    # pass anyway (highest recog precedence), this just closes the gap between
+    # PUT /api/inventory/type and the next scan.
+    if meta and meta.get("device_type"):
+        view["device_type"] = meta["device_type"]
+        view["type_confidence"] = "high"
     return view
 
 
@@ -69,6 +95,19 @@ def build_inventory_router(service: NetworkInventoryService,
                 raise HTTPException(status_code=400, detail="invalid MAC address")
             try:
                 entry = device_meta.set_name(mac_norm, name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            return entry
+
+        @router.put("/api/inventory/type", dependencies=list(name_deps or []))
+        async def pin_device_type(mac: str = Body(...),
+                                  device_type: str | None = Body(None)):
+            try:
+                mac_norm = normalize_mac(mac)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="invalid MAC address")
+            try:
+                entry = device_meta.set_type(mac_norm, device_type)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             return entry
