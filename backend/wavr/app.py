@@ -35,6 +35,8 @@ from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
 from wavr.device_meta import DeviceMeta
 from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
+from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
+from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
 from wavr.presence_report import build_report
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
@@ -111,7 +113,8 @@ def _camera_factory(cam: dict, cfg):
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
-               internet_monitor=None, health_check=None) -> FastAPI:
+               internet_monitor=None, health_check=None, dhcp_monitor=None,
+               health_resolvers=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -171,7 +174,21 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # OFF; only ever run when the operator sets WAVR_NET_MDNS/WAVR_NET_SSDP.
         mdns_enabled=cfg.net_mdns, ssdp_enabled=cfg.net_ssdp,
         ssdp_location_enabled=cfg.net_ssdp_location,
-        collect_duration=cfg.net_collect_duration)
+        collect_duration=cfg.net_collect_duration,
+        # NetBIOS/SNMP (defensive-inventory #5/#8) + DHCP fingerprint (#6) -- opt-in,
+        # default OFF (collectors-lote2). Unlike WAVR_NET_PORTSCAN_SCOPE
+        # (default OFF -- scans every ARP host unless explicitly narrowed),
+        # the NetBIOS/SNMP scope flags default to known-only and require an
+        # explicit SCOPE=all to widen (audit fix #4: an active unicast probe
+        # is more intrusive than a connect scan); the SNMP community is
+        # read-only-by-construction and never logged.
+        netbios_enabled=cfg.net_netbios, netbios_scope_known_only=cfg.net_netbios_scope_known_only,
+        snmp_enabled=cfg.net_snmp, snmp_community=cfg.net_snmp_community,
+        snmp_scope_known_only=cfg.net_snmp_scope_known_only,
+        dhcp_fp_enabled=cfg.net_dhcp_fp,
+        # Reverse-DNS hostname resolution (gateway-anchored PTR) -- opt-in,
+        # default OFF; only queries the LAN gateway resolver when enabled.
+        hostname_resolve_enabled=cfg.net_hostnames)
 
     # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
     # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
@@ -186,16 +203,44 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             notify=_notify,
         )
 
-    # GET /api/health (basic health check, generalizing internet_monitor): an
-    # on-demand, read-only gateway-reachability probe -- NOT gated behind the
-    # internet_monitor opt-in, since it is a single caller-triggered check (a
-    # GET), not a new background scanner. Same LOCAL-ONLY default as
-    # InternetMonitor: with zero config it pings the LAN gateway (never a
-    # fixed cloud host), so hitting this route makes zero new cloud egress.
-    # `health_check` is the injectable transport (tests inject a fake -- no
-    # real network); default reuses internet_monitor's own ping helper.
+    # Rogue/multiple-DHCP-server detector (defensive-inventory #7, collectors-lote2):
+    # opt-in via injected `dhcp_monitor` (tests) or WAVR_NET_DHCP_MONITOR (real
+    # DHCP snoop, lazily built). Off by default -- no monitor, no background
+    # task, no packets. Shares the same opt-in ntfy `notify` as every other
+    # alert (rogue-device, internet down) -- derived-only (server IP, never a
+    # MAC/credential).
+    _dhcp_monitor = dhcp_monitor
+    if _dhcp_monitor is None and cfg.net_dhcp_monitor:
+        _dhcp_monitor = RogueDhcpMonitor(
+            collect=make_dhcp_collector(collect_duration=cfg.net_collect_duration,
+                                        probe=cfg.net_dhcp_probe),
+            known_servers=cfg.net_dhcp_known_servers or None,
+            interval=cfg.net_dhcp_interval,
+            alert_threshold=cfg.net_dhcp_alert_threshold,
+            on_rogue=(lambda a: _notify(f"Wavr: servidor DHCP desconhecido na rede ({a.extra_server})"))
+            if _notify else None,
+        )
+
+    # GET /api/health (5-tier ladder, defensive-inventory #12): an on-demand,
+    # read-only gateway + DNS-resolver + operator-extra-target check -- NOT
+    # gated behind the internet_monitor opt-in, since it is a single
+    # caller-triggered check (a GET), not a new background scanner. Same
+    # LOCAL-ONLY default as InternetMonitor: with zero config the gateway leg
+    # pings the LAN gateway (never a fixed cloud host). Audit fix #1: the
+    # resolver legs are the one part of this route that makes real
+    # public-internet egress, so they are gated behind `WAVR_HEALTH_RESOLVERS`
+    # (default OFF -- an empty resolver dict, severity computed from gateway +
+    # extra targets only, see wavr.health_check's module docstring); a bare
+    # Docker HEALTHCHECK/uptime monitor hitting this route no longer silently
+    # pings three US cloud providers. `health_check`/`health_resolvers` are
+    # the injectable transports (tests inject fakes -- no real network).
     _health_host = cfg.internet_check_host or guess_gateway()
     _health_check = health_check or make_checker(_health_host or "127.0.0.1")
+    _health_resolvers = (
+        health_resolvers if health_resolvers is not None
+        else (default_resolver_checkers() if cfg.health_resolvers_enabled else {})
+    )
+    _health_extra = default_extra_checkers(cfg.health_extra_targets)
 
     # Multi-device (ADR-0006): device/token store + pairing. ONLY built when
     # WAVR_MULTIDEVICE is on — otherwise it stays None so we don't open a third
@@ -232,6 +277,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             await _inventory.start()   # opt-in (WAVR_NET_INVENTORY): real LAN scan loop
         if _internet:
             await _internet.start()    # opt-in (WAVR_INTERNET_MONITOR or injected): gateway ping loop
+        if _dhcp_monitor:
+            await _dhcp_monitor.start()   # opt-in (WAVR_NET_DHCP_MONITOR or injected): DHCP snoop loop
         if cfg.ha_discovery and _rules_publish:
             from wavr.ha_discovery import publish_ha_discovery
             publish_ha_discovery(
@@ -254,6 +301,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             await _inventory.stop()
             if _internet:
                 await _internet.stop()
+            if _dhcp_monitor:
+                await _dhcp_monitor.stop()
             await manager.stop()
             if _owns_cameras:
                 with suppress(Exception):
@@ -359,7 +408,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # happens here (after require_local is defined) rather than up near the
     # other include_router calls.
     app.include_router(build_inventory_router(
-        _inventory, device_meta=_device_meta, name_deps=[Depends(require_local)]))
+        _inventory, device_meta=_device_meta, name_deps=[Depends(require_local)],
+        dhcp_monitor=_dhcp_monitor))
 
     @app.get("/api/history")
     async def history(limit: int = 200):
@@ -427,6 +477,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 "tls": cfg.multidevice,
                 "ntfy": bool(cfg.ntfy_url),
                 "internet_monitor": cfg.internet_monitor,
+                # Passive/active protocol collectors (defensive-inventory collectors +
+                # collectors-lote2) -- every one opt-in, default OFF; surfaced
+                # here so the frontend can show which signal sources are live.
+                "mdns": cfg.net_mdns,
+                "ssdp": cfg.net_ssdp,
+                "netbios": cfg.net_netbios,
+                "snmp": cfg.net_snmp,
+                "dhcp_fp": cfg.net_dhcp_fp,
+                "rogue_dhcp": cfg.net_dhcp_monitor,
+                # Audit fix #1: the ONLY egress path in this dict that isn't a
+                # dedicated background collector -- GET /api/health's public-
+                # DNS-resolver legs, opt-in via WAVR_HEALTH_RESOLVERS. Surfaced
+                # here so the Privacy & Egress dashboard stays honest about it.
+                "health_resolvers": cfg.health_resolvers_enabled,
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
@@ -448,12 +512,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/api/health")
     async def health():
         # On-demand only -- no background task, no new opt-in flag (see the
-        # _health_check construction above for the LOCAL-ONLY rationale).
-        ok = await _health_check()
-        return {
-            "gateway": {"ok": ok, "host": _health_host},
-            "internet_monitor": _internet.status() if _internet else None,
-        }
+        # _health_check/_health_resolvers construction above for the
+        # LOCAL-ONLY rationale). 5-tier severity ladder (defensive-inventory #12):
+        # gateway + public-resolver reachability + optional operator-extra
+        # targets, rolled into one severity verdict (wavr.health_check).
+        result = await check_health(
+            gateway_check=_health_check, gateway_host=_health_host,
+            resolver_checks=_health_resolvers, extra_checks=_health_extra,
+        )
+        result["internet_monitor"] = _internet.status() if _internet else None
+        return result
 
     @app.get("/api/system")
     async def system():

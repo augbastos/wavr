@@ -2,8 +2,8 @@
 plus the state-changing writes this module owns (naming and type-pinning a
 device).
 
-`build_inventory_router(service, device_meta=None, name_deps=None)` returns a
-FastAPI APIRouter exposing:
+`build_inventory_router(service, device_meta=None, name_deps=None,
+dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
   * GET /api/inventory       -- the running inventory. Each device dict is
                                  merged with persisted metadata (`name`,
                                  `first_seen`, `last_seen`) when `device_meta`
@@ -13,7 +13,12 @@ FastAPI APIRouter exposing:
                                  `model`, `os`, `open_ports`, `sources` only
                                  when populated. Every pre-existing field is
                                  unchanged.
-  * GET /api/alerts          -- rogue-device alerts (+ `type_confidence`).
+  * GET /api/alerts          -- rogue-device alerts (+ `type_confidence` +
+                                 `kind: "rogue_device"`), merged chronologically
+                                 with `dhcp_monitor`'s rogue/multiple-DHCP-server
+                                 alerts (`kind: "rogue_dhcp"`, collectors-lote2
+                                 #7) when a monitor is given -- omitted entirely
+                                 (same as before) when it is None.
   * PUT /api/inventory/name  -- {mac, name} -> persists a friendly device name.
   * PUT /api/inventory/type  -- {mac, device_type} -> persists the user
                                  device-type pin (taxonomy value; null/"" to
@@ -75,7 +80,7 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
 
 def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
-                            name_deps=None) -> APIRouter:
+                            name_deps=None, dhcp_monitor=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
@@ -84,7 +89,16 @@ def build_inventory_router(service: NetworkInventoryService,
 
     @router.get("/api/alerts")
     async def alerts():
-        return {"alerts": [a.to_dict() for a in service.recent_alerts()]}
+        # Rogue-device sightings always carry "kind" (additive field -- every
+        # existing consumer already only reads a subset of keys). Merged with
+        # the opt-in rogue-DHCP-server alerts (collectors-lote2 #7), oldest
+        # first (same ordering `recent_alerts()` already returns), when a
+        # monitor is wired in; omitted entirely (unchanged shape) otherwise.
+        merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
+        if dhcp_monitor is not None:
+            merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
+        merged.sort(key=lambda a: a["ts"])
+        return {"alerts": merged}
 
     if device_meta is not None:
         @router.put("/api/inventory/name", dependencies=list(name_deps or []))

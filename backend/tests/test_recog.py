@@ -144,6 +144,24 @@ def test_snmp_alone_capped_at_medium():
     assert ident.confidence == "medium"
 
 
+def test_netbios_alone_capped_at_medium():
+    # NetBIOS is the strongest Windows-PC signal but is still a device
+    # SELF-description (NBSTAT), same spoofability threat model as
+    # mDNS/SSDP/SNMP -- capped at "medium" alone (collectors-lote2).
+    ident = recognize({"netbios": {"device_type": "desktop"}})
+    assert ident.device_type == "desktop"
+    assert ident.confidence == "medium"
+    assert [s["signal"] for s in ident.sources] == ["netbios"]
+
+
+def test_netbios_beats_dhcp_but_loses_to_snmp():
+    # Precedence order: snmp > netbios > dhcp (collectors-lote2).
+    ident = recognize({"netbios": {"device_type": "desktop"}, "dhcp": {"device_type": "router"}})
+    assert ident.device_type == "desktop"
+    ident2 = recognize({"snmp": {"device_type": "router"}, "netbios": {"device_type": "desktop"}})
+    assert ident2.device_type == "router"
+
+
 def test_self_description_plus_second_signal_reaches_high():
     # A 2nd independent signal agreeing on the same type restores "high" via
     # the normal consensus bump -- only the ALONE case is capped.
@@ -151,6 +169,58 @@ def test_self_description_plus_second_signal_reaches_high():
     assert ident.device_type == "camera"
     assert ident.confidence == "high"
     assert {s["signal"] for s in ident.sources} == {"bonjour", "port_hint"}
+
+
+# ---- audit fix #2: consensus bump requires INDEPENDENT families, not names -----
+
+def test_two_self_reports_agreeing_stay_medium_not_forged_high():
+    # snmp + netbios are BOTH the `self_report` family -- a single rogue LAN
+    # host can answer both simultaneously (all attacker-set), so two
+    # self-descriptions agreeing must NOT forge "high" on their own (the
+    # exact defect the family-gated consensus bump closes).
+    ident = recognize({"snmp": {"device_type": "router"}, "netbios": {"device_type": "router"}})
+    assert ident.device_type == "router"
+    assert ident.confidence == "medium"
+
+
+def test_upnp_bonjour_agreeing_stay_medium_not_forged_high():
+    ident = recognize({"upnp": {"device_type": "camera"}, "bonjour": {"device_type": "camera"}})
+    assert ident.device_type == "camera"
+    assert ident.confidence == "medium"
+
+
+def test_oui_plus_port_hint_still_reaches_high_cross_family():
+    # oui + port_hint span 2 DISTINCT families (`oui` + `observed`) -> still
+    # earns "high" -- the family gate only blocks same-family agreement.
+    ident = recognize({"vendor": "Wyze", "open_ports": [554]})
+    assert ident.device_type == "camera"
+    assert ident.confidence == "high"
+
+
+# ---- audit fix #3: dhcp-fp is chaddr-keyed (unauthenticated) -> lower trust ---
+
+def test_dhcp_alone_is_unverified_and_weighted_below_oui():
+    ident = recognize({"dhcp": {"device_type": "router"}})
+    assert ident.device_type == "router"
+    assert ident.confidence == "medium"
+    assert ident.sources[0]["signal"] == "dhcp"
+    assert ident.sources[0]["unverified"] is True
+    assert ident.sources[0]["weight"] < 0.4   # below oui's 0.4
+
+
+def test_dhcp_loses_to_oui_when_they_disagree():
+    # Down-weighted below oui (audit fix #3): an off-path chaddr-spoofed dhcp
+    # signal must not outrank even a lone (spoofable-but-ARP-observed) OUI
+    # guess on a type disagreement.
+    ident = recognize({"vendor": "Sonos", "dhcp": {"device_type": "router"}})
+    assert ident.device_type == "speaker"
+
+
+def test_only_non_dhcp_sources_carry_no_unverified_key():
+    # Backward-compatible shape: a source NOT flagged unverified omits the
+    # key entirely (rather than carrying `"unverified": False`).
+    ident = recognize({"vendor": "Sonos"})
+    assert "unverified" not in ident.sources[0]
 
 
 # ---- make / model / os --------------------------------------------------------

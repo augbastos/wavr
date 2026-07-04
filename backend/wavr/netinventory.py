@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import logging
 import re
 from dataclasses import asdict, dataclass, replace
 from typing import Awaitable, Callable
@@ -25,6 +26,8 @@ from typing import Awaitable, Callable
 from wavr.data.oui import lookup_vendor
 from wavr.recog import recognize
 from wavr.sources import network
+
+_LOG = logging.getLogger(__name__)
 
 # ip + mac on one `arp -a` line. Separator-agnostic (Windows "-", Unix ":").
 _ARP_LINE_RE = re.compile(
@@ -41,7 +44,14 @@ class Device:
     Identity fields (device_type/type_confidence/make/model/os/sources) come
     from wavr.recog's local fusion; `device_type` is one of the fixed
     wavr.data.deviceclass.DEVICE_TYPES values. `open_ports` is filled only by
-    the opt-in connect-only port pass (wavr.netutils.annotate_ports)."""
+    the opt-in connect-only port pass (wavr.netutils.annotate_ports).
+
+    `is_gateway` is True only when this host's IP is the LAN default gateway,
+    read from THIS host's own routing table
+    (wavr.sources.network.default_gateway) -- never a guess, so it is honestly
+    False when the gateway can't be determined. `latency_ms` is the opt-in
+    per-device TCP-connect round-trip (wavr.netutils.ping_host), None until
+    that active pass runs (or the host doesn't answer)."""
     mac: str
     ip: str | None
     vendor: str
@@ -55,6 +65,8 @@ class Device:
     os: str | None = None
     open_ports: tuple = ()        # tuple[int, ...] — opt-in port pass only
     sources: tuple = ()           # tuple[dict] — recog evidence trail
+    is_gateway: bool = False      # this host's IP == the LAN default gateway
+    latency_ms: float | None = None  # opt-in TCP-connect latency (ping_host)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -101,15 +113,19 @@ def guess_device_type(vendor: str, hostname: str | None = None,
 
 
 def apply_recognition(device: Device, pin: str | None = None,
-                      bonjour: dict | None = None, upnp: dict | None = None) -> Device:
+                      bonjour: dict | None = None, upnp: dict | None = None,
+                      snmp: dict | None = None, netbios: dict | None = None,
+                      dhcp: dict | None = None) -> Device:
     """Return a NEW Device with the identity fields re-fused from everything
     currently known about it (vendor/hostname/MAC/open_ports + the optional
-    user type-pin, which always wins) plus any passive protocol self-
+    user type-pin, which always wins) plus any passive/active protocol self-
     description handed in for this scan cycle (`bonjour` from
-    wavr.sources.mdns, `upnp` from wavr.sources.ssdp -- both optional, both
-    keyed per-device by the caller, e.g. wavr.netinventory_service). Pure/
-    offline -- call again after the opt-in port pass fills `open_ports` (or
-    fresh collector signals arrive) to fold new hints in."""
+    wavr.sources.mdns, `upnp` from wavr.sources.ssdp, `snmp` from
+    wavr.sources.snmp, `netbios` from wavr.sources.netbios, `dhcp` from
+    wavr.sources.dhcp_fp -- all optional, all keyed per-device by the caller,
+    e.g. wavr.netinventory_service). Pure/offline -- call again after the
+    opt-in port pass fills `open_ports` (or fresh collector signals arrive)
+    to fold new hints in."""
     ident = recognize({
         "mac": device.mac,
         "vendor": device.vendor,
@@ -118,6 +134,9 @@ def apply_recognition(device: Device, pin: str | None = None,
         "user_pin": pin,
         "bonjour": bonjour,
         "upnp": upnp,
+        "snmp": snmp,
+        "netbios": netbios,
+        "dhcp": dhcp,
     })
     return replace(
         device,
@@ -134,13 +153,26 @@ def _norm_macs(macs) -> set[str]:
     return {m.strip().replace("-", ":").lower() for m in (macs or ()) if m.strip()}
 
 
+def _same_ip(a: "str | None", b: "str | None") -> bool:
+    """True when two dotted-IPv4 strings denote the same address. Defensive:
+    None or malformed input compares unequal, never raises."""
+    if not a or not b:
+        return False
+    try:
+        return ipaddress.ip_address(a.strip()) == ipaddress.ip_address(b.strip())
+    except ValueError:
+        return a.strip() == b.strip()
+
+
 def build_inventory(entries: list[tuple[str, str]], known_macs=None,
                     hostnames: dict[str, str] | None = None,
-                    pins: dict[str, str] | None = None) -> list[Device]:
+                    pins: dict[str, str] | None = None,
+                    gateway_ip: str | None = None) -> list[Device]:
     """Turn (ip, mac) pairs into resolved Device records. `known_macs` is the
     allowlist; `hostnames` optionally maps mac -> hostname for a better type
     guess; `pins` optionally maps mac -> user-pinned device_type (highest-
-    precedence recog signal). Pure/offline -- no I/O."""
+    precedence recog signal); `gateway_ip` (when given) flags the device whose
+    IP is the LAN default gateway as is_gateway. Pure/offline -- no I/O."""
     known = _norm_macs(known_macs)
     hostnames = hostnames or {}
     pins = pins or {}
@@ -155,6 +187,7 @@ def build_inventory(entries: list[tuple[str, str]], known_macs=None,
             device_type="unknown",
             known=mac in known,
             hostname=hostname,
+            is_gateway=_same_ip(ip, gateway_ip),
         )
         out.append(apply_recognition(device, pin=pins.get(mac)))
     return out
@@ -182,10 +215,37 @@ async def _arp_output() -> str:
 async def scan_inventory(known_macs=None,
                          scan: Callable[[], Awaitable[str]] | None = None,
                          hostnames: dict[str, str] | None = None,
-                         pins: dict[str, str] | None = None) -> list[Device]:
+                         pins: dict[str, str] | None = None,
+                         resolve: Callable[[list[tuple[str, str]]], Awaitable[dict[str, str]]] | None = None,
+                         gateway: Callable[[], Awaitable["str | None"]] | None = None) -> list[Device]:
     """Scan the LAN and return the resolved device inventory. `scan` is the
     injectable transport returning raw `arp -a` text (default: real ARP scan);
     inject a coroutine returning canned text to test without a network.
-    `pins` maps mac -> user-pinned device_type (see build_inventory)."""
+    `pins` maps mac -> user-pinned device_type (see build_inventory). `resolve`
+    is an optional injectable coroutine mapping the parsed (ip, mac) entries to
+    a {mac: hostname} dict (wavr.hostname_resolver.resolve_hostnames); its output
+    feeds the hostnames= build parameter when hostnames is not supplied. `gateway`
+    is an optional injectable coroutine returning THIS host's default-gateway IP;
+    the device whose IP matches is flagged is_gateway (None-safe: no detector or
+    an undetermined gateway simply leaves every is_gateway False, never guessed)."""
     raw = await (scan or _arp_output)()
-    return build_inventory(parse_arp_inventory(raw), known_macs, hostnames, pins)
+    entries = parse_arp_inventory(raw)
+    if hostnames is None and resolve is not None:
+        # Populate the hostnames= build parameter from the injectable reverse-DNS
+        # resolver -- tolerant: a resolver failure must never lose the whole scan.
+        try:
+            hostnames = await resolve(entries)
+        except Exception:
+            _LOG.warning("hostname resolver failed", exc_info=True)
+            hostnames = None
+    gateway_ip = None
+    if gateway is not None:
+        # Injectable default-gateway detector (wavr.sources.network.default_gateway)
+        # -- tolerant, same rule as the resolver: a detection failure must never
+        # lose the whole scan, it just leaves every is_gateway honestly False.
+        try:
+            gateway_ip = await gateway()
+        except Exception:
+            _LOG.warning("gateway detection failed", exc_info=True)
+            gateway_ip = None
+    return build_inventory(entries, known_macs, hostnames, pins, gateway_ip=gateway_ip)

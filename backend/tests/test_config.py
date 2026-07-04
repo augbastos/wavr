@@ -104,3 +104,80 @@ def test_config_reads_internet_monitor_env(monkeypatch):
     assert cfg.internet_check_host == "1.1.1.1"
     assert cfg.internet_check_interval == 5.0
     assert cfg.internet_fail_threshold == 2
+
+
+def test_config_has_collectors_lote2_defaults(monkeypatch):
+    # NetBIOS/SNMP/DHCP-fp/rogue-DHCP/health-ladder -- every one opt-in, off by
+    # default (collectors-lote2). NetBIOS/SNMP scope defaults to known-only
+    # (audit fix #4 -- an active unicast probe is more intrusive than passive
+    # listening); health resolver egress defaults OFF (audit fix #1).
+    for v in ("WAVR_NET_NETBIOS", "WAVR_NET_NETBIOS_SCOPE", "WAVR_NET_SNMP",
+              "WAVR_NET_SNMP_COMMUNITY", "WAVR_NET_SNMP_SCOPE", "WAVR_NET_DHCP_FP",
+              "WAVR_NET_DHCP_MONITOR", "WAVR_NET_DHCP_PROBE",
+              "WAVR_NET_DHCP_KNOWN_SERVERS", "WAVR_NET_DHCP_INTERVAL",
+              "WAVR_NET_DHCP_ALERT_THRESHOLD", "WAVR_HEALTH_EXTRA_TARGETS",
+              "WAVR_HEALTH_RESOLVERS"):
+        monkeypatch.delenv(v, raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.net_netbios is False
+    assert cfg.net_netbios_scope_known_only is True
+    assert cfg.net_snmp is False
+    assert cfg.net_snmp_community == "public"
+    assert cfg.net_snmp_scope_known_only is True
+    assert cfg.net_dhcp_fp is False
+    assert cfg.net_dhcp_monitor is False
+    assert cfg.net_dhcp_probe is False
+    assert cfg.net_dhcp_known_servers == set()
+    assert cfg.net_dhcp_interval == 30.0
+    assert cfg.net_dhcp_alert_threshold == 2
+    assert cfg.health_extra_targets == ()
+    assert cfg.health_resolvers_enabled is False
+
+
+def test_config_reads_collectors_lote2_env(monkeypatch):
+    monkeypatch.setenv("WAVR_NET_NETBIOS", "1")
+    monkeypatch.setenv("WAVR_NET_NETBIOS_SCOPE", "all")
+    monkeypatch.setenv("WAVR_NET_SNMP", "1")
+    monkeypatch.setenv("WAVR_NET_SNMP_COMMUNITY", "monitoring")
+    monkeypatch.setenv("WAVR_NET_SNMP_SCOPE", "all")
+    monkeypatch.setenv("WAVR_NET_DHCP_FP", "1")
+    monkeypatch.setenv("WAVR_NET_DHCP_MONITOR", "1")
+    monkeypatch.setenv("WAVR_NET_DHCP_KNOWN_SERVERS", "192.168.0.1, 192.168.0.2")
+    monkeypatch.setenv("WAVR_HEALTH_EXTRA_TARGETS", "9.9.9.9, example.com")
+    monkeypatch.setenv("WAVR_HEALTH_RESOLVERS", "1")
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.net_netbios is True
+    # SCOPE=all is the explicit opt-out of the known-only default (audit fix #4).
+    assert cfg.net_netbios_scope_known_only is False
+    assert cfg.net_snmp is True
+    assert cfg.net_snmp_community == "monitoring"
+    assert cfg.net_snmp_scope_known_only is False
+    assert cfg.net_dhcp_fp is True
+    assert cfg.net_dhcp_monitor is True
+    assert cfg.net_dhcp_known_servers == {"192.168.0.1", "192.168.0.2"}
+    assert cfg.health_extra_targets == ("9.9.9.9", "example.com")
+    assert cfg.health_resolvers_enabled is True
+
+
+def test_config_netbios_snmp_scope_known_only_is_the_default_without_env_var(monkeypatch):
+    # Leaving WAVR_NET_NETBIOS_SCOPE/WAVR_NET_SNMP_SCOPE completely unset (not
+    # even "known") must still land on known-only -- the safe default, not an
+    # opt-in one (audit fix #4).
+    monkeypatch.delenv("WAVR_NET_NETBIOS_SCOPE", raising=False)
+    monkeypatch.delenv("WAVR_NET_SNMP_SCOPE", raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.net_netbios_scope_known_only is True
+    assert cfg.net_snmp_scope_known_only is True
+
+
+def test_config_netbios_snmp_scope_known_explicit_still_narrows(monkeypatch):
+    # SCOPE=known (the old explicit opt-in) is still accepted and still narrows.
+    monkeypatch.setenv("WAVR_NET_NETBIOS_SCOPE", "known")
+    monkeypatch.setenv("WAVR_NET_SNMP_SCOPE", "known")
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.net_netbios_scope_known_only is True
+    assert cfg.net_snmp_scope_known_only is True
