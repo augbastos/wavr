@@ -24,3 +24,7 @@ backend/wavr.db-wal
 # tool-output dirs (never commit)
 _fable/
 .superpowers/
+
+# local competitive research — contains real home-network PII (subnet/hostnames/VPN IPs);
+# keep OUT of this public repo until redacted (audit 2026-07-04)
+docs/competitive-analysis/
