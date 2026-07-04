@@ -8,6 +8,15 @@ DeviceIdentity using PRECEDENCE (strongest opinion wins), not averaging:
               >  OUI vendor default  >  mobile-heavy vendor
               >  randomized-MAC heuristic
 
+Collector threat model (mDNS/SSDP/SNMP): every one of these protocols is a
+device SELF-description broadcast on the open LAN multicast group -- any
+host can announce whatever TXT/SRV/LOC-XML content it likes, the same
+spoofability the M1 OUI-alone fix already treats as a security-relevant
+fact (a MAC's OUI is just its first 3 octets, freely settable). So a
+protocol self-description signal ALONE is capped at "medium" confidence
+here, exactly like an OUI-alone verdict -- it only reaches "high" via the
+same consensus bump (a 2nd independent signal agreeing on the same type).
+
 Confidence is the winning signal's own confidence, bumped ONE level when a
 second independent signal agrees on the same type -- the same
 "consensus-raises-confidence" ethos Wavr's sensor fusion uses. The full
@@ -115,13 +124,15 @@ def _candidates(signals: Mapping) -> list[dict]:
     if pin:
         add("user_pin", pin, "high", pin)
 
-    # Protocol self-description hooks (future mDNS/SSDP/SNMP collectors).
+    # Protocol self-description hooks (mDNS/SSDP/SNMP collectors). Capped at
+    # "medium" ALONE -- see the module docstring's collector threat-model note;
+    # a 2nd agreeing signal still reaches "high" via the normal consensus bump.
     for key in ("upnp", "bonjour", "snmp"):
         info = signals.get(key)
         if isinstance(info, Mapping):
             dtype = _valid_type(info.get("device_type"))
             if dtype:
-                add(key, dtype, "high", f"self-described as {dtype}")
+                add(key, dtype, "medium", f"self-described as {dtype}")
 
     dhcp = signals.get("dhcp")
     if isinstance(dhcp, Mapping):

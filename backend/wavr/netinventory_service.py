@@ -17,6 +17,22 @@ to the known-MAC allowlist only (port_scan_known_only_enabled()).
 Everything is in-memory (bounded alert ring) and the scan transport is injectable
 (same seam as wavr.sources.network), so the whole service is mock-tested with
 zero real network / zero hardware.
+
+Passive protocol collectors (mDNS/SSDP, defensive-inventory collectors): OPT-IN,
+default OFF (`mdns_enabled`/`ssdp_enabled`, wired from `WAVR_NET_MDNS`/
+`WAVR_NET_SSDP` in config.py -- this module itself never reads the
+environment, same rule as every collector). When on, each scan cycle also
+runs the collectors' own bounded listen window (`collect_duration` seconds,
+both collectors concurrently) and folds whatever they heard into the SAME
+recog re-fuse pass as the port scan, keyed to this cycle's ARP-resolved
+MACs via IP -- a signal for a host not already in this cycle's ARP
+inventory has nothing to attach to and is dropped, never invented into a
+phantom device. `mdns`/`ssdp` are the injectable collector instances (tests
+hand in a fake with an async `collect(duration)`; production lazily builds
+the real `wavr.sources.mdns.MDNSCollector`/`wavr.sources.ssdp.SSDPCollector`
+only once actually enabled, so the multicast sockets are never opened
+otherwise). A collector raising is caught and logged, same tolerance as
+`on_rogue`/`device_meta` -- one collector's failure must never break scanning.
 """
 from __future__ import annotations
 
@@ -94,7 +110,10 @@ class NetworkInventoryService:
                  port_scan: bool | None = None,
                  port_scan_known_only: bool | None = None,
                  on_rogue: Callable[[RogueAlert], None] | None = None,
-                 device_meta=None, port_probe=None):
+                 device_meta=None, port_probe=None,
+                 mdns_enabled: bool = False, ssdp_enabled: bool = False,
+                 ssdp_location_enabled: bool = False,
+                 mdns=None, ssdp=None, collect_duration: float = 3.0):
         self._known = _norm_macs(known_macs)
         self._scan = scan
         self._interval = interval
@@ -107,6 +126,15 @@ class NetworkInventoryService:
         self._port_probe = port_probe   # injectable TCP-connect probe (tests)
         self._on_rogue = on_rogue
         self._device_meta = device_meta
+        # Passive collectors (opt-in, default OFF -- see module docstring).
+        # `mdns`/`ssdp` injected explicitly (tests) win over the enabled flag;
+        # otherwise the real collector is built lazily, only once actually used.
+        self._mdns_enabled = mdns_enabled
+        self._ssdp_enabled = ssdp_enabled
+        self._ssdp_location_enabled = ssdp_location_enabled
+        self._mdns = mdns
+        self._ssdp = ssdp
+        self._collect_duration = collect_duration
         self._inventory: list[Device] = []
         self._alerts: list[RogueAlert] = []
         self._alerted: set[str] = set()   # MACs already alerted (edge-triggered)
@@ -141,11 +169,77 @@ class NetworkInventoryService:
                 devices = [scanned.get(d.mac, d) for d in devices]
             else:
                 devices = await annotate_ports(devices, probe=self._port_probe)
-            devices = [apply_recognition(d, pin=pins.get(d.mac)) for d in devices]
+
+        signals = await self._collect_protocol_signals(devices)
+
+        if self._port_scan_on() or signals:
+            devices = [
+                apply_recognition(
+                    d, pin=pins.get(d.mac),
+                    bonjour=signals.get(d.mac, {}).get("bonjour"),
+                    upnp=signals.get(d.mac, {}).get("upnp"),
+                )
+                for d in devices
+            ]
         self._inventory = devices
         self._record_rogues(devices)
         self._record_seen(devices)
         return devices
+
+    def _get_mdns(self):
+        # Lazily built so a real multicast socket is only ever opened once
+        # WAVR_NET_MDNS is actually on (tests inject a fake collector instead).
+        if self._mdns is None:
+            from wavr.sources.mdns import MDNSCollector
+            self._mdns = MDNSCollector()
+        return self._mdns
+
+    def _get_ssdp(self):
+        if self._ssdp is None:
+            from wavr.sources.ssdp import SSDPCollector
+            self._ssdp = SSDPCollector(fetch_location=self._ssdp_location_enabled)
+        return self._ssdp
+
+    async def _collect_protocol_signals(self, devices: list[Device]) -> dict[str, dict]:
+        """Run whichever passive collectors are enabled (concurrently, bounded
+        to `collect_duration` seconds) and return {mac: {"bonjour": dict?,
+        "upnp": dict?}} for macs already present in THIS cycle's ARP-resolved
+        `devices` -- a signal for an IP not in that set has no device to
+        attach to and is dropped (never invented into a phantom entry).
+        Tolerant: a collector raising is logged and simply contributes nothing,
+        never aborts the scan."""
+        if not (self._mdns_enabled or self._ssdp_enabled):
+            return {}
+        ip_to_mac = {d.ip: d.mac for d in devices if d.ip}
+
+        async def _mdns_task() -> tuple[str, dict]:
+            try:
+                return "bonjour", await self._get_mdns().collect(duration=self._collect_duration)
+            except Exception:
+                _LOG.warning("mdns collector failed", exc_info=True)
+                return "bonjour", {}
+
+        async def _ssdp_task() -> tuple[str, dict]:
+            try:
+                return "upnp", await self._get_ssdp().collect(duration=self._collect_duration)
+            except Exception:
+                _LOG.warning("ssdp collector failed", exc_info=True)
+                return "upnp", {}
+
+        tasks = []
+        if self._mdns_enabled:
+            tasks.append(_mdns_task())
+        if self._ssdp_enabled:
+            tasks.append(_ssdp_task())
+
+        out: dict[str, dict] = {}
+        for kind, raw in await asyncio.gather(*tasks):
+            for key, sig in raw.items():
+                mac = ip_to_mac.get(key)
+                if mac is None:
+                    continue   # not resolved by ARP this cycle -- nothing to attach to
+                out.setdefault(mac, {})[kind] = sig
+        return out
 
     def _type_pins(self) -> dict:
         """User device-type pins (mac -> taxonomy value) from device_meta --

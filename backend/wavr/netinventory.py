@@ -100,17 +100,24 @@ def guess_device_type(vendor: str, hostname: str | None = None,
     ).device_type
 
 
-def apply_recognition(device: Device, pin: str | None = None) -> Device:
+def apply_recognition(device: Device, pin: str | None = None,
+                      bonjour: dict | None = None, upnp: dict | None = None) -> Device:
     """Return a NEW Device with the identity fields re-fused from everything
     currently known about it (vendor/hostname/MAC/open_ports + the optional
-    user type-pin, which always wins). Pure/offline -- call again after the
-    opt-in port pass fills `open_ports` to fold port hints in."""
+    user type-pin, which always wins) plus any passive protocol self-
+    description handed in for this scan cycle (`bonjour` from
+    wavr.sources.mdns, `upnp` from wavr.sources.ssdp -- both optional, both
+    keyed per-device by the caller, e.g. wavr.netinventory_service). Pure/
+    offline -- call again after the opt-in port pass fills `open_ports` (or
+    fresh collector signals arrive) to fold new hints in."""
     ident = recognize({
         "mac": device.mac,
         "vendor": device.vendor,
         "hostname": device.hostname,
         "open_ports": device.open_ports or None,
         "user_pin": pin,
+        "bonjour": bonjour,
+        "upnp": upnp,
     })
     return replace(
         device,

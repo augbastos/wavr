@@ -263,3 +263,89 @@ async def test_on_rogue_exception_is_swallowed_not_propagated():
     svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0, on_rogue=boom)
     devices = await svc.scan_once()   # must not raise despite the callback exploding
     assert devices   # scan still completed and returned the inventory
+
+
+# ---- passive mDNS/SSDP collector wiring (defensive-inventory collectors) --------------
+
+class _FakeCollector:
+    """Injectable stand-in for MDNSCollector/SSDPCollector: no sockets, no
+    real network, keyed by IP exactly like the real collectors' output."""
+
+    def __init__(self, by_ip: dict | None = None, boom: bool = False):
+        self._by_ip = by_ip or {}
+        self._boom = boom
+        self.calls = 0
+
+    async def collect(self, duration: float = 3.0) -> dict:
+        self.calls += 1
+        if self._boom:
+            raise RuntimeError("collector exploded")
+        return dict(self._by_ip)
+
+
+def test_collectors_off_by_default_never_invoked():
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns=fake, ssdp=fake)  # enabled flags default False
+    asyncio.run(svc.scan_once())
+    assert fake.calls == 0
+    dev = next(d for d in svc.latest_inventory() if d.mac == "24:0a:c4:aa:bb:cc")
+    assert dev.device_type != "camera"   # signal never applied
+
+
+def test_mdns_signal_folds_into_recognized_device():
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera", "make": "Wyze"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake)
+    asyncio.run(svc.scan_once())
+    assert fake.calls == 1
+    dev = next(d for d in svc.latest_inventory() if d.mac == "24:0a:c4:aa:bb:cc")
+    assert dev.device_type == "camera"
+    assert dev.make == "Wyze"
+    # M1-style cap: a lone self-description signal is "medium", never "high".
+    assert dev.type_confidence == "medium"
+    assert dev.sources[0]["signal"] == "bonjour"   # highest-weight winner
+
+
+def test_ssdp_signal_folds_into_recognized_device():
+    fake = _FakeCollector({"192.168.0.42": {"device_type": "router"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   ssdp_enabled=True, ssdp=fake)
+    asyncio.run(svc.scan_once())
+    dev = next(d for d in svc.latest_inventory() if d.mac == "de:ad:be:ef:00:01")
+    assert dev.device_type == "router"
+    assert dev.type_confidence == "medium"
+
+
+def test_collector_signal_for_unmapped_ip_is_dropped_not_invented():
+    # An IP no ARP entry resolved this cycle has nothing to attach to.
+    fake = _FakeCollector({"10.0.0.99": {"device_type": "camera"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake)
+    devices = asyncio.run(svc.scan_once())   # must not raise / must not add a phantom device
+    assert {d.mac for d in devices} == {
+        "a4:83:e7:11:22:33", "24:0a:c4:aa:bb:cc", "de:ad:be:ef:00:01",
+    }
+
+
+def test_collector_exception_is_tolerated_scan_still_completes():
+    fake = _FakeCollector(boom=True)
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, ssdp_enabled=True, mdns=fake, ssdp=fake)
+    devices = asyncio.run(svc.scan_once())   # must not raise despite both collectors exploding
+    assert devices
+
+
+def test_both_collectors_run_concurrently_and_combine_on_one_device():
+    # Two independent self-description signals agreeing on the same type ->
+    # the normal consensus bump restores "high" (only the ALONE case is capped).
+    mdns = _FakeCollector({"192.168.0.23": {"device_type": "camera"}})
+    ssdp = _FakeCollector({"192.168.0.23": {"device_type": "camera", "os": "Linux"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, ssdp_enabled=True, mdns=mdns, ssdp=ssdp)
+    asyncio.run(svc.scan_once())
+    dev = next(d for d in svc.latest_inventory() if d.mac == "24:0a:c4:aa:bb:cc")
+    assert dev.device_type == "camera"
+    assert dev.type_confidence == "high"
+    assert dev.os == "Linux"
+    assert {"bonjour", "upnp"} <= {s["signal"] for s in dev.sources}
