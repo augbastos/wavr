@@ -76,3 +76,113 @@ def test_build_inventory_flags_only_the_gateway_ip():
 def test_build_inventory_no_gateway_ip_flags_nothing():
     inv = build_inventory(parse_arp_inventory(WINDOWS_ARP))
     assert all(d.is_gateway is False for d in inv)
+
+
+# ---- scan_inventory end-to-end gateway wiring (injectable detector) ----------
+
+async def test_scan_inventory_flags_gateway_via_injected_detector():
+    async def scan():
+        return WINDOWS_ARP
+
+    async def gw():
+        return "192.168.0.1"
+
+    inv = await scan_inventory(scan=scan, gateway=gw)
+    by_mac = {d.mac: d for d in inv}
+    assert by_mac["a4:83:e7:11:22:33"].is_gateway is True
+    assert by_mac["24:0a:c4:aa:bb:cc"].is_gateway is False
+
+
+async def test_scan_inventory_gateway_detector_failure_leaves_all_false():
+    # A raising detector must never lose the whole scan -- the inventory still
+    # comes back, just with every is_gateway honestly False (never guessed).
+    async def scan():
+        return WINDOWS_ARP
+
+    async def boom():
+        raise OSError("route table unreadable")
+
+    inv = await scan_inventory(scan=scan, gateway=boom)
+    assert inv
+    assert all(d.is_gateway is False for d in inv)
+
+
+# ---- per-device latency wiring in NetworkInventoryService (wifiman.md #1) -----
+
+async def test_service_annotates_latency_from_injected_ping():
+    async def scan():
+        return WINDOWS_ARP
+
+    async def ping(ip):
+        return 6.0
+
+    svc = NetworkInventoryService(scan=scan, interval=0,
+                                  latency_enabled=True, ping=ping)
+    devices = await svc.scan_once()
+    assert devices
+    assert all(d.latency_ms == 6.0 for d in devices if d.ip)
+
+
+async def test_service_latency_off_by_default_never_pings():
+    calls: list[str] = []
+
+    async def scan():
+        return WINDOWS_ARP
+
+    async def ping(ip):            # injected but must stay unused while OFF
+        calls.append(ip)
+        return 6.0
+
+    svc = NetworkInventoryService(scan=scan, interval=0, ping=ping)
+    devices = await svc.scan_once()
+    assert calls == []
+    assert all(d.latency_ms is None for d in devices)
+
+
+async def test_service_latency_probe_failure_is_none_not_fatal():
+    # A probe raising for a host yields a None latency, never aborts the scan.
+    async def scan():
+        return WINDOWS_ARP
+
+    async def ping(ip):
+        raise OSError("host unreachable")
+
+    svc = NetworkInventoryService(scan=scan, interval=0,
+                                  latency_enabled=True, ping=ping)
+    devices = await svc.scan_once()
+    assert devices
+    assert all(d.latency_ms is None for d in devices)
+
+
+# ---- API surfacing: _device_view exposes both fields, honestly omits absent ---
+
+def test_device_view_surfaces_gateway_and_latency():
+    d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Acme",
+               device_type="router", known=True, is_gateway=True, latency_ms=6.0)
+    view = _device_view(d)
+    assert view["is_gateway"] is True
+    assert view["latency_ms"] == 6.0
+
+
+def test_device_view_omits_gateway_and_latency_when_absent():
+    d = Device(mac="24:0a:c4:aa:bb:cc", ip="192.168.0.23", vendor="Acme",
+               device_type="phone", known=False)
+    view = _device_view(d)
+    assert "is_gateway" not in view
+    assert "latency_ms" not in view
+
+
+# ---- config surface: the enable flags for both features ----------------------
+
+def test_config_net_latency_flag_opt_in_off_by_default(monkeypatch):
+    monkeypatch.delenv("WAVR_NET_LATENCY", raising=False)
+    assert load_config().net_latency is False          # active probe -> opt-in
+    monkeypatch.setenv("WAVR_NET_LATENCY", "1")
+    assert load_config().net_latency is True
+
+
+def test_config_net_gateway_monitor_on_by_default(monkeypatch):
+    monkeypatch.delenv("WAVR_NET_GATEWAY_MONITOR", raising=False)
+    assert load_config().net_gateway_monitor is True   # zero-egress -> on by default
+    monkeypatch.setenv("WAVR_NET_GATEWAY_MONITOR", "0")
+    assert load_config().net_gateway_monitor is False
