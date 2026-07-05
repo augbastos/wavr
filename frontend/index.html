@@ -503,6 +503,37 @@
   .cap-cta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px;}
   .cap-tag{font-size:.72rem;padding:3px 10px;border-radius:999px;border:1px dashed var(--line-strong);color:var(--dim);}
   .cap-road{margin:0;font-size:.74rem;color:var(--dim);line-height:1.45;}
+  /* detected: camera scan (ONVIF detect -> connect) */
+  .det-scan-note{font-size:.78rem;color:var(--dim);line-height:1.5;margin:0 0 10px;max-width:70ch;}
+  .det-scan-note.warn{color:var(--warn);}
+  .det-scan-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 10px;}
+  .det-scan-creds{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+                  margin:0 0 12px;padding:11px;border:1px dashed var(--line);border-radius:10px;}
+  .det-scan-creds label{display:flex;flex-direction:column;gap:4px;font-size:.74rem;color:var(--dim);}
+  .det-scan-creds input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+                        border-radius:8px;padding:8px 10px;font-size:.85rem;width:100%;}
+  .det-scan-creds .cred-note{grid-column:1/-1;}
+  .det-scan-err{font-size:.74rem;color:var(--dim);opacity:.85;margin:8px 0 0;line-height:1.4;}
+  .det-banner{display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:space-between;
+              padding:13px 15px;margin:0 0 12px;border:1px solid var(--line-strong);border-radius:12px;
+              background:var(--elevated);}
+  .det-banner .db-text{font-size:.85rem;color:var(--text);line-height:1.45;flex:1 1 240px;}
+  .det-banner .db-text b{font-weight:600;}
+  .det-banner .db-cta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .cap-card.onvif-found{border-color:rgba(61,181,74,.35);}
+  .starts-off{font-size:.74rem;color:var(--dim);line-height:1.45;margin:6px 0 0;max-width:62ch;}
+  .starts-off b{color:var(--text);font-weight:600;}
+  .onvif-connect{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+                 margin-top:8px;padding-top:10px;border-top:1px dashed var(--line);}
+  .onvif-connect label{display:flex;flex-direction:column;gap:4px;font-size:.74rem;color:var(--dim);}
+  .onvif-connect input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+                       border-radius:8px;padding:8px 10px;font-size:.85rem;width:100%;}
+  .onvif-connect .oc-actions{grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+  .onvif-stream{font-size:.74rem;color:var(--dim);font-variant-numeric:tabular-nums;
+                font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere;margin:2px 0 0;}
+  .scan-spin{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--line-strong);
+             border-top-color:var(--accent);margin-right:7px;vertical-align:-2px;animation:wavr-scan-spin .7s linear infinite;}
+  @keyframes wavr-scan-spin{to{transform:rotate(360deg);}}
   /* detected */
   .det-list{display:flex;flex-direction:column;gap:12px;}
   .det-meta{font-size:.76rem;color:var(--dim);font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
@@ -904,6 +935,10 @@
     .fchip{min-height:44px;padding:8px 14px;display:inline-flex;align-items:center;justify-content:center;}
     .nav-item{min-height:44px;}
     input,select,textarea{font-size:16px;}
+    /* class-scoped credential/setup inputs have specificity 0,1,1 and would otherwise
+       beat the bare rule above — match specificity so 16px actually wins on touch,
+       preventing iOS Safari zoom-on-focus and keeping the ~44px touch minimum. */
+    .setup-form input,.onvif-connect input,.det-scan-creds input{font-size:16px;}
   }
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
@@ -912,6 +947,7 @@
     .ctl:active{transform:none;}
     .ctl.switch::after{transition:background .15s ease-out;}
     .live-badge i{animation:none;}   /* heartbeat dot goes static, never removed */
+    .scan-spin{animation:none;border-top-color:var(--line-strong);}   /* scan busy: static ring, no spin */
     .tip-pop{transition:none;}       /* v2 tooltips: no fade — popover just appears */
   }
 </style>
@@ -1298,9 +1334,21 @@
         <!-- Detected: network inventory × catalog (live/companion; demo shows an honest state) -->
         <div id="dsubViewDetectados" class="dsub-view" hidden role="tabpanel" aria-labelledby="dsubBtnDetectados">
           <div class="tile">
-            <div class="tile-head"><h2>Detected on the network</h2><span class="hint">Wi-Fi inventory × catalog</span></div>
+            <div class="tile-head"><h2>Detected on the network</h2><span class="hint">Wi-Fi inventory × catalog</span>
+              <button id="detScanCams" class="ctl small" type="button" hidden
+                      data-tip="Looks for ONVIF/RTSP cameras on your local network (local-only)">Scan for cameras</button></div>
             <p class="panel-note">Devices seen on your network that match the catalog and aren't Wavr sources yet.
               BLE, serial, or Zigbee sensors (behind a hub) don't have their own IP and never appear here — use the Catalog for those.</p>
+            <p id="detScanNote" class="det-scan-note" hidden aria-live="polite"></p>
+            <div id="detScanCredRow" class="det-scan-row" hidden>
+              <button id="detScanCredsToggle" class="linklike" type="button" aria-expanded="false" aria-controls="detScanCreds">Does your camera need a username and password?</button>
+            </div>
+            <div id="detScanCreds" class="det-scan-creds" hidden>
+              <label><span>Camera username (optional)</span><input id="detScanUser" type="text" autocomplete="off" placeholder="e.g. admin"></label>
+              <label><span>Camera password (optional)</span><input id="detScanPass" type="password" autocomplete="off"></label>
+              <p class="cred-note"><svg aria-hidden="true"><use href="#ic-lock"/></svg>Stays on this device only — used just for this scan, never saved, never leaves your network.</p>
+            </div>
+            <div id="detBanner"></div>
             <div id="detList" class="det-list"></div>
             <div id="detEmpty" class="empty" hidden></div>
           </div>
@@ -4946,6 +4994,13 @@ try {
   var camsList = [];             // last /api/cameras payload (renderCameras)
   var healthMap = {};            // modality -> {health, age_s} from live RoomState frames
   var dsubCur = null;
+  // ONVIF camera scan (detect -> connect). Results live only in JS; never persisted client-side.
+  var onvifCams = [];            // probe.cameras[] from the last scan (masked rtsp only)
+  var onvifErrs = [];            // probe.errors[] {host, reason}
+  var scanState = "idle";        // idle | scanning | done | offoptin | error
+  var scanNote = "";             // one-line honesty note under the header
+  var scannedOnce = false;       // has a scan run this session
+  var bannerDismissed = false;   // first-run "set up your cameras" strip, one-shot per session
 
   function norm(s){
     s = String(s == null ? "" : s).toLowerCase();
@@ -5522,9 +5577,295 @@ try {
     return card;
   }
 
+  // ---------- ONVIF camera scan: detect -> connect (POST /api/onvif/probe, opt-in) ----------
+  function canDetectNow(){
+    return (M === "live") ||
+      (M === "companion" && typeof companionToken === "function" && !!companionToken());
+  }
+  function onvifTitle(cam){
+    var mk = String((cam && cam.make) || "").trim();
+    var md = String((cam && cam.model) || "").trim();
+    var nm = String((cam && cam.name) || "").trim();
+    if(nm && nm !== mk) return nm;
+    var mm = (mk + " " + md).trim();
+    return mm || ("Camera at " + ((cam && cam.ip) || "unknown"));
+  }
+  // The backend masks ONLY the password (rtsp://user:***@host). A masked-password URL can't
+  // be POSTed as-is -> the user must supply creds (Configure). No masked password -> the URL
+  // is directly connectable (Connect now).
+  function onvifNeedsCreds(cam){ return /:\*{2,}@/.test(String((cam && cam.rtsp_url) || "")); }
+  function onvifBranch(cam){
+    var url = String((cam && cam.rtsp_url) || "");
+    var profs = (cam && Array.isArray(cam.profiles)) ? cam.profiles.length : 0;
+    if(url && profs && !onvifNeedsCreds(cam)) return 1;                 // CONNECT NOW
+    if(url || profs || (cam && (cam.make || cam.model || cam.name))) return 2;  // CONFIGURE
+    return 3;                                                          // GUIDED
+  }
+  function parseRtsp(url){
+    var out = { ip: "", port: "554", path: "" };
+    var m = /^rtsps?:\/\/(?:[^@/]*@)?([^:/]+)(?::(\d+))?(\/[^\s]*)?/i.exec(String(url || ""));
+    if(m){ out.ip = m[1] || ""; if(m[2]) out.port = m[2]; if(m[3]) out.path = m[3]; }
+    return out;
+  }
+  function onvifCatalogEntry(cam){
+    return { id: "onvif-" + ((cam && cam.ip) || "cam"), name: onvifTitle(cam),
+      brand: String((cam && cam.make) || "IP camera"), category: "camera",
+      modality: "RTSP / ONVIF IP camera", coverage: "room",
+      detects: ["presence", "motion", "person"], control: "none",
+      status: "addable-now", wavr_ingress: "rtsp-onvif",
+      privacy_note: "Camera frames are processed in memory and never leave your home." };
+  }
+  function startsOffLine(){
+    var p = elc("p", "starts-off");
+    p.appendChild(document.createTextNode("Adds the camera turned "));
+    p.appendChild(elc("b", null, "off"));
+    p.appendChild(document.createTextNode(". Turn it on in Devices → Active when you're ready — Wavr never enables a camera for you."));
+    return p;
+  }
+
+  function onvifConnectRow(cam, holder, primaryBtn){
+    if(holder.firstChild) return;   // already open
+    var wrap = elc("div", "onvif-connect");
+    function fld(labelText, val, ph){
+      var l = elc("label");
+      l.appendChild(elc("span", null, labelText));
+      var i = document.createElement("input");
+      i.type = "text"; if(val) i.value = val; if(ph) i.placeholder = ph;
+      l.appendChild(i); wrap.appendChild(l);
+      return i;
+    }
+    var defName = cam.ip ? "cam_" + String(cam.ip).replace(/\./g, "_") : "cam";
+    var iName = fld("name", defName, "e.g. cam_living_room");
+    var iRoom = fld("room", suggestRoom(), "e.g. living room");
+    var actions = elc("div", "oc-actions");
+    var add = elc("button", "ctl small primary", "Add camera (off)");
+    add.type = "button";
+    var fb = elc("span", "action-fb"); fb.setAttribute("aria-live", "polite");
+    actions.appendChild(add); actions.appendChild(fb);
+    wrap.appendChild(actions);
+    add.onclick = async function(){
+      var nm = iName.value.trim(), rm = iRoom.value.trim();
+      if(!nm || !rm){ actionFeedback(fb, false, "name and room are required"); return; }
+      add.disabled = true;
+      var body = { name: nm, room: rm, rtsp_url: cam.rtsp_url, confidence: 0.4 };
+      var r = null;
+      try{
+        r = await fetch(location.origin + "/api/cameras", { method: "POST",
+          headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+          body: JSON.stringify(body) });
+      }catch(e){}
+      if(r && r.ok){
+        actionFeedback(fb, true, null, "✓ camera added — starts off");
+        if(window.__wavrCamerasRefresh) window.__wavrCamerasRefresh();
+        setTimeout(function(){ setDsub("ativos"); }, 900);
+      } else {
+        add.disabled = false;
+        var msg = "couldn't add the camera";
+        if(r && r.status === 409) msg = "a camera with that name already exists";
+        actionFeedback(fb, false, msg);
+      }
+    };
+    holder.appendChild(wrap);
+    if(primaryBtn) primaryBtn.disabled = true;
+    iName.focus();
+  }
+
+  function onvifGuidedSteps(host){
+    var s = [
+      { h: "Enable the camera account / RTSP",
+        p: "In the vendor app (e.g. Tapo → Advanced Settings → Camera Account) create a username + password. This is what Wavr uses to read the stream." }];
+    s.push({ h: "(Optional) give it a fixed address",
+      p: "So Wavr keeps finding it, set a static IP or a DHCP reservation in your router for " + (host || "this camera") + ".",
+      copy: host || "" });
+    return s;
+  }
+  function buildOnvifGuidedBody(card, host){
+    var steps = onvifGuidedSteps(host);
+    var wrap = elc("div", "ladder-steps");
+    steps.forEach(function(s, i){
+      var st = elc("div", "ladder-step");
+      st.appendChild(elc("span", "ladder-num", String(i + 1)));
+      var body = elc("div");
+      body.appendChild(elc("h4", null, s.h));
+      body.appendChild(elc("p", null, s.p));
+      if(s.copy){
+        var row = elc("div", "copyrow");
+        row.appendChild(elc("code", "copyval", s.copy));
+        var cb = elc("button", "ctl small", "Copy"); cb.type = "button";
+        cb.onclick = function(){
+          try{ if(navigator.clipboard) navigator.clipboard.writeText(s.copy).catch(function(){}); }catch(e){}
+          cb.textContent = "Copied"; setTimeout(function(){ cb.textContent = "Copy"; }, 1500);
+        };
+        row.appendChild(cb);
+        body.appendChild(row);
+      }
+      st.appendChild(body); wrap.appendChild(st);
+    });
+    var st3 = elc("div", "ladder-step");
+    st3.appendChild(elc("span", "ladder-num", String(steps.length + 1)));
+    var b3 = elc("div");
+    b3.appendChild(elc("h4", null, "Scan again"));
+    b3.appendChild(elc("p", null, "Once RTSP / the camera account is on, re-scan this camera — it will then offer Connect or Configure."));
+    var sb = elc("button", "ctl small primary", "Scan again"); sb.type = "button";
+    sb.onclick = function(){ scanCameras(host ? [host] : undefined); };
+    b3.appendChild(sb); st3.appendChild(b3); wrap.appendChild(st3);
+    card.appendChild(wrap);
+    card.appendChild(elc("p", "starts-off",
+      "Wavr can't flip these switches on the camera for you — that stays your decision on the device. Once RTSP is on, scan again."));
+  }
+
+  function buildOnvifCard(cam){
+    var branch = onvifBranch(cam);
+    var card = elc("article", "cap-card onvif-found");
+    var head = elc("div", "cap-head");
+    var ic = elc("span", "cap-icon"); ic.appendChild(icon("ic-camera"));
+    var tw = elc("div");
+    tw.appendChild(elc("div", "cap-title", onvifTitle(cam)));
+    var brand = [String(cam.make || "").trim(), String(cam.model || "").trim()].filter(Boolean).join(" ");
+    tw.appendChild(elc("div", "cap-brand", (brand || "IP camera") + " · Camera"));
+    head.appendChild(ic); head.appendChild(tw);
+    card.appendChild(head);
+    var meta = []; if(cam.ip) meta.push(cam.ip); if(brand) meta.push(brand);
+    card.appendChild(elc("div", "det-meta", "Seen on the network: " + (meta.join(" · ") || "(unknown)")));
+    var chips = elc("div", "cchips");
+    chips.appendChild(elc("span", "cchip conf-alta", "camera found"));
+    card.appendChild(chips);
+    var priv = buildPrivacy(onvifCatalogEntry(cam)); if(priv) card.appendChild(priv);
+    if(branch === 1){
+      card.appendChild(elc("p", "onvif-stream", "Stream: " + String(cam.rtsp_url || "")));
+      card.appendChild(startsOffLine());
+      var cta1 = elc("div", "cap-cta");
+      var connect = elc("button", "ctl small primary", "Connect now"); connect.type = "button";
+      var holder = elc("div");
+      connect.onclick = function(){ onvifConnectRow(cam, holder, connect); };
+      cta1.appendChild(connect); card.appendChild(cta1); card.appendChild(holder);
+    } else if(branch === 2){
+      card.appendChild(elc("p", "cap-mod",
+        "This camera answered, but needs the camera-account login before Wavr can read its stream."));
+      card.appendChild(startsOffLine());
+      var cta2 = elc("div", "cap-cta");
+      var cfg = elc("button", "ctl small primary", "Configure"); cfg.type = "button";
+      cfg.onclick = function(ev){ openSetup(onvifCatalogEntry(cam),
+        { ip: cam.ip || "", focus: "form", onvif: cam, trigger: ev.currentTarget }); };
+      cta2.appendChild(cfg); card.appendChild(cta2);
+    } else {
+      buildOnvifGuidedBody(card, cam.ip || "");
+    }
+    return card;
+  }
+  function buildOnvifGuidedCard(host, reason){
+    var card = elc("article", "cap-card");
+    var head = elc("div", "cap-head");
+    var ic = elc("span", "cap-icon"); ic.appendChild(icon("ic-camera"));
+    var tw = elc("div");
+    tw.appendChild(elc("div", "cap-title", "Camera at " + (host || "unknown")));
+    tw.appendChild(elc("div", "cap-brand", "answered ONVIF · no readable stream yet"));
+    head.appendChild(ic); head.appendChild(tw);
+    card.appendChild(head);
+    if(host) card.appendChild(elc("div", "det-meta", "Seen on the network: " + host));
+    card.appendChild(elc("p", "cap-mod",
+      "A camera responded here but didn't expose a usable RTSP stream — the camera account / RTSP is probably still turned off."));
+    buildOnvifGuidedBody(card, host);
+    return card;
+  }
+
+  function renderScanUI(){
+    var btn = $("detScanCams"), note = $("detScanNote"), credRow = $("detScanCredRow");
+    if(!btn) return;
+    var can = canDetectNow();
+    btn.hidden = !can;
+    if(credRow) credRow.hidden = !can;
+    if(!can){
+      if(note){ note.hidden = true; note.textContent = ""; }
+      var cbx = $("detScanCreds"); if(cbx) cbx.hidden = true;
+      return;
+    }
+    btn.disabled = (scanState === "scanning");
+    if(scanState === "scanning"){
+      btn.setAttribute("aria-busy", "true");
+      btn.textContent = "";
+      btn.appendChild(elc("span", "scan-spin"));
+      btn.appendChild(document.createTextNode("Scanning…"));
+    } else {
+      btn.removeAttribute("aria-busy");
+      btn.textContent = scannedOnce ? "Scan again" : "Scan for cameras";
+    }
+    if(note){
+      var txt = scanNote;
+      if(scanState === "idle" && !txt) txt = "Wavr can look for ONVIF/RTSP cameras on your local network.";
+      if(scanState === "scanning") txt = "Looking for cameras on your network… this takes a few seconds.";
+      note.textContent = txt;
+      note.className = "det-scan-note" + ((scanState === "offoptin" || scanState === "error") ? " warn" : "");
+      note.hidden = !txt;
+    }
+  }
+
+  function renderBanner(){
+    var box = $("detBanner");
+    if(!box) return;
+    box.textContent = "";
+    var show = canDetectNow() && !bannerDismissed && !scannedOnce && !(camsList && camsList.length);
+    // Shown on phones too: the non-technical owner is most likely on mobile, and this is
+    // the only proactive camera-setup nudge. The .det-banner is flex-wrap/responsive and
+    // only OFFERS a local scan (no false "camera found" claim), so it stays honest.
+    if(!show){ box.hidden = true; return; }
+    var b = elc("div", "det-banner");
+    var t = elc("div", "db-text");
+    t.appendChild(elc("b", null, "Set up your cameras"));
+    t.appendChild(document.createTextNode(" — Wavr can look for IP cameras on your network."));
+    b.appendChild(t);
+    var cta = elc("div", "db-cta");
+    var scan = elc("button", "ctl small primary", "Scan for cameras"); scan.type = "button";
+    scan.onclick = function(){ scanCameras(); };
+    var no = elc("button", "linklike", "Not now"); no.type = "button";
+    no.onclick = function(){ bannerDismissed = true; renderBanner(); };
+    cta.appendChild(scan); cta.appendChild(no);
+    b.appendChild(cta); box.appendChild(b); box.hidden = false;
+  }
+
+  async function scanCameras(targets){
+    if(scanState === "scanning") return;                 // guard double-submit
+    if(!canDetectNow()) return;
+    bannerDismissed = true;                               // the banner's job is done once a scan starts
+    scanState = "scanning"; scanNote = ""; renderScanUI(); renderBanner();
+    var body = {};
+    if(targets && targets.length) body.targets = targets;
+    var u = $("detScanUser"), p = $("detScanPass");
+    if(u && u.value.trim()) body.username = u.value.trim();
+    if(p && p.value) body.password = p.value;
+    var r = null, data = null;
+    try{
+      r = await fetch(location.origin + "/api/onvif/probe", { method: "POST",
+        headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+        body: JSON.stringify(body) });
+    }catch(e){ r = null; }
+    if(p) p.value = "";                                   // never keep the scan password around
+    if(!r){ scanState = "error"; scanNote = "Couldn't reach the hub — is it running?"; renderScanUI(); return; }
+    if(r.status === 403 || r.status === 503){
+      scanState = "offoptin";
+      scanNote = "Camera scanning is off by default. Turn on WAVR_ONVIF_PROBE on the hub to let Wavr " +
+        "probe your LAN for cameras (local-only, nothing leaves your network).";
+      renderScanUI(); return;
+    }
+    if(!r.ok){ scanState = "error"; scanNote = "Couldn't reach the hub — is it running?"; renderScanUI(); return; }
+    try{ data = await r.json(); }catch(e){ data = null; }
+    if(!data || typeof data !== "object"){
+      scanState = "error"; scanNote = "The hub returned an unexpected response."; renderScanUI(); return;
+    }
+    onvifCams = Array.isArray(data.cameras) ? data.cameras.filter(function(c){ return c && typeof c === "object"; }) : [];
+    onvifErrs = Array.isArray(data.errors) ? data.errors.filter(function(e){ return e && typeof e === "object"; }) : [];
+    scannedOnce = true; scanState = "done";
+    var n = onvifCams.length;
+    scanNote = n ? ("Found " + n + " camera" + (n === 1 ? "" : "s") + ".")
+                 : "No cameras answered. If yours is plugged in, it may need RTSP enabled first — " +
+                   "see “How to enable”, then scan again.";
+    renderScanUI(); renderDetectados();
+  }
+
   function renderDetectados(){
     var list = $("detList"), empty = $("detEmpty");
     if(!list || !empty) return;
+    renderScanUI(); renderBanner();
     var canDetect = (M === "live") ||
       (M === "companion" && typeof companionToken === "function" && !!companionToken());
     if(!canDetect){
@@ -5545,10 +5886,13 @@ try {
       return;
     }
     var usedIps = activeCameraIps();
+    // ONVIF cameras occupy the ACTIVE layer; their IPs are excluded from the passive layer below.
+    var onvifIps = new Set(onvifCams.map(function(c){ return c && c.ip; }).filter(Boolean));
     var matched = [], unmatched = [];
     invDevices.forEach(function(d){
       if(!d || typeof d !== "object") return;
-      if(d.ip && usedIps.has(d.ip)) return;   // already a configured camera — an active source
+      if(d.ip && usedIps.has(d.ip)) return;    // already a configured camera — an active source
+      if(d.ip && onvifIps.has(d.ip)) return;   // already surfaced above as an ONVIF camera card
       var m = matchDevice(d);
       if(m.conf === "none") unmatched.push({ d: d, m: m });
       else matched.push({ d: d, m: m });
@@ -5558,16 +5902,30 @@ try {
       if(r) return r;
       return String(b.d.last_seen || "").localeCompare(String(a.d.last_seen || ""));
     });
-    setDetCount(matched.length);
+    // guided cards = probe errors where a camera answered ONVIF but has no usable RTSP profile
+    // (account/RTSP likely off). Every other error is a dim "couldn't reach" line, not a card.
+    var guidedErrs = onvifErrs.filter(function(e){
+      var host = e && (e.host || e.ip);
+      return host && !usedIps.has(host) && !onvifIps.has(host) && /no usable rtsp/i.test(String(e.reason || ""));
+    });
+    var reachErrs = onvifErrs.filter(function(e){ return guidedErrs.indexOf(e) < 0 && e && (e.host || e.ip); });
+    setDetCount(onvifCams.length + matched.length);
     list.textContent = "";
     var frag = document.createDocumentFragment();
+    onvifCams.forEach(function(cam){ frag.appendChild(buildOnvifCard(cam)); });
+    guidedErrs.forEach(function(e){ frag.appendChild(buildOnvifGuidedCard(e.host || e.ip, e.reason)); });
     matched.forEach(function(x){ frag.appendChild(buildDetCard(x.d, x.m)); });
     if(unmatched.length){
       frag.appendChild(elc("h4", "det-sub", "No catalog match (" + unmatched.length + ")"));
       unmatched.forEach(function(x){ frag.appendChild(buildUnknownCard(x.d, x.m)); });
     }
+    if(reachErrs.length){
+      frag.appendChild(elc("p", "det-scan-err",
+        "Couldn't reach: " + reachErrs.map(function(e){ return String(e.host || e.ip); }).join(", ") +
+        ". These are usually non-camera devices — safe to ignore."));
+    }
     list.appendChild(frag);
-    var none = !matched.length && !unmatched.length;
+    var none = !onvifCams.length && !guidedErrs.length && !matched.length && !unmatched.length;
     empty.hidden = !none;
     if(none) empty.textContent = "Nothing detected yet — the hub's network inventory needs to be active " +
       "(see the Network tab). Reminder: BLE, serial, or Zigbee sensors (behind a hub) don't have their own IP and " +
@@ -5649,11 +6007,19 @@ try {
   function buildRung2(c, opts){
     var tile = elc("div", "tile");
     var th = elc("div", "tile-head");
+    var onv = opts.onvif;
+    var parsed = onv ? parseRtsp(onv.rtsp_url) : null;
     th.appendChild(elc("h2", null, "Quick setup — RTSP camera"));
     tile.appendChild(th);
-    tile.appendChild(elc("p", "setup-note",
-      "Wavr can't discover the stream address on its own yet (no ONVIF probe). " +
-      "Only the IP comes pre-filled — you get the RTSP username, password, and path from the camera's app or manual."));
+    if(onv){
+      tile.appendChild(elc("p", "setup-note",
+        "Wavr found this camera on your network and pre-filled its address. Add the camera-account " +
+        "username and password below — they stay on this device."));
+    } else {
+      tile.appendChild(elc("p", "setup-note",
+        "Wavr can't discover the stream address on its own yet (no ONVIF probe). " +
+        "Only the IP comes pre-filled — you get the RTSP username, password, and path from the camera's app or manual."));
+    }
     if(M !== "live"){
       tile.appendChild(elc("p", "panel-note",
         "Adding cameras happens on the Wavr hub's panel (local access). " +
@@ -5679,15 +6045,20 @@ try {
     }
     var iName = field("name", "name", { ph: "e.g. cam_living_room", req: 1 });
     var iRoom = field("room", "room", { value: suggestRoom(), ph: "e.g. living room", req: 1 });
-    var iIp   = field("ip", "Camera IP (detected)", { value: opts.ip || "", ph: "192.168.1.20", req: 1 });
-    var iPort = field("port", "port", { value: "554", type: "number" });
+    var ipVal = opts.ip || (parsed && parsed.ip) || "";
+    var iIp   = field("ip", ipVal ? "Camera IP (detected)" : "Camera IP", { value: ipVal, ph: "192.168.1.20", req: 1 });
+    var iPort = field("port", "port", { value: (parsed && parsed.port) || "554", type: "number" });
     iPort.min = "1"; iPort.max = "65535";
     var iUser = field("user", "RTSP username", { ph: "e.g. wavr" });
     var cred = elc("p", "cred-note");
     cred.appendChild(icon("ic-lock"));
     cred.appendChild(document.createTextNode("Stays on this device only — never leaves your network."));
     var iPass = field("pass", "RTSP password", { type: "password", helpEl: cred });
-    var iPath = field("path", "stream path", { ph: "e.g. /stream1 (see the camera's app/manual)", wide: 1 });
+    if(onv){
+      form.appendChild(elc("p", "starts-off setup-wide",
+        "Use the camera account you created in the vendor app (e.g. Tapo → Advanced Settings → Camera Account), not your Tapo/vendor login."));
+    }
+    var iPath = field("path", "stream path", { value: (parsed && parsed.path) || "", ph: "e.g. /stream1 (see the camera's app/manual)", wide: 1 });
     var iConf = field("confidence", "minimum confidence (0–1)", { value: "0.4", type: "number" });
     iConf.step = "0.05"; iConf.min = "0"; iConf.max = "1";
     var prev = elc("p", "setup-preview setup-wide", "");
@@ -5710,8 +6081,11 @@ try {
     subWrap.appendChild(sub);
     subWrap.appendChild(fb);
     form.appendChild(subWrap);
+    if(onv){ var off = startsOffLine(); off.className = "starts-off setup-wide"; form.appendChild(off); }
     form.onsubmit = async function(e){
       e.preventDefault();
+      if(sub.disabled) return;              // guard against rapid double-submit
+      sub.disabled = true;
       var body = { name: iName.value.trim(), room: iRoom.value.trim(),
                    rtsp_url: composed(false), confidence: parseFloat(iConf.value) || 0.4 };
       var r = null;
@@ -5729,6 +6103,7 @@ try {
         if(r && r.status === 409) msg = "a camera with that name already exists";
         if(typeof actionFeedback === "function") actionFeedback(fb, false, msg);
         else fb.textContent = msg;
+        sub.disabled = false;               // restore so the owner can retry
       }
     };
     tile.appendChild(form);
@@ -5913,6 +6288,19 @@ try {
     invDevices = Array.isArray(devs) ? devs : [];
     if(CAT){ renderDetectados(); renderCatDetectedChips(); }   // prompt's detected chips too
   };
+
+  // ---------- wire the ONVIF camera-scan controls (button + optional-creds toggle) ----------
+  (function wireScan(){
+    var btn = $("detScanCams");
+    if(btn) btn.addEventListener("click", function(){ scanCameras(); });
+    var tgl = $("detScanCredsToggle"), box = $("detScanCreds");
+    if(tgl && box) tgl.addEventListener("click", function(){
+      var open = box.hidden;
+      box.hidden = !open;
+      tgl.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    renderScanUI();
+  })();
 
   // ---------- System: collapses the source dot-list into a summary line linking to Active ----------
   (function(){
