@@ -3702,7 +3702,7 @@ async function renderRadar(){
     const T = three3d, hg = T.handleGroup;
     while(hg.children.length) hg.remove(hg.children[0]);
     hed3dHover = null;
-    if(MODE !== "live" || !SELECTED) return;
+    if(!isAdmin() || !SELECTED) return;
     const f = floorFor(currentFloor); if(!f) return;
     const y = offsetForLevel(currentFloor) + WALL_H + 0.1;   // just above the wall tops
     const addHandle = (x, z, hKind, idx, geo, mat) => {
@@ -3791,7 +3791,7 @@ async function renderRadar(){
     const c = document.getElementById("radar3d");
     if(!c) return;
     c.classList.toggle("hed3d-arm",
-      MODE === "live" && viewMode === "3d" && (TOOL !== "select" || !!SELECTED));
+      isAdmin() && viewMode === "3d" && (TOOL !== "select" || !!SELECTED));
   }
 
   // Short English confirmation per committed edit — same aria-live channel (hedFb) sighted
@@ -3805,7 +3805,7 @@ async function renderRadar(){
     const el = document.getElementById("floorEditing");
     if(!el) return;
     const f = floorFor(currentFloor);
-    el.hidden = (MODE !== "live") || !f;
+    el.hidden = (!isAdmin()) || !f;
     el.textContent = f ? "Editing: " + (f.name || ("level " + f.level)) : "";
   }
 
@@ -4052,7 +4052,7 @@ async function renderRadar(){
     const sel = document.getElementById("hedRoomSel");
     if(!sel) return;
     sel.addEventListener("change", ()=>{
-      if(MODE !== "live") return;                    // editor is central-only (hidden elsewhere anyway)
+      if(!isAdmin()) return;                    // editor is central-only (hidden elsewhere anyway)
       const id = sel.value;
       if(!id){ if(SELECTED) selectHouseEl(SELECTED.kind, SELECTED.id); return; }   // placeholder = clear (toggle off)
       if(TOOL !== "select"){
@@ -4080,7 +4080,7 @@ async function renderRadar(){
   let hedUidN = 0;
   function hedUid(prefix){ hedUidN += 1; return prefix + "_" + Date.now().toString(36) + hedUidN; }
   function selectHouseEl(kind, id){
-    if(MODE !== "live" || TOOL !== "select") return;   // belt-and-suspenders: CSS also gates click reachability
+    if(!isAdmin() || TOOL !== "select") return;   // belt-and-suspenders: CSS also gates click reachability
     SELECTED = (SELECTED && SELECTED.kind===kind && SELECTED.id===id) ? null : {kind, id};   // click again = deselect
     renderHouseOverlay(floorFor(currentFloor));
     rebuildHandles3D();   // one selection model, two views: 3D handles mirror the 2D outline
@@ -4118,7 +4118,7 @@ async function renderRadar(){
   async function saveHouseDoc(){
     const fb = document.getElementById("hedFb");
     try{
-      const r = await fetch(location.origin+"/api/house", {method:"PUT",
+      const r = await wavrFetch("/api/house", {method:"PUT",
         headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
         body: JSON.stringify(HOUSE)});
       if(r.ok){ HOUSE = await r.json(); markHouseDirty(false); buildFloorSelect(); renderCurrentView(); actionFeedback(fb, true); }
@@ -4127,7 +4127,7 @@ async function renderRadar(){
   }
 
   function initHouseEditor(){
-    if(MODE !== "live") return;              // editor is central-only; demo + companion never see it or PUT
+    if(!isAdmin()) return;              // editor is central-only; demo + companion never see it or PUT
     const ed = document.getElementById("houseEditor"); if(!ed) return;
     ed.hidden = false;   // v2: the toolbar stays mounted in BOTH views — the pointer-handler
                          // wiring below branches on viewMode (2D on #radar, 3D on #radar3d)
@@ -4229,7 +4229,7 @@ async function renderRadar(){
 
     canvas3d.addEventListener("pointerdown", (evt)=>{
       hed3dDownPt = { x: evt.clientX, y: evt.clientY };
-      if(viewMode!=="3d" || MODE!=="live" || !three3d || hed3d) return;
+      if(viewMode!=="3d" || !isAdmin() || !three3d || hed3d) return;
       if(evt.button !== undefined && evt.button !== 0) return;   // left button / touch only
       const f = floorFor(currentFloor); if(!f) return;
       const planeY = offsetForLevel(currentFloor);
@@ -4303,7 +4303,7 @@ async function renderRadar(){
     canvas3d.addEventListener("pointermove", (evt)=>{
       if(hed3d){ if(evt.pointerId === hed3d.pointerId) hed3dPreview(evt); return; }
       // Hover feedback — mouse only (no touch hover), select tool only.
-      if(viewMode!=="3d" || MODE!=="live" || !three3d || evt.pointerType!=="mouse" || TOOL!=="select") return;
+      if(viewMode!=="3d" || !isAdmin() || !three3d || evt.pointerType!=="mouse" || TOOL!=="select") return;
       let cursor = "";
       const hHit = raycast3D(evt, three3d.handleGroup.children)
         .find(h => h.object.userData && (h.object.userData.isHandleHit || h.object.userData.isHandle));
@@ -4387,7 +4387,7 @@ async function renderRadar(){
         if(evt.pointerId === hed3d.pointerId) commitHed3d(evt);
         return;
       }
-      if(viewMode!=="3d" || MODE!=="live" || !three3d) return;
+      if(viewMode!=="3d" || !isAdmin() || !three3d) return;
       if(evt.button !== undefined && evt.button > 0) return;   // primary button / touch only
       // Click path (≤6px, same threshold as the view-select handler): stairs placement or
       // editor selection. Real orbit-drags fall through here untouched.
@@ -4488,7 +4488,7 @@ async function renderRadar(){
 
     svg.addEventListener("pointerdown", (evt)=>{
       if(viewMode!=="top") return;
-      if(MODE!=="live" || editMode) return;             // never fight the zone editor for the same drag
+      if(!isAdmin() || editMode) return;             // never fight the zone editor for the same drag
       if(TOOL==="select" || TOOL==="stairs") return;     // stairs = single click, handled on pointerup
       const p = svgPoint(evt); if(!p) return;
       hedStart = {x: snap(p.x), y: snap(p.y)};
@@ -4502,12 +4502,12 @@ async function renderRadar(){
     });
     svg.addEventListener("pointermove", (evt)=>{
       if(viewMode!=="top") return;
-      if(MODE!=="live" || editMode || !hedStart) return;
+      if(!isAdmin() || editMode || !hedStart) return;
       const p = svgPoint(evt); if(p) updateHedPreview(hedStart, {x: snap(p.x), y: snap(p.y)});
     });
     svg.addEventListener("pointerup", (evt)=>{
       if(viewMode!=="top") return;
-      if(MODE!=="live" || editMode) return;
+      if(!isAdmin() || editMode) return;
       const f = floorFor(currentFloor);
       if(TOOL==="stairs"){
         const p = svgPoint(evt); if(!p || !f) return;
@@ -4541,7 +4541,7 @@ async function renderRadar(){
       cancelHedDraw();
     });
     window.addEventListener("keydown", (e)=>{
-      if(MODE!=="live") return;
+      if(!isAdmin()) return;
       if(e.ctrlKey && (e.key==="z"||e.key==="Z") && !e.shiftKey){ e.preventDefault(); undoHouse(); }
       if(e.ctrlKey && (e.key==="y"||e.key==="Y" || (e.shiftKey && (e.key==="z"||e.key==="Z")))){ e.preventDefault(); redoHouse(); }
       // A11y: arrow keys nudge the SELECTED room by one snap step (Shift = 1 m) — a real
@@ -5003,7 +5003,7 @@ try {
   // actually on screen — Home active, or the gear overlay holding the relocated map — and
   // the document itself is visible.
   function mapVisible(){
-    if(overlayOpen) return (typeof MODE !== "undefined" && MODE === "live"); // map relocates into the overlay only on live
+    if(overlayOpen) return isAdmin(); // map relocates into the overlay only on live/central (admin)
     return activeTab === "inicio";
   }
   function syncMapLoop(){
@@ -5103,7 +5103,7 @@ try {
     // overlay so drawing/zone editing works here; it returns to Home on close. The node
     // itself moves, so every id still exists exactly once (same move-a-panel technique
     // initCompanion() already uses).
-    if(typeof MODE !== "undefined" && MODE === "live"){
+    if(isAdmin()){
       var rw = document.getElementById("radarWrap");
       if(rw && gearMapHost && rw.parentNode !== gearMapHost) gearMapHost.appendChild(rw);
       if(gearMapHint) gearMapHint.hidden = false;
