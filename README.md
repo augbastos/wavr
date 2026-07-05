@@ -104,7 +104,11 @@ consumes what actually works and the trust weights tell the truth.
 - **Only derived state is ever stored or (optionally) published** — occupancy / confidence / timestamp.
   Never frames, never raw targets, never credentials. Credentials are never logged or echoed.
 - **Every egress is opt-in and default-OFF** — LAN multi-device (TLS), MQTT to Home Assistant (derived
-  state only), the MCP control tool, and the optional narrator. Turn none on and Wavr is an island.
+  state only), the MCP control tool, and the optional natural-language narrator. Turn none on and Wavr is
+  an island. **The narrator is provider-agnostic** — point it at a **local Ollama** (or any loopback
+  OpenAI-compatible server) and even that last summarizing step stays on your box with **zero cloud
+  egress**; or pick Gemini / OpenAI / Claude if you'd rather (opt-in cloud). Every provider is fed the
+  same allowlisted prompt — occupancy and confidence only, never a frame, vital, MAC, or credential.
 - **No analytics, no telemetry SDK, no account.** The frontend makes zero external requests; the public
   simulator declares itself fake on screen.
 
@@ -134,7 +138,7 @@ sources (network / ruview CSI / camera / mmwave / BLE / sim)
                   ├─> SQLite (derived state only — never frames, never targets)
                   ├─> RulesEngine / AwayMonitor ─> MQTT (opt-in; occupied/confidence/ts only)
                   ├─> MCP server (read RoomState/map; opt-in gated HA control)
-                  └─> Narrator ─> Gemini (double opt-in; the ONLY cloud egress)
+                  └─> Narrator ─> your LLM (Ollama local = ZERO egress; or Gemini/OpenAI/Claude = opt-in cloud)
 ```
 
 - **Backend:** Python 3.11, FastAPI, zero mandatory heavy deps — torch/cv2, pyserial, paho, bleak,
@@ -157,9 +161,10 @@ detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - **Precision tiers** — richer sensing modes beyond the shipped Off/Presence/Precise meter, as
   per-camera pose, homography, and a second per-room signal (mmWave/BLE) land.
 - **Needs a GPU / open research** — live camera YOLO-pose (standing/sitting/lying), cross-source track
-  association (Kalman + Hungarian) instead of best-source pass-through, real fall detection (a research
-  demo, **not** a certified safety system — ADR-0003), and a fully-local LLM narrator to remove the last
-  optional cloud egress.
+  association (Kalman + Hungarian) instead of best-source pass-through, and real fall detection (a
+  research demo, **not** a certified safety system — ADR-0003). *(The fully-local LLM narrator that
+  removes the last optional cloud egress already ships — point the provider-agnostic narrator at
+  Ollama.)*
 - **Face recognition** — a heavily-gated, always-opt-in, default-OFF, local-only, deletable module to
   identify household members by face. It crosses into biometric special-category data (GDPR Art. 9) even
   stored locally, so it is **explicitly gated and undecided** — designed-for, not committed. (The

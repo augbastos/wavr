@@ -57,6 +57,25 @@ class Config:
     gemini_api_key: str
     gemini_model: str
     narrate_enabled: bool
+    # Pluggable narrator provider (WAVR_NARRATE_PROVIDER): gemini|ollama|openai|
+    # anthropic. Default 'gemini' (backward-compat). The privacy allowlist
+    # (narrator.build_prompt) is shared by ALL providers -- switching backend never
+    # changes what leaves the box. OLLAMA is LOCAL (zero cloud egress); the rest reach
+    # a cloud endpoint by default. The two-factor default-OFF gate holds per provider
+    # (see narrator.provider_configured): narrate_enabled AND the selected provider
+    # configured (a key for cloud providers; merely being selected for local Ollama).
+    narrate_provider: str
+    # Ollama (LOCAL, zero egress). Only the model + base URL; no key exists.
+    ollama_url: str
+    ollama_model: str
+    # OpenAI-compatible (/v1/chat/completions): OpenAI/Codex cloud OR a local server
+    # (LM Studio/llama.cpp) via WAVR_OPENAI_BASE_URL. Key sent only when set.
+    openai_api_key: str
+    openai_base_url: str
+    openai_model: str
+    # Anthropic Claude (/v1/messages) -- cloud.
+    anthropic_api_key: str
+    anthropic_model: str
     house_map: str
     mmwave_port: str
     mmwave_room: str
@@ -262,6 +281,24 @@ def load_config() -> Config:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("WAVR_GEMINI_MODEL", "gemini-1.5-flash"),
         narrate_enabled=os.getenv("WAVR_NARRATE_ENABLED", "").lower() in ("1", "true", "yes"),
+        # Narrator provider selection -- unknown values fall back to 'gemini' (never
+        # crash on a typo; the two-factor gate still guards egress).
+        narrate_provider=(
+            os.getenv("WAVR_NARRATE_PROVIDER", "gemini").strip().lower()
+            if os.getenv("WAVR_NARRATE_PROVIDER", "gemini").strip().lower()
+            in ("gemini", "ollama", "openai", "anthropic") else "gemini"
+        ),
+        # Ollama (LOCAL): default loopback daemon; zero cloud egress.
+        ollama_url=os.getenv("WAVR_OLLAMA_URL", "http://localhost:11434"),
+        ollama_model=os.getenv("WAVR_OLLAMA_MODEL", "llama3.2"),
+        # OpenAI-compatible: base URL defaults to OpenAI cloud; point it at a loopback
+        # server (e.g. http://localhost:1234/v1) for a local, no-egress setup.
+        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+        openai_base_url=os.getenv("WAVR_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        openai_model=os.getenv("WAVR_OPENAI_MODEL", "gpt-4o-mini"),
+        # Anthropic Claude (cloud).
+        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        anthropic_model=os.getenv("WAVR_ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
         # F1: default to a bare cwd-relative "house.json" (mirrors db_path="wavr.db"
         # above) so PUT /api/house works out-of-the-box instead of 409-ing for every
         # fresh install. The env override is preserved; an operator who explicitly sets
