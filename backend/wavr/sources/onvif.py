@@ -50,7 +50,6 @@ import base64
 import contextlib
 import datetime
 import hashlib
-import ipaddress
 import logging
 import os
 import re
@@ -62,6 +61,8 @@ import uuid
 import xml.etree.ElementTree as ET
 from typing import Awaitable, Callable
 from xml.sax.saxutils import escape as _xml_escape
+
+from wavr.netaddr import is_lan_ip as _is_lan_ip
 
 _LOG = logging.getLogger(__name__)
 
@@ -85,10 +86,6 @@ _SOAP_READ_CAP = 262_144   # bytes read from a SOAP HTTP response
 # Same restriction as app._URL_SHAPE_RE: the URL is handed toward cv2.VideoCapture
 # downstream, so only rtsp(s):// is ever surfaced (no http/file/etc. SSRF/LFI).
 _RTSP_SHAPE_RE = re.compile(r"^rtsps?://.+", re.IGNORECASE)
-
-# Cloud metadata endpoints: link-local, so they pass the private/link-local allow --
-# denied explicitly (SSRF T2). Both the AWS IMDS IPv4 and its IPv6 form.
-_METADATA_HOSTS = frozenset({"169.254.169.254", "fd00:ec2::254"})
 
 # ONVIF / WS-Discovery / WS-Security namespaces (for building requests only; parsing
 # is namespace-AGNOSTIC via local-tag matching, so a device's odd xmlns never breaks it).
@@ -117,35 +114,10 @@ def onvif_probe_enabled() -> bool:
 # SSRF guards (reuse the ssdp policy verbatim; add the metadata-IP denylist).
 # --------------------------------------------------------------------------- #
 
-def _is_lan_ip(host: str | None) -> bool:
-    """True only if `host` is a LITERAL private/loopback/link-local IP address
-    that is NOT a cloud-metadata endpoint. A DNS hostname (not a bare IP literal)
-    is refused -- identical rationale to ssdp._is_lan_location: without a scoped
-    local resolver there is no guarantee it resolves on-LAN, and Wavr's
-    zero-cloud-egress invariant means never taking that risk on a string an
-    untrusted LAN device chose."""
-    if not host:
-        return False
-    h = host.strip().strip("[]")   # tolerate bracketed IPv6 literals
-    if h in _METADATA_HOSTS:
-        return False
-    try:
-        ip = ipaddress.ip_address(h)
-    except ValueError:
-        return False
-    # Normalize the IPv4-mapped IPv6 form (::ffff:a.b.c.d) to its IPv4 address
-    # BEFORE the metadata/private tests. On a dual-stack host
-    # [::ffff:169.254.169.254] routes to the IPv4 IMDS endpoint, but the mapped
-    # IPv6 object is not == the IPv4 metadata object and still reports
-    # is_link_local True -- so without this it would slip past the denylist
-    # (SSRF T2 bypass). Collapsing to the v4 form makes the denylist and the
-    # non-LAN rejection (e.g. ::ffff:8.8.8.8) see the address that is really used.
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    if ip in (ipaddress.ip_address("169.254.169.254"),
-              ipaddress.ip_address("fd00:ec2::254")):
-        return False
-    return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
+# `_is_lan_ip` is the shared wavr.netaddr.is_lan_ip (imported above). It lives in a
+# shared module so there is ONE hardened implementation (literal-only + cloud-metadata
+# denylist + IPv4-mapped-IPv6 normalization) reused by ONVIF, PTZ and the F3 camera-
+# rebind route -- a second hand-maintained copy could drift and reopen the SSRF bypass.
 
 
 def _host_of(url: str) -> str | None:

@@ -255,3 +255,85 @@ def test_release_model_also_nulls_pose_model():
     _cam.release_model()
     assert _cam._YOLO_MODEL is None
     assert _cam._POSE_MODEL is None
+
+
+# ---- F3: edge-triggered health hook (name+bool only, never a frame) -------------
+
+async def test_health_hook_edge_triggers_down_then_recovery():
+    _reset_active()
+    calls = []
+    def on_health(name, healthy):
+        calls.append((name, healthy))
+
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            return          # 1st connection yields NO frame -> stream ends -> down edge
+            yield           # (unreachable) make this an async generator
+        yield "frameA"      # 2nd connection yields a frame -> recovery edge
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q",
+                       frames=frames, detect=lambda f: Detection(count=1, confidence=0.9),
+                       on_health=on_health, unhealthy_secs=0.0,
+                       reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)                       # pulls the recovery frame's event
+    assert ev.presence is True                          # normal event still flows
+    assert ("cam_q", False) in calls                    # down fired
+    assert ("cam_q", True) in calls                     # recovery fired
+    assert calls.count(("cam_q", False)) == 1           # edge-triggered: exactly once
+    assert calls.count(("cam_q", True)) == 1
+    # ADR-0002: the callback ever only receives (str name, bool) -- NEVER a frame.
+    for name, healthy in calls:
+        assert isinstance(name, str) and isinstance(healthy, bool)
+
+
+async def test_health_hook_not_fired_before_unhealthy_secs():
+    _reset_active()
+    calls = []
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            return          # 1st connection: brief blip, no frame
+            yield
+        yield "frameA"      # 2nd connection recovers quickly
+
+    # unhealthy_secs is large, so a blip that recovers before the threshold must NOT
+    # report down (nor a spurious recovery, since it was never reported down).
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q", frames=frames,
+                       detect=lambda f: Detection(1, 0.5),
+                       on_health=lambda n, h: calls.append((n, h)),
+                       unhealthy_secs=999.0, reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+    assert calls == []              # blip < unhealthy_secs -> no down, no recovery
+
+
+async def test_health_hook_absent_callback_is_noop():
+    _reset_active()
+    async def frames(url):
+        yield "f"
+    # No on_health wired -> behaves exactly like before (no crash, event flows).
+    src = CameraSource("quarto", rtsp_url="rtsp://x", frames=frames,
+                       detect=lambda f: Detection(1, 0.8), interval=0)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+
+
+async def test_health_hook_bad_callback_never_breaks_source():
+    _reset_active()
+    def bad(name, healthy):
+        raise RuntimeError("monitor down")
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            return
+            yield
+        yield "frameA"
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q", frames=frames,
+                       detect=lambda f: Detection(1, 0.9), on_health=bad,
+                       unhealthy_secs=0.0, reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)   # a throwing callback must not break the loop
+    assert ev.presence is True

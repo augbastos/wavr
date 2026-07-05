@@ -160,7 +160,12 @@ def test_bad_host_header_returns_400():
         assert r.status_code == 400
 
 
-def test_get_house_returns_rooms():
+def test_get_house_returns_rooms(tmp_path, monkeypatch):
+    # F1: WAVR_HOUSE_MAP now defaults to a cwd-relative "house.json"; without pinning
+    # it, this test would read a dev's REAL repo-root house.json (whose rooms need not
+    # include "sala"). Point at a nonexistent tmp file so load_house_map deterministically
+    # falls back to DEFAULT_MAP (which has "sala") -- mirrors the sibling test below.
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nonexistent.json"))
     with build_client() as client:
         r = client.get("/api/house")
         assert r.status_code == 200
@@ -306,8 +311,12 @@ def test_status_features_reflect_config_defaults(monkeypatch):
         }
 
 
-def test_status_house_counts_match_default_map(monkeypatch):
-    monkeypatch.delenv("WAVR_HOUSE_MAP", raising=False)   # unset -> DEFAULT_MAP (1 floor, 3 rooms)
+def test_status_house_counts_match_default_map(tmp_path, monkeypatch):
+    # F1: WAVR_HOUSE_MAP now defaults to a cwd-relative "house.json", so unsetting the
+    # env would read/create ./house.json in the repo root (cwd-dependent, and would
+    # clobber a dev's real map). Point at a nonexistent tmp file so load_house_map
+    # deterministically falls back to DEFAULT_MAP (1 floor, 3 rooms).
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nonexistent.json"))
     with build_client() as client:
         assert client.get("/api/status").json()["house"] == {"floors": 1, "rooms": 3}
 

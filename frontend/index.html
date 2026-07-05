@@ -319,6 +319,7 @@
   .ctl.off{color:var(--dim);}
   .ctl.small{padding:6px 12px;font-size:.78rem;}
   .ctl:disabled{opacity:.6;cursor:default;}
+  a.ctl{display:inline-flex;align-items:center;gap:6px;text-decoration:none;}
   .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
   .controls-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
   .ctl.switch{position:relative;padding-left:46px;}
@@ -639,6 +640,15 @@
              font-size:1.7rem;letter-spacing:.18em;color:var(--accent);
              font-variant-numeric:tabular-nums;user-select:all;}
   .pair-hint{color:var(--dim);font-size:.78rem;max-width:44ch;overflow-wrap:anywhere;}
+  .pair-fp-box{border:1px solid var(--line);border-radius:8px;padding:11px 13px;margin:0 0 14px;
+               background:var(--elevated);max-width:52ch;}
+  .pair-fp-label{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;
+                 letter-spacing:.05em;color:var(--text);margin-bottom:6px;}
+  .pair-fp-hint{color:var(--dim);font-size:.78rem;margin:0 0 8px;}
+  .pair-fp{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+           font-size:.74rem;line-height:1.5;color:var(--accent);word-break:break-all;
+           user-select:all;background:var(--bg);border-radius:6px;padding:7px 9px;}
+  .pair-fp-warn{color:var(--dim);font-size:.76rem;margin:8px 0 0;}
   .pair-sub{margin:8px 0 4px;font-size:.72rem;color:var(--dim);font-weight:600;
             text-transform:uppercase;letter-spacing:.05em;}
   .pair-dev-list{display:flex;flex-direction:column;max-height:250px;overflow:auto;}
@@ -1573,6 +1583,8 @@
         <button type="button" id="hedExport" class="ctl small" data-tip="Download the house map as a file">Download floor plan</button>
         <button type="button" id="hedImportBtn" class="ctl small" data-tip="Load a house map from a file">Import floor plan</button>
         <input type="file" id="hedImportFile" accept="application/json,.json" hidden>
+        <a id="hedMeasure" class="ctl small" href="/measure.html" target="_blank" rel="noopener"
+           data-tip="Open the phone capture page (WebXR): tap a room's floor corners with an Android phone or Quest, then position it here">Medir com o celular</a>
         <span id="hedDirty" class="hed-dirty" hidden aria-live="polite">unsaved</span>
       </div>
       <p class="hed-hint" id="hedHint">Select: click a room/wall/stairs to mark and delete it · + Room/+ Wall: drag on the plan · + Stairs: click on the plan.</p>
@@ -1593,6 +1605,19 @@
         <span id="pairCode" class="pair-code" aria-live="polite"></span>
         <button type="button" id="pairCopy" class="ctl small">Copy</button>
         <span class="pair-hint">enter this code in the device's app within 2 min · local network</span>
+      </div>
+      <!-- Out-of-band MitM defense (audit #1): the phone can't pin the self-signed cert in
+           the browser, so the operator verifies it by hand. This fingerprint comes from the
+           TRUSTED loopback response; on the phone, tap the certificate warning → View
+           certificate and confirm the SHA-256 matches. A mismatch = someone is intercepting
+           the pairing — do NOT continue. -->
+      <div id="pairFingerprintBox" class="pair-fp-box" hidden>
+        <span class="pair-fp-label">Verify the certificate on the phone</span>
+        <p class="pair-fp-hint">On the phone, when you see the security warning, tap it →
+          <b>View certificate</b> and confirm the SHA-256 fingerprint matches:</p>
+        <code id="pairFingerprint" class="pair-fp" aria-live="polite"></code>
+        <p class="pair-fp-warn">If it does <b>not</b> match, stop. Someone may be intercepting
+          your network; do not tap “Continue”.</p>
       </div>
       <h4 class="pair-sub">Authorized devices</h4>
       <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
@@ -2622,6 +2647,16 @@ async function renderPairing(){
     let d; try{ d = await r.json(); }catch{ actionFeedback(pairFb, false, "invalid server response"); return; }
     codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
     codeBox.hidden = false;
+    // Out-of-band MitM defense (audit #1): show the live cert fingerprint so the operator
+    // can verify it against the phone's browser certificate warning. Only shown when the
+    // backend actually serves TLS and could read the cert (null on plain-HTTP loopback).
+    const fpBox = document.getElementById("pairFingerprintBox");
+    const fpEl  = document.getElementById("pairFingerprint");
+    if(fpBox && fpEl){
+      const fp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
+      fpEl.textContent = fp;                 // textContent — server-provided fingerprint
+      fpBox.hidden = !fp;
+    }
     actionFeedback(pairFb, true);
     refresh();                              // a fresh code may register a slot; keep list current
   };
