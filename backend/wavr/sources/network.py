@@ -10,7 +10,7 @@ import socket
 from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable
 
-from wavr.events import SensingEvent
+from wavr.events import Identity, SensingEvent
 
 # Matches a MAC with either "-" (Windows arp) or ":" (Unix) separators.
 _MAC_RE = re.compile(r"(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}")
@@ -147,13 +147,22 @@ class NetworkSource:
     def __init__(self, known_macs: set[str],
                  scan: Callable[[], Awaitable[set[str]]] | None = None,
                  room: str = "casa", interval: float = 15.0,
-                 grace: int = 2, present_confidence: float = 0.8):
+                 grace: int = 2, present_confidence: float = 0.8,
+                 known: dict[str, str] | None = None,
+                 emit_identity: bool = False):
         self._known = {m.replace("-", ":").lower() for m in known_macs}
         self._scan = scan or arp_scan
         self._room = room
         self._interval = interval
         self._grace = grace
         self._conf = present_confidence
+        # Optional MAC->person label map for non-biometric "who is home". Presence
+        # still runs off `self._known` (the MAC set) so nothing regresses; the label
+        # is attached only when `emit_identity` is on. Default OFF -> no Identity is
+        # ever created, so no PII enters the event/state/DB path.
+        self._known_labels = {m.replace("-", ":").lower(): p
+                              for m, p in (known or {}).items()}
+        self._emit_identity = emit_identity
         self._missed = grace + 1  # start "absent" until first sighting
 
     async def events(self) -> AsyncIterator[SensingEvent]:
@@ -171,11 +180,22 @@ class NetworkSource:
             else:
                 self._missed += 1
             present = self._missed <= self._grace
+            # House-level "who is home": name currently-seen labelled devices only
+            # when the gate is on. rssi is None — an ARP scan gives no signal
+            # strength. Empty during a grace-held miss (nothing seen this cycle).
+            identities: tuple = ()
+            if present and self._emit_identity and self._known_labels:
+                identities = tuple(
+                    Identity(person=self._known_labels[m], source="network", rssi=None)
+                    for m in sorted(self._known_labels)
+                    if m in seen and self._known_labels.get(m)
+                )
             yield SensingEvent(
                 room=self._room, modality="network", presence=present,
                 motion=0.0, breathing_bpm=None, heart_bpm=None,
                 confidence=self._conf if present else 0.0,
                 ts=datetime.now(timezone.utc).isoformat(),
+                identities=identities,
             )
             if self._interval:
                 await asyncio.sleep(self._interval)

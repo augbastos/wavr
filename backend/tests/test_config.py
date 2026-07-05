@@ -21,6 +21,41 @@ def test_config_has_source_b_defaults(monkeypatch):
     assert cfg.ruview_room == "sala"
     assert cfg.ruview_reconnect == 3.0
 
+def test_identity_enabled_defaults_off(monkeypatch):
+    monkeypatch.delenv("WAVR_IDENTITY_ENABLED", raising=False)
+    cfg = load_config()
+    assert cfg.identity_enabled is False   # opt-in: off by default
+
+
+def test_identity_enabled_parses_truthy(monkeypatch):
+    for val in ("1", "true", "yes"):
+        monkeypatch.setenv("WAVR_IDENTITY_ENABLED", val)
+        assert load_config().identity_enabled is True
+    monkeypatch.setenv("WAVR_IDENTITY_ENABLED", "no")
+    assert load_config().identity_enabled is False
+
+
+def test_net_known_parses_mac_person_and_folds_into_presence(monkeypatch):
+    for v in ("WAVR_NET_KNOWN", "WAVR_NET_MACS"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("WAVR_NET_KNOWN", "AA-BB-CC-DD-EE-FF=alice, 11:22:33:44:55:66=phone")
+    monkeypatch.setenv("WAVR_NET_MACS", "99:99:99:99:99:99")
+    cfg = load_config()
+    assert cfg.net_known == {
+        "aa:bb:cc:dd:ee:ff": "alice",
+        "11:22:33:44:55:66": "phone",
+    }
+    # WAVR_NET_KNOWN keys also count toward presence (union with WAVR_NET_MACS).
+    assert cfg.net_known_macs == {
+        "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66", "99:99:99:99:99:99",
+    }
+
+
+def test_net_known_defaults_empty(monkeypatch):
+    monkeypatch.delenv("WAVR_NET_KNOWN", raising=False)
+    assert load_config().net_known == {}
+
+
 def test_config_has_camera_defaults(monkeypatch):
     for var in ("WAVR_CAM_INTERVAL", "WAVR_CAM_CONFIDENCE"):
         monkeypatch.delenv(var, raising=False)

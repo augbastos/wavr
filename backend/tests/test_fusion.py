@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from wavr.events import SensingEvent
+from wavr.events import Identity, SensingEvent
 from wavr.fusion import FusionEngine
 from wavr.rules import RulesEngine
 
@@ -270,3 +270,51 @@ def test_rooms_getter_lists_known_rooms():
     f.update(ev("sala", "camera", True, 0.9))
     f.update(ev("quarto", "network", False, 0.4))
     assert set(f.rooms()) == {"sala", "quarto"}
+
+
+# --- Identity ("who is home") pass-through -----------------------------------------
+
+def _ident_ev(room, modality, presence, conf, identities=()):
+    return SensingEvent(room=room, modality=modality, presence=presence, motion=0.0,
+                        breathing_bpm=None, heart_bpm=None, confidence=conf,
+                        ts="2026-07-01T10:00:00+00:00", identities=identities)
+
+
+def test_identity_surfaces_from_present_fresh_event():
+    f = FusionEngine()
+    rs = f.update(_ident_ev("casa", "ble", True, 0.7,
+                            (Identity("alice", "ble", -55),)))
+    assert rs.identities == [{"person": "alice", "source": "ble", "rssi": -55}]
+
+
+def test_identity_dropped_when_source_is_dead_stale():
+    # Aged well past stale_s -> decay 0 -> the identity is dropped exactly like a
+    # dead source's targets (present flag alone must not leak a stale name).
+    base = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
+    f = FusionEngine(now_fn=lambda: base + timedelta(seconds=1000))
+    rs = f.update(_ident_ev("casa", "ble", True, 0.7,
+                            (Identity("alice", "ble", -55),)))
+    assert rs.identities == []
+
+
+def test_identity_deduped_by_person_keeps_stronger_rssi():
+    f = FusionEngine()
+    f.update(_ident_ev("casa", "network", True, 0.8,
+                       (Identity("alice", "network", None),)))
+    rs = f.update(_ident_ev("casa", "ble", True, 0.7,
+                            (Identity("alice", "ble", -55),)))
+    # One person -> one entry; the ble entry with a real rssi wins over rssi=None.
+    assert rs.identities == [{"person": "alice", "source": "ble", "rssi": -55}]
+
+
+def test_confidence_byte_identical_with_and_without_identities():
+    # The core invariant: attaching identities must not move the fused confidence
+    # by a single ulp. Same events, one carrying an Identity, one not.
+    plain = FusionEngine()
+    p = plain.update(_ident_ev("casa", "ble", True, 0.7))
+    withid = FusionEngine()
+    w = withid.update(_ident_ev("casa", "ble", True, 0.7,
+                                (Identity("alice", "ble", -55),)))
+    assert w.confidence == p.confidence
+    assert w.occupied == p.occupied
+    assert w.sources == p.sources

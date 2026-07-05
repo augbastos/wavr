@@ -72,7 +72,39 @@ def test_state_returns_latest_per_room():
         state = r.json()
         assert state  # at least one room
         any_room = next(iter(state.values()))
-        assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals", "sources", "targets", "explanation", "ts"}
+        assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals",
+                                        "sources", "targets", "identities", "explanation", "ts"}
+
+
+def test_state_exposes_identities_only_when_flag_on():
+    # With emit_identity on, a known present BLE device surfaces the person label on
+    # the house-level 'casa' room via /api/state (the intended local-dashboard path).
+    from wavr.sources.ble import BLESource
+
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff": -55}
+
+    def _app(emit):
+        return create_app(
+            sources=[("ble", lambda: BLESource(
+                {"aa:bb:cc:dd:ee:ff": "alice"}, scan=scan, interval=0.01,
+                rssi_min=-80, emit_identity=emit), True)],
+            storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
+            camera_store=CameraStore(":memory:"),
+        )
+
+    with TestClient(_app(True)) as client:
+        import time; time.sleep(0.3)
+        casa = client.get("/api/state").json().get("casa")
+        assert casa is not None
+        assert casa["identities"] == [{"person": "alice", "source": "ble", "rssi": -55}]
+
+    # Flag OFF (default): identity key still present but EMPTY even with a known map.
+    with TestClient(_app(False)) as client:
+        import time; time.sleep(0.3)
+        casa = client.get("/api/state").json().get("casa")
+        assert casa is not None
+        assert casa["identities"] == []
 
 
 LOCAL = {"X-Wavr-Local": "1"}  # state-changing routes require this header (CSRF guard)

@@ -98,11 +98,13 @@ def test_get_room_context_strips_vitals_and_targets():
     rs = {"room": "sala", "occupied": True, "confidence": 0.72,
           "vitals": {"breathing_bpm": 14, "heart_bpm": 68},
           "targets": [{"x": 1.2, "y": 3.4, "id": "person-1"}],
+          "identities": [{"person": "alice", "source": "ble", "rssi": -55}],
           "sources": [{"modality": "mmwave", "presence": True, "confidence": 0.9}],
           "explanation": "mmwave: presente -> 72% ocupado"}
     ctx = get_room_context(FakeProvider(["sala"], {"sala": rs}, HOUSE), "sala")
     assert "vitals" not in ctx
     assert "targets" not in ctx
+    assert "identities" not in ctx    # "who is home" is PII — never reaches an agent
     assert ctx["room"] == "sala"
     assert ctx["occupied"] is True
     assert ctx["confidence"] == 0.72
