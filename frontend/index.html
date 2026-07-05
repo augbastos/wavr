@@ -2074,7 +2074,7 @@ const STATUS_FEATURE_LABEL = {
   tls:"TLS", ntfy:"notifications",
 };
 function renderStatus(){
-  if(MODE!=="live") return;                 // live-only; never in Plano B (demo) or companion
+  if(!isAdmin()) return;                     // admin-only: loopback dashboard, or mobile role==="central"; never viewer/demo
   document.getElementById("statusPanel").hidden = false;
   const versionEl  = document.getElementById("statusVersion");
   const sourcesEl  = document.getElementById("statusSources");
@@ -2082,7 +2082,7 @@ function renderStatus(){
   const houseEl    = document.getElementById("statusHouse");
   const internetEl = document.getElementById("statusInternet");
   async function refresh(){
-    let s; try{ s = await (await fetch(location.origin+"/api/status")).json(); }catch{ return; }
+    let s; try{ s = await (await wavrFetch("/api/status")).json(); }catch{ return; }
     window.__wavrStatus?.(s);   // Stage-3b hook: egress dashboard + Sobre reuse this SAME payload
     versionEl.textContent = "version " + (s.version ?? "?");
     // Internet up/down (item: internet monitor) — ok:null means the monitor is off or the
@@ -2129,13 +2129,13 @@ renderStatus();
 
 // ---- Control plane (Plano A / live only): global on/off + per-source on/off ----
 async function renderControls(){
-  if(MODE!=="live") return;               // the control plane is a backend feature
+  if(!isAdmin()) return;                  // admin-only: loopback dashboard, or mobile role==="central"
   document.getElementById("controls").hidden = false;
-  const post = (url,body)=> fetch(location.origin+url,{method:"POST",
+  const post = (url,body)=> wavrFetch(url,{method:"POST",
     headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)})
     .catch(()=>{});  // the local network may fail momentarily; the next refresh() re-syncs
   async function refresh(){
-    let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
+    let s; try{ s = await (await wavrFetch("/api/system")).json(); }catch{ return; }
     window.__wavrSystem?.(s);   // Stage-2 hook: Dispositivos→Ativos badge/rows share this payload
     const sys = document.getElementById("sysToggle");
     // Item 7: a real switch affordance ("System" + on/off track) instead of an ambiguous
@@ -2527,9 +2527,10 @@ function renderNetwork(){
         metaLine.appendChild(seen);
       }
       left.appendChild(metaLine);
-      // Rename affordance — live/central only: PUT /api/inventory/name needs the X-Wavr-Local
-      // CSRF header, which companion viewers (bearer-token auth) don't send.
-      if(MODE==="live"){
+      // Rename affordance — admin only (loopback dashboard, or mobile role==="central"): PUT
+      // /api/inventory/name needs the X-Wavr-Local header on web; on mobile wavrFetch swaps it
+      // for the pinned Bearer. Companion viewers (non-central) never see this control.
+      if(isAdmin()){
         if(editingMac === d.mac){
           const form = document.createElement("form"); form.className = "dev-rename-form";
           const input = document.createElement("input");
@@ -2546,7 +2547,7 @@ function renderNetwork(){
             const newName = input.value.trim();
             let r;
             try{
-              r = await fetch(location.origin+"/api/inventory/name", {method:"PUT",
+              r = await wavrFetch("/api/inventory/name", {method:"PUT",
                 headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
                 body: JSON.stringify({mac:d.mac, name:newName})});
             }catch{}
@@ -5196,7 +5197,7 @@ try {
     if(!rows.length) return null;
     return { act: ss.querySelectorAll(".h.active").length, total: rows.length };
   };
-  if(typeof MODE !== "undefined" && MODE === "live"){
+  if(typeof MODE !== "undefined" && isAdmin()){
     var statusInternetEl = document.getElementById("statusInternet");
     var pillInternet = document.getElementById("pillInternet");
     var redeInternetTile = document.getElementById("redeInternet");
@@ -5863,7 +5864,7 @@ try {
   function setAtvCount(){
     var e = $("atvCount");
     if(!e) return;
-    if(M !== "live" || !sysInfo || !Array.isArray(sysInfo.sources)){ e.textContent = ""; return; }
+    if(!isAdmin() || !sysInfo || !Array.isArray(sysInfo.sources)){ e.textContent = ""; return; }
     var on = sysInfo.sources.filter(function(s){ return s && s.enabled; }).length;
     e.textContent = " (" + on + "/" + sysInfo.sources.length + ")";
   }
@@ -6559,7 +6560,7 @@ try {
   }
 
   // ---------- Active: sources tile (live) + per-modality health via RoomState ----------
-  if(M === "live"){ var af = $("ativosFontes"); if(af) af.hidden = false; }
+  if(isAdmin()){ var af = $("ativosFontes"); if(af) af.hidden = false; }
 
   function renderHealth(){
     var box = $("srcHealth");
@@ -6588,7 +6589,7 @@ try {
         if(s && s.modality) healthMap[s.modality] = { health: s.health || "", age_s: s.age_s };
       });
     }catch(e){}
-    if(M !== "live") return;   // the Sources tile is live-only
+    if(!isAdmin()) return;   // the Sources tile is admin-only (loopback dashboard / mobile central)
     if(healthTimer) return;
     healthTimer = setTimeout(function(){ healthTimer = null; renderHealth(); }, 1000);
   };
@@ -6850,7 +6851,7 @@ try {
   function cameraEgRow(){
     // cameras are LOCAL compute — this row surfaces the boot-OFF invariant + the live count
     var txt;
-    if(M === "live"){
+    if(isAdmin()){
       var cs = cameraSourceList();
       if(!cs.length) txt = "no camera configured · every new camera starts off";
       else {
@@ -6867,14 +6868,14 @@ try {
     wrap.appendChild(egKillState);
     var main = row.querySelector(".eg-main");
     if(main) main.appendChild(wrap);
-    if(M !== "live") egKillDemoState();
+    if(!isAdmin()) egKillDemoState();
     return row;
   }
   function renderEgress(){
     var list = $("egressList"), sum = $("egressSummary"), note = $("egressNote");
     var demoNote = $("egressDemoNote");
     if(!list || !sum) return;
-    var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
+    var feats = (isAdmin() && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
       ? statusInfo.features : null;
     list.textContent = "";
     var open = 0;
@@ -6981,7 +6982,7 @@ try {
   function renderSensing(){
     var list = $("sensingList");
     if(!list) return;
-    var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
+    var feats = (isAdmin() && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
       ? statusInfo.features : null;
     list.textContent = "";
     SENSING_ITEMS.forEach(function(it){
@@ -7023,7 +7024,7 @@ try {
         }
       });
     }
-    if(M !== "live"){
+    if(!isAdmin()){
       btns.forEach(function(b){ if(b && b !== egKill) b.hidden = true; });
       egKillDemoState();   // visible, disabled, honestly labeled — sets its own note text
       [$("camKillState"), $("gearKillState")].forEach(function(s){
@@ -7060,13 +7061,13 @@ try {
     else say("Off for privacy.", true);
   }
   async function killToggle(){
-    if(M !== "live" || killBusy) return;
+    if(!isAdmin() || killBusy) return;
     var cs = cameraSourceList();
     if(!cs.length) return;
     var target = !cs.some(function(s){ return s.enabled; });   // any on -> all off; all off -> all on
     killBusy = true; renderKill();
     await Promise.all(cs.map(function(s){
-      return fetch(location.origin + "/api/sources/" + encodeURIComponent(s.name) + "/toggle", {
+      return wavrFetch("/api/sources/" + encodeURIComponent(s.name) + "/toggle", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
         body: JSON.stringify({ enabled: target }),
@@ -7074,7 +7075,7 @@ try {
     }));
     // quick re-sync (renderControls' own 3s poll converges anyway; this just closes the gap)
     try{
-      var r = await fetch(location.origin + "/api/system");
+      var r = await wavrFetch("/api/system");
       if(r.ok){ var s2 = await r.json(); if(s2 && typeof s2 === "object") sysInfo = s2; }
     }catch(e){}
     killBusy = false;
@@ -7210,7 +7211,7 @@ try {
   }
   async function presenceRefresh(){
     var r;
-    try{ r = await fetch(location.origin + "/api/presence/report"); }
+    try{ r = await wavrFetch("/api/presence/report"); }
     catch(e){ return; }   // backend momentarily unreachable — keep last view
     if(!r.ok){
       // route missing = a hub running pre-A2 code (404) — say so honestly instead
@@ -7248,8 +7249,8 @@ try {
   function renderPresence(){
     var tile = $("presenceReport");
     if(!tile) return;
-    tile.hidden = false;   // visible in every mode (own honest note when not live, like egressPanel)
-    if(M !== "live"){ presenceOffState(); return; }
+    tile.hidden = false;   // visible in every mode (own honest note when not admin, like egressPanel)
+    if(!isAdmin()){ presenceOffState(); return; }
     var note = $("presenceNote"); if(note) note.hidden = true;
     presenceRefresh();
     if(!presenceStarted){ presenceStarted = true; setInterval(presenceRefresh, 15000); }
@@ -7397,9 +7398,10 @@ try {
       });
       box.appendChild(ev);
     }
-    // v2: user device-type pin — live/hub only (PUT needs the X-Wavr-Local CSRF header,
-    // same rule as rename). "Auto" clears the pin (device_type: null on the wire).
-    if(M === "live" && d.mac){
+    // v2: user device-type pin — admin only (loopback dashboard, or mobile role==="central"),
+    // same rule as rename. On web the PUT carries X-Wavr-Local; on mobile wavrFetch swaps it for
+    // the pinned Bearer. A non-central viewer never sees this control. "Auto" clears the pin.
+    if(isAdmin() && d.mac){
       var pinRow = elc("div", "dd-row dd-pin");
       pinRow.appendChild(elc("span", "dk", "set type"));
       var pv = elc("span", "dv");
@@ -7421,7 +7423,7 @@ try {
       sel.onchange = function(){
         var v = sel.value;
         sel.disabled = true;
-        fetch(location.origin + "/api/inventory/type", { method: "PUT",
+        wavrFetch("/api/inventory/type", { method: "PUT",
           headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
           body: JSON.stringify({ mac: d.mac, device_type: v || null }) })
         .then(function(r){
@@ -7597,7 +7599,7 @@ try {
   function renderHealthTile(){
     var tile = $("healthCheck");
     if(!tile) return;
-    tile.hidden = (M !== "live");
+    tile.hidden = !isAdmin();
     var state = healthResolversState();
     var cr = $("healthConfirmResolvers");
     if(cr) cr.hidden = (state === "off");
@@ -7677,7 +7679,7 @@ try {
       // comment above. Never add a poll/interval around this fetch. cache:"no-store" so a
       // repeat click always re-triggers a real check instead of risking a stale browser-
       // cached GET response (this route can have a genuine external side effect per call).
-      fetch(location.origin + "/api/health", { headers: { "X-Wavr-Local": "1" }, cache: "no-store" })
+      wavrFetch("/api/health", { headers: { "X-Wavr-Local": "1" }, cache: "no-store" })
         .then(function(r){ if(!r.ok) throw new Error(String(r.status)); return r.json(); })
         .then(function(d){
           renderHealthResult(d || {});
