@@ -1608,9 +1608,11 @@
             <option value="central">Admin — full access (edit map, cameras, measure)</option>
           </select>
         </label>
-        <button type="submit" class="ctl">Generate pairing code</button>
+        <button type="submit" class="ctl">New code now</button>
         <span id="pairFb" class="action-fb" aria-live="polite"></span>
       </form>
+      <p class="pair-hint" style="margin:-4px 0 10px">A live code rotates automatically while this
+        panel is open — just open the companion on the device and enter it.</p>
       <div id="pairCodeBox" class="pair-code-box" hidden>
         <span id="pairCode" class="pair-code" aria-live="polite"></span>
         <span id="pairCountdown" class="pair-countdown" aria-hidden="true"></span>
@@ -2733,9 +2735,30 @@ async function renderPairing(){
     rotTimer = setInterval(tick, 1000);
   }
 
-  document.getElementById("pairForm").onsubmit = (e)=>{
+  const pairForm = document.getElementById("pairForm");
+  const pairTile = document.getElementById("pairing");
+
+  // Zero-click auto-start: the moment the pairing panel becomes visible (operator opens
+  // Settings), a live code starts rotating on its own — no button press. Just open Wavr
+  // here and open the companion on the phone. tick()'s visibility guard still stops the
+  // rotation when the panel hides, so a valid code exists ONLY while this panel is shown.
+  if(pairTile && "IntersectionObserver" in window){
+    const io = new IntersectionObserver((entries)=>{
+      for(const en of entries){
+        if(en.isIntersecting){ if(!rotTimer) startRotation(pairForm.role.value); }
+        else stopRotation();
+      }
+    }, {threshold:0.01});
+    io.observe(pairTile);
+  }
+
+  // Changing the access level (User/Admin) while a code is live re-mints under the new role.
+  pairForm.role.onchange = ()=>{ if(rotTimer) startRotation(pairForm.role.value); };
+
+  // The button is now just a manual "refresh now" (rotation is automatic) — kept for control.
+  pairForm.onsubmit = (e)=>{
     e.preventDefault();
-    startRotation(e.target.role.value);     // (re)start rotation for the chosen device type
+    startRotation(pairForm.role.value);
   };
 
   const copyBtn = document.getElementById("pairCopy");
