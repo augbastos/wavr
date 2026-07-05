@@ -157,6 +157,21 @@ class DeviceStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def set_role(self, device_id: str, role: str) -> bool:
+        """Change a paired device's role (promote/demote between VALID_ROLES).
+        Returns True if the device exists (row updated), False for an unknown id.
+        Touches ONLY the role column — never the token hash or the revoked flag, so
+        a role change can never grant or void credentials. Raises ValueError for a
+        role outside VALID_ROLES (validated before touching the db)."""
+        if role not in VALID_ROLES:
+            raise ValueError(f"invalid role: {role!r} (expected one of {sorted(VALID_ROLES)})")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE devices SET role = ? WHERE device_id = ?", (role, device_id)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
     @staticmethod
     def _to_device(r: sqlite3.Row) -> Device:
         return Device(

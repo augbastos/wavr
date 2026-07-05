@@ -1,13 +1,17 @@
+import asyncio
+
 import pytest
 
 from wavr.netinventory import Device
 from wavr.netutils import (
     PresenceHistory,
+    _tcp_open_probe,
     annotate_risks,
     build_magic_packet,
     internet_health,
     ping_host,
     port_scan_enabled,
+    port_scan_known_only_enabled,
     scan_risky_ports,
     send_magic_packet,
     speedtest_enabled,
@@ -33,6 +37,15 @@ def test_feature_flags_enable_via_env(monkeypatch):
     monkeypatch.setenv("WAVR_NET_SPEEDTEST", "true")
     assert port_scan_enabled() is True
     assert speedtest_enabled() is True
+
+
+def test_port_scan_scope_defaults_off_and_enables_on_known(monkeypatch):
+    monkeypatch.delenv("WAVR_NET_PORTSCAN_SCOPE", raising=False)
+    assert port_scan_known_only_enabled() is False
+    monkeypatch.setenv("WAVR_NET_PORTSCAN_SCOPE", "known")
+    assert port_scan_known_only_enabled() is True
+    monkeypatch.setenv("WAVR_NET_PORTSCAN_SCOPE", "all")  # anything else -> off
+    assert port_scan_known_only_enabled() is False
 
 
 # ---- 1) port / vuln awareness ------------------------------------------------
@@ -67,6 +80,50 @@ async def test_annotate_risks_skips_hosts_without_ip():
         raise AssertionError("should not probe an IP-less device")
     [d] = await annotate_risks([_dev(ip=None)], probe=fake_probe)
     assert d.risks == ()
+
+
+# ---- L6 audit fix: the REAL TCP probe's connect-only invariant, tested against
+# an actual loopback socket (every other test in this file injects a fake probe) ---
+
+async def test_tcp_open_probe_detects_open_port_and_never_sends_or_reads():
+    received = []
+    handled = asyncio.Event()
+
+    async def handle(reader, writer):
+        # A "server callback that raises on any read": if the probe ever wrote a
+        # byte (a banner-grab request), it would show up here as non-empty data.
+        data = await reader.read(64)
+        received.append(data)
+        handled.set()
+        # Deliberately never close/write a response -- if the probe's own code
+        # called reader.read() waiting for one, it would block here until our
+        # timeout below. A true connect-only probe returns long before that.
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        opened = await _tcp_open_probe("127.0.0.1", port, timeout=2.0)
+        elapsed = loop.time() - start
+        await asyncio.wait_for(handled.wait(), timeout=1.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert opened is True
+    assert elapsed < 0.5              # never blocked trying to read a response
+    assert received == [b""]          # EOF only -- the probe never sent a byte
+
+
+async def test_tcp_open_probe_detects_closed_port():
+    # Bind an ephemeral listener, close it immediately, then probe that now-free
+    # port: nothing is listening, so the connect attempt must fail (closed).
+    server = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    server.close()
+    await server.wait_closed()
+    assert await _tcp_open_probe("127.0.0.1", port, timeout=0.5) is False
 
 
 # ---- 2) speed / internet health (injected, no real network) ------------------

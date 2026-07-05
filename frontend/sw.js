@@ -10,7 +10,7 @@
 // precaching the same-origin shell, so it adds zero external egress.
 //
 // Bump CACHE to invalidate the old shell on the next activate.
-const CACHE = "wavr-shell-v2";
+const CACHE = "wavr-shell-v3";
 const VENDOR_CACHE = "wavr-vendor-v1";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 const SHELL_PATHS = new Set(["/", "/index.html", "/manifest.webmanifest", "/icon.svg"]);
@@ -58,17 +58,23 @@ self.addEventListener("fetch", (event) => {
   const isShell = SHELL_PATHS.has(url.pathname);
   const isNavigation = req.mode === "navigate";
 
-  // Cache-first ONLY for the static shell (and offline app-launch navigations, which
-  // fall back to the cached index.html). Anything else — /api/*, /ws/*, any data — is
-  // left entirely to the network and is never read from or written to the cache.
-  if (!isShell && !isNavigation) return;
+  // Cache-FIRST for the precached static shell assets only (/, /index.html, manifest, icon):
+  // content-stable, served instantly and offline (the app cold-launches with no network).
+  if (isShell) {
+    event.respondWith(caches.match(req).then((cached) => cached || fetch(req)));
+    return;
+  }
 
-  event.respondWith(
-    caches.match(isShell ? req : "./index.html").then((cached) => {
-      // A cache miss on a non-shell path (e.g. an SPA-style deep link) falls through to
-      // the network, but the response is deliberately NOT cached — only the precached
-      // shell ever lives in the cache.
-      return cached || fetch(req);
-    })
-  );
+  // Navigations to any OTHER same-origin path (e.g. /measure.html, or an SPA-style deep link)
+  // are NETWORK-FIRST: fetch the real page so it is never masked by the precached index.html.
+  // The cached shell is used ONLY as an offline fallback (app launch with no network). This
+  // fixes the bug where EVERY navigation was answered with the precached index.html, so
+  // /measure.html could never load on an installed PWA. The network response is never cached.
+  if (isNavigation) {
+    event.respondWith(fetch(req).catch(() => caches.match("./index.html")));
+    return;
+  }
+
+  // Everything else (/api/*, /ws/*, any data request) is left entirely to the network and is
+  // never read from or written to the cache.
 });

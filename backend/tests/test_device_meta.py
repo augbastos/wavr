@@ -52,7 +52,8 @@ def test_set_name_creates_entry_without_seen(tmp_path):
     s = _store(tmp_path)
     entry = s.set_name("a4:83:e7:11:22:33", "Fridge")
     assert entry == {"mac": "a4:83:e7:11:22:33", "name": "Fridge",
-                      "first_seen": None, "last_seen": None}
+                      "first_seen": None, "last_seen": None,
+                      "device_type": None}
 
 
 def test_set_name_updates_without_touching_seen_timestamps(tmp_path):
