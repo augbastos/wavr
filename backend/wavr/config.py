@@ -38,6 +38,12 @@ class Config:
     # F3 camera IP-drift health: consecutive seconds a camera source must fail to
     # yield a frame before it is reported unhealthy (edge-triggered health hook).
     cam_unhealthy_secs: float
+    # Periodic re-fuse interval (seconds). Fusion is otherwise purely event-driven,
+    # so a room whose only camera is unplugged/disabled stops emitting frames and
+    # its last "occupied" reading would FREEZE forever. This background tick re-runs
+    # fusion against the wall clock so a dead source's freshness decays to zero and
+    # the room honestly fades to unoccupied. 5s << freshness(30)/stale(90)/vacate(45).
+    refuse_interval: float
     mqtt_enabled: bool
     mqtt_host: str
     mqtt_port: int
@@ -223,6 +229,10 @@ def load_config() -> Config:
         # F3: seconds of consecutive frame-read failure before a camera is reported
         # unhealthy (drives the drift-detection health hook). Default 30s.
         cam_unhealthy_secs=float(os.getenv("WAVR_CAM_UNHEALTHY_SECS", "30")),
+        # Periodic re-fuse tick (seconds). Default 5s -- well under the freshness/
+        # stale/vacate windows so a disconnected source fades smoothly instead of
+        # freezing. Set WAVR_REFUSE_S=0 to disable the tick (pure event-driven).
+        refuse_interval=float(os.getenv("WAVR_REFUSE_S", "5")),
         mqtt_enabled=os.getenv("WAVR_MQTT_ENABLED", "").lower() in ("1", "true", "yes"),
         mqtt_host=os.getenv("WAVR_MQTT_HOST", "localhost"),
         mqtt_port=int(os.getenv("WAVR_MQTT_PORT", "1883")),

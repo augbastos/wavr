@@ -5,123 +5,181 @@
 
 **Your home, understood — without giving it away.**
 
-Wavr fuses network scan, WiFi CSI, camera pose, and mmWave radar into one *explainable* `RoomState`
-per room: occupied or not, a confidence score, and the per-modality *why* behind it — plus per-person
-position (x/y) and posture on a top-down radar, over a floor plan you draw yourself.
+Wavr is a local, explainable, privacy-first presence and network dashboard for your home — one you
+(and your agents) can actually query. It fuses several sensing modalities into a single *explainable*
+`RoomState` per room: occupied or not, a confidence score, and the per-modality *why* behind it — over
+a floor plan you draw yourself. Nothing leaves the box unless you turn on an optional, clearly-labelled
+egress. No account, no cloud, no telemetry.
 
-- **Private** — loopback-only, zero cloud egress; camera frames are never stored, position targets never touch disk.
-- **Explainable** — `confidence = agreement × strength`; the dashboard always shows *why* a room reads occupied.
-- **Local** — runs on your own hardware (laptop to Raspberry Pi) and degrades gracefully: network scan alone works, and it sharpens as you add sensors.
-- **Multi-device** — the desktop is the central; a phone or second PC on the same Wi-Fi pairs as an authenticated, revocable companion over local TLS — a read-only viewer, still zero cloud.
-- **Yours to shape** — draw your home's rooms, walls, and stairs (multi-floor) right in the dashboard; the map is the coordinate frame the sensors report into.
+- **Local-only, zero cloud egress by default** — runs on your own hardware (laptop to Raspberry Pi),
+  loopback-only out of the box. The only paths off the machine are opt-in and default-OFF.
+- **Explainable fusion** — `confidence = agreement × strength`; the dashboard always shows *why* a room
+  reads occupied, per modality, with trust weights you can see.
+- **You are admin, totally** — you draw the rooms, toggle every sensor on and off, and choose what (if
+  anything) is ever shared. Cameras boot OFF; credentials never leave the box.
 
-**Try it locally (no backend, no hardware):** open `frontend/index.html` — off-localhost the
-dashboard self-switches to a built-in simulator (simulated data only, zero network requests).
+**Try it locally (no backend, no hardware):** open `frontend/index.html` — off-localhost the dashboard
+self-switches to a built-in simulator (simulated data only, zero network requests).
 
 ![Wavr dashboard — position radar with posture labels, explainable per-room fusion, timeline](docs/img/demo.png)
 
-## Architecture
+## What's real today
 
-```
-sources (network / ruview CSI / camera / mmwave / sim)
-   └─> SensingEvent (+ Target: x/y, posture)
-        └─> FusionEngine (agreement × strength, explainable weights)
-             └─> RoomState ─> WS /ws/live + REST ─> dashboard (cards + radar)
-                  ├─> SQLite (derived state only — never frames, never targets)
-                  ├─> RulesEngine / AwayMonitor ─> MQTT (opt-in, occupied/confidence/ts only)
-                  └─> Narrator ─> Gemini (double opt-in; the ONLY cloud egress)
-```
+Everything below ships in this tree and is tested (hardware is mock-tested where the physical device
+isn't required).
 
-- **Backend:** Python 3.11, FastAPI, zero mandatory heavy deps — torch/cv2, pyserial, paho and
-  genai are lazy optional extras (`[camera]`, `[mmwave]`, `[mqtt]`, `[genai]`).
-- **Frontend:** single static HTML file, no build step, installable as a PWA (offline shell).
-  Off-localhost it self-switches to a simulator and makes zero requests to the backend.
-- **Privacy posture:** loopback-only by default (peer check + Host allowlist + CSRF header),
-  cameras boot OFF, frames never persisted, position targets live-only (never SQLite/MQTT).
-- **Control (opt-in, default-OFF):** an MCP "brain on Home Assistant" reads HA entities and can
-  trigger HA services through an allowlist + consent gate — camera/lock/scene refused even if
-  allowlisted, mass actuation blocked, every call audit-logged. Wavr never becomes a device driver.
+- **Multi-modal fusion** — a small `SensorSource` seam feeds one transparent fusion engine:
+  - **Network scan** — presence from LAN device activity. Works today with **zero extra hardware**.
+  - **BLE presence** — the host Bluetooth adapter as a modality (lazy `bleak`).
+  - **Camera** — RTSP person-detection via the `[camera]` extra (torch/cv2), lazily loaded. Cameras
+    boot **OFF**; frames are processed in RAM and never persisted (ADR-0002).
+  - **mmWave radar** — the HLK-LD2450 parser and source are written and mock-tested; running it on the
+    physical ~€15 device is a roadmap step (see below).
+  - **WiFi CSI (ruview)** — a source seam for channel-state-information presence.
+- **3D house map + in-app editor** — draw multi-floor rooms, walls, and stairs in meters, right in the
+  dashboard; persisted via `PUT /api/house` (central-only). The authored geometry is the coordinate
+  frame the sensors report into.
+- **Sensing-mode meter** — a top-level **Off / Presence / Precise** control that shows how much of your
+  home Wavr is actually sensing right now, and lets you switch camera person-detection on or off. It
+  states honestly that *Precise* processes video in memory, on your GPU, and never sends it anywhere.
+- **Device liveness — an unplugged camera never fakes presence** — fusion runs a periodic re-fuse pass
+  (`WAVR_REFUSE_S`, default 5s) against the wall clock, so a source that stops reporting **decays to
+  zero instead of freezing** at its last reading. A camera that is unplugged or disabled is latched
+  *down* by the health monitor after `WAVR_CAM_UNHEALTHY_SECS`, and the map paints that room as **offline
+  (amber, never trusted-empty)** — visibly distinct from a sensor-confirmed empty room and from a room
+  with **no coverage** at all. The liveness signal carries camera *names* and an enum only — never a
+  frame, URL, or credential.
+- **Multi-device pairing** — a phone or second PC on the same Wi-Fi pairs with the desktop "central":
+  local **HTTPS/WSS** (auto self-signed cert via `python -m wavr.serve`), a **single-use 8-digit pairing
+  code** (120s TTL, rate-limited), per-device hashed revocable tokens, single-use WS tickets, and an
+  in-subnet real-peer check. At pairing you verify an **out-of-band certificate fingerprint** — read it
+  off the trusted loopback dashboard, compare it against what the phone's browser shows — which defeats
+  a pairing-time TLS man-in-the-middle. Devices pair with a **role**: a full-control central or a
+  **read-only viewer**. Opt-in, default-OFF, zero cloud (ADR-0006).
+- **MCP "brain on Home Assistant"** — Wavr exposes `RoomState` and the house map to agents (read-only),
+  **plus** an opt-in gated control tool (`WAVR_MCP_CONTROL`, default-OFF) that asks Home Assistant to
+  run a service. Allowlist + consent refusal on both the service *and* the target entity; camera / lock
+  / scene refused even if allowlisted; mass actuation blocked; every call audit-logged. Wavr never
+  becomes a device driver (ADR-0005).
+- **Desktop Tauri shell** — a native desktop wrapper (`desktop/`) around the backend + dashboard so the
+  "Wavr desktop is the central" story ships as one app (ADR-0007).
+- **Installable PWA** — the dashboard is an installable Progressive Web App (manifest + service worker)
+  that caches only the shell and makes zero external requests.
+- **Defensive LAN inventory ("Wavr Net")** — offline OUI vendor + device-type classification,
+  rogue-device / gateway-MAC / rogue-DHCP alerts on a five-tier ladder, and opt-in port/speed/WOL
+  utilities. Defensive only (ADR-0004) — Wavr never surveils a network the host isn't authorized on.
+
+## The honest limitations
+
+- **A camera only sees where it looks.** Camera presence is **room-level** (which room a person is in,
+  where a camera is pointed) — not per-person map coordinates yet.
+- **Most rooms need a sensor to see them.** A room with no live sensor shows as **no coverage** — Wavr
+  says so rather than guessing. Blind, offline, and confirmed-empty are three distinct states on the map.
+- **Live posture (standing/sitting/lying) is roadmap**, not shipped — it needs YOLO-pose on a GPU.
+- **mmWave x/y target tracking** needs the physical LD2450; the code is written and mock-tested but
+  hasn't been run on-device here.
+- **AR floor-plan measuring, a native mobile app, and any identity/face features are roadmap** (see
+  below), and face recognition is explicitly gated and undecided.
+
+Wavr does not reimplement sensing research — it orchestrates sensing engines as plugins and is honest
+about each one's confidence. When an upstream engine's headline feature is weaker than its README, Wavr
+consumes what actually works and the trust weights tell the truth.
+
+## The privacy contract
+
+- **Loopback-only by default** — peer check + Host allowlist + CSRF header. The base install never
+  opens a LAN socket.
+- **Cameras boot OFF.** Frames live in RAM only, are never written to disk, and never leave the box
+  (ADR-0002). Position targets are live-only — never SQLite, never MQTT.
+- **Only derived state is ever stored or (optionally) published** — occupancy / confidence / timestamp.
+  Never frames, never raw targets, never credentials. Credentials are never logged or echoed.
+- **Every egress is opt-in and default-OFF** — LAN multi-device (TLS), MQTT to Home Assistant (derived
+  state only), the MCP control tool, and the optional narrator. Turn none on and Wavr is an island.
+- **No analytics, no telemetry SDK, no account.** The frontend makes zero external requests; the public
+  simulator declares itself fake on screen.
 
 ## Quickstart (network presence, zero hardware)
 
 ```powershell
 cd backend; pip install -e .[dev]; cd ..
-# .env at repo root:
+# optional .env at repo root:
 #   WAVR_NET_MACS=<your phone's wifi MAC>
 #   WAVR_FUSION_THRESHOLD=0.35   # network-only phase; revert to 0.5 when camera/CSI join
-python -m uvicorn wavr.app:app --host 127.0.0.1 --port 8000
-# or double-click scripts/wavr.ps1
+python -m wavr.serve            # loopback-only HTTP on http://127.0.0.1:8000
 ```
 
 Tests: `python -m pytest backend/tests -q` (full suite, all hardware mock-tested).
 
-For the desktop app + LAN companions, see [`docs/deploy/multi-device.md`](docs/deploy/multi-device.md)
-(`python -m wavr.serve` brings up local TLS + pairing) and the Tauri shell in [`desktop/`](desktop/).
+For the desktop app + LAN companions, set `WAVR_MULTIDEVICE=1` and see
+[`docs/deploy/multi-device.md`](docs/deploy/multi-device.md) (`python -m wavr.serve` then brings up local
+TLS + pairing) and the Tauri shell in [`desktop/`](desktop/).
 
-## Design stance: integration over hype
+## Architecture
 
-Wavr does not reimplement sensing research — it orchestrates sensing engines as plugins and is
-honest about each one's confidence. Every source implements one small `SensorSource` seam
-(injectable transports, lazy deps, fully mock-tested), the fusion is transparent math
-(`agreement × strength`, per-modality trust weights), and the dashboard always shows *why* a room
-reads occupied. When an upstream engine's headline feature turns out to be weaker than its README
-(it happens), Wavr consumes what actually works and the weights tell the truth.
+```
+sources (network / ruview CSI / camera / mmwave / BLE / sim)
+   └─> SensingEvent (+ Target: x/y, posture)
+        └─> FusionEngine (agreement × strength, explainable weights, wall-clock ageing)
+             └─> RoomState ─> WS /ws/live + REST ─> dashboard (cards + radar + house map)
+                  ├─> SQLite (derived state only — never frames, never targets)
+                  ├─> RulesEngine / AwayMonitor ─> MQTT (opt-in; occupied/confidence/ts only)
+                  ├─> MCP server (read RoomState/map; opt-in gated HA control)
+                  └─> Narrator ─> Gemini (double opt-in; the ONLY cloud egress)
+```
+
+- **Backend:** Python 3.11, FastAPI, zero mandatory heavy deps — torch/cv2, pyserial, paho, bleak,
+  cryptography and genai are lazy optional extras (`[camera]`, `[mmwave]`, `[mqtt]`, `[tls]`, `[genai]`).
+- **Frontend:** single static HTML file (three.js), no build step, installable as a PWA. Off-localhost it
+  self-switches to a simulator and makes zero requests to the backend.
 
 ## Roadmap
 
-Recently shipped: multi-device (desktop-central + LAN companions, local TLS, pairing/revocation),
-the installable PWA companion, the MCP "brain on Home Assistant" (read + gated control), and the
-**in-app house editor** — draw multi-floor rooms/walls/stairs, saved via `PUT /api/house`.
+Tiers are ordered by what they actually cost — engineering time, ~€15 of hardware, a GPU / open
+research, or a whole company plus regulatory work. Later tiers are direction, not commitments. Full
+detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-Also recently shipped: gateway-anchored reverse-DNS hostname resolution (queries the LAN gateway's
-own DNS server directly — never the OS resolver — so a device's hostname reaches the ID classifier
-even on a machine with a VPN tunnel active; opt-in, `WAVR_NET_HOSTNAMES`); a gateway-MAC-identity
-monitor (on by default, zero extra egress — it only reads the ARP-derived binding the inventory
-scan already produced) paired with an opt-in rogue-DHCP-server detector, both riding one five-tier
-alert ladder (`info` → `note` → `watch` → `alert` → `critical`); MQTT Last-Will + a retained
-availability topic (`<prefix>/status`) so Home Assistant correctly flips Wavr's entities to
-*unavailable* on a crash or restart; occupancy hysteresis in the fusion engine (fast-to-occupied,
-debounced-to-vacant dwell so one dropped frame can't flap a room vacant); a life-safety
-**safety-alarm** device category (smoke/water-leak/flood sensors no longer get lumped in with
-generic environmental ones in the device catalog); and an expanded camera/hub OUI vendor table
-(the full Ubiquiti/UniFi Protect block, plus Reolink/Wyze/Eufy) checked against the live IEEE
-registry.
+- **Just engineering time** — camera → floor-plan homography (place people on the map, not just flag the
+  room), wall-occlusion fusion weighting, floor-plan / CAD import as a backdrop.
+- **~€15 of hardware** — mmWave LD2450 bring-up on the physical device for real per-person x/y.
+- **A mobile app** — a Capacitor (native shell) companion beyond the already-installable PWA.
+- **Precision tiers** — richer sensing modes as sources and homography land.
+- **Needs a GPU / open research** — live camera YOLO-pose (standing/sitting/lying), cross-source track
+  association (Kalman + Hungarian) instead of best-source pass-through, real fall detection (a research
+  demo, **not** a certified safety system — ADR-0003), and a fully-local LLM narrator to remove the last
+  optional cloud egress.
+- **Optional, non-biometric identity** — a way to distinguish household members without cameras.
+  **Face recognition is explicitly gated and undecided** — it is not on the committed roadmap.
 
-Next:
+## Design stance: your home, understood — without giving it away
 
-- **Camera → position** — per-camera homography (image → floor x/y) so cameras place people on your
-  drawn map, not just flag which room they're in.
-- **Walls in the fusion** — use the drawn walls for occlusion (a camera can't see through a wall) to
-  sharpen the confidence weighting; wire point-in-polygon room assignment into fusion.
-- **Floor-plan import** — trace over an uploaded plan image, or auto-build the geometry from a
-  plan / CAD file.
-- **mmWave bring-up** — HLK-LD2450 over USB serial (~€15): real x/y target tracking on the radar.
-  Parser + source are done and tested; needs the device.
-- **Camera posture live** — YOLO-pose (`[camera]` extra) on RTSP cameras: standing/sitting/lying.
-- **Cross-source track association** — fuse targets from multiple sensors in the same room.
-- **Fallen-person detection** — lying + location + duration on top of the above.
+The industry's default trajectory is the opposite of this project: your home read by someone else's
+cloud, from operator-grade network sensing to the 6G push for joint communication-and-sensing, where the
+radio layer itself becomes a sensor you don't control. Wavr is the sovereign counter-position — the same
+sensing techniques, run on hardware you own, with the data staying on it. Local-only isn't a limitation
+here; it's the whole point. You get your home understood without renting the understanding back from
+anyone.
 
 ## Contributing
 
-Issues and PRs welcome. Ground rules: privacy invariants are non-negotiable (nothing leaves the
-LAN except the opt-in narrator; frames are never persisted; new sources must be mock-testable
-without hardware), and every PR needs green tests (`pytest backend/tests -q`). Good first
-contributions: roadmap items above, or a new `SensorSource` (BLE presence, zigbee occupancy, …).
+Issues and PRs welcome. Ground rules: privacy invariants are non-negotiable (nothing leaves the LAN
+except an opt-in egress you enabled; frames are never persisted; new sources must be mock-testable
+without hardware), and every PR needs green tests (`python -m pytest backend/tests -q`). Good first
+contributions: roadmap items above, or a new `SensorSource` (zigbee occupancy, a new BLE beacon type, …).
 
 ## Docs
 
 - `PRODUCT.md` — product definition and design principles
-- `docs/deploy/bring-up-and-expansion.md` — hardening, Docker, hardware tiers (mmWave LD2450,
-  ESP32 CSI, camera pose), laptop → appliance migration
-- `docs/adr/` — architecture decision records (0001–0007: RuView audit, privacy boundaries,
-  not-a-medical-device, defensive-only, MCP control boundary, authenticated LAN access, desktop shell)
-- `docs/superpowers/plans/` — every sub-plan (A fusion → B real sources → C camera CV →
-  layers 2-4 → Docker → D position/posture radar → multi-device auth → MCP brain-on-HA →
-  house maquette editor), all executed via subagent-driven development with per-task adversarial review
+- `docs/ROADMAP.md` — buildable-now vs long-horizon vision, tiered by cost
+- `docs/deploy/` — hardening, Docker, hardware tiers, multi-device bring-up
+- `docs/adr/` — architecture decision records (0001–0007: mmWave-over-fork, RAM-only privacy
+  boundaries, not-a-medical-device, defensive-only, MCP control boundary, authenticated LAN access,
+  desktop shell)
 
 ## License
 
 [AGPL-3.0-or-later](LICENSE) — Wavr is free and open source for personal, self-hosted, and
-non-commercial use. If you run a modified version as a network service, the AGPL requires you to
-publish your changes. A **commercial / dual license** (to use Wavr without the AGPL's
-network-copyleft obligations) is available from the author — open an issue to enquire.
+non-commercial use. If you run a modified version as a network service, the AGPL requires you to publish
+your changes. A **commercial / dual license** (to use Wavr without the AGPL's network-copyleft
+obligations) is available from the author — open an issue to enquire.
+</content>
+</invoke>

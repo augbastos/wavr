@@ -105,3 +105,20 @@ def test_monitor_ring_is_bounded():
     for i in range(6):
         m.report(f"cam_{i}", False)
     assert len(m.suggestions()) == 3
+
+
+# ---- down(): the liveness latch getter (feeds /api/cameras tri-state) ------------
+
+def test_down_getter_tracks_latch():
+    # A down report latches the name; recovery and clear() each release it. Carries
+    # NAMES only -- never a frame, rtsp_url or credential (ADR-0002).
+    m = CameraHealthMonitor(get_camera=lambda n: None, latest_inventory=lambda: [])
+    assert m.down() == []
+    m.report("cam_q", False)
+    assert m.down() == ["cam_q"]
+    assert all(isinstance(n, str) for n in m.down())       # names only
+    m.report("cam_q", True)                                # recovered
+    assert m.down() == []
+    m.report("cam_q", False)
+    m.clear("cam_q")                                       # rebound
+    assert m.down() == []

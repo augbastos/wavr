@@ -268,6 +268,14 @@
   .radar-room{fill:none;stroke:var(--line-strong);stroke-width:.025;vector-effect:non-scaling-stroke;
               transition:fill .3s ease-out,stroke .3s ease-out;}
   .radar-room.occ{fill:rgba(61,181,74,.08);stroke:var(--accent);}
+  /* Map liveness honesty (fake-presence-on-disconnect fix): three states beyond the
+     green 'occupied' tint + the dark 'empty' base (no class = a live sensor confirms
+     EMPTY). '.off' = a camera covering this room is offline (F3 latched it down): amber
+     attention, NEVER green — a decayed/last reading must never read as confident
+     presence. '.blind' = no live sensor here (room not in latest): a dashed dim outline
+     = 'no coverage', distinct from a monitored-but-empty room's solid dark base. */
+  .radar-room.off{fill:rgba(232,161,58,.12);stroke:var(--warn);}
+  .radar-room.blind{fill:rgba(154,164,173,.04);stroke:var(--dim);stroke-dasharray:.1 .08;}
   .radar-roomlabel{fill:var(--dim);font-size:.24px;text-transform:capitalize;}
   .radar-dot{fill:var(--accent);}
   .radar-target{transition:transform .25s cubic-bezier(.22,1,.36,1);}
@@ -790,6 +798,30 @@
   .eg-kill-wrap{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px;}
   .killswitch:disabled{opacity:.6;cursor:not-allowed;}
   .eg-kill-note{font-size:.76rem;max-width:60ch;}
+  /* Home: global Sensing-mode meter (Off | Presence | Precise) — a segmented control
+     DERIVED from system.running + whether any camera source is enabled, wired only to the
+     existing /api/system + /api/sources toggle seams. The selected pill stays neutral
+     (green is reserved for live/presence); the posture dot is the color signal — green for
+     the privacy-first Presence tier, amber to flag Precise's honest GPU/VRAM cost. */
+  .precision-seg{display:flex;gap:3px;background:var(--elevated);border:1px solid var(--line-strong);
+                 border-radius:12px;padding:3px;max-width:440px;}
+  .precision-seg .seg-btn{flex:1;padding:10px 8px;border:none;border-radius:9px;background:transparent;
+                 color:var(--dim);font:inherit;font-size:.9rem;font-weight:600;cursor:pointer;
+                 text-align:center;transition:background .15s,color .15s;}
+  .precision-seg .seg-btn:not([aria-pressed="true"]):hover{background:var(--elevated-2);color:var(--text);}
+  .precision-seg .seg-btn[aria-pressed="true"]{background:var(--elevated-2);color:var(--text);
+                 box-shadow:inset 0 0 0 1px var(--line-strong);}
+  .precision-seg .seg-btn:disabled{cursor:not-allowed;}
+  .precision-seg.locked{opacity:.75;}
+  .precision-posture{display:flex;gap:8px;align-items:flex-start;margin:12px 0 0;
+                 font-size:.86rem;line-height:1.5;color:var(--dim);max-width:62ch;}
+  .precision-posture::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;
+                 background:var(--dim);margin-top:6px;}
+  .precision-posture.t-presence::before{background:var(--accent);}
+  .precision-posture.t-precise::before{background:var(--warn);}
+  .precision-posture b{color:var(--text);font-weight:600;}
+  .precision-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px;}
+  .precision-note{font-size:.8rem;color:var(--dim);max-width:54ch;line-height:1.45;}
   /* System: privacy & egress dashboard (the trust receipt) + diagnostics */
   .egress-summary{margin:0 0 4px;font-size:.9rem;font-weight:600;}
   .egress-summary.ok{color:var(--accent);}
@@ -1171,6 +1203,24 @@
           </div>
           <p id="heroLine2" class="hero-line2"></p>
         </section>
+        <!-- Global sensing-mode meter (precision slice): Off | Presence | Precise, DERIVED
+             from system.running + whether any camera source is enabled. Wired ONLY to the
+             existing /api/system + /api/sources toggle seams (no new backend state). Default
+             tier is Presence — privacy-first, consistent with cameras booting off. The switch
+             mutates only in live; in demo/companion it is shown as an illustrative example. -->
+        <div id="precisionTile" class="tile precision-tile">
+          <div class="tile-head"><h2 id="precision-h">Sensing mode</h2><span class="hint">how much of your home Wavr senses right now</span></div>
+          <div id="precisionSeg" class="precision-seg" role="group" aria-label="sensing mode">
+            <button type="button" class="seg-btn" data-tier="off" aria-pressed="false" data-tip="Pauses every source — no network, no Bluetooth, no cameras. Zero compute.">Off</button>
+            <button type="button" class="seg-btn" data-tier="presence" aria-pressed="false" data-tip="Network and Bluetooth presence only — house-level, no cameras, zero video, zero VRAM.">Presence</button>
+            <button type="button" class="seg-btn" data-tier="precise" aria-pressed="false" data-tip="Adds camera person-detection — per-room precision. Video is processed in memory and never leaves home; uses the GPU/VRAM.">Precise</button>
+          </div>
+          <p id="precisionPosture" class="precision-posture" aria-live="polite"></p>
+          <div class="precision-actions">
+            <button id="privacyPauseBtn" type="button" class="ctl small off" data-tip="Drops to the next lower level right now — instantly turns off the heavier sensing">Privacy pause</button>
+            <span id="precisionNote" class="precision-note" aria-live="polite"></span>
+          </div>
+        </div>
         <div class="inicio-grid">
           <div class="tile rooms-col">
             <div class="tile-head"><h2 id="rooms-h">Rooms</h2></div>
@@ -2251,6 +2301,18 @@ async function renderCameras(){
       label.appendChild(nameEl);
       label.appendChild(document.createTextNode(` · ${c.room} · `));
       label.appendChild(confEl);
+      // Liveness honesty (fake-presence-on-disconnect fix): surface an OFFLINE
+      // camera so its room's decayed reading is never mistaken for a confirmed
+      // empty. c.liveness is a fixed backend enum ('live'|'offline'|'unknown') —
+      // set via textContent + inline style (XSS-safe, never innerHTML).
+      if(c.liveness === "offline"){
+        const live = document.createElement("span");
+        live.textContent = " · offline";
+        live.style.color = "#d98b3a";
+        live.style.fontWeight = "600";
+        live.title = "No frames arriving — this room's presence can't be confirmed";
+        label.appendChild(live);
+      }
       row.appendChild(label);
       const rm = document.createElement("button"); rm.className="rm"; rm.textContent="Remove";
       rm.onclick = async ()=>{
@@ -2799,6 +2861,11 @@ const SEEN_MODS = new Set();
 const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)");
 let radarUpdate = null;
 let highlightRoom3D = null;   // set inside renderRadar() once the 3D pipeline exists (§6)
+// Map liveness applier (fake-presence-on-disconnect fix): set inside renderRadar(); the
+// live-only /api/cameras poll below feeds it the per-camera liveness tri-state so the
+// house map can render an OFFLINE camera's room distinctly from a sensor-confirmed-empty
+// or a no-coverage one. Null (no-op) in demo/companion, where there are no cameras.
+let applyMapLiveness = null;
 // SVG font-size scales with the viewBox transform like any other geometric length, so a
 // fixed user-space font-size shrinks/grows with room/viewport size. rebuildRoomsForFloor()
 // recomputes this (rendered CSS px per 1 viewBox metre) on every layout so room labels and
@@ -2971,6 +3038,34 @@ async function renderRadar(){
   svg.appendChild(houseLayer); svg.appendChild(zoneLayer); svg.appendChild(roomsLayer); svg.appendChild(drawLayer);
 
   const roomIdx = {};
+  // ---- Map liveness tri-state (fake-presence-on-disconnect fix) ----
+  // roomLiveness[room] mirrors /api/cameras' per-camera enum, aggregated per room
+  // ('offline' if ANY covering camera is latched down by the F3 health hook). Rebuilt by
+  // applyMapLiveness() from the live poll below; empty in demo/companion. mapState()
+  // resolves the single state the map paints, in priority order:
+  //   'occupied' — a live reading confirms presence: ALWAYS wins so real presence is
+  //                never hidden by an offline sibling sensor (the backend re-fuse loop
+  //                decays a dead single-camera room to unoccupied, at which point one of
+  //                the states below takes over — that is how frozen presence is undone).
+  //   'offline'  — not occupied AND a covering camera is down: amber, never trusted empty.
+  //   'empty'    — in latest, a live sensor confirms empty: the dark base (unchanged).
+  //   'blind'    — never in latest, no live sensor here: 'no coverage'.
+  const roomLiveness = {};
+  function mapState(name){
+    if(roomOcc[name]) return "occupied";              // presence always wins — never hidden
+    if(roomLiveness[name] === "offline") return "offline";
+    if(name in roomOcc) return "empty";               // live sensor confirmed empty
+    return "blind";                                   // no live sensor here
+  }
+  // Paint the 2D SVG rect for one room. Exactly one state class is applied (empty => none,
+  // keeping the existing dark base); replaces the old per-frame `.occ` toggle.
+  function paintRoom2D(name){
+    const e = roomIdx[name]; if(!e) return;
+    const st = mapState(name), cl = e.rect.classList;
+    cl.toggle("occ", st === "occupied");
+    cl.toggle("off", st === "offline");
+    cl.toggle("blind", st === "blind");
+  }
 
   // ---- v2 floor -> v1-compatible rect adapter (bounding box of each room polygon) ----
   // Feeds the existing rect-based room rendering / dot placement / zone hit-test unchanged;
@@ -3053,6 +3148,9 @@ async function renderRadar(){
       roomsLayer.appendChild(g);
       roomIdx[r.name] = {r, rect, layer, dots: new Map()};
     });
+    // Re-apply the liveness tri-state to the freshly built rects so a floor switch never
+    // drops an offline/blind room back to the plain base until the next WS/poll tick.
+    Object.keys(roomIdx).forEach(paintRoom2D);
     renderHouseOverlay(f);
   }
 
@@ -3330,6 +3428,8 @@ async function renderRadar(){
 
   const FLOOR_BASE = 0x232a32;   // unlit floor — absence of green IS the signal (§4)
   const WALL_BASE = 0x2e3742;    // neutral unlit wall base (P5 fix 3)
+  const MAP_WARN = 0xe8a13a;     // --warn: offline-camera floor tint (never green)
+  const MAP_BLIND = 0x4a5563;    // cool slate: 'no coverage', greyed vs the dark empty base
 
   // Tag a material with its two opacity states so setActiveFloor3D() can re-tint the whole
   // stack without any geometry rebuild. Ground/grid/handles are untagged → left alone.
@@ -3590,19 +3690,54 @@ async function renderRadar(){
   function tintRoom3D(name){
     const e = room3dIdx[name];
     if(!e || !three3d) return;
-    if(roomOcc[name]){
+    const THREE = three3d.THREE;
+    // Same tri-state the 2D map paints (mapState), rendered as floor+wall tint so BOTH
+    // view modes are honest about disconnect. 'empty' keeps the historic unlit base.
+    const st = mapState(name);
+    if(st === "occupied"){
       const conf = roomConf[name] ?? 0;
       const t = Math.min(Math.max(conf,0),1);
-      const target = new three3d.THREE.Color(colorFor(conf));
+      const target = new THREE.Color(colorFor(conf));
       e.mesh.material.color.copy(e.base).lerp(target, 0.25 + 0.5 * t);
       // P5 fix 3: this room's walls follow the SAME scale, slightly softer, so the floor
       // stays the lead presence signal — occupied reads green, empty stays dark (§4).
       if(e.wallMat) e.wallMat.color.copy(e.wallBase).lerp(target, 0.2 + 0.45 * t);
+    } else if(st === "offline"){
+      // A covering camera is offline (F3 latched down): amber attention, NEVER green — the
+      // room's decayed/last reading must not read as confident presence.
+      const warn = new THREE.Color(MAP_WARN);
+      e.mesh.material.color.copy(e.base).lerp(warn, 0.32);
+      if(e.wallMat) e.wallMat.color.copy(e.wallBase).lerp(warn, 0.26);
+    } else if(st === "blind"){
+      // No live sensor here (not in latest): greyed 'no coverage', distinct from the dark
+      // base of a sensor-confirmed-empty room.
+      const grey = new THREE.Color(MAP_BLIND);
+      e.mesh.material.color.copy(e.base).lerp(grey, 0.42);
+      if(e.wallMat) e.wallMat.color.copy(e.wallBase).lerp(grey, 0.30);
     } else {
-      e.mesh.material.color.copy(e.base);   // unoccupied stays unlit (§4) — quiet state = dark
+      e.mesh.material.color.copy(e.base);   // 'empty' — sensor confirms empty: unlit (§4)
       if(e.wallMat) e.wallMat.color.copy(e.wallBase);
     }
   }
+  // applyMapLiveness (module-level ref, set here): rebuild roomLiveness from a /api/cameras
+  // payload (name+room+liveness enum ONLY — never a frame, url or credential; ADR-0002) and
+  // repaint every room in BOTH views. A room is 'offline' if ANY of its cameras is down.
+  applyMapLiveness = (cams)=>{
+    const next = {};
+    (Array.isArray(cams) ? cams : []).forEach(c=>{
+      if(!c || !c.room) return;
+      const prev = next[c.room];
+      if(c.liveness === "offline") next[c.room] = "offline";
+      else if(prev !== "offline"){
+        if(c.liveness === "live") next[c.room] = "live";
+        else if(prev == null) next[c.room] = "unknown";
+      }
+    });
+    Object.keys(roomLiveness).forEach(k=>{ if(!(k in next)) delete roomLiveness[k]; });
+    Object.assign(roomLiveness, next);
+    Object.keys(roomIdx).forEach(paintRoom2D);
+    Object.keys(room3dIdx).forEach(tintRoom3D);
+  };
   // highlightRoom3D(name, on): emissive boost on the room's floor plate + person-marker
   // pulse (driven by the render loop). Assigned to the module-level ref declared next to
   // radarUpdate so the DOM-side linkRoom() below the closure can call it.
@@ -4603,7 +4738,7 @@ async function renderRadar(){
 
   radarUpdate = (rs)=>{
     const e = roomIdx[rs.room]; if(!e) return;
-    e.rect.classList.toggle("occ", !!rs.occupied);
+    paintRoom2D(rs.room);   // liveness tri-state (occupied/offline/empty/blind), not just .occ
     // Reuse dots keyed by target id so movement TRANSITIONS instead of teleporting
     // (a person walking reads as motion, not a slideshow of positions).
     const seen = new Set();
@@ -4637,6 +4772,22 @@ async function renderRadar(){
   try{ window.__wavrShellSync?.(); }catch{}
 }
 renderRadar();
+// ---- Map liveness poll (fake-presence-on-disconnect fix) ----
+// Keep the house map's tri-state honest by refreshing per-camera liveness from
+// /api/cameras. Live-only (loopback), same-origin, read-only — reads name/room/liveness
+// ONLY (never a frame, rtsp_url or credential; ADR-0002 / zero egress). A camera that
+// stops sending frames latches 'offline' server-side after cam_unhealthy_secs; this poll
+// surfaces that so its room stops rendering a frozen/decayed reading as confident
+// presence. Runs once now + every 5s. No-op in demo/companion (no cameras, no applier).
+if(MODE === "live"){
+  const pollMapCams = async ()=>{
+    let cams; try{ cams = await (await fetch(location.origin + "/api/cameras")).json(); }
+    catch{ return; }   // LAN may blip; the next tick re-syncs
+    applyMapLiveness?.(cams);
+  };
+  pollMapCams();
+  setInterval(pollMapCams, 5000);
+}
 initCompanion();   // companion (private-LAN) only: pairing screen OR read-only viewer chrome
 
 // ---- Rendering (RoomState) ----
@@ -6993,7 +7144,7 @@ try {
     btns.forEach(function(b){
       if(!b) return;
       b.hidden = false;
-      b.disabled = killBusy;
+      b.disabled = killBusy || tierBusy;
       b.className = "ctl switch killswitch " + (b === egKill ? "eg-kill " : "") + (anyOn ? "on" : "off");
       b.textContent = killBusy ? "applying…" : (anyOn ? "Turn off all cameras" : "Turn cameras back on");
       b.setAttribute("role", "switch");
@@ -7006,7 +7157,7 @@ try {
     else say("Off for privacy.", true);
   }
   async function killToggle(){
-    if(M !== "live" || killBusy) return;
+    if(M !== "live" || killBusy || tierBusy) return;   // tierBusy: a Sensing-mode change is mid-fan-out
     var cs = cameraSourceList();
     if(!cs.length) return;
     var target = !cs.some(function(s){ return s.enabled; });   // any on -> all off; all off -> all on
@@ -7024,11 +7175,132 @@ try {
       if(r.ok){ var s2 = await r.json(); if(s2 && typeof s2 === "object") sysInfo = s2; }
     }catch(e){}
     killBusy = false;
-    renderKill(); renderEgress();
+    renderKill(); renderEgress(); renderTier();
   }
   [$("camKillBtn"), $("gearKillBtn"), egKill].forEach(function(b){
     if(b) b.addEventListener("click", killToggle);
   });
+
+  // =====================================================================
+  // Global Sensing-mode meter (Off | Presence | Precise) — a segmented control
+  // DERIVED from the SAME sysInfo/camsList this closure already holds:
+  //   Off      = system stopped (manager.running === false)
+  //   Presence = system running, NO camera source enabled (network/BLE only, zero VRAM)
+  //   Precise  = system running AND >=1 camera source enabled (person-detection on)
+  // Setting a tier composes ONLY the existing seams: POST /api/system/toggle + the same
+  // POST /api/sources/{name}/toggle camera fan-out the master kill uses. No new backend
+  // state. Boot tier is Presence (cameras boot off) — privacy-first by default. Live
+  // mutates; demo/companion renders it as an illustrative, non-acting example.
+  // OUT of this slice (pending owner decisions): a Max tier, per-room granularity,
+  // and identification — deliberately not built here.
+  // =====================================================================
+  var TIER_ORDER = ["off", "presence", "precise"];
+  var TIER_META = {
+    off:      { label: "Off",
+                posture: "System paused — nothing is sensing. Zero compute, zero VRAM." },
+    presence: { label: "Presence",
+                posture: "Network and Bluetooth only — house-level presence. No cameras, no video, zero VRAM." },
+    precise:  { label: "Precise",
+                posture: "Cameras on — per-room person detection. Video is processed in memory (never recorded, never leaves home) and uses the GPU/VRAM." },
+  };
+  var tierBusy = false;
+  function anyCamEnabled(){ return cameraSourceList().some(function(s){ return s.enabled; }); }
+  function deriveTier(){
+    if(!sysInfo || !sysInfo.running) return "off";
+    return anyCamEnabled() ? "precise" : "presence";
+  }
+  function tierPost(url, body){
+    return fetch(location.origin + url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+      body: JSON.stringify(body),
+    });
+  }
+  async function tierSetRunning(on){
+    var r = await tierPost("/api/system/toggle", { on: on });
+    if(r && r.ok){ var s = await r.json(); if(s && typeof s === "object") sysInfo = s; }
+  }
+  async function tierFanCameras(enabled){
+    // idempotent: only toggles cameras not already in the wanted state
+    var targets = cameraSourceList().filter(function(s){ return s.enabled !== enabled; });
+    await Promise.all(targets.map(function(s){
+      return tierPost("/api/sources/" + encodeURIComponent(s.name) + "/toggle",
+                      { enabled: enabled }).catch(function(){});
+    }));
+  }
+  async function setTier(tier){
+    if(M !== "live" || tierBusy || killBusy) return;
+    if(!TIER_META[tier] || tier === deriveTier()) return;
+    tierBusy = true; renderTier(); renderKill();
+    try{
+      if(tier === "off"){
+        await tierSetRunning(false);
+      } else if(tier === "presence"){
+        // cameras OFF first so turning the system on can't spawn YOLO for even one frame
+        await tierFanCameras(false);
+        if(!sysInfo || !sysInfo.running) await tierSetRunning(true);
+      } else { // precise
+        if(!sysInfo || !sysInfo.running) await tierSetRunning(true);
+        await tierFanCameras(true);
+      }
+      // converge (renderControls' 3s poll would too; this just closes the gap)
+      try{
+        var rr = await fetch(location.origin + "/api/system");
+        if(rr.ok){ var s2 = await rr.json(); if(s2 && typeof s2 === "object") sysInfo = s2; }
+      }catch(e){}
+    }catch(e){}
+    tierBusy = false;
+    renderTier(); renderKill(); renderEgress();
+  }
+  function privacyPause(){
+    if(M !== "live" || tierBusy || killBusy) return;
+    var idx = TIER_ORDER.indexOf(deriveTier());
+    if(idx <= 0) return;   // already Off — nothing lower to drop to
+    setTier(TIER_ORDER[idx - 1]);
+  }
+  function renderTier(){
+    var seg = $("precisionSeg"), posture = $("precisionPosture");
+    var pause = $("privacyPauseBtn"), note = $("precisionNote");
+    if(!seg || !posture) return;
+    var live = (M === "live");
+    // demo/companion: illustrative only — highlight the privacy-first default (Presence),
+    // buttons disabled, honest note that the real control runs on the hub.
+    var cur = live ? deriveTier() : "presence";
+    var locked = !live || tierBusy || killBusy;
+    var btns = seg.querySelectorAll(".seg-btn");
+    Array.prototype.forEach.call(btns, function(b){
+      var t = b.getAttribute("data-tier");
+      b.setAttribute("aria-pressed", (t === cur) ? "true" : "false");
+      b.disabled = locked;
+    });
+    seg.classList.toggle("locked", !live);
+    var meta = TIER_META[cur] || TIER_META.presence;
+    posture.className = "precision-posture t-" + cur;
+    posture.textContent = "";
+    posture.appendChild(elc("b", null, meta.label + " — "));
+    posture.appendChild(document.createTextNode(meta.posture));
+    if(pause){
+      var canDrop = live && TIER_ORDER.indexOf(cur) > 0;
+      pause.hidden = !live;
+      pause.disabled = !canDrop || tierBusy || killBusy;
+      pause.className = "ctl small off";
+    }
+    if(note){
+      note.textContent = live
+        ? (tierBusy ? "applying…"
+           : cur === "off" ? "Everything is paused."
+           : "Privacy pause drops one level instantly.")
+        : "Live control runs on the hub (local panel). Default is Presence — cameras start off.";
+    }
+  }
+  (function(){
+    var seg = $("precisionSeg"), pause = $("privacyPauseBtn");
+    if(seg) seg.addEventListener("click", function(e){
+      var b = (e.target && e.target.closest) ? e.target.closest(".seg-btn") : null;
+      if(b && b.getAttribute("data-tier")) setTier(b.getAttribute("data-tier"));
+    });
+    if(pause) pause.addEventListener("click", privacyPause);
+  })();
 
   // =====================================================================
   // P1 §7#4 — History filters: room + kind, purely over the rows the
@@ -7705,13 +7977,13 @@ try {
   window.__wavrSystem = function(s){
     try{ if(_sys) _sys(s); }catch(e){}
     sysInfo = (s && typeof s === "object") ? s : null;
-    renderKill(); renderEgress();
+    renderKill(); renderEgress(); renderTier();
   };
   var _cams = window.__wavrCameras;
   window.__wavrCameras = function(c){
     try{ if(_cams) _cams(c); }catch(e){}
     camsList = Array.isArray(c) ? c : [];
-    renderKill(); renderEgress();
+    renderKill(); renderEgress(); renderTier();
   };
   var _inv = window.__wavrInventory;
   window.__wavrInventory = function(devs){
@@ -7758,6 +8030,7 @@ try {
   renderSensing();     // A2.1 — paints the honest "no hub connected" state in demo/companion
   renderHealthTile();  // A2.3 — hidden outside live; never fetches on its own
   renderKill();
+  renderTier();        // global Sensing-mode meter — illustrative in demo, live in live
   renderDiag();
   applyTlFilter();
   renderPresence();    // A2.2 — live-only poller; no-ops (shows the note) elsewhere

@@ -105,6 +105,13 @@ class FusionEngine:
         last_ts = max(e.ts for e in self._latest[room].values())
         return self._fuse(room, last_ts)
 
+    def rooms(self) -> list[str]:
+        """Every room the engine has ever fused. Authoritative room set (the
+        engine's own `_latest` keys) — used by the periodic re-fuse tick to age
+        rooms that have stopped receiving events, rather than trusting an
+        app-side mirror dict that could drift."""
+        return list(self._latest.keys())
+
     def _freshness(self, age_s: float) -> tuple[float, str]:
         """Map a source's age to (trust multiplier 0..1, health label).
         fresh → full weight; stale → linearly decayed; dead → zero weight."""
