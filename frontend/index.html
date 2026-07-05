@@ -1802,6 +1802,15 @@ function companionToken(){ if(window.WAVR_MOBILE) return window.WAVR_MOBILE.toke
 function companionSetToken(t){ if(window.WAVR_MOBILE){ window.WAVR_MOBILE.tokenSet(t); return; } try{ localStorage.setItem(COMPANION_TOKEN_KEY, t); }catch{} }
 function companionClearToken(){ if(window.WAVR_MOBILE){ window.WAVR_MOBILE.tokenSet(null); return; } try{ localStorage.removeItem(COMPANION_TOKEN_KEY); }catch{} }
 function companionDeviceName(){ try{ return "Companion · " + (navigator.platform || "web"); }catch{ return "Companion"; } }
+// Admin-role parity (Pass 1: DEFINED but USED BY NOTHING — no gate flips yet). isAdmin(): loopback
+// dashboard is always admin; a mobile companion is admin only when the shim signals role==="central".
+// companionAdminWrite(): true off-mobile (web keeps its X-Wavr-Local path); on mobile, central only.
+// wavrFetch(): the Pass-2 write seam — on mobile it routes to the stored central via netFetch with a
+// Bearer token and no X-Wavr-Local header; off-mobile it is a same-origin fetch. All three are inert
+// until Pass 2 wires them; defining them now lets Pass 1 be verified as zero-behavior-change.
+function isAdmin(){ return MODE==="live" || (MODE==="companion" && !!window.WAVR_MOBILE && window.WAVR_MOBILE.role==="central"); }
+function companionAdminWrite(){ if(!window.WAVR_MOBILE) return true; return window.WAVR_MOBILE.role==="central"; }
+function wavrFetch(path,opts){ opts=opts||{}; if(window.WAVR_MOBILE){ const h=Object.assign({},opts.headers); delete h["X-Wavr-Local"]; const t=companionToken(); if(t) h["Authorization"]="Bearer "+t; return window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base+path, Object.assign({},opts,{headers:h})); } return fetch(location.origin+path, opts); }
 let companionAuthFailedOnce = false;
 function companionAuthFailed(){        // token revoked/expired (401/403) -> clear token + drop back to pairing
   if(companionAuthFailedOnce) return;
@@ -1888,7 +1897,7 @@ function initCompanion(){
           ? "invalid or expired code" : ("pairing failed ("+r.status+")");
         return;
       }
-      let tok=null; try{ tok=(await r.json()).token; }catch{}
+      let tok=null; try{ const pj=await r.json(); tok=pj.token; if(window.WAVR_MOBILE && window.WAVR_MOBILE.onPaired){ try{ window.WAVR_MOBILE.onPaired(pj); }catch(_){} } }catch{}
       if(!tok){ msg.className="cpair-msg err"; msg.textContent="invalid server response"; return; }
       companionSetToken(tok);
       msg.className="cpair-msg ok"; msg.textContent="paired — loading…";

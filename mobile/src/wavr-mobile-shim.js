@@ -63,6 +63,10 @@
     return SecureStorage.remove({ key: key });
   }
   var K_URL = "wavr.centralUrl", K_FP = "wavr.pinnedFp", K_TOKEN = "wavr.token";
+  // Multi-device admin parity (Pass 1: SIGNAL only). Our own device_id (captured at pair time via
+  // onPaired) and last-known role are cached in Keystore so boot reads them SYNCHRONOUSLY (like the
+  // token), and detectRole() can find our own row in GET /api/devices. Neither is ever logged.
+  var K_DEVICE_ID = "wavr.deviceId", K_ROLE = "wavr.role";
 
   // FIX-E3(b): durable-write helper for the PAIR / RE-PIN paths. Resolves only once every write of the
   // pairing state has committed; rejects if ANY write fails, so the caller surfaces a save error and
@@ -79,6 +83,8 @@
   var _base = "";      // "https://<ip>:<port>", "" until paired
   var _pinnedFp = null;
   var _token = null;
+  var _deviceId = null;   // our own device_id (from the pair response), persisted to Keystore
+  var _role = null;       // "central" | "user" | null  (null is treated as viewer everywhere)
 
   // ---------- ready gate ----------
   var _resolveReady;
@@ -140,6 +146,7 @@
     }
     WavrNet.openSocket({ url: url, pinnedFp: _pinnedFp }).then(function(r){
       sock.__id = r.socketId; _socks[r.socketId] = sock;
+      detectRole();   // socket (re)connect -> re-check role (fire-and-forget; self-guards + coalesces)
     }).catch(function(err){
       // FIX-M1: Capacitor surfaces call.reject(msg, code, data) as err.code + err.data.<field>
       // (WavrNetPlugin.kt:271,274,363,364; d.ts:24-27), so presentedFp lives at err.data.presentedFp,
@@ -184,6 +191,70 @@
     return p;
   }
 
+  // ---------- role / device-id signal (multi-device admin parity, Pass 1: SIGNAL ONLY) ----------
+  // Pass 1 populates WAVR_MOBILE.role but flips NO gate: a mobile viewer stays exactly today's
+  // viewer. The only observable effect is that a genuine promotion/demotion re-boots once so a
+  // future pass can build the page with the right capability set from the synchronous role cache.
+
+  // onPaired(pairResponse): index.html calls this right after a successful POST /api/pair with the
+  // parsed {device_id, token}. We persist OUR device_id so a later detectRole() can locate our own
+  // row in GET /api/devices. Guards missing fields; NEVER throws back to the caller (it is mid-pair);
+  // NEVER logs the id/token.
+  function onPaired(pairResponse){
+    try{
+      var id = pairResponse && pairResponse.device_id;
+      if(typeof id === "string" && id){
+        _deviceId = id;
+        secureSet(K_DEVICE_ID, id).catch(function(){});   // durable; failure is non-fatal to pairing
+      }
+    }catch(_){}
+  }
+
+  // detectRole(): ask the central who we are, fire-and-forget. GET /api/devices (Bearer) -> find our
+  // own row by device_id -> read its role. Definitiveness rules:
+  //   200 + our row present   -> that row's role ("central" if central, else "user")
+  //   200 + our id absent     -> "user"  (we are not an admin-listed device)
+  //   403                     -> "user"  (rejected as a peer; role only -- token wipe stays the
+  //                                       read/ws path's job via companionAuthFailed, untouched here)
+  //   network / other / parse -> UNDEFINED = keep the cached role (NEVER downgrade on a transient blip)
+  // A CAPABILITY flip (viewer<->admin) persists the new role then reloads (reuse the existing reload
+  // pattern), and only AFTER the durable write resolves so a failed Keystore write can never spin a
+  // reload loop (memory is updated first, so a re-trigger sees no change). A null->"user" first-detect
+  // is viewer->viewer: it persists the baseline but does NOT reload (keeps the mobile viewer flash-free).
+  // Never blocks boot; never throws; never logs id/role/token.
+  var _roleInFlight = false;
+  function detectRole(){
+    if(_roleInFlight) return;                 // coalesce overlapping triggers (boot / reconnect / resume)
+    if(!_token || !_base || !WavrNet) return; // nothing to ask without a token+base+bridge
+    _roleInFlight = true;
+    var next;   // stays UNDEFINED unless we get a DEFINITIVE answer -> undefined means "keep cache"
+    netFetch(_base + "/api/devices", { method: "GET", headers: { "Authorization": "Bearer " + _token } })
+      .then(function(r){
+        if(r && r.status === 403){ next = "user"; return; }
+        if(!r || !r.ok) return;                                  // other status -> keep cache
+        return r.json().then(function(body){
+          var list = (body && body.devices);
+          if(!Array.isArray(list)) return;                       // malformed -> keep cache
+          var mine = null;
+          for(var i = 0; i < list.length; i++){
+            if(list[i] && list[i].device_id === _deviceId){ mine = list[i]; break; }
+          }
+          next = mine ? (mine.role === "central" ? "central" : "user") : "user";
+        }, function(){ /* parse failure -> keep cache */ });
+      })
+      .catch(function(){ /* network / PIN_MISMATCH (hard-fail already raised) / other -> keep cache */ })
+      .then(function(){
+        _roleInFlight = false;
+        if(next === undefined || next === _role) return;         // no definitive change -> no reload
+        var wasAdmin = (_role === "central");
+        _role = next;                                            // memory-first: blocks a re-trigger loop
+        var capFlip = ((next === "central") !== wasAdmin);        // viewer<->admin only; null~user = viewer
+        secureSet(K_ROLE, next).then(function(){
+          if(capFlip){ try{ location.reload(); }catch(_){} }      // re-boot with the new capability set
+        }, function(){ /* durable write failed: do NOT reload (avoids a loop); keep role in memory */ });
+      });
+  }
+
   // ---------- CONTRACT A object (installed synchronously, before index.html parses) ----------
   window.WAVR_MOBILE = {
     mode: "companion",
@@ -192,8 +263,21 @@
     netWebSocket: netWebSocket,
     tokenGet: tokenGet,
     tokenSet: tokenSet,
+    onPaired: onPaired,                 // capture our device_id from the /api/pair response
+    get role(){ return _role; },        // "central" | "user" | null  (null treated as viewer)
     ready: ready
   };
+
+  // Foreground/resume trigger for detectRole: re-check our role when the app returns to the fore.
+  // visibilitychange is the zero-dependency choice (no @capacitor/app); it fires on WebView
+  // resume in Chrome/Android. detectRole self-guards on token/base and coalesces, so an extra
+  // fire is harmless. FALLBACK (only if on-device proves visibilitychange does NOT fire on native
+  // resume): add @capacitor/app's appStateChange. Do NOT add that dependency pre-emptively.
+  try{
+    document.addEventListener("visibilitychange", function(){
+      if(document.visibilityState === "visible") detectRole();
+    });
+  }catch(_){}
 
   // ================= PAIRING / TRUST UX =================
   var overlay = null, _screen = null, _styled = false;
@@ -504,10 +588,13 @@
     });
   }
 
-  Promise.all([secureGet(K_URL), secureGet(K_FP), secureGet(K_TOKEN)]).then(function(v){
+  Promise.all([secureGet(K_URL), secureGet(K_FP), secureGet(K_TOKEN),
+               secureGet(K_DEVICE_ID), secureGet(K_ROLE)]).then(function(v){
     _base = v[0] || ""; _pinnedFp = v[1] || null; _token = v[2] || null;
+    _deviceId = v[3] || null; _role = v[4] || null;   // role read synchronously at boot, like the token
   }).catch(function(){}).then(function(){
     _resolveReady();   // caches populated: index.html's deferred boot may run now
+    if(_token) detectRole();   // once after ready + token exists; fire-and-forget, never blocks boot
     decideScreen();
   });
 })();
