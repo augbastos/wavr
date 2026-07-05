@@ -79,4 +79,18 @@ def build_devices_router(store, delete_deps=None) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown device: {device_id}")
         return {"revoked": device_id}
 
+    @router.post("/api/devices/{device_id}/role", dependencies=list(delete_deps or []))
+    async def set_role(device_id: str, role: str = Body(..., embed=True)):
+        """Promote/demote an already-paired device between the two grantable roles.
+        State-changing, so it carries the SAME delete_deps (CSRF X-Wavr-Local guard)
+        as DELETE, and the router-level dep already limits it to central/root. Never
+        returns or alters token material — only the role column moves."""
+        try:
+            changed = store.set_role(device_id, role)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid role: {role!r}")
+        if not changed:
+            raise HTTPException(status_code=404, detail=f"unknown device: {device_id}")
+        return {"device_id": device_id, "role": role}
+
     return router

@@ -663,6 +663,9 @@
                 font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
   .pair-dev-row>span:first-child{min-width:0;overflow-wrap:anywhere;}
   .pair-dev-meta{color:var(--dim);font-variant-numeric:tabular-nums;}
+  .pair-dev-ctl{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+  .pair-dev-role{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+                 border-radius:8px;padding:6px 8px;font-size:.75rem;cursor:pointer;}
 
   /* ---------------- House editor (gear) ---------------- */
   .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
@@ -2631,6 +2634,25 @@ async function renderPairing(){
       meta.textContent = " · " + (d.role || "?") + " · seen " + seen + (d.revoked ? " · revoked" : "");
       left.appendChild(name); left.appendChild(meta);
       row.appendChild(left);
+      const ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
+      // Role control: promote/demote a paired device between Admin (stored 'central')
+      // and User (stored 'user') without revoke+re-pair. UI labels differ from the
+      // stored VALUES on purpose (backend auth keys off 'central'/'root').
+      const roleSel = document.createElement("select"); roleSel.className = "pair-dev-role";
+      roleSel.setAttribute("aria-label", "device role");
+      const optUser = document.createElement("option"); optUser.value = "user"; optUser.textContent = "User";
+      const optAdmin = document.createElement("option"); optAdmin.value = "central"; optAdmin.textContent = "Admin";
+      roleSel.appendChild(optUser); roleSel.appendChild(optAdmin);
+      roleSel.value = (d.role === "central") ? "central" : "user";  // reflect current stored role
+      roleSel.onchange = async ()=>{
+        const newRole = roleSel.value;                              // 'user' | 'central'
+        let r;
+        try{ r = await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id)+"/role",
+          {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+           body:JSON.stringify({role:newRole})}); }catch{}
+        if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after role change
+        else { actionFeedback(pairFb, false, "couldn't change the role"); refresh(); }  // revert select to server truth
+      };
       const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
       rm.textContent = "Revoke";
       rm.onclick = async ()=>{
@@ -2640,7 +2662,8 @@ async function renderPairing(){
         if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after revoking
         else { actionFeedback(pairFb, false, "couldn't revoke the device"); }
       };
-      row.appendChild(rm); devList.appendChild(row);
+      ctl.appendChild(roleSel); ctl.appendChild(rm);
+      row.appendChild(ctl); devList.appendChild(row);
     });
   }
 
