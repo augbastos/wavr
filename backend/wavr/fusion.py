@@ -228,6 +228,30 @@ class FusionEngine:
                     best_w = w
                     best_targets = [t.to_dict() for t in e.targets]
 
+        # Identity pass-through (non-biometric "who is home"). METADATA ONLY: this
+        # rides the SAME present + fresh (decay>0) gate as targets and NEVER feeds
+        # num/den/strength/agreement above — so `confidence` is provably unchanged
+        # whether or not identities are present. Deduped by person, keeping the
+        # entry with the stronger (higher/closer) rssi; a labelled entry with an
+        # rssi always beats one without.
+        merged: dict[str, dict] = {}
+        for modality, e in events.items():
+            if not (e.presence and e.identities and decays.get(modality, 0.0) > 0.0):
+                continue
+            for ident in e.identities:
+                d = ident.to_dict()
+                person = d.get("person")
+                if not person:
+                    continue
+                prev = merged.get(person)
+                if prev is None:
+                    merged[person] = d
+                    continue
+                pr, cr = prev.get("rssi"), d.get("rssi")
+                if cr is not None and (pr is None or cr > pr):
+                    merged[person] = d
+        identities = list(merged.values())
+
         return RoomState(room=room, occupied=occupied, confidence=confidence,
                          vitals=vitals, sources=sources, targets=best_targets,
-                         explanation=explanation, ts=ts)
+                         identities=identities, explanation=explanation, ts=ts)

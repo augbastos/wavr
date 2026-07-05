@@ -25,6 +25,11 @@ class Config:
     sim_interval: float
     fusion_threshold: float
     net_known_macs: set[str]
+    # Optional MAC->person label map (WAVR_NET_KNOWN, "mac=person" pairs), the
+    # network mirror of `ble_known`. Drives the non-biometric "who is home" label
+    # ONLY when `identity_enabled` is on; its keys also count toward presence (so a
+    # device listed here is "home" even if it isn't in WAVR_NET_MACS).
+    net_known: dict[str, str]
     net_interval: float
     net_grace: int
     net_scan_interval: float
@@ -59,6 +64,12 @@ class Config:
     ble_room: str
     ble_rssi_min: int
     ble_interval: float
+    # Non-biometric "who is home" (identity) master switch. DEFAULT OFF / opt-in:
+    # even with WAVR_BLE_KNOWN / WAVR_NET_KNOWN person maps configured, NO person
+    # label is attached to any event/state unless this is explicitly on. Privacy
+    # posture: when off the PII is never created, so it can't leak via /api/state,
+    # the WS hub, or the DB. House-level only (device presence, never a room).
+    identity_enabled: bool
     # Multi-device client auth (ADR-0006) — opt-in, all default to loopback-only.
     multidevice: bool
     bind_host: str
@@ -207,6 +218,15 @@ class Config:
 
 
 def load_config() -> Config:
+    # Network MAC->person map (WAVR_NET_KNOWN, "mac=person" pairs), mirroring the
+    # BLE parse below. Computed before Config(...) so its keys can be folded into
+    # net_known_macs (presence) while the labels feed identity separately.
+    net_known = {
+        pair.split("=", 1)[0].strip().replace("-", ":").lower():
+            (pair.split("=", 1)[1].strip() if "=" in pair else "")
+        for pair in os.getenv("WAVR_NET_KNOWN", "").split(",")
+        if pair.split("=", 1)[0].strip()
+    }
     return Config(
         db_path=os.getenv("WAVR_DB", "wavr.db"),
         sim_interval=float(os.getenv("WAVR_SIM_INTERVAL", "1.0")),
@@ -215,7 +235,8 @@ def load_config() -> Config:
             m.strip().replace("-", ":").lower()
             for m in os.getenv("WAVR_NET_MACS", "").split(",")
             if m.strip()
-        },
+        } | set(net_known.keys()),
+        net_known=net_known,
         net_interval=float(os.getenv("WAVR_NET_INTERVAL", "15.0")),
         net_grace=int(os.getenv("WAVR_NET_GRACE", "2")),
         net_scan_interval=float(os.getenv("WAVR_NET_SCAN_INTERVAL", "30.0")),
@@ -259,6 +280,9 @@ def load_config() -> Config:
         ble_room=os.getenv("WAVR_BLE_ROOM", "casa"),
         ble_rssi_min=int(os.getenv("WAVR_BLE_RSSI_MIN", "-80")),
         ble_interval=float(os.getenv("WAVR_BLE_INTERVAL", "15.0")),
+        # Non-biometric "who is home" master switch. DEFAULT OFF (mirrors the
+        # mqtt_enabled idiom): person labels are attached only when explicitly on.
+        identity_enabled=os.getenv("WAVR_IDENTITY_ENABLED", "").lower() in ("1", "true", "yes"),
         # Multi-device (ADR-0006): default OFF -> zero behaviour change, loopback-only
         # exactly as today. `bind_host` is only honoured when multidevice is on; the
         # TLS paths are empty until Phase 2 (self-signed cert generation).

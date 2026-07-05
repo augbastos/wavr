@@ -92,6 +92,38 @@ async def test_network_source_scans_when_known_macs_present():
     assert called["v"] is True
     assert ev.presence is True
 
+async def test_network_identity_attached_when_enabled():
+    # A labelled MAC that is seen gets named (rssi is None — ARP has no signal).
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff", "00:00:00:00:00:01"}
+    src = NetworkSource(KNOWN, scan=scan, interval=0, emit_identity=True,
+                        known={"AA-BB-CC-DD-EE-FF": "alice"})
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+    assert [i.to_dict() for i in ev.identities] == [
+        {"person": "alice", "source": "network", "rssi": None}
+    ]
+
+
+async def test_network_identity_absent_when_flag_off():
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff"}
+    src = NetworkSource(KNOWN, scan=scan, interval=0,
+                        known={"aa:bb:cc:dd:ee:ff": "alice"})
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True and ev.confidence == 0.8
+    assert ev.identities == ()
+
+
+async def test_network_identity_house_level_only():
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff"}
+    src = NetworkSource(KNOWN, scan=scan, interval=0, emit_identity=True,
+                        known={"aa:bb:cc:dd:ee:ff": "alice"})
+    [ev] = await _first_n(src, 1)
+    assert ev.room == "casa"
+
+
 async def test_arp_scan_parses_real_command_output(monkeypatch):
     from wavr.sources import network
     async def fake_run(*args):

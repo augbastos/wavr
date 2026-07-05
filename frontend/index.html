@@ -153,6 +153,15 @@
   .hero-line1.stale{opacity:.6;}
   .hero-line2{margin:4px 0 0;font-size:1rem;color:var(--dim);min-height:1.2em;
               font-variant-numeric:tabular-nums;}
+  /* "Who is home" roster (non-biometric, house-level). Only ever shown when the backend
+     surfaces identities on the 'casa' pseudo-room (identity is default-OFF/opt-in); hidden
+     entirely otherwise so there is no empty widget. Green = confident presence per token rules. */
+  .hero-who{margin:8px 0 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+  .hero-who[hidden]{display:none;}
+  .hero-who .who-label{font-size:.8rem;color:var(--dim);}
+  .who-chip{font-size:.75rem;font-weight:560;padding:3px 11px;border-radius:999px;
+            border:1px solid rgba(61,181,74,.4);color:var(--accent);background:var(--accent-soft);
+            max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .inicio-grid{display:grid;gap:var(--gap);grid-template-columns:minmax(0,1fr);align-items:start;}
   .map-home{order:-1;min-width:0;}
   .gear-map-host{min-width:0;}
@@ -1202,6 +1211,11 @@
             <span id="heroLive" class="live-badge" hidden><i aria-hidden="true"></i><span id="heroLiveTxt">live</span></span>
           </div>
           <p id="heroLine2" class="hero-line2"></p>
+          <!-- Non-biometric "who is home" roster (house-level, opt-in). Populated ONLY from the
+               'casa' pseudo-room's identities field, which the backend fills solely when identity
+               is explicitly enabled. Names are set via textContent (untrusted PII — never innerHTML).
+               Stays hidden with no content when identity is off/empty, so nothing new renders. -->
+          <p id="heroWhoHome" class="hero-who" aria-live="polite" hidden></p>
         </section>
         <!-- Global sensing-mode meter (precision slice): Off | Presence | Precise, DERIVED
              from system.running + whether any camera source is enabled. Wired ONLY to the
@@ -2030,14 +2044,54 @@ function confWord(conf){
 const houseEl = document.getElementById("house");
 const heroLine1El = document.getElementById("heroLine1");
 const heroLine2El = document.getElementById("heroLine2");
+const heroWhoHomeEl = document.getElementById("heroWhoHome");
 const roomOcc = {};
 const roomConf = {};
 // Neutral first-paint state (no blank flash) before the first RoomState arrives.
 houseEl.textContent = "home: —"; houseEl.className = "house";
 if(heroLine1El){ heroLine1El.textContent = "Loading…"; heroLine1El.className = "hero-line1"; }
+// "Who is home" roster (non-biometric, house-level). Driven ONLY by the 'casa'
+// pseudo-room's identities — the sole place the backend attaches them, and only when
+// identity is explicitly enabled (default OFF). Empty/absent -> hidden, no empty widget.
+// Person names are PII: rendered via textContent ONLY (never innerHTML). Honest wording:
+// "Home now" = house-level presence of a named device, NOT a per-room or biometric claim.
+let whoHomeSig = null;   // last rendered roster signature — skip rebuild + aria re-announce when unchanged
+function renderWhoHome(identities){
+  const el = heroWhoHomeEl;
+  if(!el) return;
+  const list = Array.isArray(identities) ? identities : [];
+  // Signature over (person, source) pairs; casa arrives every scan, but the roster rarely
+  // changes — avoid churning the DOM (and re-triggering aria-live) on identical frames.
+  const sig = list.map(function(id){ return (id && id.person) + "" + (id && id.source); }).join("");
+  if(sig === whoHomeSig) return;
+  whoHomeSig = sig;
+  el.textContent = "";
+  if(!list.length){ el.hidden = true; return; }
+  const label = document.createElement("span");
+  label.className = "who-label";
+  label.textContent = "Home now:";
+  el.appendChild(label);
+  list.forEach(function(id){
+    const person = id && id.person;
+    if(typeof person !== "string" || !person) return;   // skip malformed entries
+    const chip = document.createElement("span");
+    chip.className = "who-chip";
+    chip.textContent = person;                          // XSS-safe: never innerHTML
+    const src = id && id.source;
+    // Coarse proximity only — a single adapter localizes to the house, never a room.
+    if(src === "ble" || src === "network"){
+      chip.title = src === "ble" ? "seen over Bluetooth" : "seen on the network";
+    }
+    el.appendChild(chip);
+  });
+  el.hidden = el.childElementCount <= 1;   // label only (all entries malformed) -> hide
+}
 function updateHouse(rs){
   roomOcc[rs.room] = !!rs.occupied;
   roomConf[rs.room] = rs.confidence;
+  // Identity rides ONLY on the house-level 'casa' room; updating from any other room would
+  // wrongly clear the roster (their identities are always []). Gate strictly on 'casa'.
+  if(rs.room === "casa") renderWhoHome(rs.identities);
   const home = Object.values(roomOcc).some(Boolean);
   houseEl.textContent = home ? "home: someone's in" : "home: empty";
   houseEl.className = "house " + (home ? "home" : "away");

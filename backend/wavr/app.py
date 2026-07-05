@@ -110,7 +110,8 @@ def _default_sources(cfg):
     otherwise) — but then it's always-on, same as network/ruview."""
     sources = [
         ("network", lambda: NetworkSource(
-            cfg.net_known_macs, interval=cfg.net_interval, grace=cfg.net_grace), True),
+            cfg.net_known_macs, interval=cfg.net_interval, grace=cfg.net_grace,
+            known=cfg.net_known, emit_identity=cfg.identity_enabled), True),
         ("ruview", lambda: RuViewSource(
             cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
         ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
@@ -121,7 +122,7 @@ def _default_sources(cfg):
     if cfg.ble_known:
         sources.append(("ble", lambda: BLESource(
             cfg.ble_known, room=cfg.ble_room, rssi_min=cfg.ble_rssi_min,
-            interval=cfg.ble_interval), True))
+            interval=cfg.ble_interval, emit_identity=cfg.identity_enabled), True))
     return sources
 
 

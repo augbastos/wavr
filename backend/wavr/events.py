@@ -22,6 +22,23 @@ class Target:
 
 
 @dataclass(frozen=True)
+class Identity:
+    """A device-to-person association surfaced as house-level "who is home".
+    NON-BIOMETRIC: `person` is an operator-configured label (a phone's MAC/BLE
+    address named after its owner), never derived from face/voice/gait/re-ID.
+    `source` is the modality that saw the device ("ble" | "network"). `rssi` is
+    coarse proximity to the ONE host adapter (BLE only; network scan has none ->
+    None) and MUST NEVER be rendered as a room — a single antenna can localize to
+    the house, not a room."""
+    person: str
+    source: str
+    rssi: int | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class SensingEvent:
     room: str
     modality: str            # "wifi_csi" | "network" | "camera" | "mmwave" | "sim"
@@ -32,10 +49,12 @@ class SensingEvent:
     confidence: float        # the modality's own confidence 0..1
     ts: str                  # ISO-8601 UTC (+00:00)
     targets: tuple = ()      # tuple[Target, ...] — new optional last field
+    identities: tuple = ()   # tuple[Identity, ...] — house-level "who is home"
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["targets"] = list(d["targets"])
+        d["identities"] = list(d["identities"])
         return d
 
 

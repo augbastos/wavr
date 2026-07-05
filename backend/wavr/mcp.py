@@ -175,14 +175,16 @@ def get_room_context(provider: StateProvider, room: str) -> dict | None:
     """RoomState for one room, including the explainable "why": the per-modality
     `sources` and the human-readable `explanation`. None if the room is unknown.
 
-    PRIVACY (audit CRITICAL-1): strips `vitals` (breathing/heart rate) and `targets`
-    (per-person x/y tracking) before returning. MCP read tools must never expose
-    per-person biometric or positional data -- only room-level occupancy, confidence,
+    PRIVACY (audit CRITICAL-1): strips `vitals` (breathing/heart rate), `targets`
+    (per-person x/y tracking) and `identities` (non-biometric "who is home" person
+    labels — PII) before returning. MCP read tools must never expose per-person
+    biometric, positional, or identity data -- only room-level occupancy, confidence,
     and the explainable sources/explanation are exposed here."""
     state = provider.room_state(room)
     if state is None:
         return None
-    return {k: v for k, v in state.items() if k not in ("vitals", "targets")}
+    return {k: v for k, v in state.items()
+            if k not in ("vitals", "targets", "identities")}
 
 
 def get_house_map(provider: StateProvider) -> dict:

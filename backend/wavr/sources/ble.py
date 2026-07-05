@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable
 
-from wavr.events import SensingEvent
+from wavr.events import Identity, SensingEvent
 
 
 def _norm(addr: str) -> str:
@@ -42,7 +42,8 @@ class BLESource:
                  scan: Callable[[], Awaitable[dict[str, int]]] | None = None,
                  room: str = "casa", rssi_min: int = -80,
                  interval: float = 15.0, scan_window: float = 5.0,
-                 grace: int = 2, present_confidence: float = 0.7):
+                 grace: int = 2, present_confidence: float = 0.7,
+                 emit_identity: bool = False):
         self._known = {_norm(a): p for a, p in known.items()}
         self._rssi_min = rssi_min
         self._scan_window = scan_window
@@ -51,6 +52,10 @@ class BLESource:
         self._interval = interval
         self._grace = grace
         self._conf = present_confidence
+        # Non-biometric "who is home": attach the operator-configured person label
+        # only when explicitly enabled. Default OFF -> byte-identical to before
+        # (no Identity is ever created), so no PII enters the event/state/DB path.
+        self._emit_identity = emit_identity
         self._missed = grace + 1  # start "absent" until first sighting
 
     def _present_addrs(self, seen: dict[str, int]) -> set[str]:
@@ -69,16 +74,28 @@ class BLESource:
                     seen = {}
             else:
                 seen = {}
-            if self._present_addrs(seen):
+            present_addrs = self._present_addrs(seen)
+            if present_addrs:
                 self._missed = 0
             else:
                 self._missed += 1
             present = self._missed <= self._grace
+            # House-level "who is home": name the currently-seen known devices only
+            # when the gate is on and they carry a non-empty person label. During a
+            # grace-held miss (present True, nothing seen this cycle) the list is
+            # empty — honest: we hold presence but can't name who right now.
+            identities: tuple = ()
+            if present and self._emit_identity:
+                identities = tuple(
+                    Identity(person=self._known[a], source="ble", rssi=seen[a])
+                    for a in sorted(present_addrs) if self._known.get(a)
+                )
             yield SensingEvent(
                 room=self._room, modality="ble", presence=present,
                 motion=0.0, breathing_bpm=None, heart_bpm=None,
                 confidence=self._conf if present else 0.0,
                 ts=datetime.now(timezone.utc).isoformat(),
+                identities=identities,
             )
             if self._interval:
                 await asyncio.sleep(self._interval)
