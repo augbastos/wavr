@@ -53,7 +53,7 @@ python -m uvicorn wavr.app:app --host 127.0.0.1 --port 8000
 # or double-click scripts/wavr.ps1
 ```
 
-Tests: `python -m pytest backend/tests -q` (386, all hardware mock-tested).
+Tests: `python -m pytest backend/tests -q` (full suite, all hardware mock-tested).
 
 For the desktop app + LAN companions, see [`docs/deploy/multi-device.md`](docs/deploy/multi-device.md)
 (`python -m wavr.serve` brings up local TLS + pairing) and the Tauri shell in [`desktop/`](desktop/).
@@ -72,6 +72,20 @@ reads occupied. When an upstream engine's headline feature turns out to be weake
 Recently shipped: multi-device (desktop-central + LAN companions, local TLS, pairing/revocation),
 the installable PWA companion, the MCP "brain on Home Assistant" (read + gated control), and the
 **in-app house editor** — draw multi-floor rooms/walls/stairs, saved via `PUT /api/house`.
+
+Also recently shipped: gateway-anchored reverse-DNS hostname resolution (queries the LAN gateway's
+own DNS server directly — never the OS resolver — so a device's hostname reaches the ID classifier
+even on a machine with a VPN tunnel active; opt-in, `WAVR_NET_HOSTNAMES`); a gateway-MAC-identity
+monitor (on by default, zero extra egress — it only reads the ARP-derived binding the inventory
+scan already produced) paired with an opt-in rogue-DHCP-server detector, both riding one five-tier
+alert ladder (`info` → `note` → `watch` → `alert` → `critical`); MQTT Last-Will + a retained
+availability topic (`<prefix>/status`) so Home Assistant correctly flips Wavr's entities to
+*unavailable* on a crash or restart; occupancy hysteresis in the fusion engine (fast-to-occupied,
+debounced-to-vacant dwell so one dropped frame can't flap a room vacant); a life-safety
+**safety-alarm** device category (smoke/water-leak/flood sensors no longer get lumped in with
+generic environmental ones in the device catalog); and an expanded camera/hub OUI vendor table
+(the full Ubiquiti/UniFi Protect block, plus Reolink/Wyze/Eufy) checked against the live IEEE
+registry.
 
 Next:
 
