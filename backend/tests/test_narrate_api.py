@@ -39,6 +39,66 @@ def test_narrate_503_when_key_present_but_flag_unset(monkeypatch):
         assert c.post("/api/narrate").status_code == 503
 
 
+def _fake_make_generate(monkeypatch):
+    # Wire a NON-network generator so a gate-opened narrator can be exercised offline.
+    monkeypatch.setattr("wavr.app.make_generate", lambda cfg: (lambda prompt: "resumo local"))
+
+
+def _clean_narrate_env(monkeypatch):
+    for k in ("WAVR_NARRATE_ENABLED", "WAVR_NARRATE_PROVIDER", "GEMINI_API_KEY",
+              "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_gate_ollama_opens_without_key(monkeypatch):
+    # OLLAMA is LOCAL: no key needed, but narrate_enabled is still required (opt-in).
+    _clean_narrate_env(monkeypatch)
+    _fake_make_generate(monkeypatch)
+    monkeypatch.setenv("WAVR_NARRATE_ENABLED", "1")
+    monkeypatch.setenv("WAVR_NARRATE_PROVIDER", "ollama")
+    with _client(narrator=None) as c:
+        r = c.post("/api/narrate")
+        assert r.status_code == 200
+        assert r.json()["narration"] == "resumo local"
+
+
+def test_gate_ollama_still_needs_enable_flag(monkeypatch):
+    # Local is not egress, but it IS an LLM call the user must opt into.
+    _clean_narrate_env(monkeypatch)
+    _fake_make_generate(monkeypatch)
+    monkeypatch.setenv("WAVR_NARRATE_PROVIDER", "ollama")   # flag NOT set
+    with _client(narrator=None) as c:
+        assert c.post("/api/narrate").status_code == 503
+
+
+def test_gate_openai_503_without_key(monkeypatch):
+    _clean_narrate_env(monkeypatch)
+    _fake_make_generate(monkeypatch)
+    monkeypatch.setenv("WAVR_NARRATE_ENABLED", "1")
+    monkeypatch.setenv("WAVR_NARRATE_PROVIDER", "openai")   # no OPENAI_API_KEY
+    with _client(narrator=None) as c:
+        assert c.post("/api/narrate").status_code == 503
+
+
+def test_gate_openai_opens_with_key(monkeypatch):
+    _clean_narrate_env(monkeypatch)
+    _fake_make_generate(monkeypatch)
+    monkeypatch.setenv("WAVR_NARRATE_ENABLED", "1")
+    monkeypatch.setenv("WAVR_NARRATE_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    with _client(narrator=None) as c:
+        assert c.post("/api/narrate").status_code == 200
+
+
+def test_gate_anthropic_503_without_key(monkeypatch):
+    _clean_narrate_env(monkeypatch)
+    _fake_make_generate(monkeypatch)
+    monkeypatch.setenv("WAVR_NARRATE_ENABLED", "1")
+    monkeypatch.setenv("WAVR_NARRATE_PROVIDER", "anthropic")
+    with _client(narrator=None) as c:
+        assert c.post("/api/narrate").status_code == 503
+
+
 def test_narrate_offloads_storage_recent_to_a_thread(monkeypatch):
     # LOW: /api/narrate must offload the SQLite `_storage.recent(50)` read via
     # asyncio.to_thread, same as /api/history -- not call it inline on the event loop.

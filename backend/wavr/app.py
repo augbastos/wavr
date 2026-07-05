@@ -37,7 +37,7 @@ from wavr.rules import RulesEngine
 from wavr.away import AwayMonitor
 from wavr.mqtt_publisher import make_publisher
 from wavr.notifier import make_notifier
-from wavr.narrator import Narrator, make_gemini_generate
+from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
 from wavr.device_meta import DeviceMeta, normalize_mac
@@ -232,14 +232,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                          notify=_notify)
              if (_rules_publish or _notify) else None)
 
-    # Narrator: opt-in via injected `narrator` (tests) or BOTH WAVR_NARRATE_ENABLED and
-    # GEMINI_API_KEY (real Gemini generator, lazily imported). Off by default -- no
-    # explicit opt-in, no narrator, 503 on call. The flag is a conscious two-factor
-    # gate so merely having a key present (e.g. in ./.env) can't silently enable
-    # cloud egress.
+    # Narrator: opt-in via injected `narrator` (tests) or the two-factor gate below.
+    # PROVIDER-AGNOSTIC (WAVR_NARRATE_PROVIDER=gemini|ollama|openai|anthropic); the
+    # privacy allowlist (narrator.build_prompt) is shared by every provider. Off by
+    # default -- no explicit opt-in, no narrator, 503 on call. The gate is a conscious
+    # TWO-FACTOR check held PER PROVIDER: narrate_enabled AND provider_configured(cfg)
+    # (a key present for cloud providers; merely selecting local Ollama, which needs
+    # none). So merely having a key present (e.g. in ./.env) can't silently enable
+    # cloud egress, and a local Ollama narrator is still an opt-in LLM call.
     _narrator = narrator
-    if _narrator is None and cfg.narrate_enabled and cfg.gemini_api_key:
-        _narrator = Narrator(make_gemini_generate(cfg.gemini_api_key, cfg.gemini_model))
+    if _narrator is None and cfg.narrate_enabled and provider_configured(cfg):
+        _narrator = Narrator(make_generate(cfg))
 
     # Device metadata (Feature A): persisted per-MAC name + first/last-seen,
     # always built (like CameraStore) -- not itself opt-in, since naming is not
@@ -746,7 +749,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.post("/api/narrate")
     async def narrate(_=Depends(require_local)):
         if _narrator is None:
-            raise HTTPException(status_code=503, detail="narration not configured (set GEMINI_API_KEY)")
+            raise HTTPException(
+                status_code=503,
+                detail="narration not configured (set WAVR_NARRATE_ENABLED=1 and configure "
+                       f"the '{cfg.narrate_provider}' provider)")
         try:
             rows = await asyncio.to_thread(_storage.recent, 50)
             text = await asyncio.to_thread(_narrator.narrate, latest, rows)
