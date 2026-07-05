@@ -431,6 +431,26 @@
       border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.75rem;
       transition:border-color .15s ease-out,color .15s ease-out;}
   .rm:hover{border-color:var(--warn);color:var(--warn);}
+  /* PTZ d-pad (A4.3): shown per camera only when ONVIF PTZ is available. 44px targets. */
+  .ptz-wrap{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:2px 0 12px;}
+  .ptz-pad{display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);
+    gap:4px;grid-template-areas:". up ." "left stop right" ". down .";}
+  .ptz-pad button,.ptz-zoom button{width:44px;height:44px;display:flex;align-items:center;
+    justify-content:center;background:var(--elevated);border:1px solid var(--line);
+    color:var(--text);border-radius:8px;cursor:pointer;font-size:1rem;line-height:1;
+    touch-action:none;-webkit-user-select:none;user-select:none;
+    transition:border-color .12s ease-out,background .12s ease-out;}
+  .ptz-pad button:hover,.ptz-pad button:focus-visible,
+  .ptz-zoom button:hover,.ptz-zoom button:focus-visible{border-color:var(--accent);outline:none;}
+  .ptz-pad button:active,.ptz-zoom button:active{background:var(--elevated-2);}
+  .ptz-btn-up{grid-area:up;}.ptz-btn-down{grid-area:down;}.ptz-btn-left{grid-area:left;}
+  .ptz-btn-right{grid-area:right;}.ptz-btn-stop{grid-area:stop;color:var(--dim);}
+  .ptz-btn-stop:hover{border-color:var(--warn);color:var(--warn);}
+  .ptz-aux{display:flex;flex-direction:column;gap:8px;}
+  .ptz-zoom{display:flex;gap:6px;}
+  .ptz-presets{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:8px 11px;font-size:.8rem;min-height:44px;max-width:180px;cursor:pointer;}
+  .ptz-presets:hover,.ptz-presets:focus-visible{border-color:var(--accent);outline:none;}
 
   /* ---------------- Stage 2: Devices — sub-tabs, catalog, explainer, setup ladder ---------------- */
   .dsub-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -2081,9 +2101,106 @@ async function renderCameras(){
   const camFb = document.getElementById("camFb");
   const post = (url,body)=> fetch(location.origin+url,{method:"POST",
     headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+  // ---- PTZ d-pad (A4.3): ONVIF pan/tilt/zoom over the SAME require-local channel. Built per
+  // camera only when GET /api/ptz/{name}/capabilities returns {ptz:true}. Hold-to-move with a
+  // ~1s keepalive so the server's 2s auto-stop only fires when the client actually goes silent.
+  // textContent-only (XSS-safe); same-origin fetch only; 44px targets + aria labels.
+  const PTZ_KEEPALIVE_MS = 1000;
+  const PTZ_KEYVEC = {ArrowUp:{pan:0,tilt:1}, ArrowDown:{pan:0,tilt:-1},
+                      ArrowLeft:{pan:-1,tilt:0}, ArrowRight:{pan:1,tilt:0}};
+  let ptzCleanups = [];   // stopMove()s of live pads; drained before refresh() rebuilds the list
+  function buildPtzPad(name){
+    const enc = encodeURIComponent(name);
+    const wrap = document.createElement("div");
+    wrap.className = "ptz-wrap";
+    wrap.setAttribute("role","group");
+    wrap.setAttribute("aria-label", `Pan, tilt and zoom for ${name}`);
+    let timer = null, active = false;          // one hold at a time; guard re-entrancy
+    const sendMove = v => post(`/api/ptz/${enc}/move`,
+      {pan:v.pan||0, tilt:v.tilt||0, zoom:v.zoom||0}).catch(()=>{});   // LAN may blip; keepalive re-syncs
+    const sendStop = () => post(`/api/ptz/${enc}/stop`, {}).catch(()=>{});
+    function startMove(v){
+      if(active) return; active = true;
+      sendMove(v); timer = setInterval(()=> sendMove(v), PTZ_KEEPALIVE_MS);
+    }
+    function stopMove(){
+      if(timer){ clearInterval(timer); timer = null; }
+      if(active){ active = false; sendStop(); }
+    }
+    ptzCleanups.push(stopMove);   // if the list rebuilds mid-hold, refresh() clears our keepalive
+    // 3x3 d-pad: ▲ ◀ ■(stop) ▶ ▼
+    const pad = document.createElement("div"); pad.className = "ptz-pad";
+    const dirs = [
+      {cls:"ptz-btn-up",    glyph:"▲", aria:"Tilt up",    vec:{pan:0,tilt:1}},
+      {cls:"ptz-btn-left",  glyph:"◀", aria:"Pan left",   vec:{pan:-1,tilt:0}},
+      {cls:"ptz-btn-right", glyph:"▶", aria:"Pan right",  vec:{pan:1,tilt:0}},
+      {cls:"ptz-btn-down",  glyph:"▼", aria:"Tilt down",  vec:{pan:0,tilt:-1}},
+    ];
+    dirs.forEach(d=>{
+      const b = document.createElement("button");
+      b.type = "button"; b.className = d.cls; b.textContent = d.glyph;
+      b.setAttribute("aria-label", d.aria);
+      b.addEventListener("pointerdown", e=>{ e.preventDefault();
+        try{ b.setPointerCapture(e.pointerId); }catch{} startMove(d.vec); });
+      ["pointerup","pointerleave","pointercancel","blur"].forEach(ev=>
+        b.addEventListener(ev, stopMove));
+      pad.appendChild(b);
+    });
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button"; stopBtn.className = "ptz-btn-stop"; stopBtn.textContent = "■";
+    stopBtn.setAttribute("aria-label", "Stop");
+    stopBtn.addEventListener("click", stopMove);
+    pad.appendChild(stopBtn);
+    // Keyboard: arrow keys move while any pad button is focused (keydown auto-repeat is a no-op
+    // because startMove guards on `active`); keyup stops. preventDefault keeps the page from scrolling.
+    pad.addEventListener("keydown", e=>{ const v = PTZ_KEYVEC[e.key];
+      if(v){ e.preventDefault(); startMove(v); } });
+    pad.addEventListener("keyup", e=>{ if(PTZ_KEYVEC[e.key]){ e.preventDefault(); stopMove(); } });
+    wrap.appendChild(pad);
+    // Aux column: zoom +/- (hold-to-move) and a presets menu.
+    const aux = document.createElement("div"); aux.className = "ptz-aux";
+    const zoom = document.createElement("div"); zoom.className = "ptz-zoom";
+    [{glyph:"+", aria:"Zoom in", vec:{zoom:0.5}}, {glyph:"−", aria:"Zoom out", vec:{zoom:-0.5}}]
+      .forEach(z=>{
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = z.glyph; b.setAttribute("aria-label", z.aria);
+        b.addEventListener("pointerdown", e=>{ e.preventDefault();
+          try{ b.setPointerCapture(e.pointerId); }catch{} startMove(z.vec); });
+        ["pointerup","pointerleave","pointercancel","blur"].forEach(ev=>
+          b.addEventListener(ev, stopMove));
+        zoom.appendChild(b);
+      });
+    aux.appendChild(zoom);
+    const sel = document.createElement("select");
+    sel.className = "ptz-presets"; sel.hidden = true;
+    sel.setAttribute("aria-label", `Presets for ${name}`);
+    const ph = document.createElement("option"); ph.value = ""; ph.textContent = "Presets…";
+    sel.appendChild(ph);
+    sel.onchange = ()=>{ if(!sel.value) return;
+      post(`/api/ptz/${enc}/preset/${encodeURIComponent(sel.value)}`, {}).catch(()=>{});
+      sel.value = ""; };
+    (async ()=>{
+      let presets; try{ presets = await (await fetch(location.origin+`/api/ptz/${enc}/presets`,
+        {headers:{"X-Wavr-Local":"1"}})).json(); }catch{ return; }
+      if(!Array.isArray(presets) || !presets.length) return;
+      presets.forEach(p=>{ if(!p || !p.token) return;
+        const o = document.createElement("option");
+        o.value = p.token; o.textContent = p.name || p.token;   // textContent: preset names are camera-supplied
+        sel.appendChild(o); });
+      sel.hidden = false;
+    })();
+    aux.appendChild(sel);
+    wrap.appendChild(aux);
+    return wrap;
+  }
   async function refresh(){
+    ptzCleanups.splice(0).forEach(fn=>{ try{ fn(); }catch{} });   // stop any live hold before rebuild
     let cams; try{ cams = await (await fetch(location.origin+"/api/cameras")).json(); }catch{ return; }
     window.__wavrCameras?.(cams);   // Stage-2 hook: Detected excludes already-configured cameras
+    // PTZ is default-OFF: only probe per-camera capabilities when the global feature flag is on.
+    let ptzFeature = false;
+    try{ const s = await (await fetch(location.origin+"/api/status")).json();
+         ptzFeature = !!(s.features && s.features.ptz); }catch{}
     const list = document.getElementById("camList");
     list.innerHTML = cams.length ? "" : `<div class="empty">no camera configured</div>`;
     cams.forEach(c=>{
@@ -2105,6 +2222,16 @@ async function renderCameras(){
         else { actionFeedback(camFb, false, "couldn't remove the camera"); }
       };
       row.appendChild(rm); list.appendChild(row);
+      // Lazily probe PTZ capability for this camera; if the ONVIF camera exposes PTZ, drop the
+      // d-pad in on its own line just below the row. Hidden entirely when ptz:false / offline.
+      if(ptzFeature){
+        (async ()=>{
+          let cap; try{ cap = await (await fetch(location.origin+
+            `/api/ptz/${encodeURIComponent(c.name)}/capabilities`,
+            {headers:{"X-Wavr-Local":"1"}})).json(); }catch{ return; }
+          if(cap && cap.ptz === true && row.isConnected){ row.after(buildPtzPad(c.name)); }
+        })();
+      }
     });
   }
   document.getElementById("camForm").onsubmit = async (e)=>{

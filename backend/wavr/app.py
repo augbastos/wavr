@@ -44,6 +44,7 @@ from wavr.health_check import check_health, default_resolver_checkers, default_e
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
+from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
@@ -101,6 +102,9 @@ def _default_sources(cfg):
 
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# ONVIF PTZ preset tokens (A4.3): the token is XML-escaped in the SOAP body anyway,
+# but reject obviously-junk tokens early so a hostile id can't reach a log/traceback.
+_PRESET_RE = re.compile(r"^[A-Za-z0-9_\-:.]{1,100}$")
 # Scheme is restricted to rtsp(s) -- the URL is handed straight to cv2.VideoCapture,
 # so allowing arbitrary schemes (http://, file://, etc.) would let a caller point it
 # at internal/metadata endpoints or the local filesystem (SSRF/LFI via camera add).
@@ -139,7 +143,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                ha_import_store=None,
                wol_send=None, ping_probe=None, traceroute_runner=None,
                dns_query_fn=None, speedtest_fn=None,
-               onvif_discover=None, onvif_soap=None) -> FastAPI:
+               onvif_discover=None, onvif_soap=None, ptz_soap=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -339,6 +343,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     def _masked_cameras():
         return [{**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"])} for cam in _cameras.list()]
+
+    # ONVIF PTZ actuator (A4.3): opt-in (cfg.ptz, default OFF). Inert until a
+    # /api/ptz/* route runs -- it reads creds only from a stored camera's rtsp_url,
+    # contacts only LAN-IP hosts, and reads NO frame. `ptz_soap` is the test seam.
+    _ptz = CameraPTZ(soap=ptz_soap)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -702,6 +711,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # the rung-2 add form; never auto-adds. Surfaced so the Privacy &
                 # Egress view stays honest that an active LAN probe is available.
                 "onvif_probe": cfg.net_onvif_probe,
+                # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF. The first camera
+                # ACTUATOR: gates /api/ptz/* (move/stop/presets/goto). Surfaced so the
+                # Privacy & Egress view stays honest that a camera-control path exists.
+                "ptz": cfg.ptz,
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
@@ -823,6 +836,65 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         except KeyError:
             pass   # not registered (e.g. removed before a restart re-registered it)
         return _masked_cameras()
+
+    # ------------------------------------------------------------------- #
+    # ONVIF PTZ actuator routes (A4.3) -- opt-in (WAVR_PTZ) + require_local +
+    # master camera kill-switch. Creds come ONLY from the stored rtsp_url and
+    # NEVER appear in a request/response/log. No frame is ever read.
+    # ------------------------------------------------------------------- #
+    def _ptz_cam(camera_id: str) -> dict:
+        # Flag gate FIRST (default OFF -> 503 before any store lookup / ONVIF call).
+        if not cfg.ptz:
+            raise HTTPException(status_code=503, detail="PTZ disabled (set WAVR_PTZ=1)")
+        if not _NAME_RE.match(camera_id):
+            raise HTTPException(status_code=400, detail="camera id must be alphanumeric/_/-")
+        cam = _cameras.get(camera_id)
+        if not cam:
+            raise HTTPException(status_code=404, detail=f"unknown camera: {camera_id}")
+        return cam   # cam["rtsp_url"] carries the creds -- NEVER echo it back
+
+    def _camera_active(camera_id: str) -> bool:
+        # Master camera kill-switch coupling: PTZ may only actuate a camera the
+        # operator has explicitly turned ON (source task running). System kill or a
+        # per-source disable both flip `active` False -> every move short-circuits.
+        return any(s["name"] == camera_id and s["active"]
+                   for s in manager.status()["sources"])
+
+    @app.post("/api/ptz/{camera_id}/move")
+    async def ptz_move(camera_id: str,
+                       pan: float = Body(0.0), tilt: float = Body(0.0),
+                       zoom: float = Body(0.0), _=Depends(require_local)):
+        cam = _ptz_cam(camera_id)
+        if not _camera_active(camera_id):
+            # Camera off -> no ONVIF call at all (kill-switch dominates PTZ).
+            return {"ok": False, "reason": "camera off"}
+        ok = await _ptz.continuous_move(camera_id, cam["rtsp_url"], pan, tilt, zoom)
+        return {"ok": ok}
+
+    @app.post("/api/ptz/{camera_id}/stop")
+    async def ptz_stop(camera_id: str, _=Depends(require_local)):
+        cam = _ptz_cam(camera_id)
+        # Stop is always allowed (safety): even a just-disabled camera should halt.
+        return {"ok": await _ptz.stop(camera_id, cam["rtsp_url"])}
+
+    @app.get("/api/ptz/{camera_id}/presets")
+    async def ptz_presets(camera_id: str):
+        cam = _ptz_cam(camera_id)
+        return await _ptz.get_presets(camera_id, cam["rtsp_url"])
+
+    @app.post("/api/ptz/{camera_id}/preset/{token}")
+    async def ptz_goto_preset(camera_id: str, token: str, _=Depends(require_local)):
+        cam = _ptz_cam(camera_id)
+        if not _PRESET_RE.match(token):
+            raise HTTPException(status_code=400, detail="invalid preset token")
+        if not _camera_active(camera_id):
+            return {"ok": False, "reason": "camera off"}
+        return {"ok": await _ptz.goto_preset(camera_id, cam["rtsp_url"], token)}
+
+    @app.get("/api/ptz/{camera_id}/capabilities")
+    async def ptz_capabilities(camera_id: str):
+        cam = _ptz_cam(camera_id)
+        return await _ptz.capabilities(camera_id, cam["rtsp_url"])
 
     if cfg.multidevice:
         @app.post("/api/pair-code")

@@ -177,6 +177,12 @@ class Config:
     # LAN-IP-literal hosts) and it NEVER auto-adds a camera -- the user still confirms
     # via POST /api/cameras, and cameras always boot OFF.
     net_onvif_probe: bool
+    # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF. Gates the /api/ptz/* routes that
+    # actively MOVE a stored camera (ContinuousMove/Stop/GotoPreset via ONVIF at host:2020).
+    # PTZ is the first camera ACTUATOR in Wavr: default-off, require_local + master camera
+    # kill-switch honoured, LAN-IP-only (SSRF-hard), creds read only from the stored rtsp_url
+    # (never accepted over the PTZ API, never logged/echoed). No frame is ever read here.
+    ptz: bool
 
 
 def load_config() -> Config:
@@ -313,4 +319,6 @@ def load_config() -> Config:
         # ONVIF camera probe (A4.2) -- opt-in, default OFF (active probe on top of
         # the passive collectors).
         net_onvif_probe=os.getenv("WAVR_ONVIF_PROBE", "").lower() in ("1", "true", "yes", "on"),
+        # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF (first camera ACTUATOR).
+        ptz=os.getenv("WAVR_PTZ", "").lower() in ("1", "true", "yes", "on"),
     )
