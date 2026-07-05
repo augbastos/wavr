@@ -248,6 +248,8 @@ def test_status_shape_and_no_secrets():
             "wol", "diagnostics", "speedtest",
             # ONVIF camera probe (A4.2) -- opt-in, default OFF (active LAN probe).
             "onvif_probe",
+            # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF (first camera actuator).
+            "ptz",
         }
         assert set(body["features"]) == expected_features
         assert all(isinstance(v, bool) for v in body["features"].values())
@@ -286,6 +288,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "wol": False, "diagnostics": False, "speedtest": False,
             # ONVIF camera probe (A4.2) -- opt-in, default OFF.
             "onvif_probe": False,
+            # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF.
+            "ptz": False,
         }
 
 
