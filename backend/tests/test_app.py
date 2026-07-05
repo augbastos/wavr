@@ -481,3 +481,80 @@ def test_status_features_health_resolvers_reflects_flag(monkeypatch):
     monkeypatch.setenv("WAVR_HEALTH_RESOLVERS", "1")
     with build_client() as client:
         assert client.get("/api/status").json()["features"]["health_resolvers"] is True
+
+
+# ---------------------------------------------------------------------------
+# Fake-presence-on-disconnect fix: camera liveness tri-state + the periodic
+# re-fuse tick that fades a disconnected single-camera room to unoccupied.
+# ---------------------------------------------------------------------------
+
+def test_cameras_liveness_tristate():
+    # /api/cameras must surface a per-camera liveness enum so an OFFLINE camera's
+    # room can never be rendered as a sensor-confirmed 'empty'. A boot-OFF camera
+    # is 'unknown' (we honestly don't know); an F3-latched-down camera is 'offline';
+    # recovery returns it to 'unknown' (not stuck offline).
+    store = CameraStore(":memory:")
+    store.add("cam_q", "quarto", "rtsp://u:p@10.0.0.5/s1", 0.5, mac=None)
+    app = create_app(
+        sources=[], storage=Storage(":memory:"), hub=Hub(),
+        fusion=FusionEngine(), camera_store=store,
+    )
+    with TestClient(app) as client:
+        cams = client.get("/api/cameras").json()
+        assert cams[0]["liveness"] == "unknown"            # registered but boot-OFF
+        assert "***" in cams[0]["rtsp_url"]                # creds masked, not surfaced
+
+        app.state.camera_health.report("cam_q", False)     # F3 latches it down
+        cams = client.get("/api/cameras").json()
+        assert cams[0]["liveness"] == "offline"
+
+        app.state.camera_health.report("cam_q", True)      # camera recovered
+        cams = client.get("/api/cameras").json()
+        assert cams[0]["liveness"] == "unknown"
+
+
+def test_refuse_publishes_decayed_state():
+    # The periodic re-fuse tick must age a room that has stopped receiving events:
+    # a live "occupied 82%" reading decays to 0 and flips vacant across ticks,
+    # instead of freezing. Driven deterministically via app.state.refuse_once with
+    # an injected wall clock (no loop-timing flakiness).
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    from wavr.events import SensingEvent
+
+    base = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+    clock = {"t": base}
+    fusion = FusionEngine(weights={"camera": 1.0}, now_fn=lambda: clock["t"])
+    hub = Hub()
+    app = create_app(
+        sources=[], storage=Storage(":memory:"), hub=hub,
+        fusion=fusion, camera_store=CameraStore(":memory:"),
+    )
+
+    def _cam_ev(presence, conf, ts):
+        return SensingEvent(room="sala", modality="camera", presence=presence,
+                            motion=1.0, breathing_bpm=None, heart_bpm=None,
+                            confidence=conf, ts=ts)
+
+    async def drive():
+        up = fusion.update(_cam_ev(True, 0.82, base.isoformat()))
+        assert up.occupied is True and up.confidence >= 0.5
+
+        sub = hub.subscribe()
+        await app.state.refuse_once()                      # tick #1: fresh, seeds latest
+        first = sub.get_nowait()
+        assert abs(first["confidence"] - up.confidence) < 1e-9   # unchanged while live
+
+        clock["t"] = base + timedelta(seconds=300)         # camera dark, past stale
+        await app.state.refuse_once()                      # tick #2: decays + holds
+        clock["t"] = base + timedelta(seconds=400)         # past the vacate dwell
+        await app.state.refuse_once()                      # tick #3: confirms vacant
+
+        last = first
+        while not sub.empty():
+            last = sub.get_nowait()
+        assert last["room"] == "sala"
+        assert last["confidence"] == 0.0                   # faded, never frozen at 0.82
+        assert last["occupied"] is False                   # honestly unoccupied
+
+    asyncio.run(drive())

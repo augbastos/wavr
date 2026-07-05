@@ -143,6 +143,14 @@ class CameraHealthMonitor:
         """All current drift suggestions (newest-inserted last)."""
         return list(self._suggestions.values())
 
+    def down(self) -> list[str]:
+        """Names of cameras currently latched DOWN by the F3 health hook (frames
+        stopped for >= cam_unhealthy_secs). Carries camera NAMES only — never a
+        frame, rtsp_url or credential (ADR-0002). Feeds the read-only liveness
+        tri-state so the map can render an offline camera's room as
+        'unconfirmed' instead of a stale, confident presence."""
+        return list(self._down)
+
     def clear(self, name: str) -> None:
         """Drop a camera's suggestion + down-state -- called after a rebind."""
         self._down.discard(name)

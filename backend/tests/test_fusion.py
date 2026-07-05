@@ -218,3 +218,55 @@ def test_dwell_is_per_room_independent():
     sala = f.state("sala")
     assert quarto.occupied is True and "confirmando" not in quarto.explanation
     assert sala.occupied is True and "confirmando" in sala.explanation
+
+
+# ---------------------------------------------------------------------------
+# Wall-clock ageing (fake-presence-on-disconnect fix). With an injected wall
+# clock, a source that STOPS reporting decays to zero and the room fades to
+# unoccupied via the periodic re-fuse tick -- instead of freezing its last
+# reading forever (the "occupied 82%" ghost of an unplugged camera).
+# ---------------------------------------------------------------------------
+
+def test_single_source_decays_to_unoccupied_with_wallclock():
+    # A lone camera reports occupied ~82%, then goes dark (no more events). Re-fusing
+    # against an advancing wall clock must DECAY its confidence to 0 (not freeze it)
+    # and, once the vacate dwell elapses, flip the room to unoccupied.
+    clock = {"t": _BASE}
+    f = FusionEngine(weights={"camera": 1.0}, now_fn=lambda: clock["t"])
+    up = f.update(_cam("sala", True, 0.82, 0))
+    assert up.occupied is True and up.confidence >= 0.5   # live: occupied
+
+    # Camera unplugged: no new events, only the clock advances. First stale re-fuse
+    # (age 300s > stale_s=90) drives confidence to 0 immediately -- the frozen
+    # reading is GONE -- and starts the vacate dwell.
+    clock["t"] = _BASE + timedelta(seconds=300)
+    held = f.state("sala")
+    assert held.confidence == 0.0                          # NOT frozen at 0.82
+    assert held.occupied is True                           # dwell still holding
+
+    # A later re-fuse, past the vacate window, confirms the room vacant.
+    clock["t"] = _BASE + timedelta(seconds=400)
+    gone = f.state("sala")
+    assert gone.confidence == 0.0
+    assert gone.occupied is False                          # honestly unoccupied
+
+
+def test_fresh_source_value_unchanged_by_now_fn():
+    # No-regression: while a source is fresh (age <= freshness_s) the wall clock
+    # must not change the fused value at all -- byte-identical to the now_fn=None
+    # baseline. The tick can only fade a DEAD source, never alter a live one.
+    baseline = FusionEngine(weights={"camera": 1.0})       # now_fn=None
+    b = baseline.update(_cam("sala", True, 0.82, 0))
+    clock = {"t": _BASE + timedelta(seconds=5)}            # 5s <= freshness_s(30)
+    f = FusionEngine(weights={"camera": 1.0}, now_fn=lambda: clock["t"])
+    r = f.update(_cam("sala", True, 0.82, 0))
+    assert r.confidence == b.confidence
+    assert r.occupied == b.occupied
+
+
+def test_rooms_getter_lists_known_rooms():
+    f = FusionEngine()
+    assert f.rooms() == []
+    f.update(ev("sala", "camera", True, 0.9))
+    f.update(ev("quarto", "network", False, 0.4))
+    assert set(f.rooms()) == {"sala", "quarto"}

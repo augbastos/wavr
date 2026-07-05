@@ -8,6 +8,7 @@ import logging
 import re
 import sqlite3
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -193,7 +194,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
-    _fusion = fusion or FusionEngine(threshold=cfg.fusion_threshold)
+    # Wall-clock ageing is applied ONLY to the engine this function builds itself
+    # (the real app). An injected `fusion` (tests) keeps its own now_fn=None so
+    # fixed-timestamp determinism is unaffected. now_fn flips _fuse from ageing
+    # against the room's newest event (age 0 -> frozen reading) to the wall clock,
+    # so a source that stops reporting decays to zero instead of freezing.
+    _fusion = fusion or FusionEngine(threshold=cfg.fusion_threshold,
+                                     now_fn=lambda: datetime.now(timezone.utc))
     latest: dict[str, dict] = {}  # room -> last RoomState dict (Camada 4 seam)
     # deepcopy: load_house_map returns the module-level housemap.DEFAULT_MAP object
     # itself on any fallback (missing/invalid file), and put_house below mutates _house
@@ -379,12 +386,49 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _devices = DeviceStore(cfg.db_path) if cfg.multidevice else None
     _pairing = PairingManager(_devices) if cfg.multidevice else None
 
-    async def _ingest(event):
-        rs = _fusion.update(event)
+    async def _publish(rs, *, persist=True):
+        # Shared publish path for both the event-driven ingest and the periodic
+        # re-fuse tick. `persist=False` skips the DB write (the tick stores
+        # on-change only, to avoid a row every few seconds per room forever).
         d = rs.to_dict()
-        await asyncio.to_thread(_storage.insert_state, rs)  # fsync off the event loop
+        if persist:
+            await asyncio.to_thread(_storage.insert_state, rs)  # fsync off the event loop
         latest[d["room"]] = d
         await _hub.publish(d)
+        return d
+
+    async def _ingest(event):
+        rs = _fusion.update(event)
+        await _publish(rs)
+
+    async def _refuse_once():
+        # One periodic re-fuse pass. Fusion is otherwise purely event-driven, so a
+        # room whose only source (e.g. a single camera) is unplugged/disabled stops
+        # emitting frames and its last reading FREEZES ("occupied 82%" forever).
+        # Re-running fusion against the wall clock ages every known room: a dead
+        # source's freshness decays to zero (fusion._freshness) and the vacate dwell
+        # finally advances, so the room honestly fades to unoccupied. FAIL-SAFE:
+        # confidence can only DROP as a source ages — the tick never invents presence
+        # (num only accumulates from real presence events). Store-on-change only
+        # (a row every few seconds per room forever is unacceptable DB bloat); always
+        # refresh latest + hub so the live map fades. Per-room guarded so one bad
+        # room never stalls the sweep.
+        for room in _fusion.rooms():
+            try:
+                rs = _fusion.state(room)
+                if rs is None:
+                    continue
+                prev = latest.get(room)
+                changed = (prev is None or prev["occupied"] != rs.occupied
+                           or abs(prev["confidence"] - rs.confidence) >= 0.01)
+                await _publish(rs, persist=changed)
+            except Exception:
+                logging.warning("refuse tick failed for room %s", room, exc_info=True)
+
+    async def _refuse_loop():
+        while True:
+            await asyncio.sleep(cfg.refuse_interval)
+            await _refuse_once()
 
     manager = SourceManager(_ingest)
     for name, factory, enabled in (sources if sources is not None else _default_sources(cfg)):
@@ -402,7 +446,22 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         manager.register(cam["name"], _camera_factory(cam, cfg, _camera_health.report), False)
 
     def _masked_cameras():
-        return [{**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"])} for cam in _cameras.list()]
+        # Per-camera liveness tri-state (read-only, name+enum only — no frame, no
+        # creds). 'offline' = F3 health hook latched the camera down (frames stopped
+        # >= cam_unhealthy_secs); 'live' = its source task is running (frames
+        # flowing); 'unknown' = registered but boot-OFF / not started, so we
+        # HONESTLY don't know — never asserted empty. Lets the map distinguish an
+        # offline camera's stale/decayed reading from a sensor-confirmed empty room.
+        down = set(_camera_health.down())
+        active = {s["name"]: s["active"] for s in manager.status()["sources"]}
+        out = []
+        for cam in _cameras.list():
+            name = cam["name"]
+            liveness = ("offline" if name in down
+                        else "live" if active.get(name) else "unknown")
+            out.append({**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"]),
+                        "liveness": liveness})
+        return out
 
     def _resolve_mac_for_url(rtsp_url: str) -> str | None:
         # F3 best-effort MAC capture at add/rebind time: match the rtsp host IP against
@@ -452,12 +511,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             )
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
         away_task = asyncio.create_task(_away.run(_hub)) if _away else None
+        # Periodic re-fuse loop (WAVR_REFUSE_S, default 5s; 0 disables). Ages rooms
+        # that have stopped receiving events so a disconnected source fades to
+        # unoccupied instead of freezing its last reading.
+        refuse_task = (asyncio.create_task(_refuse_loop())
+                       if cfg.refuse_interval > 0 else None)
         try:
             yield
         finally:
             # Suppress CancelledError AND any error a caller-injected publisher
             # might raise, so shutdown always reaches manager.stop() + camera close.
-            for t in (rules_task, away_task):
+            for t in (rules_task, away_task, refuse_task):
                 if t:
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -487,6 +551,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     _devices.close()
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
+    # Test seams (not routes — never reachable over HTTP, carry no secrets):
+    #  * refuse_once: the periodic re-fuse body, invokable once without loop timing
+    #    so a test can drive one deterministic decayed tick.
+    #  * camera_health: the F3 monitor, so a test can latch a camera down/up and
+    #    assert the /api/cameras liveness tri-state (names only, no frame/creds).
+    app.state.refuse_once = _refuse_once
+    app.state.camera_health = _camera_health
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
