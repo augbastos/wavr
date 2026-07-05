@@ -250,6 +250,11 @@ def test_status_shape_and_no_secrets():
             "onvif_probe",
             # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF (first camera actuator).
             "ptz",
+            # A5.2 ARP device blocking -- opt-in, default OFF (active-LAN-attack primitive).
+            "blocking",
+            # A5.1 hardening posture (bool-only, never the secret): local-API token
+            # required + F6 health CSRF gate.
+            "api_token", "health_gate",
         }
         assert set(body["features"]) == expected_features
         assert all(isinstance(v, bool) for v in body["features"].values())
@@ -261,8 +266,12 @@ def test_status_shape_and_no_secrets():
         # internet monitor off by default -> null/null (Feature B contract)
         assert body["internet"] == {"ok": None, "since": None}
 
-        # NO SECRETS: grep the raw JSON text for anything token/credential/MAC/rtsp shaped.
-        raw = json.dumps(body).lower()
+        # NO SECRETS: `features` are all-bool flags (asserted just above), so no secret
+        # can hide there -- grep the REST of the payload (sources/house/internet/version)
+        # for anything credential-shaped. (A legitimate bool flag named `api_token` would
+        # false-trip a raw substring grep of the whole body; the real token-VALUE guard is
+        # test_a5_hardening.test_token_never_appears_in_status_body.)
+        raw = json.dumps({k: v for k, v in body.items() if k != "features"}).lower()
         for secret_marker in ("token", "ha_token", "ha_url", "mac", "rtsp", "password", "secret"):
             assert secret_marker not in raw
 
@@ -290,6 +299,10 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "onvif_probe": False,
             # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF.
             "ptz": False,
+            # A5.2 ARP device blocking -- opt-in, default OFF.
+            "blocking": False,
+            # A5.1 hardening: no local-API token by default; F6 health CSRF gate always on.
+            "api_token": False, "health_gate": True,
         }
 
 
@@ -358,7 +371,7 @@ def test_health_shape_and_gateway_reachable():
     # build_client, so with no resolvers configured a reachable gateway alone
     # settles severity at "ok" (see wavr.health_check.compute_severity).
     with build_client(health_check=_fake_health_up) as client:
-        r = client.get("/api/health")
+        r = client.get("/api/health", headers={"X-Wavr-Local": "1"})
         assert r.status_code == 200
         body = r.json()
         assert set(body) == {"severity", "gateway", "resolvers", "extra", "failed", "internet_monitor"}
@@ -372,7 +385,7 @@ def test_health_shape_and_gateway_reachable():
 
 def test_health_reports_gateway_down():
     with build_client(health_check=_fake_health_down) as client:
-        body = client.get("/api/health").json()
+        body = client.get("/api/health", headers={"X-Wavr-Local": "1"}).json()
         assert body["gateway"]["ok"] is False
         # An unreachable gateway is the worst tier regardless of resolvers/extra.
         assert body["severity"] == "critical"
@@ -391,8 +404,8 @@ def test_health_never_triggers_real_network_when_injected():
         return True
 
     with build_client(health_check=spy) as client:
-        client.get("/api/health")
-        client.get("/api/health")
+        client.get("/api/health", headers={"X-Wavr-Local": "1"})
+        client.get("/api/health", headers={"X-Wavr-Local": "1"})
     assert len(calls) == 2   # on-demand: one real call per GET, no caching
 
 
@@ -407,7 +420,7 @@ def test_health_severity_ladder_reflects_resolver_state():
 
     with build_client(health_check=_fake_health_up,
                        health_resolvers={"1.1.1.1": resolver_ok, "8.8.8.8": resolver_down}) as client:
-        body = client.get("/api/health").json()
+        body = client.get("/api/health", headers={"X-Wavr-Local": "1"}).json()
     assert body["severity"] == "minor"
     assert body["resolvers"] == {"1.1.1.1": True, "8.8.8.8": False}
     assert body["failed"] == ["8.8.8.8"]
@@ -426,7 +439,7 @@ def test_health_resolvers_default_off_no_real_egress_end_to_end(monkeypatch):
         health_check=_fake_health_up,
     )
     with TestClient(app) as client:
-        body = client.get("/api/health").json()
+        body = client.get("/api/health", headers={"X-Wavr-Local": "1"}).json()
     assert body["resolvers"] == {}
     assert body["severity"] == "ok"
 
@@ -450,7 +463,7 @@ def test_health_resolvers_opt_in_wires_the_real_default_resolvers(monkeypatch):
         health_check=_fake_health_up,
     )
     with TestClient(app) as client:
-        body = client.get("/api/health").json()
+        body = client.get("/api/health", headers={"X-Wavr-Local": "1"}).json()
     assert set(body["resolvers"].keys()) == set(DEFAULT_RESOLVERS)
     assert body["severity"] == "ok"
 

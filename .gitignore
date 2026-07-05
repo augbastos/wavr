@@ -21,6 +21,13 @@ backend/wavr.db
 backend/wavr.db-shm
 backend/wavr.db-wal
 
+# A5.1 optional local-API token (WAVR_LOCAL_TOKEN=auto persists the RAW shared
+# secret beside the db as an extensionless `local_token` file -- NOT matched by
+# *.db / wavr.db*). Never commit a live credential to this public AGPL repo.
+local_token
+**/local_token
+backend/local_token
+
 # tool-output dirs (never commit)
 _fable/
 .superpowers/
