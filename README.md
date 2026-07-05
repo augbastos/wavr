@@ -21,7 +21,7 @@ egress. No account, no cloud, no telemetry.
 **Try it locally (no backend, no hardware):** open `frontend/index.html` — off-localhost the dashboard
 self-switches to a built-in simulator (simulated data only, zero network requests).
 
-![Wavr dashboard — position radar with posture labels, explainable per-room fusion, timeline](docs/img/demo.png)
+![Wavr Command Center — a 3D house map with per-person markers, per-room confidence rings, the Off/Presence/Precise sensing meter, and explainable per-modality fusion (shown in the built-in simulator)](docs/img/demo.png)
 
 ## What's real today
 
@@ -50,12 +50,21 @@ isn't required).
   with **no coverage** at all. The liveness signal carries camera *names* and an enum only — never a
   frame, URL, or credential.
 - **Multi-device pairing** — a phone or second PC on the same Wi-Fi pairs with the desktop "central":
-  local **HTTPS/WSS** (auto self-signed cert via `python -m wavr.serve`), a **single-use 8-digit pairing
-  code** (120s TTL, rate-limited), per-device hashed revocable tokens, single-use WS tickets, and an
-  in-subnet real-peer check. At pairing you verify an **out-of-band certificate fingerprint** — read it
-  off the trusted loopback dashboard, compare it against what the phone's browser shows — which defeats
-  a pairing-time TLS man-in-the-middle. Devices pair with a **role**: a full-control central or a
-  **read-only viewer**. Opt-in, default-OFF, zero cloud (ADR-0006).
+  local **HTTPS/WSS** (auto self-signed cert via `python -m wavr.serve`), a **rotating 8-digit pairing
+  code** that auto-refreshes on screen (single-use, 120s TTL, rate-limited) so you never race the clock,
+  per-device hashed revocable tokens, single-use WS tickets, and an in-subnet real-peer check. At pairing
+  you verify an **out-of-band certificate fingerprint** — read it off the trusted loopback dashboard,
+  compare it against what the phone's browser shows — which defeats a pairing-time TLS man-in-the-middle.
+  Devices pair with a **role — Admin (full control) or User (read-only)** — and a device's role can be
+  changed after pairing (Admin-only; a User can never promote itself). Opt-in, default-OFF, zero cloud
+  (ADR-0006).
+- **Who is home (non-biometric)** — an **opt-in, default-OFF** identity layer maps a known device
+  (a phone's Bluetooth address or Wi-Fi MAC) to a named person, so the dashboard can show *who* is home —
+  **not just that someone is**. It is **house-level** (one adapter localizes to the house, not a room —
+  Wavr says so, never faking per-room identity) and **non-biometric** (device-to-person, no faces). With
+  the flag off, no person label is ever created, so it can't leak to `/api/state`, the DB, or an agent.
+  Person labels are stripped from the MCP read path as PII. **Face recognition is a separate, gated,
+  undecided item — not shipped** (see roadmap).
 - **MCP "brain on Home Assistant"** — Wavr exposes `RoomState` and the house map to agents (read-only),
   **plus** an opt-in gated control tool (`WAVR_MCP_CONTROL`, default-OFF) that asks Home Assistant to
   run a service. Allowlist + consent refusal on both the service *and* the target entity; camera / lock
@@ -78,8 +87,9 @@ isn't required).
 - **Live posture (standing/sitting/lying) is roadmap**, not shipped — it needs YOLO-pose on a GPU.
 - **mmWave x/y target tracking** needs the physical LD2450; the code is written and mock-tested but
   hasn't been run on-device here.
-- **AR floor-plan measuring, a native mobile app, and any identity/face features are roadmap** (see
-  below), and face recognition is explicitly gated and undecided.
+- **AR floor-plan measuring and a native mobile app are roadmap** (see below). Non-biometric "who is
+  home" ships today (opt-in, default-OFF); **face recognition** specifically is explicitly gated and
+  undecided.
 
 Wavr does not reimplement sensing research — it orchestrates sensing engines as plugins and is honest
 about each one's confidence. When an upstream engine's headline feature is weaker than its README, Wavr
@@ -141,14 +151,21 @@ detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - **Just engineering time** — camera → floor-plan homography (place people on the map, not just flag the
   room), wall-occlusion fusion weighting, floor-plan / CAD import as a backdrop.
 - **~€15 of hardware** — mmWave LD2450 bring-up on the physical device for real per-person x/y.
-- **A mobile app** — a Capacitor (native shell) companion beyond the already-installable PWA.
-- **Precision tiers** — richer sensing modes as sources and homography land.
+- **A mobile app** — a Capacitor (native shell) Android-first companion beyond the already-installable
+  PWA, where the pairing/2FA flow is native and the app pins the central's certificate at pairing
+  (stronger than a browser's fingerprint-compare). Architecture and phased plan are in progress.
+- **Precision tiers** — richer sensing modes beyond the shipped Off/Presence/Precise meter, as
+  per-camera pose, homography, and a second per-room signal (mmWave/BLE) land.
 - **Needs a GPU / open research** — live camera YOLO-pose (standing/sitting/lying), cross-source track
   association (Kalman + Hungarian) instead of best-source pass-through, real fall detection (a research
   demo, **not** a certified safety system — ADR-0003), and a fully-local LLM narrator to remove the last
   optional cloud egress.
-- **Optional, non-biometric identity** — a way to distinguish household members without cameras.
-  **Face recognition is explicitly gated and undecided** — it is not on the committed roadmap.
+- **Face recognition** — a heavily-gated, always-opt-in, default-OFF, local-only, deletable module to
+  identify household members by face. It crosses into biometric special-category data (GDPR Art. 9) even
+  stored locally, so it is **explicitly gated and undecided** — designed-for, not committed. (The
+  non-biometric device-to-person "who is home" above already ships.)
+- **Device-participation opt-out** — any paired device (even a User) instantly leaving Wavr's sensing
+  like an airplane-mode toggle; the Admin sees it left but cannot force it back on, only request.
 
 ## Design stance: your home, understood — without giving it away
 
