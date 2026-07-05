@@ -368,38 +368,37 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
     """
     from mcp.server.fastmcp import FastMCP   # lazy: optional [mcp] extra
 
-    # Capture the plain functions before the tool wrappers below shadow their names.
-    _list_rooms = list_rooms
-    _get_room_context = get_room_context
-    _get_house_map = get_house_map
-    _get_ha_entities = get_ha_entities
-    _call_ha_service = call_ha_service
-
     server = FastMCP(name)
 
-    @server.tool()
-    def list_rooms() -> list[dict]:
+    # Each tool wrapper is given a private name (`_tool_*`) so it does NOT shadow the
+    # module-level plain function it delegates to -- shadowing made those names
+    # function-local for this whole scope and read-before-assignment raised
+    # UnboundLocalError. The MCP-visible tool name is pinned via `name=` so the wire
+    # contract (tool names + param names) stays byte-identical for any host.
+
+    @server.tool(name="list_rooms")
+    def _tool_list_rooms() -> list[dict]:
         """List every room Wavr senses, with its current occupied flag and confidence."""
-        return _list_rooms(provider)
+        return list_rooms(provider)
 
-    @server.tool()
-    def get_room_context(room: str) -> dict | None:
+    @server.tool(name="get_room_context")
+    def _tool_get_room_context(room: str) -> dict | None:
         """Full state for one room, including the explainable sources + explanation."""
-        return _get_room_context(provider, room)
+        return get_room_context(provider, room)
 
-    @server.tool()
-    def get_house_map() -> dict:
+    @server.tool(name="get_house_map")
+    def _tool_get_house_map() -> dict:
         """The house map / floor plan (room geometry)."""
-        return _get_house_map(provider)
+        return get_house_map(provider)
 
-    @server.tool()
-    def get_ha_entities() -> list[dict]:
+    @server.tool(name="get_ha_entities")
+    def _tool_get_ha_entities() -> list[dict]:
         """List Home Assistant entities (entity_id/state/friendly_name/domain).
         Read-only + local; empty list when HA is not configured."""
-        return _get_ha_entities(ha_client)
+        return get_ha_entities(ha_client)
 
-    @server.tool()
-    def call_ha_service(domain: str, service: str, entity_id: str) -> dict:
+    @server.tool(name="call_ha_service")
+    def _tool_call_ha_service(domain: str, service: str, entity_id: str) -> dict:
         """Ask Home Assistant to run a service on an entity (CONTROL/WRITE, ADR-0005).
 
         Wavr does not drive the device -- HA executes. DEFAULT-OFF: inert unless
@@ -408,9 +407,9 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
         that could enable a camera/mic) are always refused -- consent is not wired yet, so
         a camera/mic can NEVER be enabled here. Returns `{"ok": bool, "status", ...}`;
         refusals do not error, they explain."""
-        return _call_ha_service(ha_client, domain, service, entity_id,
-                                control_enabled=control_enabled,
-                                allowed_services=allowed_services)
+        return call_ha_service(ha_client, domain, service, entity_id,
+                               control_enabled=control_enabled,
+                               allowed_services=allowed_services)
 
     # EXTENSION POINT (future slice -- NOT implemented here): a separate network slice
     # will add a read-only `get_network_inventory()` tool listing devices seen on the
