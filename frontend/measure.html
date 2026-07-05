@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B0E12">
+<title>Wavr · Medir com o celular</title>
+<style>
+  /* Self-contained: fixed Wavr design tokens, no external requests, no fonts/CDN.
+     Green (--accent) is reserved for live/confident state + primary actions. */
+  :root{
+    --bg:#0B0E12; --surface:#141920; --elevated:#1C232C; --line:rgba(255,255,255,.07);
+    --text:#EAECEE; --dim:#9AA4AD; --accent:#3db54a; --warn:#e8a13a; --danger:#e8726a;
+    --accent-soft:rgba(61,181,74,.14); --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{background:var(--bg);color:var(--text);min-height:100dvh;
+       font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       font-size:16px;line-height:1.5;display:flex;flex-direction:column;
+       padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);}
+  main{flex:1;display:flex;align-items:center;justify-content:center;padding:20px;}
+  .card{width:100%;max-width:430px;background:var(--surface);border:1px solid var(--line);
+        border-radius:var(--radius);padding:22px 20px;}
+  .card[hidden]{display:none;}
+  h1{font-size:1.4rem;line-height:1.25;margin:0 0 6px;font-weight:650;}
+  .brand{display:flex;align-items:center;gap:9px;margin-bottom:14px;color:var(--dim);
+         font-size:.72rem;letter-spacing:.02em;text-transform:uppercase;}
+  .brand b{color:var(--accent);font-weight:600;}
+  .lead{font-size:1rem;margin:0 0 14px;}
+  .note{color:var(--dim);font-size:.8rem;margin:10px 0 0;}
+  .note.privacy{background:var(--elevated);border:1px solid var(--line);border-radius:10px;
+                padding:11px 12px;display:flex;gap:9px;}
+  .note.privacy .dot{color:var(--accent);flex:none;margin-top:2px;}
+  ol.steps{margin:8px 0 0;padding-left:20px;color:var(--dim);font-size:.8rem;}
+  ol.steps li{margin:4px 0;}
+  code{background:var(--elevated);border:1px solid var(--line);border-radius:6px;
+       padding:1px 6px;font-size:.85em;color:var(--text);}
+  /* Buttons -- a single reusable control template. */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;width:100%;
+       min-height:48px;padding:12px 16px;margin-top:12px;border-radius:999px;cursor:pointer;
+       font-size:1rem;font-weight:560;background:var(--elevated);color:var(--text);
+       border:1px solid var(--line);text-decoration:none;
+       transition:border-color .15s,background-color .15s,color .15s;}
+  .btn:hover{border-color:var(--dim);}
+  .btn.primary{background:var(--accent-soft);border-color:rgba(61,181,74,.4);color:var(--accent);}
+  .btn.ghost{background:transparent;}
+  .btn:disabled{opacity:.55;cursor:default;}
+  label.field{display:block;margin-top:14px;font-size:.8rem;color:var(--dim);}
+  label.field input,label.field select{display:block;width:100%;margin-top:6px;min-height:46px;
+       background:var(--elevated);color:var(--text);border:1px solid var(--line);
+       border-radius:10px;padding:10px 12px;font-size:1rem;}
+  .num{font-variant-numeric:tabular-nums;}
+  .fb{margin-top:12px;font-size:.8rem;min-height:1.2em;}
+  .fb.err{color:var(--danger);}
+  .fb.ok{color:var(--accent);}
+  .spin{width:26px;height:26px;border-radius:50%;border:3px solid var(--elevated);
+        border-top-color:var(--accent);animation:spin 1s linear infinite;margin:6px 0 12px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @media (prefers-reduced-motion:reduce){.spin{animation:none;}}
+
+  /* ---- WebXR dom-overlay (only visible during an immersive-ar session) ---- */
+  #glcanvas{position:fixed;inset:0;width:100%;height:100%;}
+  #overlay{position:fixed;inset:0;z-index:10;pointer-events:none;}
+  #overlay[hidden]{display:none;}
+  #overlay > *{pointer-events:auto;}
+  .hud{position:absolute;top:0;left:0;right:0;padding:14px 16px calc(14px + env(safe-area-inset-top));
+       background:linear-gradient(#0B0E12cc,#0B0E1200);color:var(--text);text-align:center;
+       font-size:1rem;text-shadow:0 1px 3px #000;pointer-events:none;}
+  .hud .stat{color:var(--dim);font-size:.8rem;margin-top:3px;}
+  .hud .stat b{color:var(--text);}
+  .reticle{position:absolute;top:50%;left:50%;width:44px;height:44px;margin:-22px 0 0 -22px;
+           pointer-events:none;color:var(--dim);transition:color .12s;}
+  .reticle.hit{color:var(--accent);}
+  .minimap{position:absolute;left:16px;bottom:calc(96px + env(safe-area-inset-bottom));
+           width:132px;height:132px;border-radius:10px;border:1px solid var(--line);
+           background:#0B0E12cc;box-shadow:0 2px 10px #0008;}
+  .actions{position:absolute;left:0;right:0;bottom:0;display:flex;gap:10px;
+           padding:12px 14px calc(12px + env(safe-area-inset-bottom));
+           background:linear-gradient(#0B0E1200,#0B0E12dd);}
+  .actions .btn{margin-top:0;}
+  .actions .grow{flex:1;}
+  .abort{position:absolute;top:calc(12px + env(safe-area-inset-top));right:14px;width:auto;
+         margin:0;min-height:38px;padding:6px 14px;font-size:.8rem;}
+</style>
+</head>
+<body>
+<main>
+  <!-- LOADING / feature detection -->
+  <section id="card-loading" class="card">
+    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <div class="spin" aria-hidden="true"></div>
+    <p class="lead">Verificando suporte a WebXR…</p>
+  </section>
+
+  <!-- UNSUPPORTED (iOS Safari, desktop, no WebXR) -->
+  <section id="card-unsupported" class="card" hidden>
+    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <h1>Este aparelho não tem WebXR</h1>
+    <p class="lead">A captura precisa de <b>realidade aumentada</b> no navegador. Funciona no
+      <b>Android (Chrome)</b> ou no <b>Quest 2 (navegador)</b>.</p>
+    <p class="note">No iPhone/iPad o Safari não tem WebXR. Desenhe o cômodo pelo
+      <b>editor 2D</b> da casa na central.</p>
+    <a class="btn" href="/">Voltar ao app</a>
+  </section>
+
+  <!-- INSECURE (not HTTPS) -->
+  <section id="card-insecure" class="card" hidden>
+    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <h1>Abra pela central em HTTPS</h1>
+    <p class="lead">A realidade aumentada só funciona em conexão segura (HTTPS). Abra esta página
+      pelo endereço <b>https://</b> da sua central (WAVR_MULTIDEVICE).</p>
+    <p class="note">Ao ver o aviso de certificado, <b>não toque em “Continuar” às cegas</b>. Toque
+      no aviso → <b>Ver certificado</b> e confira se a impressão digital <b>SHA-256</b> é igual à
+      mostrada no painel da central (ao gerar o código de pareamento). Só prossiga se bater. Se for
+      diferente, pare: alguém pode estar interceptando a sua rede.</p>
+    <a class="btn" href="/">Voltar ao app</a>
+  </section>
+
+  <!-- NOT PAIRED (no token) -->
+  <section id="card-nopair" class="card" hidden>
+    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <h1>Pareie o aparelho primeiro</h1>
+    <p class="lead">Para enviar um cômodo, este aparelho precisa estar <b>pareado como central</b>
+      (não só visualização).</p>
+    <ol class="steps">
+      <li>No painel da central, gere um <b>código de pareamento</b> do tipo <b>central</b>.</li>
+      <li>Volte ao app neste celular e informe o código.</li>
+      <li>Depois abra <code>/measure.html</code> de novo.</li>
+    </ol>
+    <a class="btn primary" href="/">Ir parear</a>
+  </section>
+
+  <!-- READY -->
+  <section id="card-ready" class="card" hidden>
+    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <h1>Medir um cômodo</h1>
+    <p class="lead">Aponte o celular para o <b>chão</b> e marque cada <b>canto</b> do cômodo. O Wavr
+      monta o polígono em metros e adiciona à planta da casa, sem apagar o que você já desenhou.</p>
+    <p class="note privacy"><span class="dot" aria-hidden="true">●</span><span>A câmera é usada
+      <b>só pelo navegador</b> para o rastreamento AR: nenhum quadro chega ao Wavr nem sai da rede.
+      O app guarda apenas as coordenadas <b>(x, y em metros)</b> dos cantos que você marcar.</span></p>
+    <button id="startBtn" class="btn primary" type="button">Iniciar captura</button>
+    <p class="note">Precisa de boa luz e um chão com textura. Depois de salvar, posicione o cômodo
+      no editor 2D da central.</p>
+  </section>
+
+  <!-- NAME + FLOOR FORM -->
+  <section id="card-form" class="card" hidden>
+    <div class="brand"><b>Wavr</b> · Nomear cômodo</div>
+    <h1>Cômodo medido</h1>
+    <p class="lead num" id="formSummary">…</p>
+    <form id="roomForm">
+      <label class="field">Nome do cômodo
+        <input id="roomName" type="text" maxlength="200" required autocomplete="off"
+               placeholder="ex.: escritório" enterkeyhint="done">
+      </label>
+      <label class="field">Andar
+        <select id="roomLevel">
+          <option value="-1">Subsolo (−1)</option>
+          <option value="0" selected>Térreo (0)</option>
+          <option value="1">1º andar (1)</option>
+          <option value="2">2º andar (2)</option>
+          <option value="3">3º andar (3)</option>
+        </select>
+      </label>
+      <button id="saveBtn" class="btn primary" type="submit">Salvar cômodo</button>
+      <button id="remeasureBtn" class="btn ghost" type="button">Medir de novo</button>
+      <div id="formFb" class="fb" aria-live="polite"></div>
+    </form>
+  </section>
+
+  <!-- DONE -->
+  <section id="card-done" class="card" hidden>
+    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <h1 style="color:var(--accent)">Cômodo salvo</h1>
+    <p class="lead" id="doneMsg">Cômodo salvo! Abra o <b>editor 2D</b> da casa na central (no
+      computador) para posicioná-lo. A forma e o tamanho estão certos, falta só arrastar/girar
+      para o lugar.</p>
+    <button id="againBtn" class="btn primary" type="button">Medir outro cômodo</button>
+    <a class="btn ghost" href="/">Voltar ao app</a>
+  </section>
+
+  <!-- ERROR -->
+  <section id="card-error" class="card" hidden>
+    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <h1>Não deu para iniciar</h1>
+    <p class="lead" id="errMsg">Não foi possível iniciar a sessão de realidade aumentada.</p>
+    <button id="retryBtn" class="btn primary" type="button">Tentar de novo</button>
+    <a class="btn ghost" href="/">Usar o editor 2D</a>
+  </section>
+</main>
+
+<!-- WebXR compositor layer (transparent, camera shows through) + DOM overlay -->
+<canvas id="glcanvas" hidden></canvas>
+<div id="overlay" hidden>
+  <div class="hud">
+    <div id="hudStatus">Aponte para o chão…</div>
+    <div class="stat num"><b id="hudCount">0</b> cantos · perímetro <b id="hudPerim">0,00</b> m ·
+      área <b id="hudArea">0,00</b> m²</div>
+  </div>
+  <svg class="reticle" id="reticle" viewBox="0 0 44 44" aria-hidden="true">
+    <circle cx="22" cy="22" r="16" fill="none" stroke="currentColor" stroke-width="2" opacity=".9"/>
+    <circle cx="22" cy="22" r="2.5" fill="currentColor"/>
+  </svg>
+  <canvas class="minimap" id="minimap" width="132" height="132" aria-hidden="true"></canvas>
+  <button class="btn abort" id="abortBtn" type="button">Sair</button>
+  <div class="actions">
+    <button class="btn" id="undoBtn" type="button" disabled>Desfazer</button>
+    <button class="btn primary grow" id="markBtn" type="button" disabled>Marcar canto</button>
+    <button class="btn grow" id="finishBtn" type="button" disabled>Concluir</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function(){
+  // Token index: reuse the SAME companion-token key index.html uses (per-origin).
+  // NEVER echo this token in the UI, console, or any error path.
+  const TOKEN_KEY = "wavr.token." + location.origin;
+  function getToken(){ try{ return localStorage.getItem(TOKEN_KEY) || null; }catch(_){ return null; } }
+
+  const $ = (id) => document.getElementById(id);
+  const CARDS = ["card-loading","card-unsupported","card-insecure","card-nopair",
+                 "card-ready","card-form","card-done","card-error"];
+  function showCard(id){
+    CARDS.forEach(c => { const el = $(c); if(el) el.hidden = (c !== id); });
+  }
+  // pt-BR number formatting for the readouts (comma decimal), tabular-nums in CSS.
+  const fmt = (v) => (Math.round(v*100)/100).toFixed(2).replace(".", ",");
+
+  // ---- capture state ----
+  let session = null, gl = null, refSpace = null, hitTestSource = null;
+  let corners = [];          // [{x, z}] raw WebXR floor poses (meters)
+  let currentHit = null;     // {x, z} of the live reticle hit, or null
+  let finishing = false;     // set true when the user taps "Concluir"
+
+  // ---- geometry helpers (meters) ----
+  function polyStats(pts){
+    let per = 0, area = 0;
+    const n = pts.length;
+    for(let i=0;i<n;i++){
+      const a = pts[i], b = pts[(i+1)%n];
+      per += Math.hypot(b.x-a.x, b.z-a.z);
+      area += a.x*b.z - b.x*a.z;
+    }
+    if(n < 3) per = (n === 2) ? Math.hypot(pts[1].x-pts[0].x, pts[1].z-pts[0].z) : 0;
+    return { per, area: Math.abs(area)/2 };
+  }
+  const round3 = (v) => Math.round(v*1000)/1000;
+  // House mapping: house_x = pose.x, house_y = pose.z (local-floor plane, floor at y=0).
+  // Single fixed non-reflecting mapping; global translate/rotate is fixed MANUALLY in the
+  // 2D editor (v0). Translate so the bounding-box min corner lands near (0,0) for a tidy drop.
+  function buildPolygon(){
+    let minX = Infinity, minZ = Infinity;
+    for(const p of corners){ if(p.x<minX) minX=p.x; if(p.z<minZ) minZ=p.z; }
+    return corners.map(p => [round3(p.x-minX), round3(p.z-minZ)]);
+  }
+
+  // ---- minimap (top-down plan of the polygon being built) ----
+  const mm = $("minimap");
+  const mmCtx = mm.getContext("2d");
+  function drawMinimap(){
+    const W = mm.width, H = mm.height, pad = 14;
+    mmCtx.clearRect(0,0,W,H);
+    const preview = currentHit ? [currentHit] : [];
+    const all = corners.concat(preview);
+    if(all.length === 0) return;
+    let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+    for(const p of all){ minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minZ=Math.min(minZ,p.z);maxZ=Math.max(maxZ,p.z); }
+    const spanX = Math.max(maxX-minX, 0.5), spanZ = Math.max(maxZ-minZ, 0.5);
+    const s = Math.min((W-2*pad)/spanX, (H-2*pad)/spanZ);
+    const toPx = (p) => ({ x: pad + (p.x-minX)*s, y: pad + (p.z-minZ)*s });
+    if(corners.length){
+      mmCtx.beginPath();
+      corners.forEach((p,i)=>{ const q=toPx(p); i ? mmCtx.lineTo(q.x,q.y) : mmCtx.moveTo(q.x,q.y); });
+      if(corners.length >= 3){ mmCtx.closePath(); mmCtx.fillStyle="rgba(61,181,74,.14)"; mmCtx.fill(); }
+      mmCtx.strokeStyle="#3db54a"; mmCtx.lineWidth=2; mmCtx.stroke();
+      mmCtx.fillStyle="#EAECEE";
+      corners.forEach(p=>{ const q=toPx(p); mmCtx.beginPath(); mmCtx.arc(q.x,q.y,3,0,Math.PI*2); mmCtx.fill(); });
+    }
+    if(currentHit){
+      const q = toPx(currentHit);
+      mmCtx.strokeStyle="#3db54a"; mmCtx.lineWidth=2;
+      mmCtx.beginPath(); mmCtx.arc(q.x,q.y,5,0,Math.PI*2); mmCtx.stroke();
+    }
+  }
+  function refreshHud(){
+    const st = polyStats(corners);
+    $("hudCount").textContent = String(corners.length);
+    $("hudPerim").textContent = fmt(st.per);
+    $("hudArea").textContent  = fmt(corners.length >= 3 ? st.area : 0);
+    $("undoBtn").disabled   = corners.length === 0;
+    $("finishBtn").disabled = corners.length < 3;
+    $("hudStatus").textContent = corners.length < 3
+      ? (currentHit ? "Toque em Marcar canto" : "Aponte para o chão…")
+      : (currentHit ? "Marque mais cantos ou Concluir" : "Aponte para o chão…");
+  }
+
+  // ---- WebXR session ----
+  async function startCapture(){
+    corners = []; currentHit = null; finishing = false;
+    const canvas = $("glcanvas");
+    try{
+      gl = canvas.getContext("webgl", { xrCompatible: true, alpha: true, antialias: false });
+      if(!gl) throw new Error("sem WebGL");
+      if(gl.makeXRCompatible) await gl.makeXRCompatible();
+      // PRIVACY (ADR-0002): we DELIBERATELY DO NOT request the 'camera-access' feature, so
+      // no camera frame/pixel is ever exposed to JS -- only tapped floor poses (x/y meters).
+      session = await navigator.xr.requestSession("immersive-ar", {
+        requiredFeatures: ["local-floor", "hit-test"],
+        optionalFeatures: ["dom-overlay"],
+        domOverlay: { root: $("overlay") }
+      });
+    }catch(err){
+      teardownGl();
+      showError("Não foi possível iniciar a realidade aumentada. Confira a impressão digital do "
+              + "certificado da central (SHA-256) antes de aceitar, garanta boa iluminação, ou use "
+              + "o editor 2D. (" + (err && err.name || "erro") + ")");
+      return;
+    }
+    session.addEventListener("end", onSessionEnd);
+    await session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+    refSpace = await session.requestReferenceSpace("local-floor");
+    const viewerSpace = await session.requestReferenceSpace("viewer");
+    hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+
+    canvas.hidden = false;
+    $("overlay").hidden = false;
+    $("markBtn").disabled = true;
+    refreshHud();
+    drawMinimap();
+    session.requestAnimationFrame(onXRFrame);
+  }
+
+  function onXRFrame(t, frame){
+    if(!session) return;
+    session.requestAnimationFrame(onXRFrame);
+    const glLayer = session.renderState.baseLayer;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+    gl.viewport(0, 0, glLayer.framebufferWidth, glLayer.framebufferHeight);
+    gl.clearColor(0, 0, 0, 0);           // transparent -- the AR camera composites behind us
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    let hit = null;
+    if(hitTestSource){
+      const results = frame.getHitTestResults(hitTestSource);
+      if(results.length){
+        const pose = results[0].getPose(refSpace);
+        if(pose) hit = { x: pose.transform.position.x, z: pose.transform.position.z };
+      }
+    }
+    currentHit = hit;
+    $("reticle").classList.toggle("hit", !!hit);
+    $("markBtn").disabled = !hit;
+    refreshHud();
+    drawMinimap();
+  }
+
+  function markCorner(){
+    if(!currentHit) return;
+    corners.push({ x: currentHit.x, z: currentHit.z });
+    refreshHud(); drawMinimap();
+  }
+  function undoCorner(){
+    corners.pop();
+    refreshHud(); drawMinimap();
+  }
+  function finishCapture(){
+    if(corners.length < 3) return;
+    finishing = true;
+    if(session) session.end();
+  }
+
+  function onSessionEnd(){
+    teardownGl();
+    $("overlay").hidden = true;
+    $("glcanvas").hidden = true;
+    // Only advance to the naming form on an explicit "Concluir" with a valid polygon.
+    // "Sair" / an unexpected session exit returns to the ready screen (work discarded).
+    if(finishing && corners.length >= 3){
+      const st = polyStats(corners);
+      $("formSummary").textContent =
+        corners.length + " cantos · perímetro " + fmt(st.per) + " m · área " + fmt(st.area) + " m²";
+      $("formFb").textContent = ""; $("formFb").className = "fb";
+      showCard("card-form");
+      $("roomName").focus();
+    }else{
+      showCard("card-ready");
+    }
+  }
+  function teardownGl(){
+    if(hitTestSource){ try{ hitTestSource.cancel(); }catch(_){} }
+    hitTestSource = null; refSpace = null; session = null; gl = null;
+  }
+
+  // ---- submit ----
+  async function submitRoom(ev){
+    ev.preventDefault();
+    const token = getToken();
+    if(!token){ showCard("card-nopair"); return; }
+    const name = ($("roomName").value || "").trim();
+    if(!name){ setFb("Informe um nome para o cômodo.", "err"); return; }
+    if(corners.length < 3){ setFb("Marque pelo menos 3 cantos.", "err"); return; }
+    const level = parseInt($("roomLevel").value, 10);
+    const body = { level: level, room: { name: name, polygon: buildPolygon() } };
+    $("saveBtn").disabled = true; setFb("Enviando…", "");
+    let res;
+    try{
+      res = await fetch("/api/house/room", {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    }catch(_){
+      $("saveBtn").disabled = false;
+      setFb("Sem conexão com a central. Verifique a rede e tente de novo.", "err");
+      return;
+    }
+    if(res.status === 200){
+      showCard("card-done");
+      return;
+    }
+    $("saveBtn").disabled = false;
+    if(res.status === 403){
+      setFb("Este aparelho não tem permissão de central. Gere um código de pareamento "
+          + "do tipo central no painel e pareie de novo.", "err");
+    }else if(res.status === 409){
+      setFb("A central está sem WAVR_HOUSE_MAP configurado. Não há onde salvar a planta.", "err");
+    }else if(res.status === 422){
+      let detail = "geometria inválida";
+      try{ const j = await res.json(); if(j && j.detail) detail = (typeof j.detail === "string") ? j.detail : JSON.stringify(j.detail); }catch(_){}
+      setFb("Cômodo recusado: " + detail, "err");
+    }else{
+      setFb("Falha ao salvar (código " + res.status + "). Tente de novo.", "err");
+    }
+  }
+  function setFb(msg, kind){
+    const el = $("formFb");
+    el.textContent = msg;
+    el.className = "fb" + (kind ? " " + kind : "");
+  }
+  function showError(msg){ $("errMsg").textContent = msg; showCard("card-error"); }
+
+  // ---- boot / feature gate ----
+  async function boot(){
+    // 1) WebXR immersive-ar support? (iOS Safari & desktop -> no)
+    let supported = false;
+    try{
+      supported = !!(navigator.xr && await navigator.xr.isSessionSupported("immersive-ar"));
+    }catch(_){ supported = false; }
+    if(!supported){ showCard("card-unsupported"); return; }
+    // 2) Secure context (WebXR needs HTTPS). localhost is secure but has no AR, so it never
+    //    reaches here -- a phone loaded over plain HTTP does, and gets the cert/HTTPS copy.
+    if(location.protocol !== "https:"){ showCard("card-insecure"); return; }
+    // 3) Paired? (companion token present). Role is only known at submit time (a 'user'
+    //    token 403s) -- the page discovers and explains that after the PUT.
+    if(!getToken()){ showCard("card-nopair"); return; }
+    showCard("card-ready");
+  }
+
+  // ---- wiring ----
+  $("startBtn").addEventListener("click", startCapture);
+  $("markBtn").addEventListener("click", markCorner);
+  $("undoBtn").addEventListener("click", undoCorner);
+  $("finishBtn").addEventListener("click", finishCapture);
+  $("abortBtn").addEventListener("click", () => { finishing = false; if(session) session.end(); });
+  $("roomForm").addEventListener("submit", submitRoom);
+  $("remeasureBtn").addEventListener("click", () => showCard("card-ready"));
+  $("againBtn").addEventListener("click", () => showCard("card-ready"));
+  $("retryBtn").addEventListener("click", () => showCard("card-ready"));
+
+  boot();
+})();
+</script>
+</body>
+</html>

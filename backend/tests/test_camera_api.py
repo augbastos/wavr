@@ -105,3 +105,89 @@ def test_post_confidence_out_of_range_rejected(tmp_path):
         r = c.post("/api/cameras", json={"name": "cam_conf", "room": "sala",
                                          "rtsp_url": "rtsp://x", "confidence": 999})
         assert r.status_code == 400
+
+
+# ---- F3: optional mac on add ----------------------------------------------------
+
+def test_post_camera_with_explicit_mac_persists_it(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.post("/api/cameras", json={"name": "cam_q", "room": "quarto",
+                                         "rtsp_url": "rtsp://u:pw@10.0.0.5/s1",
+                                         "confidence": 0.5, "mac": "AA-BB-CC-DD-EE-FF"})
+        assert r.status_code == 200
+        [cam] = c.get("/api/cameras").json()
+        assert cam["mac"] == "aa:bb:cc:dd:ee:ff"       # normalized to lowercase colon form
+
+def test_post_camera_with_junk_mac_rejected_and_not_persisted(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.post("/api/cameras", json={"name": "cam_q", "room": "quarto",
+                                         "rtsp_url": "rtsp://x", "confidence": 0.5,
+                                         "mac": "not-a-mac"})
+        assert r.status_code == 400
+        assert c.get("/api/cameras").json() == []       # never persisted
+
+def test_post_camera_without_mac_stores_null_out_of_box(tmp_path):
+    # net_inventory is OFF by default -> auto-resolve yields null, honestly.
+    with _client(tmp_path) as c:
+        c.post("/api/cameras", json={"name": "cam_q", "room": "quarto",
+                                     "rtsp_url": "rtsp://x", "confidence": 0.5})
+        [cam] = c.get("/api/cameras").json()
+        assert cam["mac"] is None
+
+
+# ---- F3: GET /api/cameras/suggestions (read-only) -------------------------------
+
+def test_suggestions_shape_empty_out_of_box(tmp_path):
+    with _client(tmp_path) as c:
+        body = c.get("/api/cameras/suggestions").json()
+        assert body == {"suggestions": []}              # no drift / no inventory
+
+
+# ---- F3: POST /api/cameras/{name}/rebind ----------------------------------------
+
+_SEED = [{"name": "cam_q", "room": "quarto",
+          "rtsp_url": "rtsp://user:secret@10.0.0.5/s1", "confidence": 0.5}]
+
+def test_rebind_rewrites_host_and_masks_password(tmp_path):
+    with _client(tmp_path, seed=_SEED) as c:
+        r = c.post("/api/cameras/cam_q/rebind", json={"ip": "10.0.0.9"})
+        assert r.status_code == 200
+        [cam] = r.json()
+        assert "10.0.0.9" in cam["rtsp_url"]            # host rewritten
+        assert "10.0.0.5" not in cam["rtsp_url"]        # old host gone
+        assert "secret" not in r.text                   # password never echoed (masked)
+        # persisted + source re-registered boot-OFF (never auto-enabled)
+        sysrc = {s["name"]: s for s in c.get("/api/system").json()["sources"]}
+        assert sysrc["cam_q"]["enabled"] is False
+
+def test_rebind_requires_csrf(tmp_path):
+    store = CameraStore(str(tmp_path / "r.db"))
+    store.add(**_SEED[0])
+    with TestClient(create_app(sources=[], camera_store=store)) as c:  # no X-Wavr-Local
+        assert c.post("/api/cameras/cam_q/rebind", json={"ip": "10.0.0.9"}).status_code == 403
+
+def test_rebind_rejects_public_ip(tmp_path):
+    with _client(tmp_path, seed=_SEED) as c:
+        assert c.post("/api/cameras/cam_q/rebind", json={"ip": "8.8.8.8"}).status_code == 400
+
+def test_rebind_rejects_hostname(tmp_path):
+    with _client(tmp_path, seed=_SEED) as c:
+        assert c.post("/api/cameras/cam_q/rebind", json={"ip": "camera.local"}).status_code == 400
+
+def test_rebind_rejects_cloud_metadata_ip(tmp_path):
+    with _client(tmp_path, seed=_SEED) as c:
+        assert c.post("/api/cameras/cam_q/rebind",
+                      json={"ip": "169.254.169.254"}).status_code == 400
+        assert c.post("/api/cameras/cam_q/rebind",
+                      json={"ip": "::ffff:169.254.169.254"}).status_code == 400
+
+def test_rebind_unknown_camera_404(tmp_path):
+    with _client(tmp_path) as c:
+        assert c.post("/api/cameras/nope/rebind", json={"ip": "10.0.0.9"}).status_code == 404
+
+def test_rebind_clears_matching_suggestion(tmp_path):
+    # A rebind must drop any drift suggestion for that camera (defence-in-depth: the
+    # UI shouldn't keep offering a rebind that was already applied).
+    with _client(tmp_path, seed=_SEED) as c:
+        assert c.post("/api/cameras/cam_q/rebind", json={"ip": "10.0.0.9"}).status_code == 200
+        assert c.get("/api/cameras/suggestions").json() == {"suggestions": []}

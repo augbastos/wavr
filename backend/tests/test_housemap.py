@@ -240,3 +240,90 @@ def test_unknown_room_key_rejected():
     d["floors"][0]["rooms"][0]["extra"] = "nope"
     with pytest.raises(HouseMapError):
         validate_house_map(d)
+
+
+# === F2: upsert_room merge helper (phone "medir com o celular") =====================
+import copy
+from wavr.housemap import upsert_room
+
+
+def _house_multi():
+    # two rooms + walls/features/backdrop-shaped extras on level 0, so a merge that
+    # wipes siblings or floor extras is caught.
+    return {"version": 2, "units": "m", "floors": [
+        {"id": "f0", "name": "T", "level": 0,
+         "rooms": [{"id": "r1", "name": "sala",   "polygon": [[0,0],[4,0],[4,3],[0,3]]},
+                   {"id": "r2", "name": "quarto", "polygon": [[5,0],[8,0],[8,3],[5,3]]}],
+         "walls": [{"id": "w1", "a": [4,0], "b": [4,3]}],
+         "features": [{"id": "s1", "type": "stairs", "at": [3.5,2.5], "to_level": 1}],
+         "backdrop": None}]}
+
+
+def test_upsert_new_room_keeps_siblings_and_floor_extras():
+    house = _house_multi()
+    merged = upsert_room(house, 0, {"name": "cozinha", "polygon": [[9,0],[12,0],[12,3],[9,3]]})
+    f0 = merged["floors"][0]
+    assert [r["name"] for r in f0["rooms"]] == ["sala", "quarto", "cozinha"]
+    assert f0["walls"] == house["floors"][0]["walls"]          # walls untouched
+    assert f0["features"] == house["floors"][0]["features"]    # features untouched
+    assert f0["backdrop"] is None                               # backdrop untouched
+    ids = [r["id"] for r in f0["rooms"]]
+    assert len(ids) == len(set(ids))                            # unique room ids
+
+
+def test_upsert_existing_name_replaces_polygon_and_keeps_id():
+    house = _house_multi()
+    orig_id = house["floors"][0]["rooms"][0]["id"]              # r1 (sala)
+    new_poly = [[0,0],[6,0],[6,4],[0,4]]
+    merged = upsert_room(house, 0, {"name": "sala", "polygon": new_poly})
+    f0 = merged["floors"][0]
+    assert [r["name"] for r in f0["rooms"]] == ["sala", "quarto"]   # replaced, not appended
+    sala = next(r for r in f0["rooms"] if r["name"] == "sala")
+    assert sala["id"] == orig_id                               # id preserved
+    assert sala["polygon"] == new_poly                         # geometry replaced
+
+
+def test_upsert_new_level_creates_floor_leaving_existing_alone():
+    house = _house_multi()
+    merged = upsert_room(house, 2, {"name": "sotao", "polygon": [[0,0],[3,0],[3,3],[0,3]]})
+    assert [f["level"] for f in merged["floors"]] == [0, 2]
+    fids = [f["id"] for f in merged["floors"]]
+    assert len(fids) == len(set(fids))                         # unique floor ids
+    new_floor = next(f for f in merged["floors"] if f["level"] == 2)
+    assert [r["name"] for r in new_floor["rooms"]] == ["sotao"]
+    assert new_floor["walls"] == [] and new_floor["features"] == []
+    assert [r["name"] for r in merged["floors"][0]["rooms"]] == ["sala", "quarto"]
+
+
+def test_upsert_does_not_mutate_input_house():
+    house = _house_multi()
+    snapshot = copy.deepcopy(house)
+    upsert_room(house, 0, {"name": "nova", "polygon": [[0,0],[1,0],[1,1]]})
+    assert house == snapshot                                   # deepcopy proof
+
+
+def test_upsert_merged_doc_passes_validation():
+    house = _house_multi()
+    merged = upsert_room(house, 1, {"name": "quarto2", "polygon": [[0,0],[3,0],[3,3],[0,3]]})
+    validate_house_map(merged)                                 # must not raise
+
+
+def test_upsert_degenerate_polygon_fails_validation():
+    # upsert itself does not validate; the merged doc fails the shared validator (the
+    # exact path the endpoint takes via save_house_map -> HouseMapError -> 422).
+    for bad in ([[0,0],[1,1]], [["x",0],[1,0],[1,1]]):         # <3 verts, non-finite
+        merged = upsert_room(_house_multi(), 0, {"name": "ruim", "polygon": bad})
+        with pytest.raises(HouseMapError):
+            validate_house_map(merged)
+
+
+def test_upsert_generated_floor_id_avoids_collision():
+    # existing level-0 floor carries a custom id "f2"; upserting a NEW level 2 wants id
+    # "f2" too -> the helper must pick a distinct id so validate (unique floor ids) passes.
+    house = {"version": 2, "units": "m", "floors": [
+        {"id": "f2", "name": "T", "level": 0, "rooms": [], "walls": [], "features": [], "backdrop": None}]}
+    merged = upsert_room(house, 2, {"name": "x", "polygon": [[0,0],[3,0],[3,3],[0,3]]})
+    fids = [f["id"] for f in merged["floors"]]
+    assert fids[0] == "f2" and fids[1] != "f2"
+    assert len(fids) == len(set(fids))
+    validate_house_map(merged)                                 # unique ids -> passes

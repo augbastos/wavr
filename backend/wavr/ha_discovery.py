@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Callable, Iterable
 
+from wavr.mqtt_topics import room_state_topic, slug_room, status_topic
+
 # Shared HA device block: every Wavr entity carries it so Home Assistant groups
 # them under a single "Wavr" device instead of scattering loose entities.
 _DEVICE = {
@@ -14,14 +16,6 @@ _DEVICE = {
 # PRIVACY INVARIANT (hard): discovery + the state topics it points at expose ONLY
 # occupancy + confidence. Positions (x/y), targets, pose and vitals are NEVER
 # referenced in any topic, template, or payload built here. Keep it that way.
-
-
-def _slug(name: str) -> str:
-    """object_id / unique_id fragment: keep [a-z0-9_-], collapse anything else to
-    '_' so a room name is always a valid MQTT discovery node. The state_topic still
-    uses the raw room name (to match what the rules engine publishes)."""
-    s = "".join(c if (c.isalnum() or c in "-_") else "_" for c in name)
-    return s.strip("_").lower() or "room"
 
 
 def publish_ha_discovery(
@@ -43,10 +37,24 @@ def publish_ha_discovery(
       - a `sensor` for ``confidence`` (%), reading the same state topic.
     Plus one house-level `binary_sensor` (device_class ``presence``) reading the
     retained home/away topic. All entities share the `_DEVICE` block.
-    """
+
+    Every payload also declares an ``availability_topic`` (``{prefix}/status``):
+    the publisher's retained Last Will flips it to ``offline`` when Wavr drops off,
+    so HA renders these entities *unavailable* instead of showing stale presence.
+    The room segment of every state topic is slugged (via `mqtt_topics`) IDENTICALLY
+    to what the rules engine publishes -- so a room name with an MQTT wildcard
+    (`+`/`#`) or `/` still yields a legal, matching topic."""
+    # Availability is the same for every entity -- one retained status topic, HA's
+    # documented default online/offline payloads.
+    availability = {
+        "availability_topic": status_topic(prefix),
+        "payload_available": "online",
+        "payload_not_available": "offline",
+    }
+
     for room in rooms:
-        oid = _slug(room)
-        state_topic = f"{prefix}/rooms/{room}/state"
+        oid = slug_room(room)
+        state_topic = room_state_topic(prefix, room)
 
         # Occupancy: pull the `occupied` boolean out of the retained JSON and map
         # it to ON/OFF (HA's binary_sensor payload contract).
@@ -61,6 +69,7 @@ def publish_ha_discovery(
                 "payload_on": "ON",
                 "payload_off": "OFF",
                 "device": _DEVICE,
+                **availability,
             }),
             True,   # retained: HA picks up the config even if it starts after Wavr
         )
@@ -75,6 +84,7 @@ def publish_ha_discovery(
                 "value_template": "{{ (value_json.confidence * 100) | round(0) }}",
                 "unit_of_measurement": "%",
                 "device": _DEVICE,
+                **availability,
             }),
             True,
         )
@@ -90,6 +100,7 @@ def publish_ha_discovery(
             "payload_on": "home",
             "payload_off": "away",
             "device": _DEVICE,
+            **availability,
         }),
         True,
     )

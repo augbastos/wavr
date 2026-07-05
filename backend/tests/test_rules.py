@@ -57,3 +57,23 @@ async def test_run_consumes_hub_and_unsubscribes():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert hub._subscribers == set()                   # unsubscribed on cancel
+
+def test_room_with_mqtt_wildcard_is_slugged_to_legal_topic():
+    # A room named with '#'/'+' would otherwise build an illegal MQTT wildcard
+    # topic that paho rejects -> the room silently never reaches HA.
+    msgs = []
+    eng = RulesEngine(lambda t, p, r: msgs.append((t, p, r)))
+    eng.handle(_rs("Kids#1", True))     # first sighting -> state only
+    eng.handle(_rs("Kids#1", False))    # flip -> event
+    state = {t for t, _, _ in msgs if t.endswith("/state")}
+    event = [t for t, _, _ in msgs if t.endswith("/event")]
+    assert state == {"wavr/rooms/kids_1/state"}   # retained state each call, one topic
+    assert event == ["wavr/rooms/kids_1/event"]
+    for t, _, _ in msgs:                 # no wildcard ever reaches a published topic
+        assert "#" not in t and "+" not in t
+        assert t.count("/") == 3         # room name did not inject an extra level
+
+def test_room_with_slash_does_not_inject_topic_level():
+    msgs = []
+    RulesEngine(lambda t, p, r: msgs.append(t)).handle(_rs("Sala/Cozinha", True))
+    assert msgs[0] == "wavr/rooms/sala_cozinha/state"

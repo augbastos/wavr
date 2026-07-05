@@ -119,6 +119,10 @@ _SENSITIVE_HINTS = (
     "lock", "unlock", "deadbolt", "latch", "strike", "maglock",
     "door", "garage", "gate", "portao", "fechadura", "barrier",
     "valve", "siren", "alarm", "smoke", "co2",
+    # A5.2 defense-in-depth: device-blocking is NEVER registered as an MCP tool (see the
+    # extension-point warning in build_mcp_server) -- but refuse any HA entity whose name
+    # could front an ARP-block/spoof/deauth capability anyway. Real control = never-register.
+    "arp_block", "arpspoof", "arp_spoof", "deauth", "arp_poison",
 )
 
 
@@ -171,14 +175,16 @@ def get_room_context(provider: StateProvider, room: str) -> dict | None:
     """RoomState for one room, including the explainable "why": the per-modality
     `sources` and the human-readable `explanation`. None if the room is unknown.
 
-    PRIVACY (audit CRITICAL-1): strips `vitals` (breathing/heart rate) and `targets`
-    (per-person x/y tracking) before returning. MCP read tools must never expose
-    per-person biometric or positional data -- only room-level occupancy, confidence,
+    PRIVACY (audit CRITICAL-1): strips `vitals` (breathing/heart rate), `targets`
+    (per-person x/y tracking) and `identities` (non-biometric "who is home" person
+    labels — PII) before returning. MCP read tools must never expose per-person
+    biometric, positional, or identity data -- only room-level occupancy, confidence,
     and the explainable sources/explanation are exposed here."""
     state = provider.room_state(room)
     if state is None:
         return None
-    return {k: v for k, v in state.items() if k not in ("vitals", "targets")}
+    return {k: v for k, v in state.items()
+            if k not in ("vitals", "targets", "identities")}
 
 
 def get_house_map(provider: StateProvider) -> dict:
@@ -364,38 +370,37 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
     """
     from mcp.server.fastmcp import FastMCP   # lazy: optional [mcp] extra
 
-    # Capture the plain functions before the tool wrappers below shadow their names.
-    _list_rooms = list_rooms
-    _get_room_context = get_room_context
-    _get_house_map = get_house_map
-    _get_ha_entities = get_ha_entities
-    _call_ha_service = call_ha_service
-
     server = FastMCP(name)
 
-    @server.tool()
-    def list_rooms() -> list[dict]:
+    # Each tool wrapper is given a private name (`_tool_*`) so it does NOT shadow the
+    # module-level plain function it delegates to -- shadowing made those names
+    # function-local for this whole scope and read-before-assignment raised
+    # UnboundLocalError. The MCP-visible tool name is pinned via `name=` so the wire
+    # contract (tool names + param names) stays byte-identical for any host.
+
+    @server.tool(name="list_rooms")
+    def _tool_list_rooms() -> list[dict]:
         """List every room Wavr senses, with its current occupied flag and confidence."""
-        return _list_rooms(provider)
+        return list_rooms(provider)
 
-    @server.tool()
-    def get_room_context(room: str) -> dict | None:
+    @server.tool(name="get_room_context")
+    def _tool_get_room_context(room: str) -> dict | None:
         """Full state for one room, including the explainable sources + explanation."""
-        return _get_room_context(provider, room)
+        return get_room_context(provider, room)
 
-    @server.tool()
-    def get_house_map() -> dict:
+    @server.tool(name="get_house_map")
+    def _tool_get_house_map() -> dict:
         """The house map / floor plan (room geometry)."""
-        return _get_house_map(provider)
+        return get_house_map(provider)
 
-    @server.tool()
-    def get_ha_entities() -> list[dict]:
+    @server.tool(name="get_ha_entities")
+    def _tool_get_ha_entities() -> list[dict]:
         """List Home Assistant entities (entity_id/state/friendly_name/domain).
         Read-only + local; empty list when HA is not configured."""
-        return _get_ha_entities(ha_client)
+        return get_ha_entities(ha_client)
 
-    @server.tool()
-    def call_ha_service(domain: str, service: str, entity_id: str) -> dict:
+    @server.tool(name="call_ha_service")
+    def _tool_call_ha_service(domain: str, service: str, entity_id: str) -> dict:
         """Ask Home Assistant to run a service on an entity (CONTROL/WRITE, ADR-0005).
 
         Wavr does not drive the device -- HA executes. DEFAULT-OFF: inert unless
@@ -404,9 +409,9 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
         that could enable a camera/mic) are always refused -- consent is not wired yet, so
         a camera/mic can NEVER be enabled here. Returns `{"ok": bool, "status", ...}`;
         refusals do not error, they explain."""
-        return _call_ha_service(ha_client, domain, service, entity_id,
-                                control_enabled=control_enabled,
-                                allowed_services=allowed_services)
+        return call_ha_service(ha_client, domain, service, entity_id,
+                               control_enabled=control_enabled,
+                               allowed_services=allowed_services)
 
     # EXTENSION POINT (future slice -- NOT implemented here): a separate network slice
     # will add a read-only `get_network_inventory()` tool listing devices seen on the
@@ -414,6 +419,12 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
     # inventory provider (extend StateProvider, or inject a second provider). It MUST
     # stay READ-ONLY/LOCAL like the tools above -- observe the network, never
     # scan/probe/deploy. Do not implement it in slice D.
+    #
+    # PERMANENT EXCLUSION (A5.2): device blocking / ARP spoofing / deauth is an ACTIVE
+    # LAN-ATTACK primitive and is PERMANENTLY OUT OF MCP SCOPE. Never add a block/arp/
+    # spoof/deauth @server.tool() here or anywhere -- MCP is read-only-by-construction and
+    # no agent may trigger an attack. It ships only behind a human-clicked, triple-gated
+    # dashboard action (POST /api/block). Do not weaken this.
 
     return server
 

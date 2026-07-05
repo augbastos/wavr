@@ -69,6 +69,48 @@ async def test_grace_holds_presence_then_absence_after_debounce():
     assert [e.presence for e in evs] == [True, True, True, False]
 
 
+async def test_identity_attached_only_for_known_above_floor_when_enabled():
+    # emit_identity=True: the present known device is named with its rssi; the
+    # unknown device is never named; a known device below the floor is not present
+    # so it is not named either.
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff": -55, "00:00:00:00:00:99": -40}
+    src = BLESource(KNOWN, scan=scan, interval=0, rssi_min=-80, emit_identity=True)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+    assert [i.to_dict() for i in ev.identities] == [
+        {"person": "alice", "source": "ble", "rssi": -55}
+    ]
+
+
+async def test_identity_absent_when_flag_off_even_with_known_map():
+    # Same known map + present device, but emit_identity defaults OFF -> NO person
+    # label is ever created, while presence/confidence stay byte-identical.
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff": -55}
+    src = BLESource(KNOWN, scan=scan, interval=0, rssi_min=-80)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True and ev.confidence == 0.7
+    assert ev.identities == ()
+
+
+async def test_identity_empty_when_below_floor_even_if_enabled():
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff": -95}   # known but too weak -> absent
+    src = BLESource(KNOWN, scan=scan, interval=0, rssi_min=-80, emit_identity=True)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is False
+    assert ev.identities == ()
+
+
+async def test_identity_room_is_house_level_casa():
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff": -55}
+    src = BLESource(KNOWN, scan=scan, interval=0, rssi_min=-80, emit_identity=True)
+    [ev] = await _first_n(src, 1)
+    assert ev.room == "casa"   # house-level only, never a real room
+
+
 async def test_no_known_devices_skips_scan_and_reports_absent():
     called = {"v": False}
     async def scan():

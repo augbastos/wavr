@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Callable
@@ -53,7 +54,10 @@ class CameraSource:
                  interval: float = 0.5, confidence: float = 0.0,
                  reconnect_delay: float = 3.0,
                  pose: bool = False,
-                 pose_detect: Callable[[object, float], list[Target]] | None = None):
+                 pose_detect: Callable[[object, float], list[Target]] | None = None,
+                 name: str = "",
+                 on_health: Callable[[str, bool], None] | None = None,
+                 unhealthy_secs: float = 30.0):
         self.room = room
         self._url = rtsp_url
         self._frames = frames or rtsp_frames
@@ -70,15 +74,43 @@ class CameraSource:
         # has that signature.
         self._pose = pose
         self._pose_detect = pose_detect or yolo_pose_detect
+        # F3 camera IP-drift health hook. `on_health(name, healthy)` is edge-triggered:
+        # fired once (name, False) after `unhealthy_secs` of no frame, and once
+        # (name, True) on the first frame after a down report. It ever only receives
+        # (name, bool) -- NEVER a frame (ADR-0002 holds). `_last_ok` is a monotonic
+        # timestamp of the last yielded frame; `_down_reported` is the edge latch.
+        self._name = name
+        self._on_health = on_health
+        self._unhealthy_secs = unhealthy_secs
+        self._last_ok = 0.0
+        self._down_reported = False
+
+    def _emit_health(self, healthy: bool) -> None:
+        """Fire the health callback with ONLY (name, healthy) -- never a frame
+        (ADR-0002). Tolerant: a broken monitor never breaks the source loop (same
+        rule as the source's other injected callbacks)."""
+        if self._on_health is None:
+            return
+        try:
+            self._on_health(self._name, healthy)
+        except Exception:
+            logging.warning("CameraSource(%s) health callback failed",
+                            self._name or self.room, exc_info=True)
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         global _ACTIVE
         _ACTIVE += 1
+        self._last_ok = time.monotonic()
         try:
             while True:
                 try:
                     async with contextlib.aclosing(self._frames(self._url)) as stream:
                         async for frame in stream:
+                            self._last_ok = time.monotonic()
+                            if self._down_reported:
+                                # Recovery edge: first frame after a down report.
+                                self._emit_health(True)
+                                self._down_reported = False
                             det = await asyncio.to_thread(self._detect, frame)
                             present = det.count > 0
                             targets: tuple[Target, ...] = ()
@@ -98,6 +130,13 @@ class CameraSource:
                     raise
                 except Exception:
                     logging.warning("CameraSource(%s) error; reconnecting", self.room, exc_info=True)
+                # F3 down edge: fire a single (name, False) once we've gone
+                # `unhealthy_secs` without a frame. Runs on both the error path AND a
+                # clean stream-end (empty/closed capture, e.g. a dead/drifted host).
+                if self._on_health and not self._down_reported and (
+                        time.monotonic() - self._last_ok) >= self._unhealthy_secs:
+                    self._emit_health(False)
+                    self._down_reported = True
                 if self._reconnect:
                     await asyncio.sleep(self._reconnect)
         finally:

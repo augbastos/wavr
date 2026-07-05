@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -257,6 +258,60 @@ def room_at(house: dict, level: int, x: float, y: float) -> str | None:
                 return r.get("name")
         return None      # right floor found, no room matched
     return None
+
+
+def _unique_id(prefix: str, taken: set) -> str:
+    """Smallest `<prefix><n>` (n>=1) not already in `taken`. Deterministic + collision-
+    free -- used for a generated floor/room id so it never clashes with a hand-edited one."""
+    n = 1
+    cand = f"{prefix}{n}"
+    while cand in taken:
+        n += 1
+        cand = f"{prefix}{n}"
+    return cand
+
+
+def upsert_room(house: dict, level: int, room: dict) -> dict:
+    """Merge ONE room into a DEEP COPY of `house`, upserting BY NAME on the floor whose
+    `level == level`. Pure: never mutates the caller's `house`, never validates or saves
+    -- the caller runs validate_house_map on the returned doc exactly ONCE, so every
+    invariant is enforced identically to PUT /api/house (F2, ADR-0002/0006).
+
+    * Target floor: the first floor with a matching `level`. If none exists, a minimal
+      floor is created and appended (unique id, empty walls/features, backdrop=None) --
+      every existing floor/room/wall/feature/backdrop is preserved untouched.
+    * Room upsert: if a room with the same `name` already exists on that floor, only its
+      `polygon` is replaced (its id is kept); otherwise a new room with a freshly
+      generated unique id is appended. The first same-name room wins (deterministic).
+    """
+    merged = copy.deepcopy(house)
+    floors = merged.get("floors")
+    if not isinstance(floors, list):
+        floors = []
+        merged["floors"] = floors
+
+    floor = next((f for f in floors if isinstance(f, dict) and f.get("level") == level), None)
+    if floor is None:
+        taken_ids = {f.get("id") for f in floors if isinstance(f, dict)}
+        floor = {"id": _unique_id(f"f{level}", taken_ids), "name": f"Nível {level}",
+                 "level": level, "rooms": [], "walls": [], "features": [], "backdrop": None}
+        floors.append(floor)
+
+    rooms = floor.setdefault("rooms", [])
+    if not isinstance(rooms, list):
+        rooms = []
+        floor["rooms"] = rooms
+
+    name = room.get("name")
+    polygon = room.get("polygon")
+    existing = next((r for r in rooms if isinstance(r, dict) and r.get("name") == name), None)
+    if existing is not None:
+        existing["polygon"] = polygon        # replace geometry, keep the existing id
+    else:
+        taken_rids = {r.get("id") for f in floors if isinstance(f, dict)
+                      for r in f.get("rooms", []) if isinstance(r, dict)}
+        rooms.append({"id": _unique_id("r_", taken_rids), "name": name, "polygon": polygon})
+    return merged
 
 
 def save_house_map(path: str, doc: dict) -> None:

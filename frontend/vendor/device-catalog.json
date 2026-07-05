@@ -1,0 +1,3446 @@
+[
+  {
+    "id": "espresense-esp32-node",
+    "name": "ESPresense node (ESP32/ESP32-C3, single-room)",
+    "brand": "ESPresense (open-source)",
+    "category": "ble",
+    "modality": "room-level BLE presence via RSSI trilateration, open-source firmware",
+    "wavr_ingress": "mqtt",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Fully local MQTT publish only, no cloud; requires ESPresense firmware flash and a local MQTT broker.",
+    "notes": "~$5-10/node (generic ESP32 board); one node gives coarse room presence, 3+ nodes enable trilateration-grade room accuracy (see whole-home mesh variant)."
+  },
+  {
+    "id": "nrf52840-dongle-beacon",
+    "name": "Nordic nRF52840 Dongle as iBeacon/Eddystone transmitter",
+    "brand": "Nordic Semiconductor",
+    "category": "ble",
+    "modality": "Programmable BLE beacon transmitter for tagging people/objects",
+    "wavr_ingress": "esp-uart",
+    "coverage": "point",
+    "detects": [
+      "identity"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Local BLE broadcast only; no cloud dependency; MAC/UUID mapped locally to identity.",
+    "notes": "~10 EUR; needs custom firmware (nRF Connect SDK) to broadcast iBeacon frames; paired with a BLE scanner node for room mapping."
+  },
+  {
+    "id": "esp32-ble-scanner-generic",
+    "name": "Generic ESP32 BLE scanner (passive advertisement sniffer)",
+    "brand": "Genérico",
+    "category": "ble",
+    "modality": "Passive BLE advertisement scanning (RSSI + MAC) for known-device presence",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Local only; known-MAC allowlist processed on-box; no raw MAC data leaves home.",
+    "notes": "~4-6 EUR board; simplest DIY entry point, one scanner = coarse room-presence for known phones/tags."
+  },
+  {
+    "id": "tile-mate",
+    "name": "Tile Mate (BLE finder tag)",
+    "brand": "Tile (Life360)",
+    "category": "ble",
+    "modality": "BLE tag broadcast for item/keychain tracking",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Detectable via local BLE scan of its advertisement MAC/UUID; Tile's own app/cloud network is NOT used by Wavr, only the raw local BLE broadcast.",
+    "notes": "~25-30 EUR; primarily consumer finder tag, works as passive presence tag via local BLE scanner."
+  },
+  {
+    "id": "apple-airtag",
+    "name": "Apple AirTag",
+    "brand": "Apple",
+    "category": "ble",
+    "modality": "BLE (+ U1 UWB with iPhone) precision finding tag",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "CAVEAT: AirTag rotates its BLE MAC address (privacy-by-design, anti-stalking), so persistent local identity mapping is unreliable without Apple's Find My network/cloud, which Wavr does not use. UWB ranging (via U1) requires an iPhone and Apple's Nearby Interaction framework -- not natively accessible to Wavr. Usable only for coarse, unreliable BLE presence detection.",
+    "notes": "~35 EUR; best avoided for reliable presence -- MAC rotation breaks simple allowlist tracking; UWB path is roadmap only."
+  },
+  {
+    "id": "iphone-ble-presence",
+    "name": "iPhone (any modern model) as BLE presence device",
+    "brand": "Apple",
+    "category": "ble",
+    "modality": "Smartphone BLE advertisement / randomized MAC presence",
+    "wavr_ingress": "ble",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "CAVEAT: iOS randomizes BLE MAC by default, weakening long-term identity matching; more reliable when the phone runs a companion BLE beacon app (e.g. a dedicated iBeacon-broadcasting app) with a fixed UUID. Native Wi-Fi CSI / U1 UWB from iPhone is NOT accessible to Wavr (roadmap).",
+    "notes": "No hardware cost; identity best achieved by installing an iBeacon broadcaster app rather than relying on ambient BLE."
+  },
+  {
+    "id": "android-phone-ble-presence",
+    "name": "Android smartphone as BLE presence device",
+    "brand": "Genérico (Samsung/Google/etc.)",
+    "category": "ble",
+    "modality": "Smartphone BLE advertisement + optional beacon-app broadcast",
+    "wavr_ingress": "ble",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local BLE scan only; some Android versions also randomize MAC, so a dedicated beacon-broadcast app with fixed identifier is recommended for stable presence mapping.",
+    "notes": "No hardware cost; can also expose network-scan presence via Wi-Fi (see network-scan ingress in other categories)."
+  },
+  {
+    "id": "apple-watch-ble",
+    "name": "Apple Watch (any Series) as BLE wearable presence",
+    "brand": "Apple",
+    "category": "ble",
+    "modality": "Wearable BLE presence, correlates with paired iPhone owner identity",
+    "wavr_ingress": "ble",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Same MAC-randomization caveat as iPhone; local BLE scan only, no Apple cloud involved.",
+    "notes": "Useful as a secondary confirmation signal for a known person alongside their phone."
+  },
+  {
+    "id": "wear-os-watch-ble",
+    "name": "Wear OS smartwatch as BLE wearable presence",
+    "brand": "Genérico (Samsung Galaxy Watch/Pixel Watch)",
+    "category": "ble",
+    "modality": "Wearable BLE presence signal",
+    "wavr_ingress": "ble",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local BLE scan of advertisement; no cloud dependency for Wavr's use.",
+    "notes": "Similar role to Apple Watch entry; secondary presence confirmation device."
+  },
+  {
+    "id": "kkm-ibeacon-k9",
+    "name": "KKmoon/KKM K9 iBeacon Bluetooth Beacon",
+    "brand": "KKM (generic iBeacon vendor)",
+    "category": "ble",
+    "modality": "Battery-powered iBeacon transmitter, fixed UUID/major/minor",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Fixed non-rotating identifier broadcast locally; no cloud, no pairing required.",
+    "notes": "~10-15 EUR; coin-cell powered, months-year battery life; good for room/zone anchors."
+  },
+  {
+    "id": "minew-e8-beacon",
+    "name": "Minew E8 Beacon (iBeacon/Eddystone)",
+    "brand": "Minew",
+    "category": "ble",
+    "modality": "Dual-mode iBeacon/Eddystone-URL/UID beacon with configurable interval/power",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local BLE broadcast only; configurable via Minew app over BLE (no persistent cloud link needed for operation).",
+    "notes": "~15-20 EUR; widely used commercial-grade beacon, replaceable battery, good range (~50-70m)."
+  },
+  {
+    "id": "estimote-proximity-beacon",
+    "name": "Estimote Proximity Beacon",
+    "brand": "Estimote",
+    "category": "ble",
+    "modality": "iBeacon/Eddystone beacon with temperature/motion sensors",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local broadcast usable without Estimote Cloud; Wavr ignores Estimote's own cloud analytics feature.",
+    "notes": "~30 EUR; discontinued line but many units still in circulation on secondary market."
+  },
+  {
+    "id": "esp32-c3-beacon-tag",
+    "name": "ESP32-C3 SuperMini as low-cost wearable BLE tag",
+    "brand": "Genérico",
+    "category": "esp-diy",
+    "modality": "DIY coin-sized BLE beacon tag for keychain/wearable identity tagging",
+    "wavr_ingress": "esp-uart",
+    "coverage": "point",
+    "detects": [
+      "identity"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Fully local; custom firmware means fixed non-rotating ID under admin's control (privacy-friendlier than commercial trackers with cloud networks).",
+    "notes": "~3-5 EUR board; needs battery + 3D-printed/case DIY assembly; best price/control tradeoff for admins comfortable flashing firmware."
+  },
+  {
+    "id": "espresense-multi-node-mesh",
+    "name": "ESPresense multi-node mesh (3-6x ESP32 nodes, whole-home deployment)",
+    "brand": "ESPresense (open-source)",
+    "category": "ble",
+    "modality": "Whole-home room-level trilateration mesh for BLE tags/phones",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "All processing/MQTT local; this is the most capable BLE presence deployment Wavr can ingest today without cloud egress.",
+    "notes": "~30-50 EUR total for a small home (5-6 nodes); best BLE-based room-accuracy achievable pre-UWB; feeds Wavr via MQTT topics per node."
+  },
+  {
+    "id": "govee-h5074-thermo-beacon",
+    "name": "Govee H5074 Bluetooth Thermo-Hygrometer (BLE beacon side-channel)",
+    "brand": "Govee",
+    "category": "ble",
+    "modality": "Environmental sensor BLE advertisement, incidental fixed-MAC presence anchor",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "environment"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local BLE advertisement scan only; Govee cloud app not required for Wavr's ingestion.",
+    "notes": "~10-12 EUR; dual-purpose device -- primarily temp/humidity sensor but its steady BLE broadcast doubles as a fixed room anchor for RSSI calibration."
+  },
+  {
+    "id": "xiaomi-mi-band-ble",
+    "name": "Xiaomi Mi Band (any recent model) as BLE wearable presence",
+    "brand": "Xiaomi",
+    "category": "ble",
+    "modality": "Fitness band BLE advertisement presence signal",
+    "wavr_ingress": "ble",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local BLE scan of advertisement; some firmware versions randomize MAC periodically, reducing long-term reliability.",
+    "notes": "~30-40 EUR; inexpensive wearable option for identity-linked presence, secondary signal only."
+  },
+  {
+    "id": "apple-u1-uwb-native",
+    "name": "Apple U1 UWB chip (iPhone 11+/Apple Watch Series 6+) Nearby Interaction",
+    "brand": "Apple",
+    "category": "uwb",
+    "modality": "Centimeter-accurate UWB ranging and direction between Apple devices",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "Apple's Nearby Interaction framework restricts UWB ranging to authorized companion apps on Apple platforms only; no public local API exists for a third-party hub like Wavr to passively range an iPhone's U1 chip today.",
+    "notes": "Would require a custom iOS companion app using NearbyInteraction framework to ever bridge into Wavr; not a plug-and-play sensor."
+  },
+  {
+    "id": "qorvo-dwm3000-module",
+    "name": "Qorvo DWM3000 UWB Module (IEEE 802.15.4z)",
+    "brand": "Qorvo (formerly Decawave)",
+    "category": "uwb",
+    "modality": "Standalone UWB transceiver module for precise ranging/positioning",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "Fully local hardware, no cloud -- but Wavr has no native UWB stack/driver integration yet; would need a custom firmware+ranging-anchor bridge (e.g. MQTT) to become usable.",
+    "notes": "~25-40 EUR/module; developer kit (DWM3000EVB) available; realistic DIY path once Wavr adds a UWB anchor bridge -- flag as future roadmap item, not addable today."
+  },
+  {
+    "id": "nxp-trimension-ur-sr150",
+    "name": "NXP Trimension SR150/SR040 UWB Chipset",
+    "brand": "NXP",
+    "category": "uwb",
+    "modality": "Automotive/consumer-grade UWB secure ranging chipset (used in car-key and phone UWB)",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "Chipset-level component, not a consumer end-device; no path into Wavr without custom reference-design hardware and firmware.",
+    "notes": "Primarily found embedded in car keys / phones (e.g. some Android UWB-capable models); no off-the-shelf standalone module comparable to Qorvo's dev kit."
+  },
+  {
+    "id": "pixel-uwb-phone",
+    "name": "Google Pixel (UWB-capable models, e.g. Pixel 6 Pro+) native UWB",
+    "brand": "Google",
+    "category": "uwb",
+    "modality": "Android UWB ranging via NXP/Qorvo chipset, exposed through Android's UWB API",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "Android's UWB Ranging API (AOSP `android.uwb`) could theoretically be used by a custom companion app to feed Wavr locally, but no such bridge exists yet -- honestly a roadmap item pending companion-app development.",
+    "notes": "Closest realistic Android UWB path if Wavr ever builds a companion app; today it is not addable."
+  },
+  {
+    "id": "eddystone-generic-beacon",
+    "name": "Generic Eddystone-UID/URL Beacon (assorted Chinese OEM)",
+    "brand": "Genérico",
+    "category": "ble",
+    "modality": "Low-cost Eddystone-format BLE beacon for zone/room anchoring",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local broadcast only; no vendor cloud dependency for basic Eddystone frame reception.",
+    "notes": "~5-8 EUR; widely available on AliExpress/Amazon; quality/battery life varies by OEM."
+  },
+  {
+    "id": "raspberry-pi-pico-w-ble",
+    "name": "Raspberry Pi Pico W as BLE scanner/beacon bridge",
+    "brand": "Raspberry Pi Foundation",
+    "category": "esp-diy",
+    "modality": "DIY BLE scanner or beacon node with Wi-Fi backhaul",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Fully local; requires custom MicroPython/C firmware to scan BLE and publish over local Wi-Fi/MQTT.",
+    "notes": "~6-7 EUR; alternative to ESP32 for admins preferring RPi ecosystem/tooling; needs more DIY firmware work than ESPresense's turnkey ESP32 image."
+  },
+  {
+    "id": "m5stack-atom-ble-tag",
+    "name": "M5Stack AtomS3/ATOM Lite as compact BLE tag or scanner",
+    "brand": "M5Stack",
+    "category": "esp-diy",
+    "modality": "Compact ESP32-based module usable as either a beacon tag or scanner node",
+    "wavr_ingress": "esp-uart",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Local only; custom firmware (ESPresense-compatible or custom) required, admin controls exactly what's broadcast/collected.",
+    "notes": "~10 EUR; small form factor good for wearable tag use-case; built-in battery options available."
+  },
+  {
+    "id": "bluecharm-blecbeacon",
+    "name": "BlueCharm BC011/BC021 Bluetooth Beacon",
+    "brand": "BlueCharm",
+    "category": "ble",
+    "modality": "Configurable iBeacon/Eddystone beacon, replaceable battery, IP66 outdoor variants available",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local broadcast only; configuration app is optional and not required for ongoing operation.",
+    "notes": "~20 EUR; outdoor-rated variants useful for perimeter/garden zone anchoring alongside indoor rooms."
+  },
+  {
+    "id": "network-known-phone-arp",
+    "name": "Known smartphone MAC via Wi-Fi ARP (cross-reference with BLE identity)",
+    "brand": "Genérico",
+    "category": "network",
+    "modality": "Wi-Fi network presence of a known phone, correlated with BLE identity mapping for confidence boost",
+    "wavr_ingress": "network-scan",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "identity"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local ARP/router-table scan only; combining with BLE room-level data improves identity confidence without any new cloud egress.",
+    "notes": "No new hardware cost (uses existing router/network-scan ingress); pairs naturally with this category's BLE identity mapping for cross-validation."
+  },
+  {
+    "id": "tplink-tapo-c210",
+    "name": "Tapo C210",
+    "brand": "TP-Link",
+    "category": "camera",
+    "modality": "indoor pan/tilt 2K Wi-Fi camera, person detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP stream available via Tapo app 'Advanced Settings > Camera Account'; frames processed live by Wavr, never persisted or sent to TP-Link cloud if cloud sync disabled.",
+    "notes": "~€30-35, Wi-Fi only, indoor, 2K, requires enabling local RTSP + creating camera account"
+  },
+  {
+    "id": "tplink-tapo-c225",
+    "name": "Tapo C225",
+    "brand": "TP-Link",
+    "category": "camera",
+    "modality": "indoor pan/tilt 2K QHD Wi-Fi camera with spotlight, person/pet detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP available; disable cloud storage/notifications for full local-only operation.",
+    "notes": "~€35-40, Wi-Fi, indoor, built-in spotlight + siren (siren not exposed via RTSP, only app)"
+  },
+  {
+    "id": "tplink-tapo-tc40",
+    "name": "Tapo TC40",
+    "brand": "TP-Link",
+    "category": "camera",
+    "modality": "outdoor 2K pan/tilt Wi-Fi camera, color night vision, person detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP available; weatherproof so keeps camera frames on-prem for perimeter watch, no cloud egress needed for detection.",
+    "notes": "~€45-55, Wi-Fi, IP65 outdoor, color night vision, spotlight"
+  },
+  {
+    "id": "tplink-tapo-c520ws",
+    "name": "Tapo C520WS",
+    "brand": "TP-Link",
+    "category": "camera",
+    "modality": "outdoor 2K pan/tilt Wi-Fi camera with solar option, person detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP supported; can run fully local for perimeter, optional solar panel avoids power wiring.",
+    "notes": "~€60-70, Wi-Fi, IP66, optional solar panel accessory"
+  },
+  {
+    "id": "reolink-rlc-810a",
+    "name": "RLC-810A",
+    "brand": "Reolink",
+    "category": "camera",
+    "modality": "PoE outdoor 4K bullet camera, person/vehicle detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Native ONVIF + RTSP, fully local, no cloud account required to view stream; Reolink Cloud is opt-in only.",
+    "notes": "~€60-70, PoE, IP66, 4K, well documented ONVIF support"
+  },
+  {
+    "id": "reolink-rlc-833a",
+    "name": "RLC-833A",
+    "brand": "Reolink",
+    "category": "camera",
+    "modality": "PoE outdoor 4K bullet camera, 5x optical zoom, person/vehicle detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP/ONVIF works fully offline; good option for long-range perimeter without relying on Reolink cloud.",
+    "notes": "~€110-130, PoE, IP66, 4K, 5x zoom for long driveways/gates"
+  },
+  {
+    "id": "reolink-e1-pro",
+    "name": "E1 Pro",
+    "brand": "Reolink",
+    "category": "camera",
+    "modality": "indoor pan/tilt 4K Wi-Fi camera, person/pet detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP/ONVIF supported alongside Reolink app; keep cloud/NVR sync off for local-only.",
+    "notes": "~€60-70, Wi-Fi, indoor, 4K, 355 pan"
+  },
+  {
+    "id": "reolink-trackmix-poe",
+    "name": "TrackMix PoE",
+    "brand": "Reolink",
+    "category": "camera",
+    "modality": "PoE outdoor dual-lens (wide+telephoto) 4K camera, auto person/vehicle tracking",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Native ONVIF/RTSP dual streams, no cloud dependency for detection.",
+    "notes": "~€200-230, PoE, IP66, dual-lens auto-tracking, higher tier"
+  },
+  {
+    "id": "hikvision-ds-2cd2143g2",
+    "name": "DS-2CD2143G2-I (EasyIP 4MP)",
+    "brand": "Hikvision",
+    "category": "camera",
+    "modality": "PoE outdoor/indoor 4MP fixed dome camera, AcuSense person/vehicle filter",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Full local RTSP/ONVIF, common in NVR-free deployments; disable Hik-Connect cloud P2P for zero egress.",
+    "notes": "~€90-120, PoE, IP67, 4MP, widely used professional-grade ONVIF camera"
+  },
+  {
+    "id": "hikvision-ds-2cd2385fwd",
+    "name": "DS-2CD2385FWD-I (EasyIP 8MP)",
+    "brand": "Hikvision",
+    "category": "camera",
+    "modality": "PoE outdoor 8MP (4K) fixed dome camera, deep-learning person/vehicle detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local ONVIF/RTSP; some regions restrict Hikvision procurement (US federal ban) — note for enterprise buyers, still fine for private local home use.",
+    "notes": "~€150-180, PoE, 4K, IK10 vandal resistant dome"
+  },
+  {
+    "id": "dahua-ipc-hdw2831t",
+    "name": "IPC-HDW2831T-ZS (Lite AI 8MP)",
+    "brand": "Dahua",
+    "category": "camera",
+    "modality": "PoE outdoor 8MP varifocal dome camera, WizSense person/vehicle detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local ONVIF/RTSP available; keep P2P/cloud (gateway to Dahua servers) disabled for local-only.",
+    "notes": "~€130-160, PoE, motorized varifocal lens, 8MP"
+  },
+  {
+    "id": "dahua-ipc-hfw2439s",
+    "name": "IPC-HFW2439S-AS-LED-B",
+    "brand": "Dahua",
+    "category": "camera",
+    "modality": "PoE outdoor 4MP full-color bullet camera with active deterrence (light/siren), person detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "siren",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP/ONVIF; siren/light control local via camera's own relay, no cloud needed.",
+    "notes": "~€100-120, PoE, full-color night vision, built-in deterrence; control detail: onboard white-light + siren, controllable via ONVIF/CGI if exposed, else via Dahua app only"
+  },
+  {
+    "id": "amcrest-ip5m-t1179ew",
+    "name": "IP5M-T1179EW",
+    "brand": "Amcrest",
+    "category": "camera",
+    "modality": "PoE outdoor 5MP turret camera, person/vehicle AI detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Full local ONVIF/RTSP support, Amcrest cloud (Amcrest View) fully optional, common choice for local-only NVR setups.",
+    "notes": "~€60-70, PoE, IP67, 5MP, budget-friendly ONVIF camera"
+  },
+  {
+    "id": "amcrest-ip8m-2496ew",
+    "name": "IP8M-2496EW (4K UltraHD PoE)",
+    "brand": "Amcrest",
+    "category": "camera",
+    "modality": "PoE outdoor 4K bullet camera, person/vehicle detection, built-in mic",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person",
+      "sound"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP/ONVIF; audio stream also local via RTSP, no cloud required.",
+    "notes": "~€110-130, PoE, IP67, 4K, integrated mic for audio pickup"
+  },
+  {
+    "id": "unifi-protect-g4-bullet",
+    "name": "UniFi Protect G4 Bullet",
+    "brand": "Ubiquiti",
+    "category": "camera",
+    "modality": "PoE outdoor 4MP bullet camera, integrated with UniFi Protect NVR AI (person/vehicle)",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Requires a local UniFi Protect controller (Cloud Key/Dream Machine) on-prem; RTSP can be enabled per-camera from Protect for direct Wavr ingest, all local, no UI.com cloud needed for video.",
+    "notes": "~€120-140, PoE, needs UniFi Protect host (NVR/UDM) on same network"
+  },
+  {
+    "id": "unifi-protect-g5-flex",
+    "name": "UniFi Protect G5 Flex",
+    "brand": "Ubiquiti",
+    "category": "camera",
+    "modality": "compact PoE indoor/outdoor 2K camera with person/package/vehicle smart detect",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Same as other UniFi Protect cams: needs local Protect controller; RTSP toggle exposes local stream to Wavr.",
+    "notes": "~€90-100, PoE (or micro-USB adapter), compact form factor"
+  },
+  {
+    "id": "unifi-protect-g4-doorbell",
+    "name": "UniFi Protect G4 Doorbell Pro",
+    "brand": "Ubiquiti",
+    "category": "camera",
+    "modality": "PoE video doorbell, 2K HDR, person/package detection at entry point",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Requires local UniFi Protect controller; RTSP can be enabled locally, no cloud dependency for video/detection.",
+    "notes": "~€180-200, PoE (may need PoE injector kit), built-in chime relay for real doorbell"
+  },
+  {
+    "id": "wyze-cam-v3-rtsp",
+    "name": "Wyze Cam v3 (RTSP firmware)",
+    "brand": "Wyze",
+    "category": "camera",
+    "modality": "indoor/outdoor 1080p Wi-Fi camera, color night vision, motion detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Official Wyze 'RTSP Firmware' add-on flashes camera to expose a local RTSP stream, fully bypassing Wyze cloud for video; requires manual firmware flash and loses default Wyze app AI features.",
+    "notes": "~€25-35, Wi-Fi, IP65 (v3 outdoor-rated), cheapest local-RTSP option; no onboard person-detection once on RTSP firmware — Wavr's YOLO does that instead"
+  },
+  {
+    "id": "annke-c800",
+    "name": "Annke C800",
+    "brand": "Annke",
+    "category": "camera",
+    "modality": "PoE outdoor 4K bullet camera, person/vehicle AI detection, color night vision",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP/ONVIF supported; Annke cloud (Annke Vision) optional only.",
+    "notes": "~€70-90, PoE, IP67, 4K, budget-tier alternative to Reolink/Amcrest"
+  },
+  {
+    "id": "annke-nc800",
+    "name": "Annke NC800 (5MP PoE Turret)",
+    "brand": "Annke",
+    "category": "camera",
+    "modality": "PoE outdoor 5MP turret camera with two-way audio, person detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person",
+      "sound"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local ONVIF/RTSP; two-way audio stream stays on local network via RTSP/ONVIF audio backchannel.",
+    "notes": "~€60-80, PoE, IP67, includes mic + speaker"
+  },
+  {
+    "id": "foscam-r2m",
+    "name": "R2M",
+    "brand": "Foscam",
+    "category": "camera",
+    "modality": "indoor pan/tilt 2K Wi-Fi/PoE camera, person detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Native ONVIF/RTSP; Foscam Cloud (VIP plan) fully optional, camera works standalone on LAN.",
+    "notes": "~€45-55, Wi-Fi + PoE option, indoor, 2K"
+  },
+  {
+    "id": "foscam-g4p",
+    "name": "G4P",
+    "brand": "Foscam",
+    "category": "camera",
+    "modality": "outdoor 4MP pan/tilt Wi-Fi camera, person/vehicle/pet AI detection, spotlight+siren",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "siren",
+    "status": "addable-now",
+    "privacy_note": "Local ONVIF/RTSP supported, camera functions fully without Foscam Cloud.",
+    "notes": "~€100-120, Wi-Fi, IP66, 4MP, active deterrence; control detail: onboard siren/spotlight, deterrence controllable mainly via Foscam app; ONVIF alarm-out support varies by firmware"
+  },
+  {
+    "id": "generic-onvif-poe-dome",
+    "name": "Generic 4MP ONVIF PoE Dome Camera",
+    "brand": "Genérico",
+    "category": "camera",
+    "modality": "PoE indoor/outdoor dome camera, basic motion detection, generic ONVIF Profile S/T",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "No-name ONVIF cameras (AliExpress/Amazon generic brands) are typically fully local with no cloud account at all — good for privacy but verify firmware doesn't phone home; audit before trusting.",
+    "notes": "~€25-45, PoE, IP66, quality/support varies widely; person detection relies on Wavr's own YOLO, not onboard AI"
+  },
+  {
+    "id": "generic-onvif-4g-battery-cam",
+    "name": "Generic 4G/Battery Solar ONVIF Camera",
+    "brand": "Genérico",
+    "category": "camera",
+    "modality": "battery/solar outdoor camera with cellular 4G backhaul, motion-triggered clips",
+    "wavr_ingress": "roadmap",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "Most cellular/battery cams route video through a manufacturer cloud app with no local RTSP — cloud-only by design; would need a local-RTSP-capable model to fit Wavr's no-egress rule. Flagged roadmap until a verified local-stream battery cam is chosen.",
+    "notes": "Useful for off-grid perimeter points (gates, driveways) but privacy caveat is real — do not add without confirming local RTSP support"
+  },
+  {
+    "id": "eufycam-3",
+    "name": "eufyCam 3",
+    "brand": "Anker Eufy",
+    "category": "camera",
+    "modality": "wire-free battery/solar outdoor camera, on-device person/pet/vehicle AI, local HomeBase storage",
+    "wavr_ingress": "roadmap",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "Eufy stores locally on HomeBase (good) but does not expose an open RTSP/ONVIF stream to third parties out of the box; would need reverse-engineered integration (e.g. via eufy-security-ws bridge) to reach Wavr — tag honestly as roadmap/needs-bridge, not addable-now.",
+    "notes": "~€180-220 per cam + HomeBase required; strong native privacy story but no native Wavr ingress path yet"
+  },
+  {
+    "id": "hikvision-colorvu-turret",
+    "name": "DS-2CD2347G2-LU (ColorVu 4MP Turret)",
+    "brand": "Hikvision",
+    "category": "camera",
+    "modality": "PoE outdoor 4MP full-color-24/7 turret camera, person/vehicle AcuSense, built-in mic",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person",
+      "sound"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local ONVIF/RTSP + audio; ColorVu full-color night vision improves person ID at night for Wavr's own detector without any cloud step.",
+    "notes": "~€100-130, PoE, IP67, ColorVu full-color low-light"
+  },
+  {
+    "id": "reolink-duo-2-poe",
+    "name": "Duo 2 PoE",
+    "brand": "Reolink",
+    "category": "camera",
+    "modality": "PoE outdoor dual-lens 8MP wide-angle panoramic camera, person/vehicle detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local RTSP/ONVIF; wide panoramic FoV covers more perimeter per camera, fully local.",
+    "notes": "~€150-170, PoE, IP66, 180-degree stitched panoramic view"
+  },
+  {
+    "id": "dahua-ptz-sd1a404",
+    "name": "SD1A404XB-GNR (4MP Mini PTZ)",
+    "brand": "Dahua",
+    "category": "camera",
+    "modality": "PoE outdoor 4MP PTZ (pan-tilt-zoom) camera with auto-tracking, person/vehicle detection",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local ONVIF/RTSP includes PTZ control commands (ONVIF PTZ service) for local pan/tilt/zoom automation with no cloud step.",
+    "notes": "~€150-200, PoE, motorized PTZ, ONVIF PTZ profile supported for programmatic control"
+  },
+  {
+    "id": "annke-doorbell-lite",
+    "name": "Annke Doorbell Lite",
+    "brand": "Annke",
+    "category": "camera",
+    "modality": "Wi-Fi video doorbell, 2K, PIR motion + person detection at front door",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Some Annke doorbells expose local RTSP (verify per firmware version); if RTSP is disabled on a given unit it falls back to cloud-only — check before purchase.",
+    "notes": "~€60-80, Wi-Fi/battery, entry-point coverage; confirm RTSP support per SKU/firmware before relying on it"
+  },
+  {
+    "id": "aqara-door-window-p2",
+    "name": "Door and Window Sensor P2",
+    "brand": "Aqara",
+    "category": "contact",
+    "modality": "magnetic reed contact open/close",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Aqara Zigbee hub bridged to HA; no cloud egress if Aqara hub kept on local API mode",
+    "notes": "~$15, Zigbee 3.0, battery CR1632 ~2yr, needs Aqara/Zigbee hub"
+  },
+  {
+    "id": "sonoff-snzb-04",
+    "name": "SNZB-04 Door/Window Sensor",
+    "brand": "Sonoff",
+    "category": "contact",
+    "modality": "magnetic reed contact open/close",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local Zigbee via Sonoff/Zigbee2MQTT bridge to HA; no cloud needed with ZHA/Z2M",
+    "notes": "~$10, Zigbee, works great with Zigbee2MQTT, CR2032 battery"
+  },
+  {
+    "id": "sonoff-snzb-04p",
+    "name": "SNZB-04P Door/Window Sensor",
+    "brand": "Sonoff",
+    "category": "contact",
+    "modality": "magnetic reed contact open/close, improved range",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local Zigbee via Zigbee2MQTT/ZHA to HA, no cloud dependency",
+    "notes": "~$12, Zigbee 3.0, improved battery life vs 04"
+  },
+  {
+    "id": "aqara-vibration-sensor",
+    "name": "Vibration Sensor",
+    "brand": "Aqara",
+    "category": "contact",
+    "modality": "vibration/tilt/drop detection (accelerometer)",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Aqara Zigbee hub to HA; useful for cabinet/safe/window-break context",
+    "notes": "~$18, Zigbee, detects tilt/drop/vibrate events, good for windows/mailboxes/safes"
+  },
+  {
+    "id": "sonoff-snzb-06p",
+    "name": "SNZB-06P Zigbee Human Presence Sensor",
+    "brand": "Sonoff (eWeLink)",
+    "category": "pir",
+    "modality": "hybrid PIR + 5.8GHz mmWave human presence detection",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Zigbee2MQTT/HA bridge; no camera, no cloud needed once flashed/paired locally.",
+    "notes": "~$15-20, mains-powered (no battery), hybrid mmWave+PIR reduces false negatives/detects stationary occupants, adjustable sensitivity."
+  },
+  {
+    "id": "aqara-temp-humidity-t1",
+    "name": "Temperature and Humidity Sensor T1",
+    "brand": "Aqara",
+    "category": "environmental",
+    "modality": "temperature, relative humidity, atmospheric pressure",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Aqara Zigbee hub to HA",
+    "notes": "~$15, Zigbee, useful for HVAC context + occupancy inference (temp/humidity delta)"
+  },
+  {
+    "id": "sensirion-scd41-co2",
+    "name": "SCD41-based CO2/Temp/Humidity Module (DIY/ESP32)",
+    "brand": "Genérico",
+    "category": "environmental",
+    "modality": "CO2 ppm, temperature, humidity via NDIR sensor",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "environment",
+      "presence"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "fully local; ESP32 firmware pushes readings over serial/MQTT, no cloud",
+    "notes": "~$30-40 module, I2C sensor + ESP32, CO2 rise is a strong presence/occupancy proxy for closed rooms"
+  },
+  {
+    "id": "sonoff-snzb-02p",
+    "name": "SNZB-02P Temperature and Humidity Sensor",
+    "brand": "Sonoff",
+    "category": "environmental",
+    "modality": "temperature, relative humidity",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local Zigbee via Z2M/ZHA to HA",
+    "notes": "~$10, Zigbee, e-ink display option, low cost baseline environmental sensor"
+  },
+  {
+    "id": "m5stack-mic-sound-level",
+    "name": "ESP32 Sound Level / Mic Module (INMP441 or SPM1423)",
+    "brand": "Genérico",
+    "category": "sound",
+    "modality": "ambient sound pressure level (dB), not speech/audio recording",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "sound",
+      "presence"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "custom firmware computes dB level on-device only, never streams raw audio, no recording/no cloud — critical for privacy on mic-based sensors",
+    "notes": "~$15-25 DIY, I2S MEMS mic + ESP32, glass-break / loud-noise / baby-cry-level alerting without ever transmitting audio"
+  },
+  {
+    "id": "shelly-uni-glassbreak-input",
+    "name": "Shelly Uni (dry-contact input for 3rd-party glass-break detector)",
+    "brand": "Shelly",
+    "category": "sound",
+    "modality": "relay/dry-contact bridge for external acoustic glass-break sensor",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "sound",
+      "contact"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "local WiFi device, native MQTT support, can run fully local firmware without cloud",
+    "notes": "~$25, WiFi, ADC+digital inputs, bridges legacy alarm-panel glass-break detectors into Wavr via MQTT"
+  },
+  {
+    "id": "nuki-smart-lock-4th-gen",
+    "name": "Smart Lock 4th Gen",
+    "brand": "Nuki",
+    "category": "lock-control",
+    "modality": "electronic deadbolt/euro-cylinder retrofit lock control",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "lock",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Nuki Bridge (LAN API) to HA; door-lock control is a sensitive action — require explicit allowlist + confirmation gating in Wavr, never auto-unlock from ambiguous presence signals",
+    "notes": "~€200-260, Bluetooth+WiFi/Matter, retrofits existing euro-cylinder, door-sensor built in reports lock/latch state"
+  },
+  {
+    "id": "august-wifi-smart-lock-4th-gen",
+    "name": "Wi-Fi Smart Lock (4th Gen)",
+    "brand": "August",
+    "category": "lock-control",
+    "modality": "deadbolt retrofit lock control with built-in door sense",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "lock",
+    "status": "via-home-assistant",
+    "privacy_note": "August cloud is used for app pairing; local control only via HA August integration (partial local, some cloud dependency) — flag as caveat, treat lock/unlock as sensitive gated action",
+    "notes": "~$230, WiFi+BT, US deadbolt form factor, DoorSense contact reports open/closed"
+  },
+  {
+    "id": "yale-assure-lock-2",
+    "name": "Assure Lock 2 (Zigbee module)",
+    "brand": "Yale",
+    "category": "lock-control",
+    "modality": "keypad/touch deadbolt lock control",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "lock",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Zigbee module + Z2M/ZHA to HA, no cloud needed when using Zigbee accessory module instead of WiFi module",
+    "notes": "~$250, modular radio (Zigbee/Z-Wave/WiFi options), sensitive control — allowlist + confirm before remote unlock"
+  },
+  {
+    "id": "danalock-v3",
+    "name": "Danalock V3",
+    "brand": "Danalock",
+    "category": "lock-control",
+    "modality": "euro-cylinder retrofit lock control (Z-Wave/BT)",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "lock",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Z-Wave stick + HA, no cloud required",
+    "notes": "~€180, Z-Wave/BT, common in EU multi-unit buildings, sensitive control device"
+  },
+  {
+    "id": "shelly-plus-1pm",
+    "name": "Plus 1PM",
+    "brand": "Shelly",
+    "category": "plug-control",
+    "modality": "Gen2 WiFi relay/switch with power metering and dry-contact input",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Gen2 firmware supports fully local MQTT/RPC (cloud disable-able), no frame/audio data involved.",
+    "notes": "~$15-20, WiFi, 16A relay + power monitoring, local scripting (Shelly Script); great generic switch/appliance control node."
+  },
+  {
+    "id": "shelly-plug-s-gen3",
+    "name": "Plug S Gen3",
+    "brand": "Shelly",
+    "category": "plug-control",
+    "modality": "smart plug with power metering",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "environment"
+    ],
+    "control": "plug",
+    "status": "addable-now",
+    "privacy_note": "local WiFi, native MQTT, no cloud egress required",
+    "notes": "~€25, WiFi, EU/UK plug formats, power monitoring useful for appliance-in-use presence inference"
+  },
+  {
+    "id": "tplink-kasa-kp125",
+    "name": "Kasa Smart Plug KP125 (energy monitoring)",
+    "brand": "TP-Link",
+    "category": "plug-control",
+    "modality": "smart plug with power metering",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "environment"
+    ],
+    "control": "plug",
+    "status": "via-home-assistant",
+    "privacy_note": "Kasa devices support a local-only mode via HA TP-Link/Kasa integration (no cloud needed for local control)",
+    "notes": "~$15-20, WiFi, popular/cheap, energy readings help infer device-in-use presence"
+  },
+  {
+    "id": "sonoff-s60-smart-plug",
+    "name": "S60 Smart Plug",
+    "brand": "Sonoff",
+    "category": "plug-control",
+    "modality": "smart plug with power metering",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "environment"
+    ],
+    "control": "plug",
+    "status": "addable-now",
+    "privacy_note": "supports local MQTT firmware mode (eWeLink or custom), no cloud egress when configured for local API",
+    "notes": "~$12-18, WiFi, 15A/16A rating depending on region, energy monitoring"
+  },
+  {
+    "id": "shelly-1-gen3-esphome",
+    "name": "Shelly 1 Gen3 (ESPHome-flashable relay)",
+    "brand": "Shelly",
+    "category": "esp-diy",
+    "modality": "generic relay control node, custom firmware capable",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "reflash with ESPHome for zero-cloud, fully local API integration with Wavr/HA",
+    "notes": "~€10-15, ESP32-based, ideal building block for custom local control nodes (garage, gate, valve)"
+  },
+  {
+    "id": "aeotec-siren-6",
+    "name": "Siren 6",
+    "brand": "Aeotec",
+    "category": "lock-control",
+    "modality": "Z-Wave audible/visual alarm siren",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [],
+    "control": "siren",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Z-Wave stick + HA, no cloud dependency; siren activation should be gated behind explicit alarm-arming logic to avoid false-positive nuisance triggers",
+    "notes": "~$50, Z-Wave, 8 alarm tones + strobe, battery or USB backup"
+  },
+  {
+    "id": "sonoff-siren-nsalarm",
+    "name": "NS Panel Pro compatible Zigbee Siren",
+    "brand": "Sonoff",
+    "category": "lock-control",
+    "modality": "Zigbee audible siren/strobe",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [],
+    "control": "siren",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Zigbee2MQTT/ZHA to HA, no cloud dependency",
+    "notes": "~$25-35, Zigbee, battery/USB, integrates into HA alarm automations"
+  },
+  {
+    "id": "meross-garage-door-opener-msg200",
+    "name": "Smart Garage Door Opener MSG200",
+    "brand": "Meross",
+    "category": "lock-control",
+    "modality": "garage door controller with built-in contact sensor",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "garage",
+    "status": "via-home-assistant",
+    "privacy_note": "Meross has a local-control HA integration (LAN HTTP) that avoids cloud round-trip; verify firmware version supports local mode; garage control is sensitive — allowlist + confirm required",
+    "notes": "~$35-40, WiFi, includes door-open/close reed sensor + relay for existing opener button terminals"
+  },
+  {
+    "id": "shelly-plus-i4-garage-gate",
+    "name": "Shelly Plus i4 (garage/gate control node)",
+    "brand": "Shelly",
+    "category": "lock-control",
+    "modality": "4-channel dry-contact input node paired with Shelly relay for garage/gate button-press automation",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "garage",
+    "status": "addable-now",
+    "privacy_note": "fully local WiFi device, native MQTT, no cloud egress; gate/garage actuation is sensitive — gate behind explicit confirmation",
+    "notes": "~€20, WiFi, battery or mains powered, pairs with Shelly 1 relay to pulse existing garage-door button wiring"
+  },
+  {
+    "id": "aqara-water-leak-sensor",
+    "name": "Water Leak Sensor",
+    "brand": "Aqara",
+    "category": "safety-alarm",
+    "modality": "water/moisture detection on floor",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "hazard"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Aqara Zigbee hub to HA",
+    "notes": "~$20, Zigbee, IP67, useful under sinks/water heaters, can trigger valve shutoff control"
+  },
+  {
+    "id": "fibaro-flood-sensor",
+    "name": "Flood Sensor",
+    "brand": "Fibaro",
+    "category": "safety-alarm",
+    "modality": "water leak + temperature",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "hazard"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Z-Wave stick + HA, no cloud dependency",
+    "notes": "~$60, Z-Wave, floats to detect rising water level, IP68"
+  },
+  {
+    "id": "shelly-valve-actuator",
+    "name": "Shelly Wave Valve Actuator (main water shutoff)",
+    "brand": "Shelly",
+    "category": "lock-control",
+    "modality": "motorized ball valve actuator for main water line",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "valve",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Z-Wave stick + HA, no cloud; auto-shutoff should trigger only on high-confidence leak detection, sensitive actuator",
+    "notes": "~€90, Z-Wave, pairs well with flood sensors for automated water shutoff"
+  },
+  {
+    "id": "aqara-smoke-detector",
+    "name": "Smoke Detector",
+    "brand": "Aqara",
+    "category": "safety-alarm",
+    "modality": "photoelectric smoke detection",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "hazard"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Aqara Zigbee hub to HA; life-safety device — treat alerts as high priority, no cloud dependency for detection",
+    "notes": "~$30, Zigbee, certified smoke sensor, 5-yr battery, should never be sole life-safety device (keep certified standalone alarm too)"
+  },
+  {
+    "id": "sonoff-snzb-05p-temp-alarm",
+    "name": "SNZB-05P Water Leak Sensor",
+    "brand": "Sonoff",
+    "category": "safety-alarm",
+    "modality": "water leak detection",
+    "wavr_ingress": "home-assistant",
+    "coverage": "point",
+    "detects": [
+      "hazard"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local Zigbee via Z2M/ZHA to HA, no cloud dependency",
+    "notes": "~$15, Zigbee, IP66, compact form factor"
+  },
+  {
+    "id": "generic-mic-decibel-esp32-adapter",
+    "name": "Generic I2S MEMS Mic Decibel Adapter (ESPHome)",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "converts raw ambient audio to a local dB/event level only, bridges to Wavr as a sound-level sensor",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "sound"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "audio is processed on-device into a dB value only; raw waveform is never transmitted or stored — required design to keep mic sensors privacy-safe",
+    "notes": "~$10-20 DIY BOM, ESPHome microphone platform, good for baby-cry / loud-argument / glass-break context signals without recording"
+  },
+  {
+    "id": "zooz-motion-contact-multisensor",
+    "name": "4-in-1 Motion/Temp/Light/Humidity Sensor ZSE40",
+    "brand": "Zooz",
+    "category": "environmental",
+    "modality": "PIR motion + temperature + light + humidity combo",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "local via Z-Wave stick + HA, no cloud dependency",
+    "notes": "~$40, Z-Wave, adjustable sensitivity, useful multi-signal context sensor"
+  },
+  {
+    "id": "esp32-devkit-v1",
+    "name": "ESP32 DevKitC (WROOM-32)",
+    "brand": "Espressif",
+    "category": "esp-diy",
+    "modality": "general-purpose Wi-Fi/BLE MCU host for sensors/relays",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "presence"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Runs custom local firmware; talks to Wavr over LAN MQTT or serial, no cloud required.",
+    "notes": "~$6-9; base board for most DIY sensor nodes; dual-core, Wi-Fi+BLE"
+  },
+  {
+    "id": "esp32-s3-devkitc",
+    "name": "ESP32-S3-DevKitC-1",
+    "brand": "Espressif",
+    "category": "esp-diy",
+    "modality": "Wi-Fi/BLE MCU with AI acceleration (vector instructions) for camera/audio nodes",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "sound"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Local firmware only; suited for on-device inference so raw audio/frames need not leave the node.",
+    "notes": "~$10-13; more RAM/PSRAM than classic ESP32, USB-OTG, good for cam/mic nodes"
+  },
+  {
+    "id": "esp32-c3-devkitm",
+    "name": "ESP32-C3-DevKitM-1",
+    "brand": "Espressif",
+    "category": "esp-diy",
+    "modality": "low-cost RISC-V Wi-Fi/BLE MCU for simple sensor nodes",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Local-only firmware; ideal for cheap single-purpose contact/environmental nodes.",
+    "notes": "~$4-6; single-core RISC-V, smaller footprint, good for battery nodes"
+  },
+  {
+    "id": "esp32-cam-ai-thinker",
+    "name": "ESP32-CAM (AI-Thinker)",
+    "brand": "AI-Thinker",
+    "category": "camera",
+    "modality": "low-cost Wi-Fi camera module (OV2640), can run local motion/person detect",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "motion",
+      "presence",
+      "person"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Needs custom firmware exposing local RTSP/HTTP MJPEG stream; frames stay on LAN, never persisted by Wavr, no cloud.",
+    "notes": "~$8-10; OV2640 2MP, no audio, PoE not native, needs USB-serial to flash"
+  },
+  {
+    "id": "raspberry-pi-4b",
+    "name": "Raspberry Pi 4 Model B (4/8GB)",
+    "brand": "Raspberry Pi Foundation",
+    "category": "hub-bridge",
+    "modality": "SBC host for RTSP restreaming, USB radar/BLE dongles, local compute",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Runs fully local services (e.g. go2rtc/mediamtx, frigate-style pipelines); no cloud egress if configured local-only.",
+    "notes": "~$55-90 board only; hosts USB mmWave/BLE dongles or acts as extra RTSP/ONVIF bridge node"
+  },
+  {
+    "id": "raspberry-pi-5",
+    "name": "Raspberry Pi 5 (4/8GB)",
+    "brand": "Raspberry Pi Foundation",
+    "category": "hub-bridge",
+    "modality": "faster SBC host for local YOLO inference, multi-camera restreaming, radar host",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local compute node; can pair with Coral/AI HAT for on-device inference, no frames leave LAN.",
+    "notes": "~$60-100 board only; PCIe lane enables NVMe + faster USB for multiple camera streams"
+  },
+  {
+    "id": "raspberry-pi-zero-2w",
+    "name": "Raspberry Pi Zero 2 W",
+    "brand": "Raspberry Pi Foundation",
+    "category": "hub-bridge",
+    "modality": "compact low-power SBC for single-camera RTSP node or BLE/serial bridge",
+    "wavr_ingress": "rtsp-onvif",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local-only bridge node; no cloud services required.",
+    "notes": "~$15-18; good for tucking a Pi Camera + local RTSP server into a small enclosure"
+  },
+  {
+    "id": "usb-serial-cp2102",
+    "name": "CP2102 USB-to-UART Adapter",
+    "brand": "Silicon Labs (chipset, generic boards)",
+    "category": "adapter",
+    "modality": "USB-serial bridge for flashing/talking to ESP32 or serial mmWave radar",
+    "wavr_ingress": "serial-uart",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Passive data bridge; carries only local serial traffic, no network exposure by itself.",
+    "notes": "~$3-6; most common USB-UART chipset, native driver support on Win/Mac/Linux"
+  },
+  {
+    "id": "usb-serial-ch340",
+    "name": "CH340/CH341 USB-to-UART Adapter",
+    "brand": "WCH (chipset, generic boards)",
+    "category": "adapter",
+    "modality": "budget USB-serial bridge for ESP32/Arduino flashing and serial radar hosts",
+    "wavr_ingress": "serial-uart",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Passive local serial bridge; no cloud, no data retention.",
+    "notes": "~$1-3; cheapest option, may need extra driver on Windows/older macOS"
+  },
+  {
+    "id": "usb-serial-ftdi-ft232rl",
+    "name": "FTDI FT232RL USB-to-UART Adapter",
+    "brand": "FTDI",
+    "category": "adapter",
+    "modality": "reliable USB-serial bridge, industrial-grade, for radar/ESP hosts",
+    "wavr_ingress": "serial-uart",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Passive local serial bridge; no cloud dependency.",
+    "notes": "~$8-15 (genuine); most stable driver support, avoid counterfeit chips"
+  },
+  {
+    "id": "seeed-xiao-esp32c3",
+    "name": "Seeed Studio XIAO ESP32-C3",
+    "brand": "Seeed Studio",
+    "category": "esp-diy",
+    "modality": "thumb-sized Wi-Fi/BLE MCU, common host for mmWave/PIR breakout modules",
+    "wavr_ingress": "esp-uart",
+    "coverage": "point",
+    "detects": [
+      "presence"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Local custom firmware; no cloud unless user adds it.",
+    "notes": "~$5; very small form factor, popular host for Seeed mmWave kits and LD2410"
+  },
+  {
+    "id": "m5stack-core2",
+    "name": "M5Stack Core2 (ESP32 + display)",
+    "brand": "M5Stack",
+    "category": "esp-diy",
+    "modality": "ESP32 dev board with touchscreen, mic, IMU — DIY control panel / sensor hub",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "sound"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Local firmware; can double as an in-home Wavr status/control panel without cloud round-trip.",
+    "notes": "~$40-50; touchscreen useful for a local wall-mounted Wavr control panel"
+  },
+  {
+    "id": "poe-splitter-injector-kit",
+    "name": "PoE Splitter + Injector Kit (802.3af/at)",
+    "brand": "Genérico (TP-Link/Ubiquiti-compatible)",
+    "category": "adapter",
+    "modality": "power delivery for PoE IP cameras/ESP32-CAM PoE hats over single Ethernet run",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Pure power infrastructure; no data path of its own, enables tidy local wiring for cameras.",
+    "notes": "~$15-25 per pair; simplifies running a single cable to ceiling-mounted RTSP cameras"
+  },
+  {
+    "id": "external-2-4ghz-antenna-rp-sma",
+    "name": "External 2.4GHz Wi-Fi/BLE Antenna (RP-SMA, 5-9dBi)",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "range-extension antenna for ESP32/BLE nodes and USB Wi-Fi adapters",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Passive RF component; no data handling, purely improves signal range for existing ingress paths.",
+    "notes": "~$5-12; improves BLE/ESPresense reliability in far rooms or through walls"
+  },
+  {
+    "id": "usb-wifi-adapter-ac1300",
+    "name": "USB Wi-Fi Adapter, AC1300 dual-band (RTL8812AU/MT7612U)",
+    "brand": "Genérico (TP-Link Archer T3U-class)",
+    "category": "adapter",
+    "modality": "adds/extends Wi-Fi connectivity to Pi/PC hosts running Wavr services",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Pure network infrastructure; carries whatever ingress path (RTSP/MQTT/BLE) is already local.",
+    "notes": "~$15-25; useful when host box lacks reliable onboard Wi-Fi or needs monitor mode for network-scan"
+  },
+  {
+    "id": "usb-ble-dongle-csr4",
+    "name": "USB Bluetooth 4.0/5.0 Dongle (CSR/Realtek chipset)",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "adds BLE scanning capability to a Pi/PC host for advertisement-based presence",
+    "wavr_ingress": "ble",
+    "coverage": "point",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Passive advertisement scanning only; local host processes RSSI, no cloud round-trip.",
+    "notes": "~$8-15; lets a headless Pi/PC act as a BLE presence scanner without native onboard BT"
+  },
+  {
+    "id": "coral-usb-accelerator",
+    "name": "Coral USB Accelerator (Edge TPU)",
+    "brand": "Google Coral",
+    "category": "adapter",
+    "modality": "USB ML accelerator to speed up local YOLO/person-detection inference",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Pure local inference accelerator; frames processed on-device, nothing leaves the box, no cloud.",
+    "notes": "~$60-75; offloads YOLO/pose inference from CPU on Pi/PC hosts, big FPS/latency win"
+  },
+  {
+    "id": "m2-nvme-to-usb-adapter",
+    "name": "M.2 NVMe-to-USB3.2 Enclosure/Adapter",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "fast local storage for Wavr host (clip buffers, model files, logs)",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Storage-only component; keeps any transient buffers strictly local, no network path.",
+    "notes": "~$15-25; useful for Pi/mini-PC hosts needing fast local storage for multi-camera pipelines"
+  },
+  {
+    "id": "esp32-poe-olimex",
+    "name": "Olimex ESP32-POE",
+    "brand": "Olimex",
+    "category": "esp-diy",
+    "modality": "ESP32 dev board with native 802.3af PoE, Ethernet, for wired reliable sensor/relay nodes",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "contact"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Local custom firmware over wired Ethernet; avoids Wi-Fi congestion, no cloud required.",
+    "notes": "~$25-30; good for fixed sensor/relay nodes needing power+data on one cable"
+  },
+  {
+    "id": "usb-uart-esp32-prog-adapter",
+    "name": "ESP-Prog USB JTAG/UART Programmer",
+    "brand": "Espressif",
+    "category": "adapter",
+    "modality": "dedicated flashing/debugging adapter for ESP32 family boards",
+    "wavr_ingress": "serial-uart",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Dev/flashing tool only; not part of runtime data path.",
+    "notes": "~$15-18; speeds up flashing/debugging multiple ESP nodes during DIY build-out"
+  },
+  {
+    "id": "waveshare-esp32-s3-eth-poe",
+    "name": "Waveshare ESP32-S3-ETH (with PoE option)",
+    "brand": "Waveshare",
+    "category": "esp-diy",
+    "modality": "ESP32-S3 board with onboard Ethernet PHY, good for wired reliable camera/relay hub",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "presence"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Local firmware over wired Ethernet; deterministic LAN path, no cloud.",
+    "notes": "~$15-20; alternative to Olimex, more RAM/PSRAM for on-device inference tasks"
+  },
+  {
+    "id": "sonoff-zbdongle-e",
+    "name": "ZBDongle-E",
+    "brand": "Sonoff",
+    "category": "hub-bridge",
+    "modality": "Zigbee 3.0 USB coordinator (EFR32/Silicon Labs), feeds Zigbee2MQTT",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Local Zigbee radio; runs through local Zigbee2MQTT + local MQTT broker, no cloud egress",
+    "notes": "~$20-25, USB, requires Zigbee2MQTT (Docker/HA add-on) + MQTT broker; most flexible/most documented Zigbee coordinator"
+  },
+  {
+    "id": "sonoff-zbdongle-p",
+    "name": "ZBDongle-P",
+    "brand": "Sonoff",
+    "category": "hub-bridge",
+    "modality": "Zigbee 3.0 USB coordinator (TI CC2652P), higher power/range, feeds Zigbee2MQTT",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Local Zigbee radio; local Zigbee2MQTT + MQTT, no cloud",
+    "notes": "~$25-30, USB, better range/PA+LNA than -E, popular for larger homes"
+  },
+  {
+    "id": "conbee-ii",
+    "name": "ConBee II",
+    "brand": "Phoscon/dresden elektronik",
+    "category": "hub-bridge",
+    "modality": "Zigbee USB coordinator, feeds deCONZ or Zigbee2MQTT",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Local; deCONZ/Zigbee2MQTT can bridge to local MQTT, no cloud dependency",
+    "notes": "~$45, USB, mature firmware, wide device compatibility"
+  },
+  {
+    "id": "skyconnect",
+    "name": "SkyConnect",
+    "brand": "Home Assistant / Nabu Casa",
+    "category": "hub-bridge",
+    "modality": "Zigbee + Thread combo USB radio for Home Assistant",
+    "wavr_ingress": "home-assistant",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion"
+    ],
+    "control": "switch",
+    "status": "via-home-assistant",
+    "privacy_note": "Local radio operated by HA OS/ZHA/OTBR; Wavr consumes via local HA API, no cloud",
+    "notes": "~$40, USB, official HA hardware, ZHA or Zigbee2MQTT + OpenThread Border Router"
+  },
+  {
+    "id": "aeotec-zstick-7",
+    "name": "Z-Stick 7",
+    "brand": "Aeotec",
+    "category": "hub-bridge",
+    "modality": "Z-Wave 700-series USB controller, feeds Z-Wave JS (UI)",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Local Z-Wave mesh; Z-Wave JS UI can publish to local MQTT, no cloud egress",
+    "notes": "~$60-70, USB, S2 security, needs Z-Wave JS/Z-Wave JS UI server"
+  },
+  {
+    "id": "zooz-zst39",
+    "name": "ZST39 800LR",
+    "brand": "Zooz",
+    "category": "hub-bridge",
+    "modality": "Z-Wave 800-series long-range USB controller",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Local Z-Wave LR mesh via Z-Wave JS UI to local MQTT, no cloud",
+    "notes": "~$50, extended range 800-series chip, good for large properties"
+  },
+  {
+    "id": "home-assistant-yellow",
+    "name": "Home Assistant Yellow",
+    "brand": "Home Assistant / Nabu Casa",
+    "category": "hub-bridge",
+    "modality": "Full local smart-home hub (HA OS) with built-in Zigbee/Thread radio, PoE option",
+    "wavr_ingress": "home-assistant",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion",
+      "sound"
+    ],
+    "control": "light",
+    "status": "via-home-assistant",
+    "privacy_note": "Runs fully local (HA OS); Wavr integrates via HA local REST/WebSocket API, no cloud required",
+    "notes": "~$150-200, built-in NVMe option, aggregates hundreds of integrations into one HA instance"
+  },
+  {
+    "id": "home-assistant-green",
+    "name": "Home Assistant Green",
+    "brand": "Home Assistant / Nabu Casa",
+    "category": "hub-bridge",
+    "modality": "Entry-level local smart-home hub appliance (HA OS)",
+    "wavr_ingress": "home-assistant",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion",
+      "sound"
+    ],
+    "control": "light",
+    "status": "via-home-assistant",
+    "privacy_note": "Local HA OS box; Wavr talks local API, no cloud dependency",
+    "notes": "~$100, no radio built in (pair with SkyConnect/dongle), fanless, low power"
+  },
+  {
+    "id": "hubitat-elevation-c8",
+    "name": "Elevation C-8",
+    "brand": "Hubitat",
+    "category": "hub-bridge",
+    "modality": "Local Zigbee+Z-Wave hub with on-device automation engine",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Processing fully local on hub; MQTT app/community integration bridges to Wavr with no cloud round-trip",
+    "notes": "~$160, Zigbee+Z-Wave radios onboard, MakerAPI + MQTT link community apps"
+  },
+  {
+    "id": "shelly-plus-2pm",
+    "name": "Shelly Plus 2PM",
+    "brand": "Shelly",
+    "category": "hub-bridge",
+    "modality": "Gen2 dual-relay WiFi switch/roller controller, local MQTT",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Local MQTT/RPC, cloud can be fully disabled in device settings",
+    "notes": "~$25, WiFi, supports roller/shutter mode + power metering per channel"
+  },
+  {
+    "id": "shelly-h-t-gen3",
+    "name": "Shelly H&T Gen3",
+    "brand": "Shelly",
+    "category": "environmental",
+    "modality": "Battery WiFi temperature + humidity sensor, local MQTT",
+    "wavr_ingress": "mqtt",
+    "coverage": "room",
+    "detects": [
+      "environment"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local MQTT publish, no cloud required for readings",
+    "notes": "~$25, battery ~1yr, WiFi (higher battery drain than Zigbee equivalents)"
+  },
+  {
+    "id": "sonoff-basic-r4",
+    "name": "BASICR4",
+    "brand": "Sonoff",
+    "category": "plug-control",
+    "modality": "inline WiFi relay/switch module for appliances, garage, gate motors",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Stock firmware is cloud (eWeLink); official DIY mode exposes a local HTTP API but guaranteed local-only operation requires a Tasmota/ESPHome reflash.",
+    "notes": "~$8-12, WiFi, bare relay module, easy ESPHome/Tasmota reflash; common building block for garage/gate/appliance control."
+  },
+  {
+    "id": "tasmota-generic",
+    "name": "Tasmota (generic ESP8266/ESP32 firmware)",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "Open-source firmware turning ESP-based smart plugs/relays/sensors into local MQTT devices",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "contact",
+      "environment"
+    ],
+    "control": "plug",
+    "status": "via-esp",
+    "privacy_note": "Fully local MQTT by design, no vendor cloud at all once flashed",
+    "notes": "free, flash via Tasmotizer/web-installer, huge device compatibility list (Sonoff, Athom, generic plugs)"
+  },
+  {
+    "id": "esphome-generic",
+    "name": "ESPHome (generic ESP32/ESP8266 firmware)",
+    "brand": "ESPHome (community firmware)",
+    "category": "adapter",
+    "modality": "YAML-defined firmware exposing any GPIO/I2C/UART sensor or relay via native API or MQTT, deep HA integration",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "via-esp",
+    "privacy_note": "Config-driven local firmware; publishes to local MQTT broker or native API only, no cloud dependency.",
+    "notes": "free; cost = board + sensor (~$5-15); most flexible way to add commodity PIR/door/temp/BLE-tracker sensors to Wavr; compiles per-device firmware."
+  },
+  {
+    "id": "athom-smart-plug",
+    "name": "Athom Smart Plug v2 (Tasmota/ESPHome preflashed)",
+    "brand": "Athom",
+    "category": "hub-bridge",
+    "modality": "ESP32 WiFi smart plug shipped with open firmware, local MQTT, power metering",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "contact"
+    ],
+    "control": "plug",
+    "status": "addable-now",
+    "privacy_note": "Ships open-firmware, local-only MQTT out of the box, no forced cloud",
+    "notes": "~$15-18, WiFi, energy monitoring, popular with ESPHome/Tasmota community"
+  },
+  {
+    "id": "mosquitto-broker",
+    "name": "Mosquitto",
+    "brand": "Eclipse Foundation",
+    "category": "hub-bridge",
+    "modality": "Open-source local MQTT broker — the backbone all MQTT devices/bridges publish into",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion",
+      "sound"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Self-hosted on the same box/LAN as Wavr; zero external egress by design",
+    "notes": "free, runs as Docker container or HA add-on, TLS+auth recommended, foundation of the MQTT ingress path"
+  },
+  {
+    "id": "zigbee2mqtt",
+    "name": "Zigbee2MQTT",
+    "brand": "Koenkk (open source)",
+    "category": "adapter",
+    "modality": "Software bridge translating Zigbee coordinator traffic into local MQTT topics for 4000+ devices",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion",
+      "sound"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Runs fully local (Docker/HA add-on), publishes only to local Mosquitto, no cloud dependency",
+    "notes": "free, requires a supported Zigbee coordinator (ZBDongle-E/P, ConBee II, etc.), largest Zigbee device compatibility DB"
+  },
+  {
+    "id": "zwave-js-ui",
+    "name": "Z-Wave JS UI",
+    "brand": "zwave-js community",
+    "category": "adapter",
+    "modality": "Software bridge exposing Z-Wave network state/control over local MQTT and REST",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Self-hosted Docker/HA add-on, local MQTT only, no cloud",
+    "notes": "free, pairs with any 500/700/800-series Z-Wave USB stick, web UI for pairing/management"
+  },
+  {
+    "id": "home-assistant-core",
+    "name": "Home Assistant Core/OS",
+    "brand": "Home Assistant / Nabu Casa",
+    "category": "hub-bridge",
+    "modality": "Central local automation platform aggregating Zigbee/Z-Wave/WiFi/BLE/MQTT integrations under one API",
+    "wavr_ingress": "home-assistant",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment",
+      "motion",
+      "sound",
+      "identity"
+    ],
+    "control": "light",
+    "status": "via-home-assistant",
+    "privacy_note": "Runs on user's own hardware (RPi/NUC/VM), local REST/WebSocket API for Wavr, Nabu Casa cloud is opt-in only",
+    "notes": "free (self-hosted), single richest integration surface (2000+), recommended default bridge for Wavr's HA ingress"
+  },
+  {
+    "id": "onvif-mqtt-bridge",
+    "name": "MQTT/HA discovery generic bridge template",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "Any third-party integration publishing HA MQTT-discovery-compliant sensors/switches",
+    "wavr_ingress": "mqtt",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "addable-now",
+    "privacy_note": "Depends on the specific integration; discovery payloads stay on local broker, Wavr never needs external calls",
+    "notes": "free, covers custom scripts/integrations that follow HA's MQTT discovery spec, catch-all long-tail entry"
+  },
+  {
+    "id": "aqara-hub-m2",
+    "name": "Hub M2",
+    "brand": "Aqara",
+    "category": "hub-bridge",
+    "modality": "Zigbee hub with local LAN API + BLE gateway function, also HomeKit bridge",
+    "wavr_ingress": "home-assistant",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "via-home-assistant",
+    "privacy_note": "Stock app requires Aqara cloud account for setup; local LAN API/HA integration avoids ongoing cloud traffic but initial pairing depends on Aqara cloud",
+    "notes": "~$45, Zigbee 3.0 + BLE, requires HA Aqara integration for local-first operation, IR blaster onboard"
+  },
+  {
+    "id": "ikea-dirigera",
+    "name": "DIRIGERA",
+    "brand": "IKEA",
+    "category": "hub-bridge",
+    "modality": "Zigbee hub for TRÅDFRI/Zigbee 3.0 devices, local API supported via HA integration",
+    "wavr_ingress": "home-assistant",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "light",
+    "status": "via-home-assistant",
+    "privacy_note": "Has a documented local API (token-based); HA integration keeps traffic on-LAN, no per-event cloud round trip",
+    "notes": "~$70, Zigbee 3.0 + Matter support, best for IKEA smart bulbs/blinds fleets"
+  },
+  {
+    "id": "tp-link-tapo-h200",
+    "name": "Tapo H200",
+    "brand": "TP-Link",
+    "category": "hub-bridge",
+    "modality": "WiFi hub for Tapo Zigbee/RF sensors (contact, motion, water leak)",
+    "wavr_ingress": "roadmap",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "roadmap",
+    "privacy_note": "Cloud-only architecture (Tapo app/account required, no documented local API); would need reverse-engineered or future official local bridge",
+    "notes": "~$25, budget option, currently NOT recommended for Wavr due to cloud-only ingress"
+  },
+  {
+    "id": "sonoff-nspanel-pro",
+    "name": "NSPanel Pro",
+    "brand": "Sonoff",
+    "category": "hub-bridge",
+    "modality": "Zigbee wall panel hub with touchscreen, local Home Assistant integration (via eWeLink or flashed HA add-on)",
+    "wavr_ingress": "home-assistant",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "contact",
+      "environment"
+    ],
+    "control": "switch",
+    "status": "via-home-assistant",
+    "privacy_note": "Supports local HA add-on mode (NSPanel Pro Manager) avoiding eWeLink cloud; caveat if left on stock cloud firmware",
+    "notes": "~$120, built-in Zigbee coordinator + touchscreen UI, dual-use as hub + control panel"
+  },
+  {
+    "id": "wiren-board-generic",
+    "name": "Generic industrial MQTT gateway (Modbus/RS485-to-MQTT)",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "Modbus/RS485 industrial sensor bus bridged to local MQTT for env/utility sensors",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "environment"
+    ],
+    "control": "valve",
+    "status": "addable-now",
+    "privacy_note": "Local serial-to-MQTT bridge, no cloud; useful for advanced users wiring HVAC/water/energy metering into Wavr",
+    "notes": "varies $30-100, niche/DIY, relevant for whole-home utility monitoring integration"
+  },
+  {
+    "id": "namron-zigbee-repeater",
+    "name": "Generic Zigbee mains-powered repeater/plug",
+    "brand": "Genérico",
+    "category": "hub-bridge",
+    "modality": "Zigbee router/repeater device (mains smart plug) extending mesh range for Zigbee2MQTT/HA ZHA networks",
+    "wavr_ingress": "mqtt",
+    "coverage": "whole-home",
+    "detects": [
+      "contact"
+    ],
+    "control": "plug",
+    "status": "addable-now",
+    "privacy_note": "Local Zigbee mesh extension only, no data of its own beyond relay + optional plug telemetry, no cloud",
+    "notes": "~$15-20, any Zigbee mains plug acts as a repeater — recommended for extending coverage in larger homes"
+  },
+  {
+    "id": "hlk-ld2410b",
+    "name": "HLK-LD2410B",
+    "brand": "Hi-Link",
+    "category": "mmwave",
+    "modality": "24GHz FMCW presence + motion detection with static/moving distance gates",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART module, no radio egress at all — no camera, no cloud path possible.",
+    "notes": "~$5-8 bare module, 3.3V UART, 9 configurable range gates, common in DIY presence sensors; needs USB-serial or MCU to reach Wavr"
+  },
+  {
+    "id": "hlk-ld2410c",
+    "name": "HLK-LD2410C",
+    "brand": "Hi-Link",
+    "category": "mmwave",
+    "modality": "24GHz FMCW presence + motion, improved firmware/AT-command set over LD2410B",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART only, no wireless radio on the module itself.",
+    "notes": "~$6-9, pin-compatible with LD2410B, widely used in ESPHome community presence boards"
+  },
+  {
+    "id": "hlk-ld2410-esp-bridge",
+    "name": "LD2410 + ESP32 mmWave Presence Node (DIY)",
+    "brand": "Genérico",
+    "category": "esp-diy",
+    "modality": "24GHz mmWave presence bridged to Wi-Fi/MQTT via ESPHome or custom firmware",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Local WiFi/MQTT only if configured with local API (no cloud); requires ESPHome build/flash to keep fully local.",
+    "notes": "~$8-15 all-in (LD2410/LD2410C module + ESP32 dev board), common AliExpress combo boards, very popular ESPHome pairing; needs custom firmware flash to expose over MQTT/native API."
+  },
+  {
+    "id": "hlk-ld2412",
+    "name": "HLK-LD2412",
+    "brand": "Hi-Link",
+    "category": "mmwave",
+    "modality": "24GHz FMCW presence, next-gen anti-interference vs LD2410 series",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART only, same trust model as LD2410 family.",
+    "notes": "~$7-10, newer gen with better false-trigger rejection near curtains/fans, drop-in UART protocol similar to LD2410"
+  },
+  {
+    "id": "hlk-ld2450",
+    "name": "HLK-LD2450",
+    "brand": "Hi-Link",
+    "category": "mmwave",
+    "modality": "24GHz multi-target tracking radar, outputs X/Y coordinates + speed for up to 3 targets",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "person"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Coordinate-only output over local UART, no imagery, no cloud dependency.",
+    "notes": "~$10-14, 360-degree or fan FOV depending on antenna variant, popular for room-zone occupancy grids"
+  },
+  {
+    "id": "hlk-ld1125h",
+    "name": "HLK-LD1125H",
+    "brand": "Hi-Link",
+    "category": "mmwave",
+    "modality": "24GHz single-target motion + presence detection, simple binary/serial output",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART, no wireless stack on the module.",
+    "notes": "~$5-7, cheaper/simpler than LD2410, coarser range resolution, decent for closet/small-room presence"
+  },
+  {
+    "id": "hlk-ld1115h",
+    "name": "HLK-LD1115H",
+    "brand": "Hi-Link",
+    "category": "mmwave",
+    "modality": "24GHz motion + presence radar, predecessor to LD1125H with dual-channel output",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART only.",
+    "notes": "~$5-7, older gen, still sold, similar use case to LD1125H"
+  },
+  {
+    "id": "dfrobot-sen0395",
+    "name": "DFRobot SEN0395 mmWave Human Presence Sensor",
+    "brand": "DFRobot",
+    "category": "mmwave",
+    "modality": "24GHz FMCW presence detection with configurable detection zone/sensitivity via UART/GPIO",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART/GPIO module, no cloud egress.",
+    "notes": "~$13-16, Gravity-format breakout, easier hobbyist wiring than bare Hi-Link modules, also has digital output pin"
+  },
+  {
+    "id": "dfrobot-c4001",
+    "name": "DFRobot C4001 mmWave Radar (SEN0592)",
+    "brand": "DFRobot",
+    "category": "mmwave",
+    "modality": "24GHz FMCW presence + speed/distance ranging, longer range than SEN0395, UART and I2C output",
+    "wavr_ingress": "serial-uart",
+    "coverage": "zone",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART/I2C, no wireless radio.",
+    "notes": "~$20-25, up to ~20m range mode available, good for hallway/perimeter-style zone coverage"
+  },
+  {
+    "id": "seeed-mr60bha2",
+    "name": "Seeed Studio MR60BHA2 mmWave Vital Signs Sensor",
+    "brand": "Seeed Studio",
+    "category": "mmwave",
+    "modality": "60GHz FMCW radar, contactless respiration + heart-rate estimation plus presence",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "vitals"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Vitals are live-only over local UART, nothing persisted or sent off-box by the sensor itself; treat vitals stream as sensitive and keep it live-only per Wavr policy.",
+    "notes": "~$25-35, Grove-compatible UART breakout (or bare module + XIAO/ESP32 host); marketed for elderly/health monitoring, short range (~1-1.5m) for accurate vitals."
+  },
+  {
+    "id": "seeed-mr24hpc1",
+    "name": "Seeed Studio MR24HPC1 mmWave Human Presence Sensor",
+    "brand": "Seeed Studio",
+    "category": "mmwave",
+    "modality": "24GHz FMCW radar, human static/moving presence with body-motion parameter output",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART only, no imaging.",
+    "notes": "~$20-25, also pairs with XIAO ESP32-C3 in ESPHome-friendly boards; good static-presence performance (sitting still detection)."
+  },
+  {
+    "id": "seeed-mr60fda2",
+    "name": "Seeed Studio MR60FDA2 mmWave Fall Detection Sensor",
+    "brand": "Seeed Studio",
+    "category": "mmwave",
+    "modality": "60GHz FMCW radar tuned for fall-detection posture/height-drop analysis plus presence",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "fall",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART, fall events should be treated live-only, no imagery captured.",
+    "notes": "~$30-40, ceiling or high-wall mount recommended for best fall-angle coverage, aimed at elder-care use cases"
+  },
+  {
+    "id": "everything-presence-one",
+    "name": "Everything Presence One",
+    "brand": "Everything Smart Technology",
+    "category": "mmwave",
+    "modality": "LD2410-based mmWave + PIR + light/temp/humidity combo sensor, open-source ESPHome firmware",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Runs ESPHome locally; can be configured for local-only native API/MQTT with no cloud dependency.",
+    "notes": "~$45-55 assembled, open hardware/firmware, ceiling or wall mount, exposes distance + PIR + env data over MQTT/native API"
+  },
+  {
+    "id": "everything-presence-lite",
+    "name": "Everything Presence Lite",
+    "brand": "Everything Smart Technology",
+    "category": "mmwave",
+    "modality": "LD2410-based mmWave-only presence sensor, ESPHome firmware, budget variant of Presence One",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "ESPHome local API/MQTT, no cloud needed when self-hosted.",
+    "notes": "~$25-30 assembled, no PIR/env sensors, mmWave-only presence for cost-sensitive rooms"
+  },
+  {
+    "id": "aqara-fp2",
+    "name": "Aqara Presence Sensor FP2",
+    "brand": "Aqara",
+    "category": "mmwave",
+    "modality": "60GHz FMCW radar with multi-zone occupancy mapping, fall detection, and multi-person tracking",
+    "wavr_ingress": "home-assistant",
+    "coverage": "zone",
+    "detects": [
+      "presence",
+      "motion",
+      "person",
+      "fall"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Native app path touches Aqara cloud; integrate strictly via the local Aqara HA integration (local-only mode) to avoid new cloud egress into Wavr.",
+    "notes": "~$80-90, needs Aqara Hub or HomeKit for setup, one of the strongest consumer zone-mapping mmWave products, wired power only"
+  },
+  {
+    "id": "aqara-fp1e",
+    "name": "Aqara Presence Sensor FP1E",
+    "brand": "Aqara",
+    "category": "mmwave",
+    "modality": "mmWave presence detection with single-zone occupancy + motion, successor to original FP1",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Pairs via Aqara/Zigbee hub; use local HA integration path, avoid Aqara cloud automations for anything Wavr-facing.",
+    "notes": "~$35-40, Zigbee to Aqara hub, simpler single-zone version of FP2, battery or wired depending on revision"
+  },
+  {
+    "id": "tuya-zy-m100",
+    "name": "Tuya ZY-M100 mmWave Presence Module (white-label)",
+    "brand": "Tuya",
+    "category": "mmwave",
+    "modality": "24GHz mmWave human presence detection, the module used inside many white-label 'smart presence sensor' products",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Stock firmware reports to Tuya cloud; only add via HA's Local Tuya integration (cloud-pull disabled) to keep Wavr local-first, and note this caveat to the admin.",
+    "notes": "~$15-25 branded finished units (many resellers), Zigbee or WiFi variants exist, popular OEM radar behind countless generic 'presence sensor' listings"
+  },
+  {
+    "id": "generic-tuya-zigbee-mmwave",
+    "name": "Generic Tuya/Zigbee mmWave Human Presence Sensor",
+    "brand": "Genérico",
+    "category": "mmwave",
+    "modality": "24GHz mmWave presence, commodity Zigbee sensor sold under many storefront names",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Cloud-dependent by default via Tuya/Zigbee2MQTT gateway path; run through Zigbee2MQTT + local MQTT broker to keep it local-first.",
+    "notes": "~$15-20, quality varies widely by vendor, best paired with Zigbee2MQTT rather than the Tuya app/hub for a fully local path"
+  },
+  {
+    "id": "ld2410-usb-serial-breakout",
+    "name": "LD2410 USB-Serial Breakout (direct-to-PC)",
+    "brand": "Genérico",
+    "category": "mmwave",
+    "modality": "LD2410-family module pre-wired to a USB-to-UART adapter for direct PC/server ingestion",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Fully local, plugs straight into the Wavr box's USB port, no intermediate radio hop at all.",
+    "notes": "~$12-18, simplest possible integration path when the Wavr box is physically near the sensed room"
+  },
+  {
+    "id": "seeed-mr24hpc2",
+    "name": "Seeed Studio MR24HPC2 mmWave Presence + Fall Sensor",
+    "brand": "Seeed Studio",
+    "category": "mmwave",
+    "modality": "24GHz radar combining human presence, motion, and basic fall/posture-change detection in one module",
+    "wavr_ingress": "serial-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "fall"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "Local UART, no imaging, fall flag should be treated live-only.",
+    "notes": "~$25-30, successor/sibling to MR24HPC1 with added fall-flag output, good bathroom/bedroom candidate"
+  },
+  {
+    "id": "esp32-mmwave-mqtt-gateway",
+    "name": "ESP32 mmWave-to-MQTT Gateway (DIY, any LD-series module)",
+    "brand": "Genérico",
+    "category": "adapter",
+    "modality": "Custom firmware bridge that reads any Hi-Link LD-series UART frame and republishes to local MQTT",
+    "wavr_ingress": "mqtt",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Fully local when pointed at a self-hosted MQTT broker; no external service required.",
+    "notes": "~$5-10 in parts (ESP32 dev board + module), requires writing/flashing firmware; lets Wavr absorb any UART mmWave sensor uniformly via MQTT"
+  },
+  {
+    "id": "hc-sr501-esp",
+    "name": "HC-SR501 PIR Motion Sensor (via ESP8266/ESP32)",
+    "brand": "Genérico",
+    "category": "pir",
+    "modality": "passive infrared motion detection",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Fully local: binary GPIO signal read by ESP firmware, pushed to Wavr over serial/MQTT; no cloud, no imagery.",
+    "notes": "~$1-2/unit, adjustable sensitivity/delay pots, 3-7m range, needs custom ESP firmware (GPIO interrupt -> MQTT/serial)."
+  },
+  {
+    "id": "hc-sr505-esp",
+    "name": "HC-SR505 Mini PIR Motion Sensor (via ESP)",
+    "brand": "Genérico",
+    "category": "pir",
+    "modality": "passive infrared motion detection (small form factor)",
+    "wavr_ingress": "esp-uart",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Local GPIO read via ESP; no cloud egress.",
+    "notes": "~$1-3/unit, compact (23mm), ~3m range, good for cabinets/doorways, fixed low sensitivity."
+  },
+  {
+    "id": "am312-esp",
+    "name": "AM312 Micro PIR Motion Sensor (via ESP)",
+    "brand": "Genérico",
+    "category": "pir",
+    "modality": "ultra-compact passive infrared motion detection",
+    "wavr_ingress": "esp-uart",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Local GPIO digital output only, no imagery or cloud.",
+    "notes": "~$2/unit, tiny (10mm), 3.3V native (ESP-friendly, no level shifter), ~3m range, low power."
+  },
+  {
+    "id": "aqara-motion-p1",
+    "name": "Aqara Motion Sensor P1",
+    "brand": "Aqara",
+    "category": "pir",
+    "modality": "PIR motion + ambient light level, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Requires Zigbee2MQTT/HA bridge for local operation; once bridged, stays fully local with no vendor cloud dependency.",
+    "notes": "~$20-25, Zigbee 3.0, battery (CR2450, ~2yr), adjustable detection distance/interval, illuminance lux reading useful for automations."
+  },
+  {
+    "id": "aqara-motion-rtcgq11lm",
+    "name": "Aqara Motion Sensor (RTCGQ11LM, gen 1)",
+    "brand": "Aqara",
+    "category": "pir",
+    "modality": "PIR motion + ambient light level, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Zigbee2MQTT/HA; no direct Wavr Zigbee stack today.",
+    "notes": "~$15-20, Zigbee, CR2450 battery, ~7m/170° detection cone, widely supported in Z2M."
+  },
+  {
+    "id": "hue-motion-sensor",
+    "name": "Philips Hue Motion Sensor",
+    "brand": "Philips (Signify)",
+    "category": "pir",
+    "modality": "PIR motion + ambient light + temperature, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local through Hue Bridge (local API) or Zigbee2MQTT bridged into HA; no imagery, no new cloud egress if Hue cloud services are disabled.",
+    "notes": "~$40, Zigbee (Hue mesh or Z2M), battery (2xAA, ~2yr), also exposes temp + lux, indoor/outdoor variants exist."
+  },
+  {
+    "id": "hue-outdoor-motion-sensor",
+    "name": "Philips Hue Outdoor Motion Sensor",
+    "brand": "Philips (Signify)",
+    "category": "pir",
+    "modality": "weatherproof PIR motion + ambient light + temperature",
+    "wavr_ingress": "home-assistant",
+    "coverage": "perimeter",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Hue Bridge/Z2M bridged into HA; no imagery.",
+    "notes": "~$45, IP54 weatherproof, Zigbee, battery powered, good for driveway/garden perimeter coverage."
+  },
+  {
+    "id": "sonoff-snzb-03",
+    "name": "Sonoff SNZB-03 Zigbee Motion Sensor",
+    "brand": "Sonoff (eWeLink)",
+    "category": "pir",
+    "modality": "PIR motion detection, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Runs fully local once paired to Zigbee2MQTT/HA coordinator; no eWeLink cloud dependency needed in that mode.",
+    "notes": "~$10, cheapest reliable Zigbee PIR, CR2450 battery, ~1yr life, well supported in Z2M/ZHA."
+  },
+  {
+    "id": "tuya-zigbee-pir",
+    "name": "Tuya Zigbee PIR Motion Sensor",
+    "brand": "Tuya (generic OEM)",
+    "category": "pir",
+    "modality": "PIR motion + lux, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local through Zigbee2MQTT (Tuya cloud not required once paired to Z2M); avoid Tuya Smart Life app pairing to prevent cloud dependency.",
+    "notes": "~$10-15, widely rebadged (various brands), battery powered, decent Z2M support but variable quality across batches."
+  },
+  {
+    "id": "tuya-wifi-pir",
+    "name": "Tuya Wi-Fi PIR Motion Sensor",
+    "brand": "Tuya (generic OEM)",
+    "category": "pir",
+    "modality": "PIR motion detection, Wi-Fi",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Cloud-dependent by default (Tuya cloud); use LocalTuya integration in HA to keep data local, otherwise this device egresses to Tuya cloud — flag caveat.",
+    "notes": "~$8-12, battery or USB powered, requires LocalTuya HA integration for local-only operation; skip if avoiding any Tuya cloud pairing step."
+  },
+  {
+    "id": "sonoff-snzb-03p",
+    "name": "Sonoff SNZB-03P Zigbee Motion Sensor (gen 2)",
+    "brand": "Sonoff (eWeLink)",
+    "category": "pir",
+    "modality": "PIR motion detection with configurable sensitivity, Zigbee 3.0",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Fully local once bridged via Z2M/HA; improved firmware over SNZB-03 with local sensitivity config.",
+    "notes": "~$12, CR2450 battery ~2yr, configurable sensitivity/keep-time in Z2M, good value upgrade pick."
+  },
+  {
+    "id": "amg8833-thermal-esp",
+    "name": "AMG8833 8x8 Thermopile Grid-EYE Sensor (via ESP)",
+    "brand": "Panasonic (Grid-EYE)",
+    "category": "pir",
+    "modality": "low-res thermal grid presence/occupancy (non-imaging heat blob detection)",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "8x8 pixel thermal array is not a camera (no identifiable imagery), processed fully on-device/local ESP+Wavr; strong privacy profile for bathrooms/bedrooms.",
+    "notes": "~$15-25 module, I2C, requires custom ESP firmware to parse grid + threshold-detect blobs, good PIR alternative for detecting stationary occupants (PIR misses stillness)."
+  },
+  {
+    "id": "mlx90640-thermal-esp",
+    "name": "MLX90640 32x24 Thermal Camera Module (via ESP)",
+    "brand": "Melexis",
+    "category": "pir",
+    "modality": "higher-res thermal grid occupancy/fall-adjacent detection (non-identifying)",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Low-res thermal (768px) still non-identifying (no facial/visual detail); frames processed locally, never persisted, strong option for bedroom/bathroom occupancy without RGB camera privacy concerns.",
+    "notes": "~$50-60 module, I2C, wider FoV (55x35°) than AMG8833, custom ESP/firmware parsing needed, can approximate posture/fall via blob shape heuristics (experimental)."
+  },
+  {
+    "id": "generic-ceiling-occupancy-360",
+    "name": "Generic 360° Ceiling PIR Occupancy Sensor (mains, relay output)",
+    "brand": "Genérico",
+    "category": "pir",
+    "modality": "wide-angle ceiling-mount PIR occupancy with dry-contact/relay output",
+    "wavr_ingress": "esp-uart",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Relay/dry-contact output read by ESP GPIO, fully local, no imagery.",
+    "notes": "~$15-30, 360° ceiling mount, 6-8m diameter coverage, common in commercial lighting control, needs ESP to read relay/0-10V output into Wavr."
+  },
+  {
+    "id": "hue-motion-sensor-gen2",
+    "name": "Philips Hue Motion Sensor (2nd gen, temp/lux update)",
+    "brand": "Philips (Signify)",
+    "category": "pir",
+    "modality": "PIR motion + ambient light + temperature, Zigbee, improved firmware",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Hue Bridge (local API supported) or Z2M; disable Hue cloud remote access for strict local-only operation.",
+    "notes": "~$40, same form factor as original, improved sensitivity tuning, magnetic swivel mount, indoor use."
+  },
+  {
+    "id": "ikea-tradfri-motion",
+    "name": "IKEA TRÅDFRI Motion Sensor",
+    "brand": "IKEA",
+    "category": "pir",
+    "modality": "PIR motion detection, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Fully local through Zigbee2MQTT/HA, no IKEA cloud (Dirigera) required if paired directly to Z2M coordinator.",
+    "notes": "~$12-15, budget Zigbee PIR, 2xAAA battery, ~1-2yr life, well supported in Z2M."
+  },
+  {
+    "id": "ikea-tradfri-motion-2",
+    "name": "IKEA TRÅDFRI Motion Sensor (updated model, wireless motion sensor v2)",
+    "brand": "IKEA",
+    "category": "pir",
+    "modality": "PIR motion detection with adjustable detection range, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Z2M/HA bridge; no cloud needed.",
+    "notes": "~$15, physical range dial (short/medium/long), battery powered, good budget option for hallways."
+  },
+  {
+    "id": "shelly-motion-2",
+    "name": "Shelly Motion 2",
+    "brand": "Shelly",
+    "category": "pir",
+    "modality": "PIR motion + lux + vibration + temperature, Wi-Fi",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Shelly devices expose a local HTTP/CoAP/MQTT API — can run fully local without Shelly Cloud; recommend disabling cloud toggle in device settings.",
+    "notes": "~$35-40, Wi-Fi (no hub needed), battery (18650, ~1yr), also has vibration/tamper detection, native MQTT makes direct Wavr ingest possible without HA in some setups."
+  },
+  {
+    "id": "aeotec-tri-sensor",
+    "name": "Aeotec TriSensor (motion + temp + lux)",
+    "brand": "Aeotec",
+    "category": "pir",
+    "modality": "PIR motion + temperature + ambient light, Zigbee",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Z2M/HA; no cloud dependency once paired to local Zigbee coordinator.",
+    "notes": "~$30, CR2450 battery, compact form factor, 3-in-1 sensing reduces device count."
+  },
+  {
+    "id": "everspring-sp815",
+    "name": "Everspring SP815 Z-Wave PIR Motion Sensor",
+    "brand": "Everspring",
+    "category": "pir",
+    "modality": "PIR motion detection, Z-Wave",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Z-Wave JS/HA bridge, no cloud dependency; Z-Wave is inherently local mesh.",
+    "notes": "~$35-40, Z-Wave Plus, battery powered, good option if household already has a Z-Wave stick/mesh instead of Zigbee."
+  },
+  {
+    "id": "fibaro-motion-sensor",
+    "name": "Fibaro Motion Sensor (FGMS-001/FGMS-001 ZW5)",
+    "brand": "Fibaro",
+    "category": "pir",
+    "modality": "PIR motion + temperature + ambient light + vibration/tamper, Z-Wave",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Z-Wave JS/HA, no cloud dependency; well-regarded multi-sensor for privacy-conscious local setups.",
+    "notes": "~$45-55, CR123A battery, RGB LED status ring, configurable sensitivity/blind time, premium option."
+  },
+  {
+    "id": "sonoff-snzb-03-basiczb",
+    "name": "SONOFF Zigbee Motion Sensor SNZB-03 (Basic/older stock)",
+    "brand": "Sonoff (eWeLink)",
+    "category": "pir",
+    "modality": "PIR motion detection, Zigbee (basic feature set)",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Z2M/HA; identical privacy profile to SNZB-03 line.",
+    "notes": "~$10, same hardware family as SNZB-03, older firmware batches sometimes need manual Z2M quirk override."
+  },
+  {
+    "id": "bosch-motion-sensor-2",
+    "name": "Bosch Smart Home Motion Detector II",
+    "brand": "Bosch",
+    "category": "pir",
+    "modality": "PIR motion + ambient light, proprietary mesh (bridgeable)",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion",
+      "environment"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Requires Bosch Smart Home Controller bridged into HA; check whether local push API is available on your controller firmware version, else data transits Bosch cloud — caveat.",
+    "notes": "~$50, battery powered, needs Bosch hub, best for households already invested in Bosch ecosystem."
+  },
+  {
+    "id": "esp32-cam-pir-hybrid",
+    "name": "ESP32-CAM + External PIR Trigger (hybrid wake-on-motion module)",
+    "brand": "Genérico",
+    "category": "pir",
+    "modality": "PIR-gated motion trigger for low-power wake/snapshot workflows",
+    "wavr_ingress": "esp-uart",
+    "coverage": "point",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "PIR-only signal used for Wavr presence event; if the onboard camera is also used, frames must never be persisted per Wavr camera policy — treat as PIR entry, camera use is out of scope here.",
+    "notes": "~$8-10 combo board, popular DIY hack for battery-friendly triggered sensing, requires custom ESP firmware; do not enable frame capture without following camera privacy invariant."
+  },
+  {
+    "id": "lidl-silvercrest-motion-zigbee",
+    "name": "Lidl Silvercrest Zigbee Motion Sensor (SMSZ 1A1)",
+    "brand": "Silvercrest (Lidl)",
+    "category": "pir",
+    "modality": "PIR motion detection, Zigbee (Tuya-based OEM)",
+    "wavr_ingress": "home-assistant",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-home-assistant",
+    "privacy_note": "Local via Z2M/HA, Tuya-based Zigbee radio but no cloud requirement once paired locally.",
+    "notes": "~$8-12 (seasonal Lidl stock), CR2450 battery, budget European option, decent Z2M support."
+  },
+  {
+    "id": "d1-mini-pir-node",
+    "name": "Wemos D1 Mini + HC-SR501 DIY PIR Node",
+    "brand": "Genérico",
+    "category": "pir",
+    "modality": "DIY Wi-Fi PIR motion node built on ESP8266 dev board",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "Fully local Wi-Fi MQTT publish direct to Wavr broker, no cloud, DIY firmware fully auditable.",
+    "notes": "~$5-8 total parts, most common DIY PIR-to-Wavr pattern, publishes MQTT topic on GPIO interrupt, easy to batch across many rooms cheaply."
+  },
+  {
+    "id": "openwrt-router-arp",
+    "name": "OpenWrt Router (ARP/DHCP presence)",
+    "brand": "Genérico (OpenWrt)",
+    "category": "network",
+    "modality": "device presence via ARP table + DHCP lease scanning",
+    "wavr_ingress": "network-scan",
+    "coverage": "whole-home",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "fully local; Wavr polls router API/SSH over LAN, no cloud egress",
+    "notes": "any router flashed w/ OpenWrt; free; needs SSH or ubus JSON-RPC access"
+  },
+  {
+    "id": "unifi-dream-machine",
+    "name": "UniFi Dream Machine / UDM-Pro",
+    "brand": "Ubiquiti",
+    "category": "network",
+    "modality": "device presence + client list via UniFi Network API",
+    "wavr_ingress": "network-scan",
+    "coverage": "whole-home",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "local controller API on LAN; no cloud calls needed if local-only mode used",
+    "notes": "~€180-400; local API key; also gives per-AP RSSI for rough room estimate"
+  },
+  {
+    "id": "unifi-ap-rssi",
+    "name": "UniFi Access Point (RSSI-based room estimate)",
+    "brand": "Ubiquiti",
+    "category": "network",
+    "modality": "connected-client RSSI per AP, used for coarse room localization",
+    "wavr_ingress": "network-scan",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "local controller data only; identifies known device MACs, not people directly",
+    "notes": "~€90-200/AP; accuracy is per-AP not per-room unless dense mesh"
+  },
+  {
+    "id": "fing-agent-desktop",
+    "name": "a proprietary scanner Agent (desktop/NAS network scanner)",
+    "brand": "a proprietary scanner",
+    "category": "network",
+    "modality": "continuous LAN device discovery + presence via ARP/mDNS",
+    "wavr_ingress": "network-scan",
+    "coverage": "whole-home",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "free agent runs locally (e.g. on a NAS/RPi); a proprietary scanner cloud sync is optional and should stay OFF for Wavr use",
+    "notes": "free tier sufficient; run on always-on box (RPi, NAS, mini PC)"
+  },
+  {
+    "id": "raspberry-pi-nmap-scanner",
+    "name": "Raspberry Pi + nmap/arp-scan cron job",
+    "brand": "Genérico",
+    "category": "network",
+    "modality": "periodic ARP/nmap sweep of subnet for known-MAC presence",
+    "wavr_ingress": "network-scan",
+    "coverage": "whole-home",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "fully local script, no third-party service, results only touch Wavr box",
+    "notes": "RPi Zero 2W ~€20; DIY; needs same L2 subnet as targets"
+  },
+  {
+    "id": "esp32-csi-toolkit",
+    "name": "ESP32-CSI-Tool (Wi-Fi CSI presence sensing)",
+    "brand": "Genérico (ESP32, open-source ESP32-CSI-Tool)",
+    "category": "wifi-csi",
+    "modality": "channel state info amplitude/phase variance for motion/presence, no wearable needed",
+    "wavr_ingress": "roadmap",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "would be fully local (raw CSI never needs to leave the box) once integrated; today Wavr has no native CSI decoder/pipeline",
+    "notes": "ESP32 dev board ~€6-10 x2 (TX+RX); open-source firmware exists but needs custom Wavr-side ML pipeline to be usable"
+  },
+  {
+    "id": "esp32-csi-tool-single-ap",
+    "name": "ESP32 CSI single-AP fall/breathing research rig",
+    "brand": "Genérico (ESP32)",
+    "category": "wifi-csi",
+    "modality": "experimental CSI-based breathing/fall detection (research-grade)",
+    "wavr_ingress": "roadmap",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "vitals",
+      "fall"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "would stay fully local; not yet in Wavr — flagged as future R&D, accuracy unproven outside lab papers",
+    "notes": "very DIY, unstable across firmware versions/antennas; treat as experimental only"
+  },
+  {
+    "id": "nexmon-csi-rpi",
+    "name": "Nexmon CSI on Raspberry Pi 4B (BCM43455c0)",
+    "brand": "Genérico (Nexmon + RPi Foundation)",
+    "category": "wifi-csi",
+    "modality": "monitor-mode CSI extraction from onboard Broadcom Wi-Fi chip",
+    "wavr_ingress": "roadmap",
+    "coverage": "room",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "processing would be fully on-device/local; not yet wired into Wavr ingestion",
+    "notes": "RPi 4B ~€45-60; nexmon patch fragile across kernel updates; needs a Wavr CSI adapter to be usable"
+  },
+  {
+    "id": "nexmon-csi-router-tplink",
+    "name": "Nexmon CSI on OpenWrt router (TP-Link Archer C7)",
+    "brand": "TP-Link",
+    "category": "wifi-csi",
+    "modality": "router-side CSI extraction for whole-home motion sensing (no extra hardware)",
+    "wavr_ingress": "roadmap",
+    "coverage": "whole-home",
+    "detects": [
+      "presence",
+      "motion"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "would be local-only (CSI stays on router/LAN); no Wavr decoder pipeline exists today",
+    "notes": "~€60-90 router; well-documented nexmon target but router-grade CPU limits sample rate"
+  },
+  {
+    "id": "alfa-awus036axml",
+    "name": "Alfa AWUS036AXML (Wi-Fi 6E monitor-mode USB adapter)",
+    "brand": "Alfa Network",
+    "category": "network",
+    "modality": "USB monitor-mode adapter for passive Wi-Fi frame capture (probe requests, device fingerprinting)",
+    "wavr_ingress": "roadmap",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "would be fully local passive sniffing; Wavr has no monitor-mode probe-request ingestion pipeline yet",
+    "notes": "~€45-60; MediaTek MT7921AU chipset; Linux monitor mode supported natively"
+  },
+  {
+    "id": "alfa-awus036achm",
+    "name": "Alfa AWUS036ACHM (dual-band monitor-mode USB adapter)",
+    "brand": "Alfa Network",
+    "category": "network",
+    "modality": "long-range USB Wi-Fi adapter usable in monitor mode for passive presence sniffing",
+    "wavr_ingress": "roadmap",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "local passive capture only, no cloud; awaiting Wavr probe-request pipeline",
+    "notes": "~€35-45; Realtek RTL8812AU chipset; popular pentest adapter, high-gain antenna"
+  },
+  {
+    "id": "panda-pau09-n600",
+    "name": "Panda PAU09 N600 Dual-Band USB Adapter",
+    "brand": "Panda Wireless",
+    "category": "network",
+    "modality": "budget USB monitor-mode-capable adapter for passive Wi-Fi scanning",
+    "wavr_ingress": "roadmap",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "local only if/when integrated; no current Wavr ingestion path",
+    "notes": "~€25-35; RTL8814AU chipset; commonly used in Kali/Wi-Fi pentest kits"
+  },
+  {
+    "id": "tplink-deco-mesh-node",
+    "name": "TP-Link Deco Mesh Node (per-node client list)",
+    "brand": "TP-Link",
+    "category": "network",
+    "modality": "mesh AP exposing per-node connected-client list as a coarse room/zone signal",
+    "wavr_ingress": "network-scan",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "local app/API pull of client table over LAN; Deco cloud account optional and not required for local query",
+    "notes": "~€60-100/node; API access sometimes needs local reverse-engineered endpoint or TP-Link Deco app token"
+  },
+  {
+    "id": "asus-aimesh-node",
+    "name": "ASUS AiMesh Node",
+    "brand": "ASUS",
+    "category": "network",
+    "modality": "mesh Wi-Fi node with client-list JSON API for per-node device presence",
+    "wavr_ingress": "network-scan",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "local HTTP API on router firmware, no vendor cloud dependency",
+    "notes": "~€80-150/node; ASUSWRT/Merlin firmware exposes richer local API"
+  },
+  {
+    "id": "eero-mesh-node",
+    "name": "Amazon eero Mesh Node",
+    "brand": "Amazon eero",
+    "category": "network",
+    "modality": "mesh node; device presence only reachable through eero's cloud API",
+    "wavr_ingress": "roadmap",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "CAVEAT: no documented local API — client list requires eero cloud account, which conflicts with Wavr's no-new-cloud-egress rule; not addable without accepting that tradeoff",
+    "notes": "~€100-140/node; closed ecosystem, avoid unless user explicitly accepts cloud dependency"
+  },
+  {
+    "id": "google-nest-wifi-pro",
+    "name": "Google Nest Wifi Pro",
+    "brand": "Google",
+    "category": "network",
+    "modality": "mesh node; client presence only via Google Home cloud account",
+    "wavr_ingress": "roadmap",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "CAVEAT: cloud-only management, no local device API — violates local-first/no-new-cloud-egress invariant, flagged not recommended",
+    "notes": "~€130-200/node; closed firmware; would need HA bridge (unofficial) to get any local signal"
+  },
+  {
+    "id": "gl-inet-travel-router",
+    "name": "GL.iNet Travel/Mini Router (OpenWrt-based)",
+    "brand": "GL.iNet",
+    "category": "network",
+    "modality": "compact OpenWrt router with SSH/API access for ARP-based presence, usable as dedicated sensing AP per room",
+    "wavr_ingress": "network-scan",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "fully local; ships with OpenWrt/LuCI, SSH enabled by default, no cloud needed",
+    "notes": "~€25-50; good low-cost dedicated per-room AP for room-level ARP presence"
+  },
+  {
+    "id": "esp32-wifi-probe-sniffer",
+    "name": "ESP32 Wi-Fi Probe-Request Sniffer (DIY, promiscuous mode)",
+    "brand": "Genérico (ESP32 via esp-wifi)",
+    "category": "esp-diy",
+    "modality": "ESP32 in promiscuous mode logging probe-request frames + RSSI to estimate nearby phones/devices",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "custom firmware keeps MAC hashing/processing local; sends only presence events over Wi-Fi/MQTT to Wavr, no cloud",
+    "notes": "~€6-10 ESP32 board; DIY firmware required (open reference sketches exist); MAC randomization on modern phones limits reliability"
+  },
+  {
+    "id": "esp32-arp-mqtt-bridge",
+    "name": "ESP32 ARP-to-MQTT Presence Bridge (DIY)",
+    "brand": "Genérico (ESP32)",
+    "category": "esp-diy",
+    "modality": "ESP32 pings/ARPs a list of known-MAC devices per subnet segment and republishes presence via MQTT",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "runs fully on LAN, publishes to local MQTT broker only, no vendor cloud",
+    "notes": "~€6-10; simple Arduino/ESP-IDF sketch; good for segmented VLANs where router-level scan can't see everything"
+  },
+  {
+    "id": "netgear-orbi-mesh-node",
+    "name": "Netgear Orbi Mesh Satellite",
+    "brand": "Netgear",
+    "category": "network",
+    "modality": "mesh satellite exposing local web UI client list per node for zone-level presence",
+    "wavr_ingress": "network-scan",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "local admin UI/API scrape over LAN; Orbi cloud account not required for basic client list",
+    "notes": "~€90-180/satellite; local API undocumented but scrapeable via router web UI"
+  },
+  {
+    "id": "tp-link-tapo-powerline-poe",
+    "name": "TP-Link Powerline Adapter (network backhaul, non-sensing)",
+    "brand": "TP-Link",
+    "category": "network",
+    "modality": "powerline Ethernet-over-mains backhaul to extend LAN reach to a sensing AP/hub in another room",
+    "wavr_ingress": "roadmap",
+    "coverage": "point",
+    "detects": [],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "purely a network transport accessory, no sensing/detection itself; included as infra to extend coverage of other ingress nodes",
+    "notes": "~€40-70/pair; useful for reaching a PoE camera/hub where Wi-Fi/Ethernet is weak; not a sensor, an enabler"
+  },
+  {
+    "id": "ubiquiti-poe-switch",
+    "name": "Ubiquiti PoE Switch (network infra for hub/cams)",
+    "brand": "Ubiquiti",
+    "category": "network",
+    "modality": "PoE switch powering/backhauling RTSP cameras, APs, and ESP bridges on the local network",
+    "wavr_ingress": "roadmap",
+    "coverage": "whole-home",
+    "detects": [],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "infrastructure only, no detection; enables reliable local wiring for other Wavr ingress devices",
+    "notes": "~€100-250 depending on port count; recommended backbone for a serious multi-camera/adapter Wavr install"
+  },
+  {
+    "id": "wemos-d1-mini-esp8266-probe-scanner",
+    "name": "Wemos D1 Mini (ESP8266) Probe/Beacon Scanner (DIY)",
+    "brand": "Genérico (ESP8266)",
+    "category": "esp-diy",
+    "modality": "cheap ESP8266 board sniffing Wi-Fi beacon/probe frames for coarse device-presence heuristics",
+    "wavr_ingress": "esp-wifi",
+    "coverage": "room",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "via-esp",
+    "privacy_note": "custom firmware, local MQTT publish only, no cloud dependency",
+    "notes": "~€3-5; ESP8266 has weaker promiscuous-mode API than ESP32, less reliable but very cheap"
+  },
+  {
+    "id": "linksys-velop-mesh-node",
+    "name": "Linksys Velop Mesh Node",
+    "brand": "Linksys",
+    "category": "network",
+    "modality": "mesh node; local device list available via LAN JSON-RPC on some firmware versions",
+    "wavr_ingress": "network-scan",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "addable-now",
+    "privacy_note": "local JNAP API over LAN (no auth token needed on same subnet in most firmware); avoids Linksys cloud app",
+    "notes": "~€70-140/node; JNAP API is unofficial but widely documented by community"
+  },
+  {
+    "id": "raspberry-pi-monitor-mode-hostapd",
+    "name": "Raspberry Pi + external monitor-mode dongle (hostapd/tcpdump rig)",
+    "brand": "Genérico (RPi + USB dongle)",
+    "category": "network",
+    "modality": "dedicated always-on box combining a monitor-mode USB adapter with tcpdump/Kismet for passive scanning, feeding Wavr",
+    "wavr_ingress": "roadmap",
+    "coverage": "zone",
+    "detects": [
+      "presence"
+    ],
+    "control": "none",
+    "status": "roadmap",
+    "privacy_note": "fully local processing planned; Wavr lacks a Kismet/tcpdump ingestion adapter today",
+    "notes": "RPi ~€40 + Alfa/Panda dongle ~€30-60; good DIY passive-scan node once pipeline exists"
+  }
+]

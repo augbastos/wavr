@@ -10,7 +10,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtensionOID, NameOID
 
-from wavr.tls import CERT_CN, ensure_cert
+from wavr.tls import CERT_CN, cert_fingerprint, ensure_cert, resolved_cert_path
 
 LOCAL_IP = "192.168.1.5"
 
@@ -136,6 +136,47 @@ def test_user_provided_existing_paths_returned_as_is(tmp_path):
         assert fh.read() == "USER-CERT"            # untouched
     with open(key_path) as fh:
         assert fh.read() == "USER-KEY"
+
+
+# --------------------------------------------------------------------------- #
+# Fingerprint (audit blocking #1): out-of-band anchor for pairing MitM defense.
+# --------------------------------------------------------------------------- #
+def test_cert_fingerprint_matches_cryptography_sha256(tmp_path):
+    # The pure-stdlib fingerprint must equal cryptography's SHA-256 over the DER cert,
+    # in the browser display format (uppercase hex, colon-separated, 32 bytes).
+    from cryptography.hazmat.primitives import hashes
+
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    got = cert_fingerprint(cert_path)
+    assert got is not None
+    parts = got.split(":")
+    assert len(parts) == 32                                  # SHA-256 = 32 bytes
+    assert all(len(p) == 2 and p == p.upper() for p in parts)
+    expected = _load_cert(cert_path).fingerprint(hashes.SHA256()).hex().upper()
+    assert got.replace(":", "") == expected                 # same bytes browsers show
+
+
+def test_cert_fingerprint_none_for_missing_file(tmp_path):
+    assert cert_fingerprint(str(tmp_path / "does-not-exist.pem")) is None
+
+
+def test_cert_fingerprint_none_for_non_pem(tmp_path):
+    # A file that is not a PEM certificate must not raise -> returns None so the UI
+    # simply hides the fingerprint line rather than crashing.
+    p = tmp_path / "garbage.pem"
+    p.write_text("this is not a certificate")
+    assert cert_fingerprint(str(p)) is None
+
+
+def test_resolved_cert_path_prefers_given(tmp_path):
+    given = str(tmp_path / "my-cert.pem")
+    assert resolved_cert_path(given) == given
+
+
+def test_resolved_cert_path_falls_back_to_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("WAVR_TLS_DIR", str(tmp_path / "wavrdir"))
+    assert resolved_cert_path("").startswith(str(tmp_path / "wavrdir"))
 
 
 def test_defaults_used_when_no_paths_given(tmp_path, monkeypatch):
