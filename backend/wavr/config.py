@@ -183,6 +183,18 @@ class Config:
     # kill-switch honoured, LAN-IP-only (SSRF-hard), creds read only from the stored rtsp_url
     # (never accepted over the PTZ API, never logged/echoed). No frame is ever read here.
     ptz: bool
+    # A5.1 local-API hardening (defense-in-depth, DEFAULT-OFF / no-op when unset).
+    # `local_token`: optional same-machine shared secret required on /api/* even on
+    # loopback ("" = disabled = today's behavior; "auto" = generate+persist+print once).
+    # Defends against OTHER local processes / a malicious http://127.0.0.1 page -- NOT a
+    # hard boundary (a same-box process that can read the shell/file gets it).
+    # `api_v1`: mount a /api/v1 alias of the identical routes (versioning, default OFF).
+    local_token: str
+    api_v1: bool
+    # A5.2 ARP device blocking (WAVR_NET_BLOCKING) -- the roadmap's single active-LAN-
+    # attack primitive. DEFAULT-OFF. Triple-gated at the route (flag + require_local +
+    # per-call confirm), inventory-only target denylist, auto-expiry, MCP-excluded.
+    net_blocking: bool
 
 
 def load_config() -> Config:
@@ -321,4 +333,9 @@ def load_config() -> Config:
         net_onvif_probe=os.getenv("WAVR_ONVIF_PROBE", "").lower() in ("1", "true", "yes", "on"),
         # ONVIF PTZ actuator (A4.3) -- opt-in, default OFF (first camera ACTUATOR).
         ptz=os.getenv("WAVR_PTZ", "").lower() in ("1", "true", "yes", "on"),
+        # A5.1 local-API hardening -- default-off / no-op when unset.
+        local_token=os.getenv("WAVR_LOCAL_TOKEN", "").strip(),
+        api_v1=os.getenv("WAVR_API_V1", "").lower() in ("1", "true", "yes", "on"),
+        # A5.2 ARP blocking -- default OFF (active-LAN-attack primitive, triple-gated).
+        net_blocking=os.getenv("WAVR_NET_BLOCKING", "").lower() in ("1", "true", "yes", "on"),
     )

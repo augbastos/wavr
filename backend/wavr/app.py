@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import re
 import sqlite3
@@ -50,6 +51,8 @@ from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
 from wavr.auth import authorize, parse_bearer, can_change_state, in_subnet
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
+from wavr.local_token import resolve_local_token
+from wavr import arp_block
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -76,6 +79,19 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "testclient"})
 
 def _is_loopback(host) -> bool:
     return host in _LOOPBACK_HOSTS
+
+
+# A5.1: paths reachable WITHOUT the optional local-API token (bootstrap shell + PWA
+# assets + liveness). Everything else under loopback requires the token when one is
+# set -- deliberately stricter than require_local (which only guards state-changers):
+# the point is to stop a same-machine process from even READING inventory/PII.
+_TOKEN_EXEMPT_PATHS = frozenset({
+    "/", "/index.html", "/manifest.webmanifest", "/sw.js", "/icon.svg", "/healthz",
+})
+
+
+def _is_token_exempt(path: str) -> bool:
+    return path in _TOKEN_EXEMPT_PATHS or path.startswith("/vendor/")
 
 
 def _default_sources(cfg):
@@ -143,7 +159,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                ha_import_store=None,
                wol_send=None, ping_probe=None, traceroute_runner=None,
                dns_query_fn=None, speedtest_fn=None,
-               onvif_discover=None, onvif_soap=None, ptz_soap=None) -> FastAPI:
+               onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
+               net_inventory=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -227,7 +244,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # the SAME edge-triggered rogue sighting the alert log records -- vendor only,
     # never the MAC/IP. `device_meta` folds every scanned MAC into the persisted
     # first-seen/last-seen store (Feature A).
-    _inventory = NetworkInventoryService(
+    # `net_inventory` is a test seam (mirrors sources=/storage=/device_meta=): when
+    # provided it replaces the built service so a route test can seed a deterministic
+    # inventory (e.g. exercise POST /api/block's 200 success path). None in production.
+    _inventory = net_inventory or NetworkInventoryService(
         cfg.net_known_macs, interval=cfg.net_scan_interval,
         on_rogue=(lambda a: _notify(f"Wavr: dispositivo desconhecido na rede ({a.vendor})"))
         if _notify else None,
@@ -349,6 +369,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # contacts only LAN-IP hosts, and reads NO frame. `ptz_soap` is the test seam.
     _ptz = CameraPTZ(soap=ptz_soap)
 
+    # A5.1 hardening: resolve the optional local-API token (default "" => disabled =>
+    # every check below is a no-op, byte-identical to before) and the /api/v1 alias
+    # flag. A5.2: the ARP blocker -- inert unless WAVR_NET_BLOCKING is on AND an elevated
+    # arp_send transport is injected (the route 503s otherwise, never a silent no-op).
+    _local_token = resolve_local_token(cfg.local_token, cfg.db_path)
+    _api_v1 = cfg.api_v1
+    _block_local_ip = _local_ipv4() or ""
+    _blocker = arp_block.ArpBlocker(send=arp_send)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await manager.start()
@@ -378,6 +407,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     with suppress(asyncio.CancelledError, Exception):
                         await t
             await _inventory.stop()
+            with suppress(Exception):
+                await _blocker.stop()   # A5.2: undo every active block on shutdown
             if _internet:
                 await _internet.stop()
             if _dhcp_monitor:
@@ -434,8 +465,31 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # is always "root". Off = byte-identical to before.
     @app.middleware("http")
     async def loopback_or_authed(request: Request, call_next):
+        # A5.1: optional /api/v1 alias (WAVR_API_V1, default OFF). Normalize the version
+        # prefix to the canonical path BEFORE any auth/path check, so the alias routes to
+        # the IDENTICAL handler + deps and can never become an auth-bypass shortcut (it is
+        # literally the same route after this rewrite).
+        if _api_v1:
+            _vp = request.scope.get("path", "")
+            if _vp == "/api/v1" or _vp.startswith("/api/v1/"):
+                _np = "/api" + _vp[len("/api/v1"):]
+                request.scope["path"] = _np
+                request.scope["raw_path"] = _np.encode("utf-8")
         host = request.client.host if request.client else None
         if _is_loopback(host):                       # loopback (incl. TestClient) -> root
+            # A5.1: optional same-machine local-API token. Unset => no-op. When set, even
+            # the loopback root must present it (X-Wavr-Token or Bearer) on non-exempt
+            # paths -> a same-box process/localhost page that can open a socket but cannot
+            # read the one-time token is denied. Constant-time compare (no timing oracle).
+            if _local_token and not _is_token_exempt(request.scope.get("path", "")):
+                supplied = (request.headers.get("x-wavr-token")
+                            or parse_bearer(request.headers.get("authorization")) or "")
+                # Encode to bytes before comparing: hmac.compare_digest raises TypeError
+                # on str inputs containing non-ASCII, so a hostile loopback request with a
+                # non-ASCII token header would otherwise crash to 500 (crash-on-hostile-
+                # input). Bytes compare is still constant-time and fails CLOSED -> 401.
+                if not hmac.compare_digest(supplied.encode("utf-8"), _local_token.encode("utf-8")):
+                    return JSONResponse({"detail": "local token required"}, status_code=401)
             request.state.role = "root"
             return await call_next(request)
         if not cfg.multidevice:                      # off: strict loopback-only, as before
@@ -487,6 +541,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             return
         if not can_change_state(role):
             raise HTTPException(status_code=403, detail="central role required")
+
+    def require_root(request: Request):
+        # A5.2 (red-team mitigation #2 -- "the single most important add"): the ARP-block
+        # route is an inward LAN-attack primitive, so it is loopback-ROOT ONLY. Even an
+        # authenticated multidevice 'central' peer -- who can change other state -- must
+        # NOT wield it: a paired/stolen central token would otherwise bypass the
+        # X-Wavr-Local CSRF header (require_local lets 'central' through header-less),
+        # the F-C bypass. Reject any non-root role. On the default (non-multidevice)
+        # build every request is already 'root', so this is a no-op there.
+        if getattr(request.state, "role", None) != "root":
+            raise HTTPException(status_code=403, detail="blocking is loopback-root only")
 
     # PUT /api/inventory/name is state-changing (Feature A) -- gated by the same
     # require_local rule as the camera/system/pair-code routes, so registration
@@ -653,6 +718,58 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             "disclosure": speedtest_mod.describe(provider),
         }
 
+    @app.post("/api/block")
+    async def block_device(mac: str = Body(..., embed=True),
+                           action: str = Body("block", embed=True),
+                           confirm: bool = Body(False, embed=True),
+                           _=Depends(require_local), __=Depends(require_root)):
+        # A5.2 ARP device blocking -- the roadmap's SINGLE active-LAN-attack primitive,
+        # pointed at the owner's OWN network. TRIPLE GATE: (1) WAVR_NET_BLOCKING default
+        # OFF -> 503; (2) require_local CSRF; (3) per-invocation confirm=true -> 409
+        # without it. Target denylist + gateway hard-deny + inventory-only live in
+        # wavr.arp_block. NEVER default-on, NEVER agent/MCP-reachable. Honest 503 when
+        # the elevated ARP-send transport is unavailable (never a silent no-op).
+        if not arp_block.blocking_enabled():
+            raise HTTPException(status_code=503,
+                                detail="device blocking disabled (set WAVR_NET_BLOCKING=1)")
+        if not _blocker.available():
+            raise HTTPException(
+                status_code=503,
+                detail=("device blocking needs elevated raw-socket/npcap privileges that "
+                        "are not available -- refusing rather than faking a block"))
+        if action not in ("block", "unblock"):
+            raise HTTPException(status_code=400, detail="action must be 'block' or 'unblock'")
+        # confirm is required ONLY for the destructive 'block'. The corrective 'unblock'
+        # (which only ever REMOVES an active block and sends a healing ARP) must always
+        # be runnable without ceremony so an operator can halt a live block immediately;
+        # gating the undo identically would weaken the 'full reversibility' invariant.
+        if action == "block" and confirm is not True:
+            raise HTTPException(
+                status_code=409,
+                detail=("device blocking requires explicit confirm=true -- it ACTIVELY "
+                        "cuts a device off your LAN via ARP spoofing; own network only"))
+        inv = _inventory.latest_inventory()
+        gw = next((d for d in inv if getattr(d, "is_gateway", False)), None)
+        # Independent, flag-free gateway derivation ('.1' heuristic from THIS host's LAN
+        # IP; zero egress) folded into the gateway deny-set so the catastrophic
+        # gateway-block guard doesn't rest solely on the best-effort is_gateway flag.
+        gw_ip_indep = guess_gateway()
+        try:
+            if action == "block":
+                return await _blocker.block(mac, inventory=inv, gateway=gw,
+                                            local_ip=_block_local_ip, gateway_ip=gw_ip_indep)
+            return await _blocker.unblock(mac, inventory=inv, gateway=gw,
+                                          local_ip=_block_local_ip)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/api/block")
+    async def list_blocks(_=Depends(require_local), __=Depends(require_root)):
+        # Read-only audit view: active blocks + recent block/unblock events (topology
+        # only, no PII). require_local + require_root -- active-attack state is sensitive
+        # and, like the block action itself, is loopback-root only (never a LAN peer).
+        return {"blocks": _blocker.list_blocks(), "events": _blocker.recent_events()}
+
     @app.get("/healthz")
     async def healthz():
         return {"ok": True, "version": __version__}
@@ -715,6 +832,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # ACTUATOR: gates /api/ptz/* (move/stop/presets/goto). Surfaced so the
                 # Privacy & Egress view stays honest that a camera-control path exists.
                 "ptz": cfg.ptz,
+                # A5.2 ARP device blocking (WAVR_NET_BLOCKING) -- opt-in, default OFF.
+                # The single active-LAN-attack primitive; surfaced so the Privacy &
+                # Egress view stays honest that a device-blocking path can exist.
+                "blocking": cfg.net_blocking,
+                # A5.1 hardening posture, surfaced honestly (bool-only, never the
+                # secret). `api_token`: a same-machine shared secret (WAVR_LOCAL_TOKEN)
+                # is REQUIRED on /api/* even on loopback. `health_gate`: F6 -- the
+                # side-effecting GET /api/health now requires the X-Wavr-Local CSRF
+                # header, so a drive-by tab can't fire its public-DNS egress (always on).
+                "api_token": bool(_local_token),
+                "health_gate": True,
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
@@ -734,7 +862,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return build_report(_device_meta)
 
     @app.get("/api/health")
-    async def health():
+    async def health(_=Depends(require_local)):
         # On-demand only -- no background task, no new opt-in flag (see the
         # _health_check/_health_resolvers construction above for the
         # LOCAL-ONLY rationale). 5-tier severity ladder (defensive-inventory #12):

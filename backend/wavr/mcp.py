@@ -119,6 +119,10 @@ _SENSITIVE_HINTS = (
     "lock", "unlock", "deadbolt", "latch", "strike", "maglock",
     "door", "garage", "gate", "portao", "fechadura", "barrier",
     "valve", "siren", "alarm", "smoke", "co2",
+    # A5.2 defense-in-depth: device-blocking is NEVER registered as an MCP tool (see the
+    # extension-point warning in build_mcp_server) -- but refuse any HA entity whose name
+    # could front an ARP-block/spoof/deauth capability anyway. Real control = never-register.
+    "arp_block", "arpspoof", "arp_spoof", "deauth", "arp_poison",
 )
 
 
@@ -414,6 +418,12 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
     # inventory provider (extend StateProvider, or inject a second provider). It MUST
     # stay READ-ONLY/LOCAL like the tools above -- observe the network, never
     # scan/probe/deploy. Do not implement it in slice D.
+    #
+    # PERMANENT EXCLUSION (A5.2): device blocking / ARP spoofing / deauth is an ACTIVE
+    # LAN-ATTACK primitive and is PERMANENTLY OUT OF MCP SCOPE. Never add a block/arp/
+    # spoof/deauth @server.tool() here or anywhere -- MCP is read-only-by-construction and
+    # no agent may trigger an attack. It ships only behind a human-clicked, triple-gated
+    # dashboard action (POST /api/block). Do not weaken this.
 
     return server
 
