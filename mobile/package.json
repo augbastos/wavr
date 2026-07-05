@@ -1,0 +1,22 @@
+{
+  "name": "wavr-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wavr Mobile — Capacitor native shell (Phase 1). Bundles frontend/index.html as native assets and talks to the user's LAN central ONLY through the pinned-TLS WavrNet native plugin. Zero cloud egress: no analytics, no crash SDK, no FCM, no third-party data/network SDK (honest 'no data collected / shared' Data Safety).",
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "sync-frontend": "node scripts/sync-frontend.mjs",
+    "sync": "npm run sync-frontend && cap sync",
+    "cap": "cap"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/core": "^8.4.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.1"
+  }
+}
