@@ -1599,10 +1599,10 @@
     <div id="pairing" class="pair tile" hidden>
       <div class="tile-head"><h2 id="pair-h">Pair device</h2></div>
       <form id="pairForm" class="pair-form" aria-labelledby="pair-h">
-        <label class="pair-role">Device type
-          <select name="role" aria-label="device type">
-            <option value="user">Phone / viewer (view only)</option>
-            <option value="central">Another hub</option>
+        <label class="pair-role">Access level
+          <select name="role" aria-label="access level">
+            <option value="user">User — view only (presence, no controls)</option>
+            <option value="central">Admin — full access (edit map, cameras, measure)</option>
           </select>
         </label>
         <button type="submit" class="ctl">Generate pairing code</button>
