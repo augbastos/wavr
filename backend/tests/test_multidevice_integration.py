@@ -48,6 +48,29 @@ def test_lan_peer_without_token_is_forbidden(app):
     assert peer.get("/api/state").status_code == 403
 
 
+def test_pair_code_returns_live_cert_fingerprint(tmp_path, monkeypatch):
+    # audit blocking #1: the loopback pair-code response carries the SHA-256 fingerprint
+    # of the LIVE serving cert, so the operator can verify it out-of-band against the
+    # phone's certificate warning and detect a pairing-time TLS MitM.
+    from wavr.tls import cert_fingerprint, ensure_cert
+
+    cert = str(tmp_path / "cert.pem")
+    key = str(tmp_path / "key.pem")
+    ensure_cert(cert, key, "192.168.1.1")
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "fp.db"))
+    monkeypatch.setenv("WAVR_TLS_CERT", cert)
+    monkeypatch.setenv("WAVR_TLS_KEY", key)
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    central = TestClient(app)
+    body = central.post("/api/pair-code", json={"role": "user"}, headers=CSRF).json()
+    assert body["cert_fingerprint"] == cert_fingerprint(cert)
+    assert len(body["cert_fingerprint"].split(":")) == 32
+
+
 def test_user_role_cannot_change_state(app):
     peer, auth = _pair(app, "user")
     assert peer.post("/api/system/toggle", json={"on": True}, headers=auth).status_code == 403

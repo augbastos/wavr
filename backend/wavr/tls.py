@@ -22,6 +22,9 @@ this module, so the base install never needs `cryptography`.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import ipaddress
 import os
 from datetime import datetime, timedelta, timezone
@@ -73,6 +76,62 @@ def ensure_cert(cert_path: str, key_path: str, local_ip: str) -> tuple[str, str]
     # 4. (Re)generate. This is the ONLY path that needs `cryptography`.
     _generate_self_signed(out_cert, out_key, local_ip)
     return out_cert, out_key
+
+
+def resolved_cert_path(cert_path: str) -> str:
+    """The path `ensure_cert` WOULD serve for `cert_path`, WITHOUT generating or
+    touching anything: the given path if non-empty, else the `~/.wavr/` default.
+
+    Lets the app read the LIVE serving cert's fingerprint (see `cert_fingerprint`)
+    for out-of-band pairing verification, using the same resolution `serve.py` used
+    to hand the cert to uvicorn."""
+    if cert_path:
+        return cert_path
+    default_cert, _ = _default_paths()
+    return default_cert
+
+
+def cert_fingerprint(cert_path: str) -> str | None:
+    """SHA-256 fingerprint of the DER certificate at `cert_path`, formatted exactly
+    as a browser's certificate viewer shows it: uppercase hex, colon-separated
+    (e.g. `AB:CD:...`). Returns `None` if the file is missing/unreadable or is not a
+    parseable PEM certificate.
+
+    This is the out-of-band anchor that defeats a pairing-time TLS MitM: the operator
+    reads it off the TRUSTED loopback dashboard and compares it against the fingerprint
+    the phone's browser shows in its certificate-warning dialog. A MitM's substituted
+    self-signed cert has a different fingerprint, so the mismatch is visible.
+
+    Pure stdlib (base64 + hashlib) so it works on the base install WITHOUT the `[tls]`
+    extra — `cryptography` is never imported here."""
+    try:
+        pem = Path(cert_path).read_text(encoding="ascii", errors="ignore")
+    except OSError:
+        return None
+    der = _first_cert_der(pem)
+    if der is None:
+        return None
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
+def _first_cert_der(pem: str) -> bytes | None:
+    """Decode the first PEM `CERTIFICATE` block to DER bytes, or `None` if the text
+    has no well-formed certificate block."""
+    begin = "-----BEGIN CERTIFICATE-----"
+    end = "-----END CERTIFICATE-----"
+    start = pem.find(begin)
+    if start == -1:
+        return None
+    body_start = start + len(begin)
+    stop = pem.find(end, body_start)
+    if stop == -1:
+        return None
+    b64 = "".join(pem[body_start:stop].split())
+    try:
+        return base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        return None
 
 
 def _cert_is_valid(cert_path: str) -> bool:

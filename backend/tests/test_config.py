@@ -216,3 +216,12 @@ def test_config_netbios_snmp_scope_known_explicit_still_narrows(monkeypatch):
     cfg = load_config()
     assert cfg.net_netbios_scope_known_only is True
     assert cfg.net_snmp_scope_known_only is True
+
+
+def test_config_cam_unhealthy_secs_default_and_override(monkeypatch):
+    # F3: camera IP-drift health threshold. Default 30s; overridable.
+    from wavr.config import load_config
+    monkeypatch.delenv("WAVR_CAM_UNHEALTHY_SECS", raising=False)
+    assert load_config().cam_unhealthy_secs == 30.0
+    monkeypatch.setenv("WAVR_CAM_UNHEALTHY_SECS", "5")
+    assert load_config().cam_unhealthy_secs == 5.0

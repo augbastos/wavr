@@ -35,6 +35,9 @@ class Config:
     ruview_reconnect: float
     cam_interval: float
     cam_confidence: float
+    # F3 camera IP-drift health: consecutive seconds a camera source must fail to
+    # yield a frame before it is reported unhealthy (edge-triggered health hook).
+    cam_unhealthy_secs: float
     mqtt_enabled: bool
     mqtt_host: str
     mqtt_port: int
@@ -217,6 +220,9 @@ def load_config() -> Config:
         ruview_reconnect=float(os.getenv("WAVR_RUVIEW_RECONNECT", "3.0")),
         cam_interval=float(os.getenv("WAVR_CAM_INTERVAL", "0.5")),
         cam_confidence=float(os.getenv("WAVR_CAM_CONFIDENCE", "0.4")),
+        # F3: seconds of consecutive frame-read failure before a camera is reported
+        # unhealthy (drives the drift-detection health hook). Default 30s.
+        cam_unhealthy_secs=float(os.getenv("WAVR_CAM_UNHEALTHY_SECS", "30")),
         mqtt_enabled=os.getenv("WAVR_MQTT_ENABLED", "").lower() in ("1", "true", "yes"),
         mqtt_host=os.getenv("WAVR_MQTT_HOST", "localhost"),
         mqtt_port=int(os.getenv("WAVR_MQTT_PORT", "1883")),
@@ -225,7 +231,13 @@ def load_config() -> Config:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("WAVR_GEMINI_MODEL", "gemini-1.5-flash"),
         narrate_enabled=os.getenv("WAVR_NARRATE_ENABLED", "").lower() in ("1", "true", "yes"),
-        house_map=os.getenv("WAVR_HOUSE_MAP", ""),
+        # F1: default to a bare cwd-relative "house.json" (mirrors db_path="wavr.db"
+        # above) so PUT /api/house works out-of-the-box instead of 409-ing for every
+        # fresh install. The env override is preserved; an operator who explicitly sets
+        # WAVR_HOUSE_MAP="" still gets the 409 (no path configured) branch. The real
+        # home floor plan this creates is git-ignored (house.json) -- it must NEVER land
+        # in this public AGPL repo (trap #1, same class as the wavr.db-wal PII leak).
+        house_map=os.getenv("WAVR_HOUSE_MAP", "house.json"),
         mmwave_port=os.getenv("WAVR_MMWAVE_PORT", ""),
         mmwave_room=os.getenv("WAVR_MMWAVE_ROOM", "sala"),
         ble_known={

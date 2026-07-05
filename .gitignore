@@ -32,6 +32,16 @@ backend/local_token
 _fable/
 .superpowers/
 
+# F4 autostart runner logs -- backend stdout/stderr may pass through here; never commit
+# to this public AGPL repo (wavr.db-wal PII-leak precedent).
+logs/
+
 # local competitive research — contains real home-network PII (subnet/hostnames/VPN IPs);
 # keep OUT of this public repo until redacted (audit 2026-07-04)
 docs/competitive-analysis/
+
+# the user's real floor plan — home-layout PII, never publish (2026-07-05)
+# F1: WAVR_HOUSE_MAP defaults to a bare cwd-relative "house.json"; the bare pattern
+# already matches backend/house.json recursively, listed explicitly (wavr.db* style).
+house.json
+backend/house.json

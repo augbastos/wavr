@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hmac
+import ipaddress
 import logging
 import re
 import sqlite3
@@ -16,7 +18,7 @@ from starlette.responses import JSONResponse
 
 from wavr import __version__
 from wavr.config import load_config
-from wavr.housemap import load_house_map, room_names, save_house_map, HouseMapError
+from wavr.housemap import load_house_map, room_names, save_house_map, upsert_room, HouseMapError
 from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine
@@ -27,6 +29,9 @@ from wavr.sources.ruview import RuViewSource
 from wavr.sources.camera import CameraSource
 from wavr.sources.mmwave import MmWaveSource
 from wavr.camera_store import CameraStore
+from wavr.camera_health import CameraHealthMonitor
+from wavr.camera_url import rebind_rtsp_host, rtsp_host
+from wavr.netaddr import is_lan_ip
 from wavr.rules import RulesEngine
 from wavr.away import AwayMonitor
 from wavr.mqtt_publisher import make_publisher
@@ -34,7 +39,8 @@ from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_gemini_generate
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
-from wavr.device_meta import DeviceMeta
+from wavr.device_meta import DeviceMeta, normalize_mac
+from wavr.netinventory import _same_ip
 from wavr.ha_client import client_from_config
 from wavr.ha_import import fetch_registry, import_devices
 from wavr.ha_import_store import HAImportStore
@@ -86,7 +92,8 @@ def _is_loopback(host) -> bool:
 # set -- deliberately stricter than require_local (which only guards state-changers):
 # the point is to stop a same-machine process from even READING inventory/PII.
 _TOKEN_EXEMPT_PATHS = frozenset({
-    "/", "/index.html", "/manifest.webmanifest", "/sw.js", "/icon.svg", "/healthz",
+    "/", "/index.html", "/measure.html", "/manifest.webmanifest", "/sw.js", "/icon.svg",
+    "/healthz",
 })
 
 
@@ -147,9 +154,31 @@ def _mask_rtsp(url: str) -> str:
         return url
 
 
-def _camera_factory(cam: dict, cfg):
-    return lambda: CameraSource(cam["room"], cam["rtsp_url"],
-                                interval=cfg.cam_interval, confidence=cam["confidence"])
+def _rebind_ip_ok(ip: str) -> bool:
+    """SSRF guard for the F3 rebind target: a bare PRIVATE/LAN IPv4 literal ONLY.
+    Reuses the shared wavr.netaddr.is_lan_ip (literal-only + cloud-metadata denylist +
+    IPv4-mapped-IPv6 normalization -- deliberately stronger than bare
+    ipaddress.is_private, which accepts 169.254.169.254 and 127.0.0.1) and additionally
+    requires a plain IPv4 literal so rebind_rtsp_host can rewrite the host
+    unambiguously (no IPv6-bracket case). Rejects public IPs, DNS hostnames, cloud-
+    metadata and IPv4-mapped-IPv6 forms."""
+    h = (ip or "").strip()
+    if not is_lan_ip(h):
+        return False
+    try:
+        return isinstance(ipaddress.ip_address(h), ipaddress.IPv4Address)
+    except ValueError:
+        return False
+
+
+def _camera_factory(cam: dict, cfg, on_health=None):
+    # F3: pass the camera name + the health monitor's report callback + the unhealthy
+    # threshold so a drifted/dead camera is edge-reported (name+bool only, never a
+    # frame -- ADR-0002). `on_health` is None for callers that don't wire the monitor.
+    return lambda: CameraSource(cam["room"], cam["rtsp_url"], name=cam["name"],
+                                interval=cfg.cam_interval, confidence=cam["confidence"],
+                                on_health=on_health,
+                                unhealthy_secs=cfg.cam_unhealthy_secs)
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
@@ -166,7 +195,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _storage = storage or Storage(cfg.db_path)
     _fusion = fusion or FusionEngine(threshold=cfg.fusion_threshold)
     latest: dict[str, dict] = {}  # room -> last RoomState dict (Camada 4 seam)
-    _house = load_house_map(cfg.house_map)
+    # deepcopy: load_house_map returns the module-level housemap.DEFAULT_MAP object
+    # itself on any fallback (missing/invalid file), and put_house below mutates _house
+    # in place (clear/update). Without this copy, the first PUT on a fresh install --
+    # now that WAVR_HOUSE_MAP defaults to a (usually not-yet-existing) "house.json" --
+    # would corrupt DEFAULT_MAP process-wide. Copy once so _house is always private.
+    _house = copy.deepcopy(load_house_map(cfg.house_map))
 
     # Notifier: opt-in via injected `notify` (tests) or WAVR_NTFY_URL (self-hosted
     # ntfy, stdlib POST, lazily built). Off by default -- no notifier, no HTTP calls.
@@ -358,11 +392,33 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     _owns_cameras = camera_store is None   # only close a store this function built itself
     _cameras = camera_store or CameraStore(cfg.db_path)
+    # F3 camera IP-drift monitor: always available (like _device_meta), inert until a
+    # camera reports down AND a stored MAC drifts. Reads camera defs from _cameras and
+    # the current LAN devices from _inventory (opt-in WAVR_NET_INVENTORY -- when off,
+    # latest_inventory() is empty and suggestions stay honestly empty).
+    _camera_health = CameraHealthMonitor(
+        get_camera=_cameras.get, latest_inventory=_inventory.latest_inventory)
     for cam in _cameras.list():                       # persisted cameras -> boot-OFF sources
-        manager.register(cam["name"], _camera_factory(cam, cfg), False)
+        manager.register(cam["name"], _camera_factory(cam, cfg, _camera_health.report), False)
 
     def _masked_cameras():
         return [{**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"])} for cam in _cameras.list()]
+
+    def _resolve_mac_for_url(rtsp_url: str) -> str | None:
+        # F3 best-effort MAC capture at add/rebind time: match the rtsp host IP against
+        # the running inventory (Device.ip -> Device.mac). LOCAL-only (ARP-based
+        # inventory, zero egress). Returns None when net_inventory is off or no host
+        # matches -- honest, never guesses. Never logs the url (carries credentials).
+        host = rtsp_host(rtsp_url)
+        if not host:
+            return None
+        try:
+            for d in _inventory.latest_inventory():
+                if d.ip and _same_ip(d.ip, host):
+                    return d.mac
+        except Exception:
+            return None
+        return None
 
     # ONVIF PTZ actuator (A4.3): opt-in (cfg.ptz, default OFF). Inert until a
     # /api/ptz/* route runs -- it reads creds only from a stored camera's rtsp_url,
@@ -506,8 +562,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # and these carry nothing sensitive (the page shows only the pairing screen until a
         # token is entered). The DATA endpoints (/api/*, /ws/*) still require the token.
         # "/index.html" is the same shell as "/" (H3 audit fix: sw.js precaches it by name).
+        # "/measure.html" is the F2 phone-capture shell: an unpaired LAN phone must be
+        # able to LOAD it, but PUT /api/house/room still needs a central token.
         _p = request.url.path
-        if _p in ("/", "/index.html", "/manifest.webmanifest", "/sw.js", "/icon.svg") or _p.startswith("/vendor/"):
+        if _p in ("/", "/index.html", "/measure.html", "/manifest.webmanifest", "/sw.js", "/icon.svg") or _p.startswith("/vendor/"):
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 return await call_next(request)
@@ -586,6 +644,31 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             raise HTTPException(status_code=code, detail=str(exc))
         _house.clear()
         _house.update(doc)          # keep the in-memory map (GET, room_names) in sync
+        return _house
+
+    @app.put("/api/house/room")
+    async def put_house_room(body: dict = Body(...), _=Depends(require_local)):
+        # F2 "medir com o celular": upsert ONE room into the existing map WITHOUT wiping
+        # the hand-edited maquette. Only x/y METER coordinates arrive here -- NO camera
+        # frame is ever touched or read, so ADR-0002 (frames RAM-only) stays intact.
+        # require_local gates it: loopback root needs X-Wavr-Local; a LAN peer needs a
+        # central-role token (a 'user' token -> 403). validate runs once via save_house_map.
+        level = body.get("level")
+        room = body.get("room")
+        if not isinstance(level, int) or isinstance(level, bool):
+            raise HTTPException(status_code=422, detail="level must be an integer")
+        if (not isinstance(room, dict) or not isinstance(room.get("name"), str)
+                or not isinstance(room.get("polygon"), list)):
+            raise HTTPException(status_code=422, detail="room must be {name: str, polygon: list}")
+        merged = upsert_room(_house, level, room)   # deep-copies _house; no mutation yet
+        try:
+            save_house_map(cfg.house_map, merged)   # full validate + atomic persist
+        except HouseMapError as exc:
+            # empty-path -> 409 (server misconfig); invalid geometry/doc -> 422.
+            code = 409 if "no house_map path" in str(exc) else 422
+            raise HTTPException(status_code=code, detail=str(exc))
+        _house.clear()
+        _house.update(merged)       # keep the in-memory map (GET, room_names) in sync
         return _house
 
     @app.post("/api/narrate")
@@ -900,6 +983,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def add_camera(
         name: str = Body(...), room: str = Body(...),
         rtsp_url: str = Body(...), confidence: float = Body(cfg.cam_confidence),
+        mac: str | None = Body(None),
         _=Depends(require_local),
     ):
         name = name.strip()
@@ -915,13 +999,25 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             raise HTTPException(status_code=400, detail="rtsp_url must be rtsp:// or rtsps://")
         if not (0.0 <= confidence <= 1.0):
             raise HTTPException(status_code=400, detail="confidence must be between 0.0 and 1.0")
+        # F3: optional MAC for IP-drift detection. A supplied MAC is validated +
+        # normalized (reject junk so it can never be persisted then reflected via
+        # /api/cameras/suggestions); if omitted, best-effort resolve it from the
+        # running inventory (null when net_inventory is off / no match -- never guessed).
+        clean_mac: str | None
+        if mac is not None and str(mac).strip():
+            try:
+                clean_mac = normalize_mac(mac)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="mac must be a 6-octet MAC address")
+        else:
+            clean_mac = _resolve_mac_for_url(rtsp_url)
         if name in {s["name"] for s in manager.status()["sources"]}:
             raise HTTPException(status_code=409, detail=f"source name in use: {name}")
         try:
-            _cameras.add(name, room, rtsp_url, confidence)
+            _cameras.add(name, room, rtsp_url, confidence, mac=clean_mac)
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail=f"camera exists: {name}")
-        manager.register(name, _camera_factory(_cameras.get(name), cfg), False)  # boots OFF
+        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report), False)  # boots OFF
         return _masked_cameras()
 
     @app.post("/api/onvif/probe")
@@ -963,6 +1059,49 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             await manager.unregister(name)
         except KeyError:
             pass   # not registered (e.g. removed before a restart re-registered it)
+        _camera_health.clear(name)   # drop any stale drift suggestion for the removed cam
+        return _masked_cameras()
+
+    @app.get("/api/cameras/suggestions")
+    async def camera_suggestions():
+        # F3 read-only IP-drift suggestions (loopback middleware is the gate, like
+        # GET /api/inventory -- no CSRF). Each: {camera, mac, current_ip, suggested_ip,
+        # vendor, ts}. IP+MAC+vendor only (already non-sensitive per /api/inventory);
+        # the rtsp_url (creds) is NEVER included. Empty when there is no drift, no
+        # inventory, or no stored MAC. NOT authoritative -- a MAC-spoofing LAN attacker
+        # can manufacture one, so the UI must require explicit confirmation before /rebind.
+        return {"suggestions": _camera_health.suggestions()}
+
+    @app.post("/api/cameras/{name}/rebind")
+    async def rebind_camera(name: str, ip: str = Body(..., embed=True),
+                            _=Depends(require_local)):
+        # F3 one-click IP-drift rebind. A rebind is NEVER automatic -- this is the
+        # load-bearing mitigation: a MAC-spoofing LAN attacker can manufacture a drift
+        # suggestion, so the change is applied ONLY on the user's explicit confirmation.
+        # Confirming will send the camera's STORED credentials to `ip` on next enable.
+        # State-changing -> require_local (CSRF).
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        ip = (ip or "").strip()
+        # SSRF-hard: private LAN IPv4 literal ONLY (mirrors the ONVIF guard). Rejects
+        # public IPs, DNS hostnames, cloud-metadata (169.254.169.254) and mapped forms.
+        if not _rebind_ip_ok(ip):
+            raise HTTPException(status_code=400, detail="ip must be a private LAN IPv4 literal")
+        cam = _cameras.get(name)
+        if not cam:
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        new_url = rebind_rtsp_host(cam["rtsp_url"], ip)
+        # rebind_rtsp_host returns the ORIGINAL on an odd shape; re-check the rtsp scheme
+        # on the rewritten URL and refuse (500-safe) rather than persist something
+        # unusable. NEVER log/echo the raw url (carries credentials).
+        if new_url == cam["rtsp_url"] or not _URL_SHAPE_RE.match(new_url):
+            raise HTTPException(status_code=500, detail="could not rewrite camera address")
+        _cameras.set_url(name, new_url)
+        with suppress(KeyError):
+            await manager.unregister(name)   # mirror delete_camera: kill before re-register
+        # Re-register boot-OFF (ADR-0002: a rebind never auto-enables a camera).
+        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report), False)
+        _camera_health.clear(name)
         return _masked_cameras()
 
     # ------------------------------------------------------------------- #
@@ -1031,7 +1170,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # companion then redeems at POST /api/pair. Gated by require_local.
             if role not in ("central", "user"):
                 raise HTTPException(status_code=400, detail="role must be central or user")
-            return {"code": _pairing.mint_code(role)}
+            # Out-of-band MitM defense (audit blocking #1): return the SHA-256 fingerprint
+            # of the LIVE serving cert, read off this TRUSTED loopback response, so the
+            # operator can verify it against the fingerprint the phone's browser shows in
+            # its certificate warning BEFORE accepting. A pairing-time TLS MitM presents a
+            # different self-signed cert -> different fingerprint -> the operator sees the
+            # mismatch and stops. `cryptography` is not imported (pure-stdlib fingerprint).
+            from wavr.tls import cert_fingerprint, resolved_cert_path
+            fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+            return {"code": _pairing.mint_code(role), "cert_fingerprint": fingerprint}
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
@@ -1108,6 +1255,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/icon.svg")
     async def icon():
         return FileResponse(_FRONTEND / "icon.svg", media_type="image/svg+xml")
+
+    # F2 phone-capture shell (WebXR "medir com o celular"). Static, carries nothing
+    # sensitive -- like "/" it is token/subnet-exempt so an unpaired LAN phone can load
+    # it; the data endpoint (PUT /api/house/room) still requires a central-role token.
+    @app.get("/measure.html")
+    async def measure_page():
+        return FileResponse(_FRONTEND / "measure.html", media_type="text/html")
 
     return app
 
