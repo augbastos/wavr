@@ -2166,10 +2166,10 @@ renderControls();
 
 // ---- Camera management (Plano A / live only) ----
 async function renderCameras(){
-  if(MODE!=="live") return;                 // live-only; never in Plano B
+  if(!isAdmin()) return;                    // admin-only (loopback dashboard; mobile only when role==="central"); never viewer/demo
   document.getElementById("cameras").hidden = false;
   const camFb = document.getElementById("camFb");
-  const post = (url,body)=> fetch(location.origin+url,{method:"POST",
+  const post = (url,body)=> wavrFetch(url,{method:"POST",
     headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
   // ---- PTZ d-pad (A4.3): ONVIF pan/tilt/zoom over the SAME require-local channel. Built per
   // camera only when GET /api/ptz/{name}/capabilities returns {ptz:true}. Hold-to-move with a
@@ -2250,7 +2250,7 @@ async function renderCameras(){
       post(`/api/ptz/${enc}/preset/${encodeURIComponent(sel.value)}`, {}).catch(()=>{});
       sel.value = ""; };
     (async ()=>{
-      let presets; try{ presets = await (await fetch(location.origin+`/api/ptz/${enc}/presets`,
+      let presets; try{ presets = await (await wavrFetch(`/api/ptz/${enc}/presets`,
         {headers:{"X-Wavr-Local":"1"}})).json(); }catch{ return; }
       if(!Array.isArray(presets) || !presets.length) return;
       presets.forEach(p=>{ if(!p || !p.token) return;
@@ -2265,11 +2265,11 @@ async function renderCameras(){
   }
   async function refresh(){
     ptzCleanups.splice(0).forEach(fn=>{ try{ fn(); }catch{} });   // stop any live hold before rebuild
-    let cams; try{ cams = await (await fetch(location.origin+"/api/cameras")).json(); }catch{ return; }
+    let cams; try{ cams = await (await wavrFetch("/api/cameras")).json(); }catch{ return; }
     window.__wavrCameras?.(cams);   // Stage-2 hook: Detected excludes already-configured cameras
     // PTZ is default-OFF: only probe per-camera capabilities when the global feature flag is on.
     let ptzFeature = false;
-    try{ const s = await (await fetch(location.origin+"/api/status")).json();
+    try{ const s = await (await wavrFetch("/api/status")).json();
          ptzFeature = !!(s.features && s.features.ptz); }catch{}
     const list = document.getElementById("camList");
     list.innerHTML = cams.length ? "" : `<div class="empty">no camera configured</div>`;
@@ -2285,7 +2285,7 @@ async function renderCameras(){
       const rm = document.createElement("button"); rm.className="rm"; rm.textContent="Remove";
       rm.onclick = async ()=>{
         let r;
-        try{ r = await fetch(location.origin+`/api/cameras/${encodeURIComponent(c.name)}`,
+        try{ r = await wavrFetch(`/api/cameras/${encodeURIComponent(c.name)}`,
           {method:"DELETE", headers:{"X-Wavr-Local":"1"}}); }catch{}
         // Item 4: visible result — success collapses the row (refresh); failure shows why, not silence.
         if(r && r.ok){ actionFeedback(camFb, true); refresh(); }
@@ -2296,7 +2296,7 @@ async function renderCameras(){
       // d-pad in on its own line just below the row. Hidden entirely when ptz:false / offline.
       if(ptzFeature){
         (async ()=>{
-          let cap; try{ cap = await (await fetch(location.origin+
+          let cap; try{ cap = await (await wavrFetch(
             `/api/ptz/${encodeURIComponent(c.name)}/capabilities`,
             {headers:{"X-Wavr-Local":"1"}})).json(); }catch{ return; }
           if(cap && cap.ptz === true && row.isConnected){ row.after(buildPtzPad(c.name)); }
@@ -5893,8 +5893,10 @@ try {
 
   // ---------- ONVIF camera scan: detect -> connect (POST /api/onvif/probe, opt-in) ----------
   function canDetectNow(){
-    return (M === "live") ||
-      (M === "companion" && typeof companionToken === "function" && !!companionToken());
+    // scan TRIGGER gate: POST /api/onvif/probe is a side-effecting LAN scan (a WRITE). Off-mobile
+    // companionAdminWrite()≡true (no behavior change); on mobile only role==="central" may scan.
+    return companionAdminWrite() && ((M === "live") ||
+      (M === "companion" && typeof companionToken === "function" && !!companionToken()));
   }
   function onvifTitle(cam){
     var mk = String((cam && cam.make) || "").trim();
@@ -5964,7 +5966,7 @@ try {
       var body = { name: nm, room: rm, rtsp_url: cam.rtsp_url, confidence: 0.4 };
       var r = null;
       try{
-        r = await fetch(location.origin + "/api/cameras", { method: "POST",
+        r = await wavrFetch("/api/cameras", { method: "POST",
           headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
           body: JSON.stringify(body) });
       }catch(e){}
@@ -6149,7 +6151,7 @@ try {
     if(p && p.value) body.password = p.value;
     var r = null, data = null;
     try{
-      r = await fetch(location.origin + "/api/onvif/probe", { method: "POST",
+      r = await wavrFetch("/api/onvif/probe", { method: "POST",
         headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
         body: JSON.stringify(body) });
     }catch(e){ r = null; }
@@ -6334,7 +6336,7 @@ try {
         "Wavr can't discover the stream address on its own yet (no ONVIF probe). " +
         "Only the IP comes pre-filled — you get the RTSP username, password, and path from the camera's app or manual."));
     }
-    if(M !== "live"){
+    if(!isAdmin()){
       tile.appendChild(elc("p", "panel-note",
         "Adding cameras happens on the Wavr hub's panel (local access). " +
         (M === "companion" ? "This viewer is read-only." : "This demo has no hub.")));
@@ -6404,7 +6406,7 @@ try {
                    rtsp_url: composed(false), confidence: parseFloat(iConf.value) || 0.4 };
       var r = null;
       try{
-        r = await fetch(location.origin + "/api/cameras", { method: "POST",
+        r = await wavrFetch("/api/cameras", { method: "POST",
           headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
           body: JSON.stringify(body) });
       }catch(err){}
