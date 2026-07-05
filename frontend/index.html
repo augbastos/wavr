@@ -639,6 +639,13 @@
   .pair-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
              font-size:1.7rem;letter-spacing:.18em;color:var(--accent);
              font-variant-numeric:tabular-nums;user-select:all;}
+  .pair-countdown{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+                  font-size:.82rem;color:var(--dim);min-width:36px;
+                  font-variant-numeric:tabular-nums;}
+  .pair-cd-bar{height:3px;border-radius:2px;background:var(--line);overflow:hidden;
+               max-width:220px;margin:-9px 0 14px;}
+  .pair-cd-bar>i{display:block;height:100%;width:100%;background:var(--accent);
+                 transition:width 1s linear;}
   .pair-hint{color:var(--dim);font-size:.78rem;max-width:44ch;overflow-wrap:anywhere;}
   .pair-fp-box{border:1px solid var(--line);border-radius:8px;padding:11px 13px;margin:0 0 14px;
                background:var(--elevated);max-width:52ch;}
@@ -1603,9 +1610,12 @@
       </form>
       <div id="pairCodeBox" class="pair-code-box" hidden>
         <span id="pairCode" class="pair-code" aria-live="polite"></span>
+        <span id="pairCountdown" class="pair-countdown" aria-hidden="true"></span>
         <button type="button" id="pairCopy" class="ctl small">Copy</button>
-        <span class="pair-hint">enter this code in the device's app within 2 min · local network</span>
+        <span class="pair-hint">enter this code on the device · it refreshes itself, so a code you are
+          typing keeps working · local network only</span>
       </div>
+      <div id="pairCountdownBar" class="pair-cd-bar" hidden><i></i></div>
       <!-- Out-of-band MitM defense (audit #1): the phone can't pin the self-signed cert in
            the browser, so the operator verifies it by hand. This fingerprint comes from the
            TRUSTED loopback response; on the phone, tap the certificate warning → View
@@ -2634,31 +2644,75 @@ async function renderPairing(){
     });
   }
 
-  document.getElementById("pairForm").onsubmit = async (e)=>{
-    e.preventDefault();
-    const role = e.target.role.value;
-    let r;
+  // ---- Auto-rotating pairing code (2FA-style) ----
+  // The code re-mints itself before it can expire, so the operator never races the 120s
+  // TTL while walking to each device. Re-minting does NOT invalidate a previously shown
+  // code — each lives its own 120s window (backend pairing.py keeps codes independent) —
+  // so a code being typed on a phone keeps working right through a refresh. SECURITY:
+  // rotation runs ONLY while this panel is on screen; the tick() visibility guard stops it
+  // the instant Settings is closed / another tab is shown, so we never leave a fresh valid
+  // code standing while nobody is looking at it.
+  const cdEl   = document.getElementById("pairCountdown");
+  const cdBar  = document.getElementById("pairCountdownBar");
+  const cdFill = cdBar ? cdBar.querySelector("i") : null;
+  const fpBox  = document.getElementById("pairFingerprintBox");
+  const fpEl   = document.getElementById("pairFingerprint");
+  const CODE_TTL_MS = 120000, REFRESH_AT_MS = 20000;   // mint a fresh code with ~20s left
+  let rotTimer = null, rotExpiresAt = 0, rotRole = "user", rotBusy = false;
+
+  function stopRotation(){ if(rotTimer){ clearInterval(rotTimer); rotTimer = null; } }
+
+  async function mintOnce(){
+    if(rotBusy) return;                     // never overlap a slow request with a tick
+    rotBusy = true;
+    let r, d;
     try{
       r = await fetch(location.origin+"/api/pair-code",{method:"POST",
         headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
-        body:JSON.stringify({role})});
-    }catch{ actionFeedback(pairFb, false, "connection failed"); return; }
-    if(!r.ok){ actionFeedback(pairFb, false, "couldn't generate the code"); return; }   // e.g. multidevice turned off mid-session
-    let d; try{ d = await r.json(); }catch{ actionFeedback(pairFb, false, "invalid server response"); return; }
+        body:JSON.stringify({role:rotRole})});
+      if(!r.ok) throw 0;                     // e.g. multidevice turned off mid-session
+      d = await r.json();
+    }catch{ actionFeedback(pairFb, false, "couldn't generate the code"); stopRotation(); rotBusy = false; return; }
     codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
     codeBox.hidden = false;
+    rotExpiresAt = Date.now() + CODE_TTL_MS;
     // Out-of-band MitM defense (audit #1): show the live cert fingerprint so the operator
     // can verify it against the phone's browser certificate warning. Only shown when the
     // backend actually serves TLS and could read the cert (null on plain-HTTP loopback).
-    const fpBox = document.getElementById("pairFingerprintBox");
-    const fpEl  = document.getElementById("pairFingerprint");
     if(fpBox && fpEl){
       const fp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
       fpEl.textContent = fp;                 // textContent — server-provided fingerprint
       fpBox.hidden = !fp;
     }
+    if(cdBar) cdBar.hidden = false;
     actionFeedback(pairFb, true);
     refresh();                              // a fresh code may register a slot; keep list current
+    rotBusy = false;
+  }
+
+  function tick(){
+    // Visibility guard: the pairing tile lives inside the Settings overlay (hidden ->
+    // display:none -> offsetParent null). Stop the instant it isn't shown so no valid code
+    // lingers unattended.
+    const tile = document.getElementById("pairing");
+    if(!tile || tile.hidden || !tile.offsetParent){ stopRotation(); return; }
+    const leftMs = rotExpiresAt - Date.now();
+    const leftS  = Math.max(0, Math.ceil(leftMs/1000));
+    if(cdEl)   cdEl.textContent = leftS + "s";
+    if(cdFill) cdFill.style.width = Math.max(0, Math.min(100, (leftMs/CODE_TTL_MS)*100)) + "%";
+    if(leftMs <= REFRESH_AT_MS && !rotBusy) mintOnce();   // refresh before the current code dies
+  }
+
+  async function startRotation(role){
+    stopRotation();
+    rotRole = role;
+    await mintOnce();
+    rotTimer = setInterval(tick, 1000);
+  }
+
+  document.getElementById("pairForm").onsubmit = (e)=>{
+    e.preventDefault();
+    startRotation(e.target.role.value);     // (re)start rotation for the chosen device type
   };
 
   const copyBtn = document.getElementById("pairCopy");
