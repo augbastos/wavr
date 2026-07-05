@@ -20,6 +20,11 @@ ble = ["bleak>=0.22"]
 mcp = ["mcp>=1.2"]
 tls = ["cryptography>=42"]
 
+[project.scripts]
+# Lets an MCP host spawn the stdio bridge as `wavr-mcp` (no `-m`). Requires the [mcp]
+# extra to run; importing wavr.mcp itself stays dependency-free.
+wavr-mcp = "wavr.mcp_serve:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

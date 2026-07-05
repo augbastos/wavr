@@ -154,3 +154,230 @@ def test_provider_unknown_room_returns_none():
     provider = FusionStateProvider(FusionEngine(), HOUSE)
     assert provider.room_state("void") is None
     assert get_room_context(provider, "void") is None
+
+
+# --- REAL MCP server build (needs the [mcp] extra) --------------------------------
+# These exercise build_mcp_server / the stdio bridge with the SDK actually installed.
+# They are skipped cleanly on the no-extra CI leg. The first one is the regression lock
+# for the UnboundLocalError shadowing bug: before the fix, build_mcp_server raised at
+# tool-registration time, so merely BUILDING the server (R1) would have caught it.
+
+import anyio  # noqa: E402
+
+pytest.importorskip("mcp.server.fastmcp")
+
+_EXPECTED_TOOLS = [
+    "call_ha_service", "get_ha_entities", "get_house_map",
+    "get_room_context", "list_rooms",
+]
+
+
+def test_build_mcp_server_registers_all_tools_without_raising():
+    # Regression lock (would have caught the shadowing bug): the real server must build
+    # and expose exactly the 5 tools with byte-identical names (host wire contract).
+    server = build_mcp_server(FakeProvider([], {}, {}))
+    names = sorted(t.name for t in anyio.run(server.list_tools))
+    assert names == _EXPECTED_TOOLS
+
+
+def test_build_mcp_server_control_tool_registered_with_control_off():
+    # Even with control DEFAULT-OFF the write tool is registered (but inert) -> the tool
+    # surface is stable regardless of the control flag.
+    server = build_mcp_server(FakeProvider([], {}, {}), control_enabled=False)
+    names = {t.name for t in anyio.run(server.list_tools)}
+    assert "call_ha_service" in names
+
+
+# --- LocalApiStateProvider bridge (injected fake fetch, zero network) --------------
+
+def test_local_api_state_provider_bridges_running_app():
+    from wavr.mcp_serve import LocalApiStateProvider
+
+    state = {
+        "sala": {"room": "sala", "occupied": True, "confidence": 0.72,
+                 "vitals": {"breathing_bpm": 14, "heart_bpm": 68},
+                 "targets": [{"x": 1.2, "y": 3.4, "id": "p1"}],
+                 "sources": [{"modality": "mmwave", "presence": True, "confidence": 0.9}],
+                 "explanation": "mmwave: presente -> 72% ocupado"},
+        "quarto": {"room": "quarto", "occupied": False, "confidence": 0.1},
+    }
+    house = {"rooms": [{"name": "sala", "x": 0, "y": 0, "w": 4, "h": 3}]}
+
+    def fake_fetch(path):
+        if path == "/api/state":
+            import json
+            return json.dumps(state).encode()
+        if path == "/api/house":
+            import json
+            return json.dumps(house).encode()
+        raise AssertionError(f"unexpected path {path}")
+
+    provider = LocalApiStateProvider("http://127.0.0.1:8000", token="", fetch=fake_fetch)
+    assert provider.list_rooms() == ["quarto", "sala"]          # sorted
+    assert provider.room_state("sala")["occupied"] is True
+    assert provider.room_state("void") is None
+    assert provider.house_map() == house
+
+    # list_rooms tool over the bridge -> only room-level fields, no biometrics.
+    rooms = list_rooms(provider)
+    assert {r["room"] for r in rooms} == {"sala", "quarto"}
+
+    # Privacy invariant SURVIVES the bridge: get_room_context strips vitals/targets even
+    # though /api/state carried them over loopback (audit CRITICAL-1).
+    ctx = get_room_context(provider, "sala")
+    assert "vitals" not in ctx and "targets" not in ctx
+    assert ctx["room"] == "sala" and ctx["sources"][0]["modality"] == "mmwave"
+
+
+def test_local_api_state_provider_empty_state_is_safe():
+    from wavr.mcp_serve import LocalApiStateProvider
+    provider = LocalApiStateProvider("http://127.0.0.1:8000", fetch=lambda p: b"")
+    assert provider.list_rooms() == []
+    assert provider.room_state("sala") is None
+    assert provider.house_map() == {}
+
+
+def test_local_api_state_provider_sends_token_header():
+    from wavr.mcp_serve import LocalApiStateProvider
+    seen = {}
+
+    def fake_fetch(path):
+        return b"{}"
+
+    # Prove the token wiring: with a token set, _urllib_get would attach X-Wavr-Token.
+    # We can't hit the network, so assert the header construction directly.
+    provider = LocalApiStateProvider("http://127.0.0.1:8000", token="s3cret", fetch=fake_fetch)
+    import urllib.request
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = dict(req.headers)
+
+        class _R:
+            def __enter__(self_):
+                return self_
+
+            def __exit__(self_, *a):
+                return False
+
+            def read(self_):
+                return b"{}"
+        return _R()
+
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        # Use the real _urllib_get path (bypass the injected fetch) to check headers.
+        provider._urllib_get("/api/state")
+    finally:
+        urllib.request.urlopen = orig
+    # urllib title-cases header keys.
+    assert captured["headers"].get("X-wavr-token") == "s3cret"
+
+
+# --- mcp_serve.make_server wiring --------------------------------------------------
+
+class _FakeCfg:
+    """Just the attributes make_server touches."""
+    def __init__(self, **kw):
+        self.port = kw.get("port", 8000)
+        self.local_token = kw.get("local_token", "")
+        self.db_path = kw.get("db_path", ":memory:")
+        self.mcp_control = kw.get("mcp_control", False)
+        self.ha_allowed_services = kw.get("ha_allowed_services", frozenset())
+        self.ha_url = kw.get("ha_url", "")
+        self.ha_token = kw.get("ha_token", "")
+
+
+def test_make_server_wires_live_bridge_control_off(monkeypatch):
+    monkeypatch.delenv("WAVR_MCP_TARGET", raising=False)
+    from wavr import mcp_serve
+    server = mcp_serve.make_server(cfg=_FakeCfg(mcp_control=False, ha_url="", ha_token=""))
+    names = sorted(t.name for t in anyio.run(server.list_tools))
+    assert names == _EXPECTED_TOOLS
+    # HA unconfigured -> the read tool degrades to [].
+    from wavr.mcp import get_ha_entities
+    assert get_ha_entities(None) == []
+
+
+def test_make_server_accepts_loopback_target_override(monkeypatch):
+    # A loopback override (same box, different port) is fine -- the token stays on-box.
+    monkeypatch.setenv("WAVR_MCP_TARGET", "http://127.0.0.1:9999")
+    from wavr import mcp_serve
+    server = mcp_serve.make_server(cfg=_FakeCfg(mcp_control=False, ha_url="", ha_token=""))
+    names = sorted(t.name for t in anyio.run(server.list_tools))
+    assert names == _EXPECTED_TOOLS
+
+
+@pytest.mark.parametrize("target", [
+    "http://192.168.1.50:8000",   # LAN peer -> would ship the local token off-box
+    "https://evil.example.com",   # internet host
+    "http://10.0.0.5:8000",       # private-but-off-box
+])
+def test_make_server_refuses_non_loopback_target(monkeypatch, target):
+    # Fail-closed loopback guard: a non-loopback WAVR_MCP_TARGET must be refused BEFORE
+    # any provider is built, so the same-box local-API token is never sent off the box
+    # (loopback/stdio invariant). Operator-misconfig, not agent-reachable.
+    monkeypatch.setenv("WAVR_MCP_TARGET", target)
+    from wavr import mcp_serve
+    with pytest.raises(ValueError, match="loopback"):
+        mcp_serve.make_server(cfg=_FakeCfg(mcp_control=False, ha_url="", ha_token=""))
+
+
+def test_is_loopback_target_classifies_hosts():
+    from wavr.mcp_serve import _is_loopback_target
+    # loopback -> True
+    assert _is_loopback_target("http://127.0.0.1:8000")
+    assert _is_loopback_target("http://127.5.5.5:8000")   # all of 127.0.0.0/8
+    assert _is_loopback_target("http://localhost:8000")
+    assert _is_loopback_target("http://[::1]:8000")
+    # off-box / unparseable -> False (fail-closed)
+    assert not _is_loopback_target("http://192.168.1.50:8000")
+    assert not _is_loopback_target("https://example.com")
+    assert not _is_loopback_target("")
+    assert not _is_loopback_target("not a url")
+
+
+# --- REAL end-to-end connect (in-memory client <-> server) -------------------------
+
+def test_end_to_end_client_session_reads_live_rooms():
+    from mcp.shared.memory import create_connected_server_and_client_session as connect
+    from wavr.mcp_serve import LocalApiStateProvider
+
+    import json
+    state = {"sala": {"room": "sala", "occupied": True, "confidence": 0.8,
+                      "vitals": {"breathing_bpm": 12}, "targets": [{"x": 1, "y": 2}]}}
+
+    def fake_fetch(path):
+        if path == "/api/state":
+            return json.dumps(state).encode()
+        if path == "/api/house":
+            return b"{}"
+        raise AssertionError(path)
+
+    provider = LocalApiStateProvider("http://127.0.0.1:8000", fetch=fake_fetch)
+    server = build_mcp_server(provider, name="wavr", control_enabled=False)
+
+    async def go():
+        async with connect(server) as session:
+            tools = await session.list_tools()
+            assert sorted(t.name for t in tools.tools) == _EXPECTED_TOOLS
+
+            res = await session.call_tool("list_rooms", {})
+            assert res.isError is False
+            assert res.structuredContent == {"result": [
+                {"room": "sala", "occupied": True, "confidence": 0.8}]}
+
+            # get_room_context over the real MCP round-trip still strips biometrics.
+            ctx = await session.call_tool("get_room_context", {"room": "sala"})
+            payload = json.loads(ctx.content[0].text)
+            assert "vitals" not in payload and "targets" not in payload
+
+            # Control tool DEFAULT-OFF: refuses without erroring.
+            called = await session.call_tool(
+                "call_ha_service",
+                {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"})
+            body = json.loads(called.content[0].text)
+            assert body["ok"] is False and body["status"] == "control_disabled"
+
+    anyio.run(go)
