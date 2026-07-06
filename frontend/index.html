@@ -154,7 +154,10 @@
   .hero-line2{margin:4px 0 0;font-size:1rem;color:var(--dim);min-height:1.2em;
               font-variant-numeric:tabular-nums;}
   .inicio-grid{display:grid;gap:var(--gap);grid-template-columns:minmax(0,1fr);align-items:start;}
-  .map-home{order:-1;min-width:0;}
+  /* Landing = the rooms/live-state answer FIRST; the house map follows on the same Home
+     screen (order:0 keeps DOM order: rooms-col then map-home). Phone (759) + PC (1200)
+     already did this; base now matches so the map is never the first thing on any width. */
+  .map-home{order:0;min-width:0;}
   .gear-map-host{min-width:0;}
   .gear-map-host:empty{display:none;}
 
@@ -347,6 +350,12 @@
   .row:last-child{border-bottom:0;}
   .row .t{color:var(--dim);min-width:88px;}
   .row .r{text-transform:capitalize;min-width:80px;}
+  /* Item 3: event-timeline emphasis — "occupied" (someone present) reads with the reserved
+     accent, "empty" stays dim; confidence is a demoted secondary cue, not the headline. */
+  .row .st{font-weight:600;}
+  .row .st.enter{color:var(--accent);}
+  .row .st.leave{color:var(--dim);font-weight:400;}
+  .row .tl-conf{color:var(--dim);opacity:.8;margin-left:auto;}
   .timeline .empty{padding:12px 18px;}
 
   /* ---------------- Network ---------------- */
@@ -364,6 +373,10 @@
   .tag{flex-shrink:0;font-size:.7rem;padding:2px 9px;border-radius:999px;border:1px solid var(--line);}
   .tag.known{color:var(--accent);border-color:rgba(61,181,74,.4);}
   .tag.unknown{color:var(--warn);border-color:rgba(232,161,58,.45);}
+  /* Item 4: paired-device identity pill — reuses the badge family; green = confident,
+     consented, live-correlated identity (same reserved accent as "known"). */
+  .tag.paired{color:var(--accent);border-color:rgba(61,181,74,.4);background:rgba(61,181,74,.12);}
+  .dev-name-line .tag.paired{margin-left:8px;align-self:center;}
   .dev-name-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:0;}
   .dev-main.named{font-weight:600;}
   .dev-sub{color:var(--dim);}
@@ -613,6 +626,15 @@
   #statusSources{display:none;}
   .status-src-summary{font-size:.82rem;color:var(--dim);}
   .status-src-summary b{color:var(--text);font-variant-numeric:tabular-nums;}
+  /* Item 5: honest source-state colors — active=live (green, reserved), idle=configured
+     but not reporting (amber), off=disabled (dim). The hidden dot-list mirrors the same. */
+  .status-src-summary .src-seg{color:var(--dim);}
+  .status-src-summary .src-seg.on b{color:var(--accent);}
+  .status-src-summary .src-seg.idle b{color:var(--warn);}
+  .status-src-summary .src-seg.off b{color:var(--dim);}
+  .status-src-summary .src-note{display:block;margin-top:4px;color:var(--dim);font-size:.74rem;}
+  .status-src-row .h.st-idle{background:var(--warn);}
+  .status-src-row .h.st-off{background:var(--dim);}
   .status-version{color:var(--dim);font-size:.82rem;margin-bottom:10px;font-variant-numeric:tabular-nums;}
   .status-cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:10px;}
   .status-col h4{margin:0 0 6px;font-size:.72rem;color:var(--dim);font-weight:600;
@@ -2106,7 +2128,15 @@ function renderStatus(){
     sourcesEl.textContent = "";
     (Array.isArray(s.sources) ? s.sources : []).forEach(src=>{
       const row = document.createElement("div"); row.className = "status-src-row";
-      const dot = document.createElement("i"); dot.className = "h" + (src.active ? " active" : "");
+      // Item 5: honest per-source state. New backends send state:"active"|"idle"|"off"
+      // (active=producing, idle=configured but not currently reporting, off=disabled).
+      // Absent (old hub / demo) → st stays null and the row renders exactly as before:
+      // a grey dot, green only when src.active. The .active class still drives the shared
+      // active-count observer, so idle/off both correctly read as "not active".
+      const st = (src.state === "active" || src.state === "idle" || src.state === "off") ? src.state : null;
+      if(st) row.dataset.state = st;
+      const dot = document.createElement("i");
+      dot.className = "h" + (src.active ? " active" : "") + (st ? " st-" + st : "");
       const name = document.createElement("span"); name.textContent = MODALITY_LABEL[src.name] || src.name;
       row.appendChild(dot); row.appendChild(name);
       sourcesEl.appendChild(row);
@@ -2501,8 +2531,14 @@ function renderNetwork(){
       const main = document.createElement("span");
       // v2: device_type is the backend's fixed taxonomy → English label + confidence-honest cue
       const vendorType = (d.vendor || "unknown") + " · " + dtypeLabel(d.device_type);  // plain-text form (aria)
-      if(d.name){
-        main.className = "dev-main named"; main.textContent = d.name;    // textContent only — XSS-safe
+      // Item 4: a paired GREEN device carries a live-correlated friendly `label` (+ paired:true).
+      // Prefer an explicit user rename (d.name) first, then that label, else the vendor/type
+      // best-guess exactly as before. `label` is a DEVICE-PROVIDED name → UNTRUSTED: rendered
+      // with textContent only, never innerHTML. Absent label/paired → byte-identical to before.
+      const displayName = d.name || d.label || null;
+      const isPaired = !!(d.paired || d.label);
+      if(displayName){
+        main.className = "dev-main named"; main.textContent = displayName;    // textContent only — XSS-safe
         const sub = document.createElement("span"); sub.className = "dev-sub";
         sub.textContent = " · " + (d.vendor || "unknown") + " · ";
         sub.appendChild(dtypeLabelEl(d.device_type, d.type_confidence, d.known === false));
@@ -2511,6 +2547,12 @@ function renderNetwork(){
         main.className = "dev-main"; main.textContent = (d.vendor || "unknown") + " · ";
         main.appendChild(dtypeLabelEl(d.device_type, d.type_confidence, d.known === false));
         nameLine.appendChild(main);
+      }
+      if(isPaired){
+        const pill = document.createElement("span");
+        pill.className = "tag paired"; pill.textContent = "identified";   // textContent only — XSS-safe
+        pill.title = "paired device — live-correlated to this host";
+        nameLine.appendChild(pill);
       }
       left.appendChild(nameLine);
       // IP/MAC + last-seen line (compact, inline; first-seen lives in the row tooltip above).
@@ -4862,9 +4904,18 @@ function pushTimeline(rs){
   // createElement + textContent instead of innerHTML so it can never inject markup.
   const t = document.createElement("span"); t.className="t"; t.textContent = rs.ts.slice(11,19);
   const r = document.createElement("span"); r.className="r"; r.textContent = rs.room;
+  // Item 3: the backend now persists only occupancy TRANSITIONS, so each row is a real
+  // event, not a per-tick sample. Read it as one: "<Room> occupied / empty at <time>",
+  // with confidence demoted to a muted secondary cue. Uses only existing row fields.
   const status = document.createElement("span");
-  status.textContent = `${rs.occupied?"occupied":"empty"} (${Math.round(rs.confidence*100)}%)`;
+  status.className = "st " + (rs.occupied ? "enter" : "leave");
+  status.textContent = rs.occupied ? "occupied" : "empty";
   row.appendChild(t); row.appendChild(r); row.appendChild(status);
+  if(typeof rs.confidence === "number"){
+    const c = document.createElement("span"); c.className = "tl-conf";
+    c.textContent = Math.round(rs.confidence * 100) + "%";
+    row.appendChild(c);
+  }
   // Stage 3b (§7#4): tag the row for the History client-side filters — the room rides
   // data-room (set above); the kind derives from the frame's modalities (network-only = "rede").
   const kmods = (rs.sources || []).map(s => s && s.modality).filter(Boolean);
@@ -5195,7 +5246,16 @@ try {
     if(!ss) return null;
     var rows = ss.querySelectorAll(".status-src-row");
     if(!rows.length) return null;
-    return { act: ss.querySelectorAll(".h.active").length, total: rows.length };
+    // Item 5: idle/off counts + hasState come from the per-row data-state stamp the
+    // renderStatus() writes only on new backends — absent it, hasState is false and every
+    // existing caller still reads act/total exactly as before.
+    return {
+      act: ss.querySelectorAll(".h.active").length,
+      total: rows.length,
+      idle: ss.querySelectorAll('.status-src-row[data-state="idle"]').length,
+      off: ss.querySelectorAll('.status-src-row[data-state="off"]').length,
+      hasState: !!ss.querySelector(".status-src-row[data-state]")
+    };
   };
   if(typeof MODE !== "undefined" && isAdmin()){
     var statusInternetEl = document.getElementById("statusInternet");
@@ -6628,10 +6688,30 @@ try {
       var c = window.__wavrCountActiveSources ? window.__wavrCountActiveSources() : null;
       if(!c) return;
       sum.textContent = "";
-      var b = document.createElement("b");
-      b.textContent = c.act + "/" + c.total;
-      sum.appendChild(b);
-      sum.appendChild(document.createTextNode(" sources active · "));
+      if(c.hasState){
+        // Item 5: honest breakdown — active (producing) · idle (configured, not currently
+        // reporting) · off (turned off). Sources not present at all aren't listed here; the
+        // note below states that absence honestly (= not configured / no hardware).
+        var seg = function(n, word, cls){
+          var s = document.createElement("span"); s.className = "src-seg " + cls;
+          var bb = document.createElement("b"); bb.textContent = n;
+          s.appendChild(bb); s.appendChild(document.createTextNode(" " + word));
+          return s;
+        };
+        var idleSeg = seg(c.idle, "idle", "idle");
+        idleSeg.title = "configured but not currently reporting — could be starting or stalled (not necessarily an error)";
+        sum.appendChild(seg(c.act, "active", "on"));
+        sum.appendChild(document.createTextNode(" · "));
+        sum.appendChild(idleSeg);
+        sum.appendChild(document.createTextNode(" · "));
+        sum.appendChild(seg(c.off, "off", "off"));
+        sum.appendChild(document.createTextNode(" · "));
+      } else {
+        var b = document.createElement("b");
+        b.textContent = c.act + "/" + c.total;
+        sum.appendChild(b);
+        sum.appendChild(document.createTextNode(" sources active · "));
+      }
       var link = elc("button", "linklike", "view in Devices");
       link.type = "button";
       link.onclick = function(){
@@ -6639,6 +6719,10 @@ try {
         setDsub("ativos");
       };
       sum.appendChild(link);
+      if(c.hasState){
+        var note = elc("span", "src-note", "Sources not listed here aren't configured (no hardware).");
+        sum.appendChild(note);
+      }
     }
     new MutationObserver(upd).observe(ss, { childList: true, subtree: true });
     upd();
@@ -7321,7 +7405,8 @@ try {
   // v2 device identity: evidence-signal display names (mirrors backend recog precedence).
   var SIGNAL_LABEL = { user_pin:"your pin", upnp:"UPnP", bonjour:"Bonjour / mDNS", snmp:"SNMP",
     dhcp:"DHCP", hostname:"hostname", port_hint:"open ports", oui:"MAC vendor (OUI)",
-    mobile_vendor:"mobile-heavy vendor", random_mac:"randomized MAC" };
+    mobile_vendor:"mobile-heavy vendor", random_mac:"randomized MAC",
+    paired:"paired device" };   // item 4: the prepended live-correlation signal reads naturally
   // Session-side pin memory: a fresh pin reads back as type_confidence:"high" on the very
   // next GET, but the `user_pin` evidence row only appears after the next scan re-fuses —
   // this map keeps the "pinned" marker honest in that gap (and hides it right after a clear).
@@ -7332,7 +7417,10 @@ try {
   }
   function buildDevDetail(d){
     var box = elc("div", "dev-detail");
-    box.appendChild(ddRow("name", d.name || "—"));
+    // Item 4: prefer the paired live-correlated label as the identity when the user hasn't
+    // set an explicit name; ddRow renders via textContent (elc), so the untrusted label is
+    // escaped. Absent name+label → "—" exactly as before.
+    box.appendChild(ddRow("name", d.name || d.label || "—"));
     var masked = (typeof maskMac === "function") ? maskMac(d.mac) : String(d.mac || "—");
     var revealed = false;
     var macRow = elc("div", "dd-row");
