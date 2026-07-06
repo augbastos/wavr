@@ -119,8 +119,14 @@ class PhoneSensorSource:
                 # recording presence if it is now red, so a just-withdrawn device leaves no
                 # lingering vote. (The chokepoint already drops red at ingest; this closes
                 # the race.) No resolver => record as before.
-                if not (self._get_consent is not None
-                        and self._get_consent(reading.device_id) == "red"):
+                # FAIL-CLOSED BY WHITELIST: record presence ONLY on a positive green/yellow
+                # tier. red AND unknown/None/garbage are treated as ABSENT -> no lingering
+                # vote (the prior check only excluded an exact "red", so an unknown/None/
+                # garbage tier still recorded -- fail-open). No resolver (legacy path) =>
+                # record as before.
+                if self._get_consent is None:
+                    self._last_seen[reading.device_id] = now
+                elif self._get_consent(reading.device_id) in ("green", "yellow"):
                     self._last_seen[reading.device_id] = now
             self._prune(now)
             present = bool(self._last_seen)

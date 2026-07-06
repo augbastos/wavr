@@ -1314,17 +1314,26 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # CONSENT TIER gate (privacy centerpiece), read off the row verify() already
             # fetched (no extra query). Purely SUBTRACTIVE -- it only ever DROPS or REDUCES,
             # never raises trust. Rate-limit stays BEFORE this so a red flood still 429s.
-            #   red    -> drop server-side; the reading NEVER reaches the hub. Return HTTP 200
-            #             {accepted:False}: a 4xx would trip the on-device shim's token-wipe
-            #             and force an un-pair, which is NOT what a privacy withdrawal means.
+            #
+            # FAIL-CLOSED BY WHITELIST (red-team hardening): ONLY the two explicit positive
+            # tiers ingest; EVERYTHING else DROPS -- red, and any unknown/NULL/uppercase/
+            # garbage/future string that slipped past validation or a direct-SQL write. The
+            # prior gate was fail-OPEN (anything != "red"/"yellow", incl. 'purple', took the
+            # FULL-ingest branch); a non-whitelisted tier must NEVER reach the hub.
+            #   green  -> ingest the full reading, as today.
             #   yellow -> ingest a data-minimized copy (reduced(): rssi/ssid/bssid=None,
             #             sensors={}) -> anonymous presence vote, no location/signal leak.
-            #   green  -> ingest the full reading, as today.
-            if device.consent == "red":
-                return {"accepted": False, "device_id": device.device_id, "consent": "red"}
-            reading = TelemetryReading.from_payload(payload, device.device_id)
-            if device.consent == "yellow":
-                reading = reading.reduced()
+            #   else   -> red OR unknown/garbage: DROP server-side; the reading NEVER reaches
+            #             the hub. Return HTTP 200 {accepted:False}: a 4xx would trip the
+            #             on-device shim's token-wipe and force an un-pair, which is NOT what a
+            #             privacy withdrawal means. Echo the offending tier back for the caller.
+            if device.consent == "green":
+                reading = TelemetryReading.from_payload(payload, device.device_id)
+            elif device.consent == "yellow":
+                reading = TelemetryReading.from_payload(payload, device.device_id).reduced()
+            else:
+                return {"accepted": False, "device_id": device.device_id,
+                        "consent": device.consent}
             request.app.state.telemetry_hub.offer(reading)
             return {"accepted": True, "device_id": device.device_id}
 

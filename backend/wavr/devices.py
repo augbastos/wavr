@@ -39,6 +39,12 @@ VALID_ROLES = frozenset({"central", "user", "sensor"})
 # Unlike `role` (which existed from schema v1), `consent` is a NEW column, so an existing
 # wavr.db needs the additive ALTER migration in DeviceStore.__init__ below -- CREATE TABLE
 # IF NOT EXISTS is a no-op on a table that already exists and would silently skip it.
+#
+# DEFENSE-IN-DEPTH: the fresh-db _SCHEMA below adds a CHECK (consent IN green/yellow/red) so
+# a direct-SQL garbage write is rejected at the DB layer too. This is a SECOND line only:
+# the ALTER path (existing dbs) cannot add a CHECK without a full table rebuild, which we
+# deliberately do NOT do -- the app-layer FAIL-CLOSED WHITELIST gate (app.py telemetry +
+# phone.py consume-side) is the load-bearing protection for BOTH fresh and migrated dbs.
 VALID_CONSENT = frozenset({"green", "yellow", "red"})
 
 _SCHEMA = """
@@ -51,6 +57,7 @@ CREATE TABLE IF NOT EXISTS devices (
     last_seen_ts TEXT,
     revoked      INTEGER NOT NULL DEFAULT 0,
     consent      TEXT    NOT NULL DEFAULT 'green'
+                 CHECK (consent IN ('green', 'yellow', 'red'))
 );
 """
 
@@ -146,22 +153,32 @@ class DeviceStore:
         ts = self._now()
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, revoked, consent FROM devices"
-                " WHERE token_hash = ?",
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, consent"
+                " FROM devices WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()
             if row is None or row["revoked"]:
                 return None
-            self._conn.execute(
-                "UPDATE devices SET last_seen_ts = ? WHERE device_id = ?",
-                (ts, row["device_id"]),
-            )
-            self._conn.commit()
+            # GDPR-red completeness (appsec): a withdrawn (red) device that keeps POSTing must
+            # NOT advance its "last contacted" timestamp -- otherwise the central GET
+            # /api/devices exposes a live presence oracle for a device that opted OUT of being
+            # tracked. Skip the last_seen UPDATE for red (freeze it at the last non-red
+            # contact); green/yellow update as before. The consent-gate in app.py already
+            # drops/reduces the reading itself -- this closes the residual metadata channel.
+            if row["consent"] == "red":
+                last_seen = row["last_seen_ts"]
+            else:
+                self._conn.execute(
+                    "UPDATE devices SET last_seen_ts = ? WHERE device_id = ?",
+                    (ts, row["device_id"]),
+                )
+                self._conn.commit()
+                last_seen = ts
         # consent is read off this SAME already-fetched row -> the telemetry hot path
         # (verify -> consent gate) costs no extra query.
         return Device(
             device_id=row["device_id"], name=row["name"], role=row["role"],
-            created_ts=row["created_ts"], last_seen_ts=ts, revoked=False,
+            created_ts=row["created_ts"], last_seen_ts=last_seen, revoked=False,
             consent=row["consent"],
         )
 

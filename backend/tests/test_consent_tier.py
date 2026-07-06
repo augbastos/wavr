@@ -102,6 +102,21 @@ def _reading(device_id, ts=None):
     return TelemetryReading(device_id=device_id, ts=ts.isoformat())
 
 
+def _inject_consent(db_path, device_id, value):
+    """Write a raw consent value straight into the devices row, BYPASSING both the app
+    (/api/consent validates against VALID_CONSENT) and the fresh-db CHECK constraint
+    (PRAGMA ignore_check_constraints=ON). Simulates a garbage tier that reached the row
+    via an existing/migrated db (no CHECK) or a direct-SQL write -- the exact precondition
+    the fail-closed app-layer gate must survive."""
+    conn = sqlite3.connect(db_path)          # default 5s busy timeout absorbs any blip
+    try:
+        conn.execute("PRAGMA ignore_check_constraints=ON")
+        conn.execute("UPDATE devices SET consent=? WHERE device_id=?", (value, device_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # --- 1: RED dropped server-side ----------------------------------------------------
 
 def test_1_red_dropped_server_side(ctx):
@@ -436,3 +451,109 @@ def test_plus_consent_migration_is_idempotent(tmp_path):
     store2 = DeviceStore(path)
     assert store2.get_consent("d1") == "yellow"
     store2.close()
+
+
+# --- HARDENING 11: garbage/unknown tier FAILS CLOSED at the app gate (red-team PoC A) --
+
+@pytest.mark.parametrize("garbage", ["purple", "", "GREEN", "future"])
+def test_11_garbage_tier_fails_closed(ctx, garbage):
+    """Red-team PoC Case A: any tier that is NOT exactly green/yellow -- 'purple' (the PoC
+    payload), an empty string (row-injected value closest to NULL that NOT NULL still
+    allows), an UPPERCASE near-miss, or a future string -- must DROP, never ingest. The
+    prior gate was fail-OPEN: anything != red/yellow took the FULL rssi/ssid/bssid branch."""
+    peer, auth, device_id = _pair(ctx.app)
+    hub = ctx.app.state.telemetry_hub
+    assert hub.qsize() == 0
+
+    _inject_consent(ctx.db_path, device_id, garbage)     # bypasses app + DB CHECK
+    rp = peer.post("/api/telemetry", json=_sample_payload(), headers=auth)
+    assert rp.status_code == 200                          # never 4xx (no forced un-pair)
+    assert rp.json() == {"accepted": False, "device_id": device_id, "consent": garbage}
+    assert hub.qsize() == 0                               # DROPPED -- the full reading never enqueued
+
+
+# --- HARDENING 12: consume-side is fail-closed by whitelist (None/garbage not recorded) --
+
+@pytest.mark.parametrize("tier", [None, "purple", "GREEN", "", "future"])
+async def test_12_nonwhitelisted_consent_not_recorded_at_consume(tier):
+    """phone.py consume-side records _last_seen ONLY on a positive green/yellow. None (an
+    unknown/deleted device -> get_consent returns None) plus any garbage/uppercase/future
+    string is treated as ABSENT -- no lingering vote, not named. Covers the 'None if
+    reachable' branch at the layer where None IS reachable (unknown-device resolver)."""
+    clock = _Clock()
+    consent = {} if tier is None else {"devA": tier}     # missing key -> .get returns None
+    src = PhoneSensorSource(_FakeHub([_reading("devA")]),
+                            get_label=lambda d: "phoneA", get_consent=consent.get, now_fn=clock)
+    agen = src.events()
+    ev = await agen.__anext__()
+    await agen.aclose()
+    assert ev.presence is False and ev.confidence == 0.0  # non-whitelisted -> no vote
+    assert src._last_seen == {}                           # nothing recorded
+    assert src.whos_home() == []                          # not named
+
+
+# --- HARDENING 13: admin goes dark -- a CENTRAL red device drops telemetry, KEEPS its role -
+
+def test_13_central_role_red_drops_telemetry_but_keeps_role(ctx):
+    """Consent and role are ORTHOGONAL axes. A central-role device set to RED pauses its
+    participation (telemetry dropped) but KEEPS role=='central' and a valid token: verify()
+    still authenticates it as central and it can still reach a central-only read route."""
+    peer, auth, device_id = _pair(ctx.app, "central")
+    token = auth["Authorization"].split(" ", 1)[1]
+    hub = ctx.app.state.telemetry_hub
+
+    # green control: telemetry accepted (1 on the hub) and a central-only read works.
+    assert peer.post("/api/telemetry", json=_sample_payload(),
+                     headers=auth).json()["accepted"] is True
+    assert hub.qsize() == 1
+    assert peer.get("/api/devices", headers=auth).status_code == 200
+
+    # withdraw to RED: participation paused -> the telemetry POST is DROPPED.
+    assert peer.post("/api/consent", json={"level": "red"}, headers=auth).status_code == 200
+    rp = peer.post("/api/telemetry", json=_sample_payload(), headers=auth)
+    assert rp.json() == {"accepted": False, "device_id": device_id, "consent": "red"}
+    assert hub.qsize() == 1                               # still just the green one; red dropped
+
+    # ROLE PERSISTS + token STILL AUTHENTICATES (get()/verify() over the shared db file).
+    store = DeviceStore(ctx.db_path)
+    try:
+        assert store.get(device_id).role == "central"    # role untouched by the consent flip
+        v = store.verify(token)
+        assert v is not None and v.role == "central"      # token still valid -> authenticates
+        assert v.consent == "red"                         # both axes coexist on one row
+    finally:
+        store.close()
+    # ...and via the real HTTP contract: the red central can STILL reach /api/devices
+    # (a central-only read; a sensor is 403 there) -> the token authorizes as central.
+    listing = peer.get("/api/devices", headers=auth)
+    assert listing.status_code == 200
+    dev = next(d for d in listing.json()["devices"] if d["device_id"] == device_id)
+    assert dev["role"] == "central" and dev["consent"] == "red"
+
+
+# --- HARDENING 14: last_seen_ts is FROZEN on red (no advancing presence oracle) ---------
+
+def test_14_last_seen_frozen_on_red(ctx):
+    """GDPR-red completeness: a withdrawn (red) device that keeps POSTing must NOT advance
+    its last_seen_ts -- otherwise GET /api/devices leaks a live 'last contacted' oracle for
+    a device that opted out of tracking. A green device's last_seen DOES advance (control)."""
+    peer, auth, device_id = _pair(ctx.app)
+    store = DeviceStore(ctx.db_path)
+    try:
+        # CONTROL: green telemetry advances last_seen_ts (NULL after pairing -> a stamp).
+        assert store.get(device_id).last_seen_ts is None            # never contacted yet
+        assert peer.post("/api/telemetry", json=_sample_payload(),
+                         headers=auth).json()["accepted"] is True
+        assert store.get(device_id).last_seen_ts is not None        # green advanced it
+
+        # Withdraw to red (this last green-era verify records the withdrawal contact)...
+        assert peer.post("/api/consent", json={"level": "red"},
+                         headers=auth).status_code == 200
+        before = store.get(device_id).last_seen_ts
+        assert before is not None
+        # ...then a RED POST must NOT advance last_seen_ts -> the oracle is frozen.
+        assert peer.post("/api/telemetry", json=_sample_payload(),
+                         headers=auth).json()["accepted"] is False
+        assert store.get(device_id).last_seen_ts == before          # FROZEN on red
+    finally:
+        store.close()
