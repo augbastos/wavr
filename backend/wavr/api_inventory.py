@@ -35,20 +35,31 @@ load-bearing access control, same as before.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Body, HTTPException
 
 from wavr.device_meta import DeviceMeta, normalize_mac
 from wavr.netinventory_service import NetworkInventoryService
 
 
-def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
+def _device_view(d, device_meta: DeviceMeta | None = None,
+                 bound: dict[str, str] | None = None) -> dict:
     """Trim a Device to the fields the dashboard needs, merged with persisted
     metadata. `risks`/`open_ports`/`make`/`model`/`os`/`sources` are included
     only when populated -- i.e. only when the opt-in port pass or a richer
     recog signal produced them. A persisted user type-pin overrides
     device_type immediately (even between scans). `is_gateway` is included
     only when True and `latency_ms` only when the opt-in ping pass measured
-    one (both additive -- every existing field unchanged)."""
+    one (both additive -- every existing field unchanged).
+
+    `bound` (item 4) maps ip -> friendly label for hosts the consent-gated live
+    IP-correlation resolver named THIS view (green + fresh + unambiguous +
+    MAC-consistent, all re-checked at view time). When this device's IP is in it,
+    the view gains `label` + `paired=True` + a prepended `paired` evidence source,
+    and its device_type becomes "phone" -- but ONLY when the owner has NOT pinned a
+    type for this host: `paired` is the LABEL authority (high), a user type-pin
+    stays the top device_type authority and is never overridden."""
     view = {
         "mac": d.mac,
         "ip": d.ip,
@@ -77,24 +88,51 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     view["name"] = meta["name"] if meta else None
     view["first_seen"] = meta["first_seen"] if meta else None
     view["last_seen"] = meta["last_seen"] if meta else None
+    has_type_pin = bool(meta and meta.get("device_type"))
     # The user's pin wins instantly -- the scan loop folds it in on the next
     # pass anyway (highest recog precedence), this just closes the gap between
     # PUT /api/inventory/type and the next scan.
-    if meta and meta.get("device_type"):
+    if has_type_pin:
         view["device_type"] = meta["device_type"]
         view["type_confidence"] = "high"
+    # LIVE IP-correlation overlay (item 4). Parallel to the user-pin instant override
+    # above, and re-checked at THIS view time (the GDPR-red backstop: a silently-withdrawn
+    # device that simply stopped POSTing is already gone from `bound`). `paired` is the
+    # LABEL authority (high); it sets device_type "phone" ONLY when no user type-pin exists
+    # -- an explicit owner pin is NEVER overridden.
+    label = bound.get(d.ip) if (bound and d.ip) else None
+    if label:
+        view["label"] = label
+        view["paired"] = True
+        paired_src = {"signal": "paired",
+                      "value": f"paired device -- live-correlated from {d.ip}"}
+        view["sources"] = [paired_src] + view.get("sources", [])
+        if not has_type_pin:
+            view["device_type"] = "phone"
+            view["type_confidence"] = "high"
     return view
 
 
 def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
                             name_deps=None, dhcp_monitor=None,
-                            gateway_monitor=None) -> APIRouter:
+                            gateway_monitor=None, host_binder=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
     async def inventory():
-        return {"devices": [_device_view(d, device_meta) for d in service.latest_inventory()]}
+        devices = service.latest_inventory()
+        # LIVE IP-correlation (item 4): resolve the paired-device labels for THIS view
+        # against the SAME devices being rendered, so MAC-consistency is checked against the
+        # host currently at each IP. Consent (green) is re-checked here, inside resolve, via
+        # the binder's injected get_consent -- fail-closed, so a withdrawn/yellow/red or
+        # ambiguous host yields no name. None binder (single-device build) -> empty overlay.
+        bound: dict[str, str] = {}
+        if host_binder is not None:
+            mac_of_ip = {d.ip: d.mac for d in devices if d.ip}
+            bound = host_binder.resolve(datetime.now(timezone.utc),
+                                        lambda ip: mac_of_ip.get(ip))
+        return {"devices": [_device_view(d, device_meta, bound) for d in devices]}
 
     @router.get("/api/alerts")
     async def alerts():

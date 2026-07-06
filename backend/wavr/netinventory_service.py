@@ -163,7 +163,7 @@ class NetworkInventoryService:
                  hostname_resolve_enabled: bool = False, hostname_resolver=None,
                  latency_enabled: bool = False, ping=None,
                  gateway_detect_enabled: bool = False, gateway_detector=None,
-                 gateway_monitor=None, ha_store=None):
+                 gateway_monitor=None, ha_store=None, is_bound=None):
         self._known = _norm_macs(known_macs)
         self._scan = scan
         self._interval = interval
@@ -218,6 +218,16 @@ class NetworkInventoryService:
         # takes effect on the very next scan; tolerant -- a store error must never
         # break scanning.
         self._ha_store = ha_store
+        # LIVE IP-correlation rogue-suppression (item 4, constraint 7) -- OPTIONAL
+        # `(ip_or_mac) -> bool` predicate that reuses the PairedHostBinder's resolve
+        # gate (green + fresh + unambiguous + MAC-consistent). When it returns True for a
+        # host, that host is a NAMED paired green device, so its rogue-device alert is
+        # suppressed -- scoped to the EXACT bound (ip, mac): the predicate checks the live
+        # MAC at the IP, so an unpaired attacker at a different MAC still alerts, and no
+        # subnet/class is ever blanket-suppressed. None -> no suppression (unchanged).
+        # Tolerant, same rule as on_rogue/device_meta: a raising predicate must never break
+        # scanning -- it fails OPEN to alerting (never silently suppresses).
+        self._is_bound = is_bound
         # NetBIOS/SNMP (active, targeted -- see module docstring for the
         # shared-subnet "known-only" mitigation and no-log-community rule).
         self._netbios_enabled = netbios_enabled
@@ -527,10 +537,29 @@ class NetworkInventoryService:
             except Exception:
                 _LOG.warning("device_meta.seen failed for %s", d.mac, exc_info=True)
 
+    def _host_is_bound(self, ip: str | None) -> bool:
+        """True when the live IP-correlation predicate names this host (a paired green
+        device on its exact bound MAC). Tolerant: no predicate, no IP, or a raising
+        predicate -> False (fail OPEN to alerting -- never silently suppress a rogue)."""
+        if self._is_bound is None or not ip:
+            return False
+        try:
+            return bool(self._is_bound(ip))
+        except Exception:
+            _LOG.warning("is_bound predicate failed", exc_info=True)
+            return False
+
     def _record_rogues(self, devices) -> None:
         ts = datetime.now(timezone.utc).isoformat()
         for d in devices:
             if d.known or d.mac in self._alerted:   # allowlisted or already seen
+                continue
+            # LIVE IP-correlation suppression (item 4, constraint 7): a NAMED paired green
+            # device is not a rogue. Suppress ONLY when the exact-MAC naming predicate holds
+            # for THIS host's IP (checked against the live MAC at that IP), never a blanket
+            # "any binding exists". Not added to `_alerted`, so if the binding later lapses
+            # (consent withdrawn / device gone) the host alerts on the next scan.
+            if self._host_is_bound(d.ip):
                 continue
             self._alerted.add(d.mac)
             # Severity on wavr.alert_severity's ONE ladder: a randomized

@@ -277,7 +277,7 @@ def test_sources_have_shape_and_descend_by_weight():
 
 def test_to_dict_roundtrip():
     d = recognize({"vendor": "Sonos"}).to_dict()
-    assert set(d) == {"device_type", "confidence", "make", "model", "os", "sources"}
+    assert set(d) == {"device_type", "confidence", "make", "model", "os", "label", "sources"}
     assert isinstance(d["sources"], list)
 
 

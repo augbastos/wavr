@@ -9,6 +9,7 @@ import math
 import re
 import sqlite3
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -61,6 +62,7 @@ from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore, VALID_CONSENT
 from wavr.pairing import PairingManager
 from wavr.telemetry import TelemetryHub, TelemetryReading, TelemetryPayload, PerDeviceRateLimiter
+from wavr.host_binding import PairedHostBinder
 from wavr.auth import authorize, parse_bearer, can_change_state, in_subnet
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.local_token import resolve_local_token
@@ -328,6 +330,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _notify else None,
         )
 
+    def _is_bound(ip_or_mac: str) -> bool:
+        # Rogue-suppression predicate (item 4, constraint 7) == the naming predicate.
+        # Resolve the LIVE bindings against THIS scan's inventory (latest_inventory() is
+        # already set to the current scan before _record_rogues runs) so MAC-consistency
+        # is checked against the host CURRENTLY at each IP -- suppression is thus scoped to
+        # the exact bound (ip, mac), never "any binding exists" and never a subnet. Any
+        # error -> False (fail-open to ALERTING, never silently suppress). `_host_binder`
+        # and `_inventory` are resolved at CALL time (both assigned before any scan runs).
+        try:
+            inv = _inventory.latest_inventory()
+            mac_of_ip = {d.ip: d.mac for d in inv if d.ip}
+            bound = _host_binder.resolve(datetime.now(timezone.utc),
+                                         lambda ip: mac_of_ip.get(ip))
+            return ip_or_mac in bound
+        except Exception:
+            return False
+
     # Wavr Net: defensive LAN inventory + rogue-device alerts (own-network only,
     # loopback-read). Runs its own periodic scan loop; port-awareness stays off
     # unless WAVR_NET_PORTSCAN (ADR-0004). `on_rogue` fires the opt-in ntfy alert on
@@ -372,7 +391,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         gateway_monitor=_gateway_monitor,
         # HA-import identity (A4.1): each scan folds the user-imported HA
         # registry back in as the recog `ha` signal (medium-capped, A4.0).
-        ha_store=_ha_import_store)
+        ha_store=_ha_import_store,
+        # LIVE IP-correlation rogue-suppression (item 4, constraint 7): suppress the
+        # rogue-device alert for a host ONLY when it satisfies the EXACT naming predicate
+        # (green+fresh+unambiguous+MAC-consistent), scoped to that host's bound MAC via the
+        # live-inventory resolve above -- never "suppress while any binding exists", never a
+        # subnet/class; an unpaired attacker at a different MAC still alerts.
+        is_bound=_is_bound)
 
     # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
     # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
@@ -448,6 +473,32 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # route offers onto; attached to app.state further down. Built even when multidevice is
     # off (inert; the /api/telemetry route itself is multidevice-gated).
     _telemetry_hub = TelemetryHub()
+
+    # LIVE IP-correlation binder (item 4, privacy centerpiece): in-memory device_id ->
+    # (ip, mac, last_seen), NEVER persisted. The consent-gated telemetry chokepoint records
+    # a GREEN device's live (source_ip, current MAC) and drops yellow/red; the Wavr Net
+    # view-time resolver (api_inventory) reads it to NAME a paired device on its host, and
+    # the rogue-suppression predicate (_is_bound above) reuses its resolve. get_label/
+    # get_consent are late-bound to `_devices` so the binder opens no DB of its own and stays
+    # inert when multidevice is off (get_consent None -> fail-closed, resolve yields nothing).
+    _host_binder = PairedHostBinder(
+        get_label=(lambda did: _devices.get_label(did)) if _devices is not None else None,
+        get_consent=(lambda did: _devices.get_consent(did)) if _devices is not None else None)
+
+    def _mac_of_ip(ip: str | None) -> str | None:
+        # The current MAC observed at `ip` by the running LAN inventory (ARP-based, zero
+        # egress). Captured at telemetry-record time so the view-time resolver can enforce
+        # MAC-consistency. None when net_inventory is off or no host matches -- honest, never
+        # guessed; a None recorded MAC then withholds the name (fail-closed).
+        if not ip:
+            return None
+        try:
+            for d in _inventory.latest_inventory():
+                if d.ip and _same_ip(d.ip, ip):
+                    return d.mac
+        except Exception:
+            return None
+        return None
 
     manager = SourceManager(_ingest)
     for name, factory, enabled in (sources if sources is not None else _default_sources(cfg)):
@@ -582,6 +633,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # override (a stolen sensor token flooding telemetry trips the limiter -> 429). Built
     # even when multidevice is off (inert objects; the /api/telemetry route itself is gated).
     app.state.telemetry_hub = _telemetry_hub
+    # LIVE IP-correlation binder on app.state (item 4): the telemetry handler records/drops
+    # onto it and tests inspect it. One instance per app, shared with the inventory router.
+    app.state.host_binder = _host_binder
     app.state.telemetry_limiter = PerDeviceRateLimiter(
         capacity=cfg.telemetry_rate_capacity, refill_per_sec=cfg.telemetry_rate_refill)
     # Separate per-device bucket for POST /api/consent, so a telemetry flood can't starve a
@@ -726,7 +780,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # other include_router calls.
     app.include_router(build_inventory_router(
         _inventory, device_meta=_device_meta, name_deps=[Depends(require_local)],
-        dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor))
+        dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
+        host_binder=_host_binder))
 
     @app.get("/api/history")
     async def history(limit: int = 200):
@@ -1327,11 +1382,25 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             #             the hub. Return HTTP 200 {accepted:False}: a 4xx would trip the
             #             on-device shim's token-wipe and force an un-pair, which is NOT what a
             #             privacy withdrawal means. Echo the offending tier back for the caller.
+            #
+            # LIVE IP-CORRELATION (item 4): the reading's SOURCE IP is the real TCP peer
+            # (request.client.host) -- NEVER an X-Forwarded-For header (a client-set value a
+            # phone could spoof to bind another host's IP). It is used ONLY to feed the
+            # in-memory PairedHostBinder: it is NOT placed on the TelemetryReading, NOT on any
+            # SensingEvent, and is NEVER logged. green RECORDS its (source_ip, current MAC);
+            # yellow (anonymous) and red/unknown both DROP the binding so a yellow device votes
+            # presence but is never NAMED on its host and a red one evaporates in RAM at once.
+            source_ip = request.client.host if request.client else None
+            binder = request.app.state.host_binder
             if device.consent == "green":
                 reading = TelemetryReading.from_payload(payload, device.device_id)
+                binder.record(device.device_id, source_ip, _mac_of_ip(source_ip),
+                              datetime.now(timezone.utc))
             elif device.consent == "yellow":
                 reading = TelemetryReading.from_payload(payload, device.device_id).reduced()
+                binder.drop(device.device_id)
             else:
+                binder.drop(device.device_id)
                 return {"accepted": False, "device_id": device.device_id,
                         "consent": device.consent}
             request.app.state.telemetry_hub.offer(reading)

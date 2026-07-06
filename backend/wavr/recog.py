@@ -68,14 +68,17 @@ their key, no engine change needed):
                device self-reports, so they must not forge "high" without a 2nd
                independent (non-self_report) family agreeing.
 """
-# CONSENT FORWARD-GUARD (per-device tier, privacy centerpiece): recog has NO paired-phone
-# signal today and this module is deliberately UNCHANGED by the consent work. If a
-# paired-phone recognition signal is EVER added later (blueprint item 4 -- a phone
-# contributing to device *identity*, not just coarse presence), it MUST consult the
-# device's consent tier (DeviceStore.get_consent) and PAUSE that signal at `red` (binding
-# paused), the same subtractive rule the telemetry chokepoint and PhoneSensorSource apply.
-# Do NOT build item 4 here; this is only the guardrail so a future author cannot wire a
-# phone into identity while bypassing consent.
+# CONSENT FORWARD-GUARD (per-device tier, privacy centerpiece): the `paired` signal
+# (blueprint item 4 -- a phone contributing to device *identity*, not just coarse presence)
+# IS now implemented here: it carries a `label` and a "phone" device_type, its LABEL wins
+# but its device_type NEVER outranks a user_pin (see `_WEIGHTS`/`_FAMILY` below and the
+# `paired` candidate in `_candidates`). CONSENT IS ENFORCED STRICTLY UPSTREAM, NOT here:
+# the ONLY producer that ever hands recog a `paired` signal is the consent-gated view-time
+# resolver (wavr.host_binding.PairedHostBinder.resolve via wavr.api_inventory), which emits
+# a binding ONLY while the device is green (re-checked at read time), fresh, unambiguous and
+# MAC-consistent. So a yellow/red/withdrawn device never reaches this signal at all -- recog
+# stays a pure precedence function and does not (and must not) re-check consent itself. A
+# future SECOND producer of a `paired` signal MUST route through that same gated resolver.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -97,6 +100,13 @@ from wavr.data.ports import port_type_hint
 # MAC prefix.
 _WEIGHTS: dict[str, float] = {
     "user_pin": 1.0,
+    # `paired` (item 4): a LIVE IP<->paired-device correlation from the consent-gated
+    # view-time resolver (wavr.host_binding). Ranked just BELOW user_pin and above every
+    # self-report so, for a device with no owner pin, "phone" wins the type; but a user
+    # pin (1.0) STILL outranks it -- the owner's explicit pin is never overridden by the
+    # live correlation. Its real job is the `label` (the friendly name), which recognize()
+    # populates directly, independent of this type ranking.
+    "paired": 0.95,
     "upnp": 0.9,
     "bonjour": 0.85,
     # `ha` (A4.0): a make/model/os/device_type opinion IMPORTED from the user's own
@@ -122,6 +132,10 @@ _WEIGHTS: dict[str, float] = {
 # distinct signal names (see module docstring for the threat this closes).
 _FAMILY: dict[str, str] = {
     "user_pin": "pin",
+    # `paired` is its OWN family (like `pin`): it is NOT a device self-description, it is a
+    # first-party, consent-gated, MAC-consistent correlation Wavr itself derived, so it is
+    # not lumped with the spoofable `self_report` bucket.
+    "paired": "paired",
     "upnp": "self_report",
     "bonjour": "self_report",
     "snmp": "self_report",
@@ -154,6 +168,9 @@ class DeviceIdentity:
     make: str | None = None
     model: str | None = None
     os: str | None = None
+    # `label` (item 4): the friendly operator name for a LIVE-correlated paired device.
+    # Populated ONLY from a `paired` signal (never invented); None for every other device.
+    label: str | None = None
     sources: tuple = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
@@ -163,6 +180,7 @@ class DeviceIdentity:
             "make": self.make,
             "model": self.model,
             "os": self.os,
+            "label": self.label,
             "sources": [dict(s) for s in self.sources],
         }
 
@@ -192,6 +210,19 @@ def _candidates(signals: Mapping) -> list[dict]:
     pin = _valid_type(signals.get("user_pin"))
     if pin:
         add("user_pin", pin, "high", pin)
+
+    # `paired` (item 4): a LIVE IP<->paired-device correlation from the consent-gated
+    # resolver. Contributes a "phone" type opinion (default; the signal may name another
+    # taxonomy value) at "high" -- but weight 0.95 < user_pin's 1.0, so a user pin STILL
+    # wins the device_type. The friendly `label` is read separately in recognize().
+    paired = signals.get("paired")
+    if isinstance(paired, Mapping):
+        dtype = _valid_type(paired.get("device_type")) or "phone"
+        label = paired.get("label")
+        value = (f"paired device -- {label.strip()}"
+                 if isinstance(label, str) and label.strip()
+                 else "paired device (live-correlated)")
+        add("paired", dtype, "high", value)
 
     # Protocol self-description hooks (mDNS/SSDP/SNMP/NetBIOS collectors). Capped
     # at "medium" ALONE -- see the module docstring's collector threat-model note;
@@ -272,9 +303,13 @@ def recognize(signals: Mapping) -> DeviceIdentity:
         make = vendor if vendor not in ("", "unknown") else None
     model = _first_str(signals, ("upnp", "bonjour", "ha", "snmp", "netbios"), "model")
     os_name = _first_str(signals, ("upnp", "bonjour", "ha", "snmp", "netbios", "dhcp"), "os")
+    # `label` comes ONLY from a `paired` signal (bounded via _first_str/_MAX_FIELD_LEN);
+    # it is independent of the type-precedence winner -- the friendly name always wins.
+    label = _first_str(signals, ("paired",), "label")
 
     if not cands:
-        return DeviceIdentity(make=make, model=model, os=os_name, sources=sources)
+        return DeviceIdentity(make=make, model=model, os=os_name, label=label,
+                              sources=sources)
 
     winner = cands[0]
     confidence = winner["conf"]
@@ -299,5 +334,6 @@ def recognize(signals: Mapping) -> DeviceIdentity:
         make=make,
         model=model,
         os=os_name,
+        label=label,
         sources=sources,
     )
