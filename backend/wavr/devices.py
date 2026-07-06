@@ -152,6 +152,14 @@ class DeviceStore:
             ).fetchone()
         return self._to_device(row) if row else None
 
+    def get_label(self, device_id: str) -> str | None:
+        """Human name for a device_id, or None if unknown. Thin read-only accessor for
+        PhoneSensorSource's who's-home view — resolves the operator label by device_id
+        WITHOUT ever returning token material. The label is derived here, on demand, and
+        never placed on a SensingEvent (privacy boundary)."""
+        d = self.get(device_id)
+        return d.name if d else None
+
     def revoke(self, device_id: str) -> bool:
         """Mark a device revoked. Returns True if the device exists (idempotent — a
         second revoke of the same id still returns True). A revoked token fails on

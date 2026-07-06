@@ -25,6 +25,7 @@ from wavr.fusion import FusionEngine
 from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
 from wavr.sources.network import NetworkSource, _local_ipv4
+from wavr.sources.phone import PhoneSensorSource
 from wavr.sources.ruview import RuViewSource
 from wavr.sources.camera import CameraSource
 from wavr.sources.mmwave import MmWaveSource
@@ -397,9 +398,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         latest[d["room"]] = d
         await _hub.publish(d)
 
+    # Phone-telemetry ingest hub (blueprint step 2): the bounded queue POST /api/telemetry
+    # offers readings onto and PhoneSensorSource (step 4) drains. Built HERE -- before the
+    # source register loop -- so the phone factory below binds the SAME instance that the
+    # route offers onto; attached to app.state further down. Built even when multidevice is
+    # off (inert; the /api/telemetry route itself is multidevice-gated).
+    _telemetry_hub = TelemetryHub()
+
     manager = SourceManager(_ingest)
     for name, factory, enabled in (sources if sources is not None else _default_sources(cfg)):
         manager.register(name, factory, enabled)
+    # PhoneSensorSource (blueprint step 4): folds paired-phone telemetry into fusion as a
+    # coarse whole-home ('casa') presence vote. Multidevice-gated -- when off it is NEVER
+    # registered, so the single-device source set stays byte-identical. It consumes the
+    # shared telemetry hub and resolves the who's-home operator label via DeviceStore; the
+    # label/rssi never ride the SensingEvent (privacy invariant).
+    if cfg.multidevice:
+        manager.register("phone", lambda: PhoneSensorSource(
+            _telemetry_hub, get_label=_devices.get_label), True)
 
     _owns_cameras = camera_store is None   # only close a store this function built itself
     _cameras = camera_store or CameraStore(cfg.db_path)
@@ -499,13 +515,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
 
-    # Phone-telemetry ingest seam (blueprint §4, step 2). The hub is the bounded queue
-    # PhoneSensorSource (step 4) will consume; the limiter throttles POST /api/telemetry
-    # per authenticated device. Both are attached to app.state so they are a single
-    # per-app instance the handler reads and tests can inspect/override (a stolen sensor
-    # token flooding telemetry trips the limiter -> 429). Built even when multidevice is
-    # off (they are inert objects; the /api/telemetry route itself is multidevice-gated).
-    app.state.telemetry_hub = TelemetryHub()
+    # Phone-telemetry ingest seam (blueprint §4). The hub (built above, before the source
+    # register loop, so PhoneSensorSource binds the SAME instance) is attached here; the
+    # limiter throttles POST /api/telemetry per authenticated device. Both live on
+    # app.state as a single per-app instance the handler reads and tests can inspect/
+    # override (a stolen sensor token flooding telemetry trips the limiter -> 429). Built
+    # even when multidevice is off (inert objects; the /api/telemetry route itself is gated).
+    app.state.telemetry_hub = _telemetry_hub
     app.state.telemetry_limiter = PerDeviceRateLimiter(
         capacity=cfg.telemetry_rate_capacity, refill_per_sec=cfg.telemetry_rate_refill)
 

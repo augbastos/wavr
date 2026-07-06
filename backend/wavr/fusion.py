@@ -10,9 +10,11 @@ from wavr.roomstate import RoomState
 # Default trust weights per modality. Camera (video) is most precise; network
 # (device presence) is house-level and coarse. Tunable via config later.
 # `ble` (Bluetooth presence) sits between wifi_csi and network: room-ish, coarser
-# than CSI but tighter than house-wide ARP.
+# than CSI but tighter than house-wide ARP. `phone` (paired-phone telemetry) is the
+# same coarse/house-level tier as network: 0.5 x its 0.8 present-confidence = 0.4,
+# below the default 0.5 threshold, so a lone phone can never fabricate occupancy.
 DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
-                   "network": 0.5, "sim": 0.6}
+                   "network": 0.5, "phone": 0.5, "sim": 0.6}
 
 # Freshness decay window (seconds). A source votes at full trust up to
 # FRESHNESS_S, then its trust decays linearly to zero at STALE_S — so a source
