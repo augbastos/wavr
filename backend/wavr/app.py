@@ -926,7 +926,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
              "available": _mcp_http_route is not None,
              "active": _mcp_http_route is not None and _connectors.is_enabled("mcp-http"),
              "suppressed": False, "enforcement": "registry-overlay",
-             "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp: RoomState + house map + HA entity list (no vitals/targets/identities, no secrets)",
+             "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp: RoomState + house map (no Wavr vitals/targets/presence-identities, no secrets) + HA entity list incl. entity names (which may name people/devices)",
              "env_flag": None},
         ]
 
