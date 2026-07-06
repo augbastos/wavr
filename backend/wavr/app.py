@@ -58,6 +58,8 @@ from wavr.sources.onvif import ONVIFProbe
 from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.identity_store import IdentityStore
+from wavr.connector_store import ConnectorStore
+from wavr.api_connectors import build_connectors_router
 from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore
@@ -232,7 +234,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                wol_send=None, ping_probe=None, traceroute_runner=None,
                dns_query_fn=None, speedtest_fn=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
-               net_inventory=None, identity_store=None, bonded_reader=None) -> FastAPI:
+               net_inventory=None, identity_store=None, bonded_reader=None,
+               connector_store=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -485,6 +488,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _identity_store = identity_store or IdentityStore(cfg.db_path)
     _bonded_reader = bonded_reader or read_bonded
 
+    # Connector registry (project_wavr_connectors_vision): the persistence for the
+    # single 'Connectors & Services' egress surface. Always built (like CameraStore /
+    # identity_store), inert until the admin toggles something -- an EMPTY registry is
+    # byte-identical to today (no built-in suppressed, no generic active). Shares
+    # wavr.db (git-ignored) so no connector metadata lands in this public repo.
+    _owns_connectors = connector_store is None
+    _connectors = connector_store or ConnectorStore(cfg.db_path)
+
     def _ble_known_provider() -> dict:
         merged = dict(cfg.ble_known)
         merged.update(_identity_store.as_ble_map())   # registry wins ties
@@ -628,6 +639,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_identity:
                 with suppress(Exception):
                     _identity_store.close()
+            if _owns_connectors:
+                with suppress(Exception):
+                    _connectors.close()
             if _owns_device_meta:
                 with suppress(Exception):
                     _device_meta.close()
@@ -793,6 +807,65 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             write_deps=[Depends(require_local)]),
         dependencies=[Depends(require_central)])
 
+    def _connector_catalog() -> list[dict]:
+        # The built-in connectors surfaced from EXISTING gated features. available/
+        # active are COMPUTED LIVE from cfg (never seeded into the DB, which would let
+        # a DEFAULT-0 row suppress a live feature). The registry is a MONOTONE overlay:
+        # effective active = env_active AND NOT is_suppressed(id). A row can only turn
+        # a feature OFF; it can NEVER enable egress beyond the env flag.
+        #  * enforcement='registry-overlay' -- the UI toggle has real teeth (a
+        #    suppression row makes the chokepoint 503/403 on the NEXT request).
+        #  * enforcement='env' -- the gate is bound inside the separate MCP server
+        #    process (ADR-0005); the card REFLECTS the flag + shows the env var to edit,
+        #    rather than pretending a dead toggle works (TRANSPARENT).
+        narr_provider = cfg.narrate_provider
+        narr_available = provider_configured(cfg)
+        narr_env = cfg.narrate_enabled and narr_available
+        narr_scope = ("local, zero egress" if narr_provider == "ollama"
+                      else f"outbound-cloud: {narr_provider}")
+        ha_configured = bool(cfg.ha_url and cfg.ha_token)
+        haimp_env = cfg.ha_import and ha_configured
+        hactl_env = cfg.mcp_control and ha_configured
+        return [
+            {"id": "narrator", "kind": "builtin", "direction": "outbound",
+             "label": "LLM Narrator", "available": narr_available,
+             "active": narr_env and not _connectors.is_suppressed("narrator"),
+             "suppressed": _connectors.is_suppressed("narrator"),
+             "enforcement": "registry-overlay", "scope": narr_scope,
+             "env_flag": "WAVR_NARRATE_ENABLED"},
+            {"id": "ha-import", "kind": "builtin", "direction": "inbound",
+             "label": "Home Assistant Import", "available": ha_configured,
+             "active": haimp_env and not _connectors.is_suppressed("ha-import"),
+             "suppressed": _connectors.is_suppressed("ha-import"),
+             "enforcement": "registry-overlay", "scope": "local HA registry (LAN)",
+             "env_flag": "WAVR_HA_IMPORT"},
+            {"id": "ha-control", "kind": "builtin", "direction": "outbound",
+             "label": "Home Assistant Control", "available": ha_configured,
+             "active": hactl_env, "suppressed": False,
+             "enforcement": "env", "scope": "outbound-control: local HA (LAN)",
+             "env_flag": "WAVR_MCP_CONTROL"},
+            {"id": "mcp-read", "kind": "builtin", "direction": "inbound",
+             "label": "MCP Server (read-only)", "available": True,
+             "active": False, "suppressed": False,
+             "enforcement": "env", "scope": "read-only RoomState; runs as a separate MCP server",
+             "env_flag": None},
+        ]
+
+    def _connectors_active() -> int:
+        # Honest count for the status header badge: live built-ins + enabled generics.
+        n = sum(1 for c in _connector_catalog() if c["active"])
+        n += sum(1 for r in _connectors.list()
+                 if r["kind"] == "generic" and r["enabled"] == 1)
+        return n
+
+    # Single egress surface: the ONLY UI that enumerates/toggles connectors. Same gates
+    # as the identity + camera routes -- router-level central/root, per-write CSRF.
+    app.include_router(
+        build_connectors_router(
+            _connectors, _connector_catalog,
+            write_deps=[Depends(require_local)]),
+        dependencies=[Depends(require_central)])
+
     @app.get("/api/history")
     async def history(limit: int = 200):
         # Clamp: a negative limit means "no limit" to SQLite's `LIMIT ?` (full-table
@@ -852,6 +925,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 status_code=503,
                 detail="narration not configured (set WAVR_NARRATE_ENABLED=1 and configure "
                        f"the '{cfg.narrate_provider}' provider)")
+        # Connectors & Services kill-switch (REVOCABLE, read per request): a
+        # suppression row revokes this outbound connector immediately, no restart.
+        # Absent row => byte-identical to before.
+        if _connectors.is_suppressed("narrator"):
+            raise HTTPException(status_code=503,
+                                detail="narrator revoked in Connectors screen")
         try:
             rows = await asyncio.to_thread(_storage.recent, 50)
             text = await asyncio.to_thread(_narrator.narrate, latest, rows)
@@ -871,6 +950,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if not cfg.ha_import:
             raise HTTPException(status_code=403,
                                 detail="HA import disabled (WAVR_HA_IMPORT=0)")
+        # Connectors & Services kill-switch (REVOCABLE, read per request): a
+        # suppression row revokes this connector immediately, no restart. Absent row
+        # => byte-identical to before.
+        if _connectors.is_suppressed("ha-import"):
+            raise HTTPException(status_code=403,
+                                detail="HA import revoked in Connectors screen")
         if client_from_config(cfg) is None:
             # HA not configured (empty ha_url/ha_token) -> nothing to import, no write.
             raise HTTPException(status_code=400,
@@ -1103,6 +1188,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # header, so a drive-by tab can't fire its public-DNS egress (always on).
                 "api_token": bool(_local_token),
                 "health_gate": True,
+                # Connectors & Services: the count of connectors that are actually
+                # ACTIVE (live built-ins + enabled generics). A non-egress header
+                # badge; the per-connector state/scope lives on GET /api/connectors.
+                "connectors_active": _connectors_active(),
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
