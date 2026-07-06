@@ -79,6 +79,10 @@
   // because the 8-digit pair success reloads the page (index.html:1904), so the "pairing -> wizard ->
   // node" sequence crosses a reboot and cannot rely on the pre-token render alone.
   var K_CAPS = "wavr.caps", K_ONBOARDED = "wavr.onboarded";
+  // wavr.consent: this device's OWN consent level ("green"|"yellow"|"red"), the control surface for the
+  // hub-side consent gate (RED telemetry is dropped server-side; the column is the enforcement). Read
+  // SYNCHRONOUSLY at boot like the token so the toggle paints the correct colour with no flash. Never logged.
+  var K_CONSENT = "wavr.consent";
 
   // FIX-E3(b): durable-write helper for the PAIR / RE-PIN paths. Resolves only once every write of the
   // pairing state has committed; rejects if ANY write fails, so the caller surfaces a save error and
@@ -99,6 +103,10 @@
   var _role = null;       // "central" | "user" | null  (null is treated as viewer everywhere)
   var _caps = null;       // {sensor,viewer,admin} | null   (null = true first launch -> chooser)
   var _onboarded = false; // sensor permission wizard completed at least once
+  // Consent level, read from Keystore at boot. ASSUMPTION (surfaced to owner): the hub defaults a freshly
+  // paired device to full participation, so an absent/first-launch value defaults to "green"; there is no
+  // GET /api/consent yet, so we do NOT reconcile against the hub at boot (a GET reconciliation is a NEXT).
+  var _consent = "green";
 
   // caps helpers. A sensor-ONLY device must never boot the index.html viewer: its sensor-role token
   // 403s every read, so CompanionProvider would self-wipe the token in a reload loop (companionAuthFailed
@@ -410,7 +418,16 @@
       ".wavrm-node-state.error{color:var(--danger,#e8726a);}" +
       ".wavrm-node-counts{color:var(--dim,#9AA4AD);font-size:.82rem;font-variant-numeric:tabular-nums;}" +
       // sensor pill injected into index.html's header .status-pills
-      "#wavrm-pill{cursor:pointer;}";
+      "#wavrm-pill{cursor:pointer;}" +
+      // consent toggle: the control's OWN border+dot = the consent level colour (green/yellow/red).
+      // border !important overrides .tpill's default so the level colour is unmistakable on the control.
+      ".wavrm-consent{cursor:pointer;position:relative;overflow:hidden;touch-action:none;" +
+      "border:1px solid var(--consent-color,rgba(255,255,255,.14))!important;}" +
+      ".wavrm-consent.pending{opacity:.8;}" +
+      // 2s hold progress fill (withdrawal affordance): danger-tinted, animates 0->100% while held.
+      ".wavrm-consent .wavrm-cprog{position:absolute;left:0;bottom:0;height:2px;width:0;" +
+      "background:var(--danger,#e8726a);pointer-events:none;transition:width .15s ease;}" +
+      ".wavrm-consent.holding .wavrm-cprog{width:100%;transition:width 2s linear;}";
     var s = el("style"); s.id = "wavrm-style"; s.textContent = css;
     (document.head || document.documentElement).appendChild(s);
   }
@@ -858,6 +875,16 @@
       };
       card.appendChild(btn);
     }
+    // Consent toggle on the dedicated node screen too, so a sensor-ONLY device shows it (item 4: every
+    // paired device regardless of role). Same control, registered in _consentUis; the boot cache gives it
+    // the right colour immediately. postConsent uses the internal _token (present even though tokenGet
+    // hides it from index.html on a sensor-only node).
+    card.appendChild(el("span", "wavrm-lab", "Your consent on this device"));
+    var crow = el("div", "wavrm-node-stat");
+    crow.appendChild(el("span", "wavrm-node-counts", "Tap to reduce · hold to withdraw"));
+    crow.appendChild(makeConsentControl().btn);
+    card.appendChild(crow);
+    renderConsent();
     pollStatusOnce();   // reflect an already-running FGS on relaunch (one-tap resume)
     renderSensor();
   }
@@ -882,6 +909,166 @@
     renderSensor();
   }
 
+  // ================= CONSENT TOGGLE UX (shim overlay chrome; ZERO index.html edits) =====================
+  // A single control whose COLOUR is the consent level. It is the CONTROL surface; the hub's consent
+  // column is the ENFORCEMENT (RED telemetry is dropped server-side). Injected into index.html's header
+  // .status-pills EXACTLY like the sensor pill (no-op if the row is absent), and also onto the dedicated
+  // sensor-node screen so it shows on EVERY paired device regardless of role/caps (participation !=
+  // permission: a device can be "admin · red"). Never logs the token or the level.
+
+  // Honest, non-overclaiming copy (blueprint item 5). GREEN does NOT claim network reach over the phone.
+  var CONSENT = {
+    green:  { next: "yellow", color: "var(--accent,#3db54a)", label: "Full participation",
+              tip: "Full participation — Wavr uses this phone's presence and names it at home." },
+    yellow: { next: "red",    color: "var(--warn,#e8a13a)",   label: "Limited",
+              tip: "Limited — present but anonymous; minimal data." },
+    // TAP wraps red -> green: a single visible control must be able to RE-ENGAGE, and re-granting one's
+    // OWN consent is legitimate. The deliberate 2s-hold is the easy-withdrawal path, so an accidental
+    // single tap can only ever step the level (never hold-to-off), and every tap changes colour+label
+    // and POSTs -- so a mistaken tap is instantly visible and reversible with another tap.
+    red:    { next: "green",  color: "var(--danger,#e8726a)", label: "Off",
+              tip: "Off — you've left Wavr; this device contributes nothing." }
+  };
+  function normConsent(v){ return (v === "green" || v === "yellow" || v === "red") ? v : "green"; }
+
+  var _consentUis = [];        // every rendered consent control (header pill + node-screen copy)
+  var _consentPending = false; // true while the CURRENT level is NOT yet confirmed by a 2xx from the hub
+  var _consentGen = 0;         // bumped on every change so stale retries/responses are ignored
+  var _consentRetry = null;
+  function clearConsentRetry(){ if(_consentRetry){ clearTimeout(_consentRetry); _consentRetry = null; } }
+
+  // POST /api/consent {level} over the PINNED transport (netFetch -> WavrNet pinned HTTPS), Bearer our
+  // OWN token. Resolves TRUE only on a 2xx (hub accepted). CRITICAL self-DoS guard: a 422 (invalid) /
+  // 429 (rate-limited) / 5xx / even a 401/403 here resolves FALSE (-> retry), and a network error REJECTS
+  // (-> retry). It NEVER wipes the token or forces re-pair: that stays the job of companionAuthFailed /
+  // the sensor auth-fail handler on THEIR OWN read/ws/telemetry paths, bound to 401/403 only. A failed
+  // consent POST surfaces a retry, never a re-pair. Never logs the token or the level.
+  function postConsent(level){
+    if(!_token || !_base) return Promise.reject(new Error("not paired"));
+    return netFetch(_base + "/api/consent", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + _token, "Content-Type": "application/json" },
+      body: JSON.stringify({ level: level })
+    }).then(function(r){ return !!(r && r.ok); });   // 200 {device_id, level} -> true; else -> false (retry, NEVER wipe)
+  }
+
+  // In-memory + UI + durable Keystore; on RED best-effort stop the native sensor loop. Returns the
+  // Keystore write promise (a durable-write failure is non-fatal here -- the hub column is the enforcement).
+  function applyConsentLocal(level){
+    _consent = level;
+    if(level === "red"){ try{ stopSensor(); }catch(_){} }   // guarded no-op on a viewer with no sensor
+    renderConsent();
+    return secureSet(K_CONSENT, level).catch(function(){});
+  }
+
+  function scheduleConsentRetry(gen){
+    clearConsentRetry();
+    _consentRetry = setTimeout(function(){
+      _consentRetry = null;
+      if(gen !== _consentGen) return;                          // a newer change owns the state now
+      postConsent(_consent).then(function(ok){
+        if(gen !== _consentGen) return;
+        if(ok){ _consentPending = false; renderConsent(); }    // hub confirmed on retry
+        else { scheduleConsentRetry(gen); }
+      }, function(){ if(gen === _consentGen) scheduleConsentRetry(gen); });
+    }, 5000);
+  }
+
+  // The single mutation entry point for both gestures.
+  function changeConsent(target){
+    target = normConsent(target);
+    var gen = ++_consentGen; clearConsentRetry();
+    if(target === "red"){
+      // WITHDRAWAL: POST FIRST -- the hub gate is the guarantee against a replaying token. Show red as
+      // UNCONFIRMED until the hub accepts; never present a confirmed "withdrawn" the hub hasn't accepted.
+      _consent = "red"; _consentPending = true; renderConsent();
+      postConsent("red").then(function(ok){
+        if(gen !== _consentGen) return;
+        if(ok){ _consentPending = false; applyConsentLocal("red"); }              // confirmed: persist + stop loop
+        else { applyConsentLocal("red"); _consentPending = true; renderConsent(); scheduleConsentRetry(gen); }
+      }, function(){
+        if(gen !== _consentGen) return;
+        // offline: enact locally anyway (persist red + stop loop so the phone stops contributing NOW),
+        // but keep it UNCONFIRMED and retry until the hub accepts the withdrawal.
+        applyConsentLocal("red"); _consentPending = true; renderConsent(); scheduleConsentRetry(gen);
+      });
+    } else {
+      // green / yellow: optimistic local apply, then POST to record + confirm; retry on failure. Erring
+      // toward the phone showing MORE participation than the hub has granted is the privacy-safe direction
+      // (it never under-states data flow). Keystore persisted immediately so the boot colour is durable.
+      _consentPending = true; applyConsentLocal(target);
+      postConsent(target).then(function(ok){
+        if(gen !== _consentGen) return;
+        if(ok){ _consentPending = false; renderConsent(); }
+        else { scheduleConsentRetry(gen); }
+      }, function(){ if(gen === _consentGen) scheduleConsentRetry(gen); });
+    }
+  }
+
+  function renderConsent(){
+    // Prune controls whose DOM node was removed (e.g. a rebuilt overlay card) so we never keep updating
+    // detached nodes.
+    if(document.body){ _consentUis = _consentUis.filter(function(u){ return document.body.contains(u.btn); }); }
+    var meta = CONSENT[_consent] || CONSENT.green;
+    var label = meta.label, tip = meta.tip;
+    if(_consentPending){
+      if(_consent === "red"){ label = "Off · confirming"; tip = "Withdrawal not yet confirmed by the hub — retrying."; }
+      else { label = meta.label + " · confirming"; tip = meta.tip + " (not yet confirmed by the hub)"; }
+    }
+    for(var i = 0; i < _consentUis.length; i++){
+      var u = _consentUis[i];
+      u.btn.style.setProperty("--consent-color", meta.color);
+      u.dot.style.background = meta.color;
+      u.txt.textContent = label;
+      u.btn.title = tip;
+      u.btn.setAttribute("aria-label", "Consent: " + label + ". Tap to reduce, hold two seconds to withdraw.");
+      u.btn.classList.toggle("pending", !!_consentPending);
+    }
+  }
+
+  // TAP = decrease one step (green->yellow->red, wraps red->green). HOLD 2s = jump straight to RED (GDPR
+  // "withdraw as easy as give") with a visible 2s progress fill. Pointer events only (no click) so a tap
+  // and a hold never double-fire.
+  function attachConsentGestures(btn){
+    var holdTimer = null, held = false;
+    function clearHold(){ if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; } btn.classList.remove("holding"); }
+    btn.addEventListener("pointerdown", function(ev){
+      held = false; btn.classList.add("holding");             // CSS fills the progress bar to 100% over 2s
+      holdTimer = setTimeout(function(){
+        held = true; holdTimer = null; btn.classList.remove("holding");
+        changeConsent("red");                                  // withdrawal shortcut
+      }, 2000);
+      try{ btn.setPointerCapture(ev.pointerId); }catch(_){}
+    });
+    btn.addEventListener("pointerup", function(){
+      var wasHeld = held; clearHold();
+      if(!wasHeld) changeConsent(CONSENT[_consent].next);      // TAP = one step down (wraps at red)
+    });
+    btn.addEventListener("pointercancel", clearHold);
+    btn.addEventListener("lostpointercapture", clearHold);
+  }
+
+  function makeConsentControl(){
+    injectStyle();
+    var b = el("button", "tpill wavrm-consent"); b.type = "button";
+    var dot = el("i", "p-dot"); var txt = el("span", "p-txt", "");
+    b.appendChild(dot); b.appendChild(txt); b.appendChild(el("i", "wavrm-cprog"));
+    attachConsentGestures(b);
+    var ui = { btn: b, dot: dot, txt: txt };
+    _consentUis.push(ui);
+    return ui;
+  }
+
+  // Header placement (viewer/admin/central/combo): inject into .status-pills exactly like the sensor
+  // pill. No-op if the host row is absent. Only once paired.
+  function injectConsentPill(){
+    if(!_token) return;
+    var row = document.querySelector(".status-pills"); if(!row) return;
+    if(row.querySelector(".wavrm-consent")) return;            // idempotent
+    row.appendChild(makeConsentControl().btn);
+    renderConsent();
+  }
+
   // ----- Boot: load caches, resolve the gate, then decide which screen to show -----
   function decideScreen(){
     whenDom(function(){
@@ -901,10 +1088,14 @@
           showConnecting("Connecting to your home…");
           setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
           injectSensorPill();
+          injectConsentPill();   // consent toggle in the header chrome (combo device)
         } else {
-          // viewer / admin / migrated (token, no caps): EXACTLY today's boot, byte-for-byte UNCHANGED.
+          // viewer / admin / migrated (token, no caps): EXACTLY today's boot, byte-for-byte UNCHANGED,
+          // plus the consent toggle injected into the header chrome (participation != permission -- a
+          // viewer/admin/central device shows it too).
           showConnecting("Connecting to your home…");
           setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
+          injectConsentPill();
         }
       } else if(!_caps && !_base){
         // True first launch (nothing chosen AND nothing entered) -> capability chooser before setup.
@@ -922,10 +1113,11 @@
 
   Promise.all([secureGet(K_URL), secureGet(K_FP), secureGet(K_TOKEN),
                secureGet(K_DEVICE_ID), secureGet(K_ROLE),
-               secureGet(K_CAPS), secureGet(K_ONBOARDED)]).then(function(v){
+               secureGet(K_CAPS), secureGet(K_ONBOARDED), secureGet(K_CONSENT)]).then(function(v){
     _base = v[0] || ""; _pinnedFp = v[1] || null; _token = v[2] || null;
     _deviceId = v[3] || null; _role = v[4] || null;   // role read synchronously at boot, like the token
     _caps = parseCaps(v[5]); _onboarded = (v[6] === "1");   // caps + onboarded read synchronously too
+    _consent = normConsent(v[7]);   // consent level read synchronously -> the toggle's boot colour is correct
   }).catch(function(){}).then(function(){
     _resolveReady();   // caches populated: index.html's deferred boot may run now
     // detectRole drives the DASHBOARD admin surface only; a sensor-ONLY node has no dashboard and its
