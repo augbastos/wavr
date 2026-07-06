@@ -23,6 +23,20 @@ DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
 # house-level source with no room-localization MUST be added here.
 _COARSE_MODALITIES = frozenset({"phone", "network"})
 
+# Locatable modalities: the ONLY modalities allowed to contribute a per-target floor
+# position (x/y) that the house map renders as a precise body dot. This is the
+# fail-closed guarantee behind the map-honesty invariant "a coarse signal must NEVER
+# render as a precise body": target selection below (best_targets) draws bodies ONLY
+# from a source whose modality is in this ALLOWLIST. Anything not listed here --
+# phone/network/ble AND any unknown/future modality -- contributes NO located target,
+# even if it carries a fabricated `targets:[{x,y}]`; it still casts its occupancy vote
+# unchanged, it just can never draw a BODY. This is an allowlist, NOT a blocklist, on
+# purpose: it also closes the `ble` gap (ble is coarse but is NOT in _COARSE_MODALITIES)
+# and every other non-listed source, by construction. A NEW locatable source MUST be
+# added here to render bodies -- that fail-closed tradeoff (a real body silently
+# suppressed until listed) is deliberate and safer than a fake body ever rendering.
+_LOCATABLE_MODALITIES = frozenset({"camera", "mmwave", "wifi_csi", "sim"})
+
 # Freshness decay window (seconds). A source votes at full trust up to
 # FRESHNESS_S, then its trust decays linearly to zero at STALE_S — so a source
 # that stopped reporting gradually loses its vote instead of freezing the fused
@@ -240,6 +254,14 @@ class FusionEngine:
         best_targets: list = []
         best_w = -1.0
         for modality, e in events.items():
+            # Fail-closed map-honesty gate: ONLY an allowlisted locatable modality
+            # may contribute a rendered body. A coarse/unknown source carrying a
+            # fabricated `targets:[{x,y}]` (future source, refactor, or an injected
+            # SensingEvent) contributes NO located target here -- its occupancy vote
+            # already counted in the loop above; it just can never draw a precise
+            # person. See _LOCATABLE_MODALITIES.
+            if modality not in _LOCATABLE_MODALITIES:
+                continue
             # Same freshness/decay gate as the confidence loop: a stale/dead
             # (or invalid-ts) source must not pass its targets through — a
             # decayed-to-zero source is indistinguishable from an absent one.
