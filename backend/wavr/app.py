@@ -54,6 +54,9 @@ from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
 from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
+from wavr.identity_store import IdentityStore
+from wavr.bonded import read_bonded
+from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
 from wavr.auth import authorize, parse_bearer, can_change_state, in_subnet
@@ -102,16 +105,25 @@ def _is_token_exempt(path: str) -> bool:
     return path in _TOKEN_EXEMPT_PATHS or path.startswith("/vendor/")
 
 
-def _default_sources(cfg):
+def _default_sources(cfg, ble_provider=None, net_provider=None):
     """Plano A real-source set: network always-on ($0), ruview always-on (harmless
     reconnect loop when the container is absent), sim off by default (toggle it on
     from the dashboard to populate the view when no real data is flowing). mmwave is
     only added when a serial port is configured (passive local serial, no frames
-    otherwise) — but then it's always-on, same as network/ruview."""
+    otherwise) — but then it's always-on, same as network/ruview.
+
+    `ble_provider`/`net_provider` are the LIVE consent-registry providers (callables
+    returning the current {addr: person} map, env allowlist merged with the identity
+    store). When present the sources re-read them each scan cycle so a registration /
+    opt-out takes effect with no restart. The BLE source is registered at boot only
+    when there is at least one known device (env OR registry) — a truly-empty install
+    stays byte-identical; a first BLE registration on such an install brings the
+    source up live via the POST route's ensure_source hook."""
     sources = [
         ("network", lambda: NetworkSource(
             cfg.net_known_macs, interval=cfg.net_interval, grace=cfg.net_grace,
-            known=cfg.net_known, emit_identity=cfg.identity_enabled), True),
+            known=cfg.net_known, emit_identity=cfg.identity_enabled,
+            known_provider=net_provider), True),
         ("ruview", lambda: RuViewSource(
             cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
         ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
@@ -119,10 +131,12 @@ def _default_sources(cfg):
     if cfg.mmwave_port:
         sources.append(
             ("mmwave", lambda: MmWaveSource(cfg.mmwave_room, cfg.mmwave_port), True))
-    if cfg.ble_known:
+    _ble_known_now = ble_provider() if ble_provider is not None else cfg.ble_known
+    if _ble_known_now:
         sources.append(("ble", lambda: BLESource(
             cfg.ble_known, room=cfg.ble_room, rssi_min=cfg.ble_rssi_min,
-            interval=cfg.ble_interval, emit_identity=cfg.identity_enabled), True))
+            interval=cfg.ble_interval, emit_identity=cfg.identity_enabled,
+            known_provider=ble_provider), True))
     return sources
 
 
@@ -191,7 +205,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                wol_send=None, ping_probe=None, traceroute_runner=None,
                dns_query_fn=None, speedtest_fn=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
-               net_inventory=None) -> FastAPI:
+               net_inventory=None, identity_store=None, bonded_reader=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -434,9 +448,44 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             await asyncio.sleep(cfg.refuse_interval)
             await _refuse_once()
 
+    # Consent-first identity/device registry (2026-07-06 ethics decision): the
+    # persistent, admin-confirmed source of {addr -> person}. Built like CameraStore
+    # (always available, shares wavr.db). The two providers below are re-read by the
+    # BLE/network sources each scan cycle -- env allowlist merged with the registry,
+    # registry taking precedence -- so a registration/opt-out is live without restart.
+    # Default behaviour is unchanged when the registry is empty (env still works).
+    _owns_identity = identity_store is None
+    _identity_store = identity_store or IdentityStore(cfg.db_path)
+    _bonded_reader = bonded_reader or read_bonded
+
+    def _ble_known_provider() -> dict:
+        merged = dict(cfg.ble_known)
+        merged.update(_identity_store.as_ble_map())   # registry wins ties
+        return merged
+
+    def _net_known_provider() -> dict:
+        merged = dict(cfg.net_known)
+        merged.update(_identity_store.as_net_map())
+        return merged
+
     manager = SourceManager(_ingest)
-    for name, factory, enabled in (sources if sources is not None else _default_sources(cfg)):
+    for name, factory, enabled in (
+            sources if sources is not None
+            else _default_sources(cfg, _ble_known_provider, _net_known_provider)):
         manager.register(name, factory, enabled)
+
+    def _ensure_ble_source() -> None:
+        # Live bring-up: register the BLE source the moment the first BLE device is
+        # registered on an install that had none, so the registration takes effect
+        # without a restart. Boots ENABLED (a device only reaches the registry by an
+        # affirmative consent act) -- SourceManager spawns it immediately when running.
+        # No-op if a 'ble' source already exists or default sources are overridden.
+        if "ble" in {s["name"] for s in manager.status()["sources"]}:
+            return
+        manager.register("ble", lambda: BLESource(
+            cfg.ble_known, room=cfg.ble_room, rssi_min=cfg.ble_rssi_min,
+            interval=cfg.ble_interval, emit_identity=cfg.identity_enabled,
+            known_provider=_ble_known_provider), True)
 
     _owns_cameras = camera_store is None   # only close a store this function built itself
     _cameras = camera_store or CameraStore(cfg.db_path)
@@ -541,6 +590,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_cameras:
                 with suppress(Exception):
                     _cameras.close()
+            if _owns_identity:
+                with suppress(Exception):
+                    _identity_store.close()
             if _owns_device_meta:
                 with suppress(Exception):
                     _device_meta.close()
@@ -693,6 +745,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(build_inventory_router(
         _inventory, device_meta=_device_meta, name_deps=[Depends(require_local)],
         dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor))
+
+    # Consent-first identity registry routes. Router-level require_central keeps the
+    # person-labelled PII list off a multidevice 'user' (loopback root always passes);
+    # the state-changing POST/DELETE additionally carry require_local (CSRF + central-
+    # or-root), same gates as the camera + device-management routes. ensure_source
+    # brings the BLE source up live when the first BLE device is registered.
+    app.include_router(
+        build_identity_router(
+            _identity_store, bonded_reader=_bonded_reader,
+            ensure_source=_ensure_ble_source,
+            write_deps=[Depends(require_local)]),
+        dependencies=[Depends(require_central)])
 
     @app.get("/api/history")
     async def history(limit: int = 200):

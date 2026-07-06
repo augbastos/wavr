@@ -684,6 +684,24 @@
   .pair-dev-role{background:var(--elevated);color:var(--text);border:1px solid var(--line);
                  border-radius:8px;padding:6px 8px;font-size:.75rem;cursor:pointer;}
 
+  /* ---------------- My devices — consent-first identity registry (gear) ---------------- */
+  .pair-role input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+                   border-radius:8px;padding:8px 11px;font-size:.82rem;min-width:0;max-width:200px;
+                   font-variant-numeric:tabular-nums;}
+  .id-bonded-box{border:1px solid var(--line);border-radius:8px;padding:11px 13px;
+                 margin:2px 0 6px;background:var(--elevated);max-width:52ch;}
+  .id-bonded-list{display:flex;flex-direction:column;}
+  .id-bonded-row{display:flex;justify-content:space-between;align-items:center;gap:10px;
+                 font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
+  .id-bonded-row:first-child{border-top:none;}
+  .id-bonded-row.dim{opacity:.55;}
+  .id-bonded-row label{display:flex;align-items:center;gap:10px;cursor:pointer;min-width:0;
+                       overflow-wrap:anywhere;}
+  .id-bonded-row input[type=checkbox]{flex-shrink:0;width:16px;height:16px;accent-color:var(--accent);}
+  .id-bonded-row .mac{color:var(--dim);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+                      font-size:.76rem;font-variant-numeric:tabular-nums;}
+  .id-bonded-tag{flex-shrink:0;font-size:.7rem;color:var(--dim);}
+
   /* ---------------- House editor (gear) ---------------- */
   .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .hed-tools .primary{border-color:var(--accent);color:var(--accent);}
@@ -1700,6 +1718,55 @@
       </div>
       <h4 class="pair-sub">Authorized devices</h4>
       <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
+    </div>
+    <!-- My devices — consent-first identity registry (2026-07-06 ethics decision).
+         The registry holds ONLY devices the admin confirms: a Bluetooth device bonded to
+         this PC is a SUGGESTION (pre-checked, uncheck a housemate's); manual add is for
+         anything not bonded. Un-registering = the participation opt-out. Live/central only
+         (like the pairing tile) — hidden until GET /api/identity/devices answers 200. All
+         names/addresses are rendered via textContent (PII/untrusted) — NEVER innerHTML. -->
+    <div id="myDevices" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="mydev-h">My devices</h2></div>
+      <p class="pair-hint" style="margin:-2px 0 12px">Only devices you confirm are registered as
+        presence signals. Un-registering stops it being a signal and removes its name — your
+        privacy opt-out.</p>
+      <h4 class="pair-sub">Confirm your paired devices</h4>
+      <div class="controls-row" style="margin-bottom:8px">
+        <button type="button" id="idDetectBtn" class="ctl small">Detect my paired devices</button>
+        <label class="pair-role">Your name
+          <input type="text" id="idBondedName" maxlength="64" placeholder="e.g. augusto"
+                 aria-label="your name for these devices">
+        </label>
+        <span id="idDetectFb" class="action-fb" aria-live="polite"></span>
+      </div>
+      <div id="idBondedBox" class="id-bonded-box" hidden>
+        <div id="idBondedList" class="id-bonded-list" aria-live="polite"></div>
+        <div class="controls-row" style="margin-top:10px">
+          <button type="button" id="idBondedRegister" class="ctl small primary">Register checked</button>
+          <span class="pair-hint">Checked devices are the ones you confirm are yours.</span>
+        </div>
+      </div>
+      <h4 class="pair-sub">Add a device manually</h4>
+      <form id="idManualForm" class="pair-form" aria-labelledby="mydev-h">
+        <label class="pair-role">Address
+          <input type="text" name="address" placeholder="aa:bb:cc:dd:ee:ff"
+                 aria-label="device MAC address" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="pair-role">Name
+          <input type="text" name="label" maxlength="64" placeholder="e.g. augusto"
+                 aria-label="device owner name">
+        </label>
+        <label class="pair-role">Signal
+          <select name="source" aria-label="signal type">
+            <option value="ble">Bluetooth</option>
+            <option value="network">Network (Wi-Fi/LAN)</option>
+          </select>
+        </label>
+        <button type="submit" class="ctl small">Add device</button>
+        <span id="idManualFb" class="action-fb" aria-live="polite"></span>
+      </form>
+      <h4 class="pair-sub">Registered devices</h4>
+      <div id="idDevList" class="pair-dev-list" aria-live="polite"></div>
     </div>
     <!-- Stage 3b (§2.6/§7#6/#10 + §9): Privacy & security — the brand's trust screen,
          visible in EVERY mode (demo included). Invariants are static truth; the kill-switch
@@ -2887,6 +2954,147 @@ async function renderPairing(){
   refresh(seed);                            // seed the list from the probe response we already read
 }
 renderPairing();
+
+// ---- My devices — consent-first identity registry (live only, 2026-07-06 ethics) ----
+// The registry holds ONLY admin-confirmed devices. Three surfaces: (1) "Detect my paired
+// devices" -> GET /api/identity/bonded lists THIS PC's bonded BT devices PRE-CHECKED (a
+// pairing act is a suggestion, not consent — the admin unchecks a housemate's speaker and
+// confirms) -> POST /api/identity/devices. (2) manual add (address+name) for non-bonded.
+// (3) the registered list, each with Un-register = the participation opt-out (DELETE ->
+// the live provider stops returning it next scan cycle and its name is gone). Router-level
+// require_central: on loopback root (MODE==="live") the admin always passes; a multidevice
+// 'user' peer gets 403 and the panel stays hidden. `person` is PII — EVERY name/address is
+// rendered via textContent, NEVER innerHTML.
+async function renderIdentity(){
+  if(MODE!=="live") return;                 // live-only; never in companion/demo
+  const hdr = {"X-Wavr-Local":"1"};         // same local-only guard as the other panels
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/identity/devices",{headers:hdr}); }
+  catch{ return; }                          // backend unreachable — stay hidden
+  if(!probe.ok) return;                     // 403 (multidevice 'user') — stay hidden
+  let seed; try{ seed = (await probe.json()).devices; }catch{ seed = []; }
+  document.getElementById("myDevices").hidden = false;
+
+  const devList  = document.getElementById("idDevList");
+  const detectBtn = document.getElementById("idDetectBtn");
+  const bondedBox = document.getElementById("idBondedBox");
+  const bondedList = document.getElementById("idBondedList");
+  const bondedName = document.getElementById("idBondedName");
+  const bondedRegister = document.getElementById("idBondedRegister");
+  const detectFb = document.getElementById("idDetectFb");
+  const manualForm = document.getElementById("idManualForm");
+  const manualFb = document.getElementById("idManualFb");
+
+  // Registered list — each row is one consented device; Un-register is the opt-out.
+  function renderList(devices){
+    devices = Array.isArray(devices) ? devices : [];
+    devList.textContent = "";
+    if(!devices.length){
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "no registered devices yet";
+      devList.appendChild(e); return;
+    }
+    devices.forEach(d => {
+      const row = document.createElement("div"); row.className = "pair-dev-row";
+      const left = document.createElement("span");
+      const name = document.createElement("b"); name.textContent = d.person || "(unnamed)"; // textContent — PII
+      const meta = document.createElement("span"); meta.className = "pair-dev-meta";
+      const sig = MODALITY_LABEL[d.source] || d.source || "?";
+      const via = d.origin === "bonded" ? " · paired" : "";
+      meta.textContent = " · " + sig + " · " + (d.address || "") + via;   // textContent — server data
+      left.appendChild(name); left.appendChild(meta);
+      row.appendChild(left);
+      const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
+      rm.textContent = "Un-register";
+      rm.setAttribute("aria-label", "un-register " + (d.person || "device") + " — privacy opt-out");
+      rm.onclick = async ()=>{
+        let r;
+        try{ r = await fetch(location.origin+"/api/identity/devices/"+encodeURIComponent(d.address),
+          {method:"DELETE", headers:hdr}); }catch{}
+        if(r && r.ok){
+          let j; try{ j = await r.json(); }catch{ j = {}; }
+          actionFeedback(manualFb, true, null, "✓ opted out"); renderList(j.devices);
+        } else actionFeedback(manualFb, false, "couldn't un-register");
+      };
+      row.appendChild(rm); devList.appendChild(row);
+    });
+  }
+
+  // (1) Detect — read THIS PC's bonded BT devices; pre-check the not-yet-registered ones.
+  detectBtn.onclick = async ()=>{
+    let devices;
+    try{ devices = (await (await fetch(location.origin+"/api/identity/bonded",{headers:hdr})).json()).devices; }
+    catch{ actionFeedback(detectFb, false, "couldn't read paired devices"); return; }
+    devices = Array.isArray(devices) ? devices : [];
+    bondedList.textContent = "";
+    bondedBox.hidden = false;
+    if(!devices.length){
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "no paired Bluetooth devices found on this PC";
+      bondedList.appendChild(e); return;
+    }
+    devices.forEach(d => {
+      const already = !!d.already_registered;
+      const row = document.createElement("div");
+      row.className = "id-bonded-row" + (already ? " dim" : "");
+      const lab = document.createElement("label");
+      const cb = document.createElement("input"); cb.type = "checkbox";
+      cb.checked = !already;                 // SUGGESTION: pre-check unregistered, admin can uncheck
+      cb.disabled = already;                 // already registered -> not re-offered here
+      cb.dataset.address = d.address || "";
+      const nm = document.createElement("b"); nm.textContent = d.name || "(unnamed device)"; // textContent
+      const mac = document.createElement("span"); mac.className = "mac"; mac.textContent = d.address || ""; // textContent
+      lab.appendChild(cb); lab.appendChild(nm); lab.appendChild(mac);
+      row.appendChild(lab);
+      if(already){
+        const tag = document.createElement("span"); tag.className = "id-bonded-tag";
+        tag.textContent = "already registered";
+        row.appendChild(tag);
+      }
+      bondedList.appendChild(row);
+    });
+  };
+
+  // Register the checked bonded devices under the admin's name (origin='bonded').
+  bondedRegister.onclick = async ()=>{
+    const person = (bondedName.value || "").trim();
+    if(!person){ actionFeedback(detectFb, false, "enter your name first"); return; }
+    const checks = Array.from(bondedList.querySelectorAll('input[type=checkbox]'))
+                        .filter(cb => cb.checked && !cb.disabled);
+    if(!checks.length){ actionFeedback(detectFb, false, "check at least one device"); return; }
+    const devices = checks.map(cb => ({address: cb.dataset.address, source: "ble", origin: "bonded"}));
+    let r;
+    try{ r = await fetch(location.origin+"/api/identity/devices",
+      {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+       body:JSON.stringify({person, devices})}); }catch{}
+    if(r && r.ok){
+      let j; try{ j = await r.json(); }catch{ j = {}; }
+      actionFeedback(detectFb, true, null, "✓ registered"); renderList(j.devices);
+      bondedBox.hidden = true;               // collapse the suggestion list after a confirm
+    } else actionFeedback(detectFb, false, "couldn't register — check the name");
+  };
+
+  // (2) Manual add — address + name for anything not bonded (origin='manual').
+  manualForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const address = (manualForm.address.value || "").trim();
+    const label   = (manualForm.label.value || "").trim();
+    const source  = manualForm.source.value || "ble";
+    if(!address){ actionFeedback(manualFb, false, "enter an address"); return; }
+    if(!label){ actionFeedback(manualFb, false, "enter a name"); return; }
+    let r;
+    try{ r = await fetch(location.origin+"/api/identity/devices",
+      {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+       body:JSON.stringify({person: label, devices:[{address, source, origin:"manual"}]})}); }catch{}
+    if(r && r.ok){
+      let j; try{ j = await r.json(); }catch{ j = {}; }
+      actionFeedback(manualFb, true, null, "✓ added"); renderList(j.devices); manualForm.reset();
+    } else actionFeedback(manualFb, false, "invalid address or name");
+  };
+
+  renderList(seed);                          // seed the registered list from the probe we already read
+}
+renderIdentity();
 
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";

@@ -36,6 +36,10 @@ async def test_slow_source_does_not_starve_fast_ones():
 
 def test_default_sources_lists_network_ruview_sim(monkeypatch):
     monkeypatch.delenv("WAVR_NET_MACS", raising=False)
+    # Clear the person-map envs too so the default set is deterministic regardless of
+    # the operator's .env (a populated WAVR_BLE_KNOWN registers a 'ble' source).
+    monkeypatch.delenv("WAVR_BLE_KNOWN", raising=False)
+    monkeypatch.delenv("WAVR_NET_KNOWN", raising=False)
     from wavr.config import load_config
     from wavr.app import _default_sources
     srcs = _default_sources(load_config())
