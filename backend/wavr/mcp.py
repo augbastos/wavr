@@ -346,7 +346,11 @@ def call_ha_service(ha_client: HAServiceCaller | None, domain: str, service: str
 def build_mcp_server(provider: StateProvider, name: str = "wavr",
                      ha_client: HAEntitiesProvider | None = None,
                      control_enabled: bool = False,
-                     allowed_services=frozenset()):
+                     allowed_services=frozenset(), *,
+                     expose_control: bool = True,
+                     stateless_http: bool = False,
+                     json_response: bool = False,
+                     transport_security=None):
     """Build the MCP server: the always-on read tools + the opt-in control tool.
 
     The MCP SDK is imported HERE, lazily: importing `wavr.mcp` never needs the [mcp]
@@ -367,10 +371,29 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
         off the read-only default is preserved: nothing can actuate.
       * `allowed_services`: the set of permitted `domain.service` pairs (ADR-0005 §5).
         Sensitive domains are refused in code regardless (ADR-0005 §4).
+
+    Transport shaping (ADR-0008, Slice 1 -- the in-app streamable-HTTP mount):
+      * `expose_control` (default True): when False, `call_ha_service` is NOT registered
+        at all -- ABSENT from `list_tools`, not merely inert. The HTTP transport passes
+        False so it is READ-ONLY by construction (mcp.py's control gate is process-global,
+        not per-caller, so control must not be reachable over the network). The stdio
+        bridge keeps the default (full gated toolset), unchanged.
+      * `stateless_http` / `json_response` / `transport_security`: forwarded straight to
+        FastMCP for the streamable-HTTP transport. Defaults reproduce the plain stdio
+        server byte-for-byte (no kwargs passed to FastMCP), so the stdio path is untouched.
     """
     from mcp.server.fastmcp import FastMCP   # lazy: optional [mcp] extra
 
-    server = FastMCP(name)
+    # Only pass the streamable-HTTP kwargs when explicitly set, so the default (stdio)
+    # construction stays `FastMCP(name)` -- byte-identical to before this slice.
+    _fastmcp_kwargs: dict = {}
+    if stateless_http:
+        _fastmcp_kwargs["stateless_http"] = True
+    if json_response:
+        _fastmcp_kwargs["json_response"] = True
+    if transport_security is not None:
+        _fastmcp_kwargs["transport_security"] = transport_security
+    server = FastMCP(name, **_fastmcp_kwargs)
 
     # Each tool wrapper is given a private name (`_tool_*`) so it does NOT shadow the
     # module-level plain function it delegates to -- shadowing made those names
@@ -394,24 +417,37 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
         return get_house_map(provider)
 
     @server.tool(name="get_ha_entities")
-    def _tool_get_ha_entities() -> list[dict]:
+    async def _tool_get_ha_entities() -> list[dict]:
         """List Home Assistant entities (entity_id/state/friendly_name/domain).
-        Read-only + local; empty list when HA is not configured."""
-        return get_ha_entities(ha_client)
+        Read-only + local; empty list when HA is not configured.
 
-    @server.tool(name="call_ha_service")
-    def _tool_call_ha_service(domain: str, service: str, entity_id: str) -> dict:
-        """Ask Home Assistant to run a service on an entity (CONTROL/WRITE, ADR-0005).
+        Async + off-loop (ADR-0008 red-team MED): get_ha_entities makes a SYNCHRONOUS HA
+        HTTP GET (urllib, ~5s timeout). Over the in-app /mcp mount the tool runs on the
+        MAIN event loop, so a slow/blackholed HA would otherwise stall the whole server
+        (dashboard WS + every peer). Offload the blocking call to a worker thread so one
+        slow HA read can never freeze the loop. Harmless on the stdio bridge (separate
+        process); anyio ships with the [mcp] SDK, imported lazily like FastMCP above."""
+        import anyio
+        return await anyio.to_thread.run_sync(get_ha_entities, ha_client)
 
-        Wavr does not drive the device -- HA executes. DEFAULT-OFF: inert unless
-        WAVR_MCP_CONTROL is on. Only allowlisted `domain.service` pairs are permitted, and
-        sensitive domains (camera / media_player / lock / alarm_control_panel, or anything
-        that could enable a camera/mic) are always refused -- consent is not wired yet, so
-        a camera/mic can NEVER be enabled here. Returns `{"ok": bool, "status", ...}`;
-        refusals do not error, they explain."""
-        return call_ha_service(ha_client, domain, service, entity_id,
-                               control_enabled=control_enabled,
-                               allowed_services=allowed_services)
+    # CONTROL/WRITE tool -- registered ONLY when expose_control is True. The HTTP transport
+    # passes expose_control=False so this tool is ABSENT from list_tools (not merely inert):
+    # mcp.py's control gate is process-global, not per-caller, so control must never be
+    # reachable over the network (ADR-0008). The stdio bridge keeps it (default True).
+    if expose_control:
+        @server.tool(name="call_ha_service")
+        def _tool_call_ha_service(domain: str, service: str, entity_id: str) -> dict:
+            """Ask Home Assistant to run a service on an entity (CONTROL/WRITE, ADR-0005).
+
+            Wavr does not drive the device -- HA executes. DEFAULT-OFF: inert unless
+            WAVR_MCP_CONTROL is on. Only allowlisted `domain.service` pairs are permitted, and
+            sensitive domains (camera / media_player / lock / alarm_control_panel, or anything
+            that could enable a camera/mic) are always refused -- consent is not wired yet, so
+            a camera/mic can NEVER be enabled here. Returns `{"ok": bool, "status", ...}`;
+            refusals do not error, they explain."""
+            return call_ha_service(ha_client, domain, service, entity_id,
+                                   control_enabled=control_enabled,
+                                   allowed_services=allowed_services)
 
     # EXTENSION POINT (future slice -- NOT implemented here): a separate network slice
     # will add a read-only `get_network_inventory()` tool listing devices seen on the
