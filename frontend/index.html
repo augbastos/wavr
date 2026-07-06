@@ -1119,6 +1119,52 @@
        preventing iOS Safari zoom-on-focus and keeping the ~44px touch minimum. */
     .setup-form input,.onvif-connect input,.det-scan-creds input{font-size:16px;}
   }
+
+  /* ============================================================================
+     Wavr Core Panel (?core / window.WAVR_CORE): ambient home-status face.
+     Additive and self-contained: every rule below is scoped under #corePanel,
+     so it has zero visual effect in the three existing modes (live/companion/
+     simulated), since the element stays native [hidden] there and this block
+     never matches anything on screen. Deliberate palette discipline, distinct
+     from the rest of this file's louder chrome: the hero stays neutral
+     (--text); --accent (green) marks ONLY a confirmed-occupied room's dot
+     (reserved-green rule, §3); --warn marks a degraded Core/Rede signal or a
+     pending alert, but never --danger (a soft, usually self-healing state,
+     not a hard failure). One fade on wake/sleep, no perpetual animation: the
+     single allowed heartbeat lives on the dashboard underneath and is simply
+     covered while ambient, never duplicated (§2.1, calm-by-default).
+     See docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md.
+     ============================================================================ */
+  #corePanel{position:fixed;inset:0;z-index:900;display:flex;flex-direction:column;
+             justify-content:space-between;gap:3vh;padding:4vh 5vw;
+             background:radial-gradient(ellipse at 50% 38%,var(--surface) 0%,var(--bg) 72%);
+             color:var(--text);opacity:1;transition:opacity .6s ease;
+             font-variant-numeric:tabular-nums;}
+  #corePanel.core-dissolved{opacity:0;pointer-events:none;}
+  .core-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}
+  .core-time{margin:0;font-size:clamp(22px,3.4vw,36px);font-weight:600;letter-spacing:.01em;
+             font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .core-date{margin:3px 0 0;font-size:clamp(12px,1.5vw,16px);color:var(--dim);
+             text-transform:capitalize;}
+  .core-health{display:flex;gap:14px;}
+  .core-health-item{font-size:clamp(12px,1.6vw,17px);color:var(--dim);font-weight:500;}
+  .core-health-item.core-health-warn{color:var(--warn);}
+  .core-hero{flex:1;display:flex;align-items:center;justify-content:center;position:relative;
+             min-height:0;}
+  /* Signature ambient wave field (replaces the old big-text "CASA VAZIA"/"N EM CASA" hero,
+     see docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md): a canvas filling the
+     hero area, drawn by the gated Core Panel script below as layered green sine ribbons.
+     Decorative only (aria-hidden) — #coreHeroSr carries the equivalent text for screen
+     readers, same information the old text hero announced, just no longer painted. */
+  .core-wave{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  .core-bottom{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
+               flex-wrap:wrap;}
+  .core-rooms{display:flex;gap:18px;flex-wrap:wrap;}
+  .core-room-chip{display:inline-flex;align-items:center;gap:6px;
+                  font-size:clamp(14px,2vw,20px);color:var(--text);}
+  .core-dot{color:var(--accent);font-size:.6em;}
+  .core-alerts{font-size:clamp(13px,1.8vw,18px);color:var(--warn);font-weight:600;}
+
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
     .bar>i,.ctl,.rm,.radar-target,.radar-zone,.pill,.house,.hero-line1,.radar-room,
@@ -1128,6 +1174,7 @@
     .live-badge i{animation:none;}   /* heartbeat dot goes static, never removed */
     .scan-spin{animation:none;border-top-color:var(--line-strong);}   /* scan busy: static ring, no spin */
     .tip-pop{transition:none;}       /* v2 tooltips: no fade — popover just appears */
+    #corePanel{transition:none;}     /* Core Panel: wake/sleep jump-cuts instead of fading */
   }
 </style>
 </head>
@@ -1289,8 +1336,8 @@
     <!-- Companion pairing screen (private-LAN viewer, no token yet). Hidden in central + demo. -->
     <div id="companionPair" class="cpair" hidden>
       <form id="cpairForm" class="cpair-card" aria-labelledby="cpair-h">
-        <h2 id="cpair-h">Pair with the hub</h2>
-        <p class="cpair-sub">Enter the 8-digit code shown on the hub's panel to view this home on this device.</p>
+        <h2 id="cpair-h">Pair with the Core</h2>
+        <p class="cpair-sub">Enter the 8-digit code shown on the Core's panel to view this home on this device.</p>
         <input id="cpairCode" class="cpair-input" inputmode="numeric" autocomplete="one-time-code"
                pattern="[0-9]*" maxlength="8" placeholder="00000000" aria-label="pairing code" autofocus>
         <button type="submit" class="ctl cpair-btn" disabled>Pair</button>
@@ -1917,6 +1964,35 @@
     <span class="lockbadge"><svg aria-hidden="true"><use href="#ic-lock"/></svg>Nothing leaves home</span>
   </div>
   <div class="overlay-content" id="setupContent"></div>
+</div>
+
+<!-- ============ CORE PANEL (Phase 1 of "Wavr OS"): ?core / window.WAVR_CORE ambient
+     home-status face. Native [hidden] and completely inert in the three existing modes
+     (live/companion/simulated); only the gated script block near the end of <body>
+     ever unhides it. Shown by default in Core mode; dissolves on any touch/click/keydown
+     to reveal the dashboard beneath, returns after ~60s idle. Every value below is filled
+     in by JS from data the dashboard already consumes (RoomState via __wavrRS, /api/status
+     via __wavrStatus, the existing #alertList poll); no new WebSocket, no new endpoint.
+     See docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md. ============ -->
+<div id="corePanel" hidden role="group" aria-label="Wavr Core ambient status">
+  <div class="core-top">
+    <div>
+      <p id="coreClockTime" class="core-time">--:--</p>
+      <p id="coreClockDate" class="core-date"></p>
+    </div>
+    <div id="coreHealth" class="core-health" aria-live="polite">
+      <span id="coreHealthCore" class="core-health-item">Core …</span>
+      <span id="coreHealthNet" class="core-health-item">Rede …</span>
+    </div>
+  </div>
+  <div class="core-hero">
+    <canvas id="coreWave" class="core-wave" aria-hidden="true"></canvas>
+    <span id="coreHeroSr" class="sr-only" aria-live="polite">A carregar…</span>
+  </div>
+  <div class="core-bottom">
+    <div id="coreRooms" class="core-rooms"></div>
+    <span id="coreAlerts" class="core-alerts" hidden></span>
+  </div>
 </div>
 
 <!-- v2 tooltips: THE one shared context-help popover (positioned by initTooltips; text is
@@ -9172,6 +9248,335 @@ try {
   }
   new MutationObserver(scheduleStamp).observe(document.body, { childList: true, subtree: true });
   stampSrTips();
+})();
+</script>
+<script>
+// ============================================================================
+// Wavr Core Panel (Phase 1 of "Wavr OS"): ?core / window.WAVR_CORE ambient
+// home-status face. Additive and fully gated: the very first statement below
+// returns immediately unless core mode is requested, so the three existing
+// modes (live/companion/simulated) run byte-for-byte unchanged. This block
+// touches nothing outside #corePanel and a handful of already-established
+// extension hooks when core mode is off.
+//
+// Reuses EXISTING data plumbing only, per the design spec's data-sources list:
+//   - RoomState: chains onto window.__wavrRS, the same hook the Stage-2/3
+//     command-center blocks above already chain onto (no second WebSocket).
+//     Reads the dashboard's own top-level `roomOcc` accumulator directly
+//     (updateHouse() populates it earlier in the same handle() call, before
+//     __wavrRS fires), the same documented "readable from later script
+//     blocks" pattern already used for MODE elsewhere in this file.
+//   - "Rede" (network) health: chains onto window.__wavrStatus, fed by the
+//     SAME /api/status poll renderStatus()/renderControls() already run
+//     every 3s in live mode. Deliberately NOT /api/health: that endpoint is a
+//     USER-TRIGGERED, confirm-gated egress check (see the "LOAD-BEARING"
+//     comment near healthBtn elsewhere in this file). Auto-polling it here
+//     would silently re-trigger a disclosed-only public-DNS ping on every
+//     idle cycle, which would violate that invariant. /api/status's existing
+//     internet-monitor field is the honest, already-flowing substitute.
+//   - "Core" (backend/stream) health: chains onto window.setReconnecting,
+//     which handle() already calls on every WS open/close.
+//   - Alert count: observes the EXISTING #alertList DOM (rebuilt every 15s by
+//     renderNetwork()'s own poll) via MutationObserver, the same zero-new-
+//     fetch technique the header's #pillRede badge already uses above.
+//
+// Assumption flagged for review: "N EM CASA" counts ROOMS with confirmed
+// presence, not a literal person headcount. RoomState never carries a people
+// count (fusion is per-room occupied/confidence, never a headcount), so
+// counting occupied rooms is the honest reading available from this feed.
+// See docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md.
+// ============================================================================
+(function(){
+  "use strict";
+  var CORE_MODE = false;
+  try{ CORE_MODE = new URLSearchParams(location.search).has("core") || !!window.WAVR_CORE; }catch(e){}
+  if(!CORE_MODE) return;   // gate: every existing mode exits here, nothing below ever runs
+
+  var panel = document.getElementById("corePanel");
+  if(!panel) return;
+  document.body.classList.add("core-mode");
+  panel.hidden = false;   // shown by default (ambient face); dissolves on the first interaction
+
+  // ---------------- Clock (top-left): local time, ticks once a second ----------------
+  var timeEl = document.getElementById("coreClockTime");
+  var dateEl = document.getElementById("coreClockDate");
+  function tickClock(){
+    var d = new Date();
+    if(timeEl) timeEl.textContent = d.toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
+    if(dateEl) dateEl.textContent = d.toLocaleDateString("pt-BR", {weekday:"short", day:"2-digit", month:"2-digit"});
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+
+  // ---------------- Ambient wave field (the hero) + active rooms: fed by RoomState
+  // (__wavrRS chain). The center hero is now a canvas wave, not text — the "signature
+  // animated green wave/radar" the owner asked for in place of the big "CASA VAZIA" word
+  // (see docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md; that doc's §"ambient
+  // face" text description of the hero predates this change). #coreHeroSr carries the exact
+  // same information the old text hero rendered, off-screen, so occupancy is still announced
+  // to screen readers even though sighted users now read the wave instead of a word.
+  var heroSrEl   = document.getElementById("coreHeroSr");
+  var roomsEl    = document.getElementById("coreRooms");
+  var waveCanvas = document.getElementById("coreWave");
+  var haveFrame  = false;   // no RoomState frame yet this session: calm/idle wave, neutral sr text
+  var prevRoomOcc = {};     // per-room edge detection: a fresh true flips a transient "pulse"
+
+  // ---- Wave engine -----------------------------------------------------------------
+  // A handful of layered sine ribbons, additive-blended (globalCompositeOperation
+  // "lighter") for a soft neon glow — no shadowBlur (recomputes per pixel every frame,
+  // too costly 24/7 on a weak always-on phone) and no three.js/WebGL (the dashboard's
+  // 3D map already owns the one GPU context this page needs; a fixed handful of sin()
+  // samples on Canvas 2D is orders of magnitude cheaper). A single scalar "energy"
+  // (0 = empty/calm .. ~1 = many confirmed rooms at high confidence/alive) drives
+  // amplitude, drift speed and brightness together, smoothly interpolated toward its
+  // target every drawn frame — never a hard cut between calm and alive. Capped at
+  // ~30fps and fully paused whenever the panel isn't the active view (dissolved by a
+  // touch, or the document itself hidden) via wave.stop()/start() below.
+  var wave = (function(){
+    var ctx = waveCanvas ? waveCanvas.getContext("2d") : null;
+    var FRAME_MS = 1000 / 30;
+    var W = 0, H = 0, dpr = 1;
+    var energy = 0, targetEnergy = 0, pulseE = 0;
+    var t0 = null, lastDraw = null, raf = null, running = false;
+    // amplitude/alpha/speed weights per layer — index 0 calmest/back, 2 liveliest/front
+    var LAYERS = [
+      { freq: 1.5,  speed: 0.05,   ampBase: 0.045, ampGain: 0.22, width: 1.3, alphaBase: 0.16, alphaGain: 0.24, phase: 0.0 },
+      { freq: 1.0,  speed: -0.03,  ampBase: 0.065, ampGain: 0.34, width: 1.7, alphaBase: 0.11, alphaGain: 0.30, phase: 2.1 },
+      { freq: 0.65, speed: 0.018,  ampBase: 0.085, ampGain: 0.48, width: 2.2, alphaBase: 0.08, alphaGain: 0.34, phase: 4.4 }
+    ];
+
+    function resize(){
+      if(!waveCanvas || !waveCanvas.parentElement) return;
+      var rect = waveCanvas.parentElement.getBoundingClientRect();
+      dpr = Math.min(window.devicePixelRatio || 1, 1.5);   // cap backing-store cost (G9 panel is ~2.75x)
+      W = Math.max(1, Math.round(rect.width));
+      H = Math.max(1, Math.round(rect.height));
+      waveCanvas.width  = Math.round(W * dpr);
+      waveCanvas.height = Math.round(H * dpr);
+      waveCanvas.style.width  = W + "px";
+      waveCanvas.style.height = H + "px";
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    // Pure function of (t, e): the animated loop feeds it real elapsed seconds, the
+    // reduced-motion path always feeds t=0 so the shape only ever changes with energy,
+    // never with the clock (§ reduced-motion below).
+    function renderFrame(t, e){
+      if(!ctx || !W || !H) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "lighter";
+      var midY = H / 2, steps = 48;   // cheap: ~48 sin() samples per layer per frame
+      LAYERS.forEach(function(layer){
+        var amp   = (layer.ampBase + layer.ampGain * e) * H * 0.5;
+        var alpha = Math.min(1, layer.alphaBase + layer.alphaGain * e);
+        var phase = layer.phase + t * layer.speed * (1 + e * 1.5) * Math.PI * 2;
+        ctx.beginPath();
+        for(var i = 0; i <= steps; i++){
+          var x = (i / steps) * W;
+          var y = midY + Math.sin((i / steps) * layer.freq * Math.PI * 2 + phase) * amp;
+          if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        // Cheap glow: a wide faint stroke under a thin bright one, both additive —
+        // instead of shadowBlur, which is too costly per-frame at three layers, 24/7.
+        ctx.lineWidth = layer.width * 3.2; ctx.strokeStyle = "rgba(61,181,74,"  + (alpha * 0.35) + ")"; ctx.stroke();
+        ctx.lineWidth = layer.width;       ctx.strokeStyle = "rgba(130,235,150," + alpha + ")";         ctx.stroke();
+      });
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+    function drawStatic(){
+      // reduced-motion: one deterministic frame, no clock — only "energy" ever moves it.
+      renderFrame(0, Math.min(1.15, targetEnergy));
+    }
+
+    function tick(now){
+      if(!running) return;
+      raf = requestAnimationFrame(tick);
+      if(lastDraw !== null && now - lastDraw < FRAME_MS) return;   // ~30fps cap regardless of panel refresh rate
+      lastDraw = now;
+      if(t0 === null) t0 = now;
+      energy += (targetEnergy - energy) * 0.05;   // smooth interpolation, no hard jumps
+      pulseE *= 0.94;                              // transient "movement" pulse decays away
+      renderFrame((now - t0) / 1000, Math.min(1.15, energy + pulseE));
+    }
+
+    function start(){
+      if(REDUCED_MOTION.matches){ drawStatic(); return; }   // never loop under reduced motion
+      if(running) return;
+      running = true; lastDraw = null;
+      resize();   // re-measure in case layout wasn't settled when this module was built
+      raf = requestAnimationFrame(tick);
+    }
+    function stop(){
+      running = false;
+      if(raf) cancelAnimationFrame(raf);
+      raf = null;
+    }
+    function setEnergy(next){
+      targetEnergy = Math.max(0, Math.min(1, next));
+      if(REDUCED_MOTION.matches) drawStatic();   // reflect the new state immediately, still no motion
+    }
+    function pulse(){
+      if(REDUCED_MOTION.matches) return;   // a transient boost IS motion — skip it entirely
+      pulseE = Math.min(0.5, pulseE + 0.32);
+    }
+    return { start: start, stop: stop, setEnergy: setEnergy, pulse: pulse };
+  })();
+
+  function renderHero(){
+    // 'casa' is the house-level identities-only pseudo-room the backend uses for BLE/network
+    // presence (never a real room; see the backend's own "house-level only, never a real
+    // room" invariant) — it still counts toward home/away (matches updateHouse()'s own
+    // definition exactly) but is never shown as a room chip or counted into N.
+    var all  = (typeof roomOcc  !== "undefined" && roomOcc)  ? roomOcc  : {};
+    var conf = (typeof roomConf !== "undefined" && roomConf) ? roomConf : {};
+    var names = Object.keys(all);
+    var homeOccupied = names.some(function(r){ return all[r]; });
+    var realOccupied = names.filter(function(r){ return r !== "casa" && all[r]; });
+
+    if(heroSrEl){
+      heroSrEl.textContent = !haveFrame ? "A carregar…"
+        : !homeOccupied ? "CASA VAZIA"
+        : realOccupied.length > 0 ? (realOccupied.length + " EM CASA")
+        : "EM CASA";
+    }
+
+    // Wave energy target: 0 (empty house, calm) .. ~1 (several confirmed rooms at high
+    // fusion confidence, alive) — roomsFactor rewards more active rooms, maxConf rewards
+    // fusion certainty; both read from roomOcc/roomConf for the exact reason the old text
+    // hero read them. 'casa'-only presence (house-level BLE/network, no specific room) get
+    // a mid-confidence default since there is no per-room confidence to read in that case.
+    var target = 0;
+    if(homeOccupied){
+      var roomsFactor = Math.min(realOccupied.length, 4) / 4;
+      var maxConf = realOccupied.length
+        ? Math.max.apply(null, realOccupied.map(function(r){ return conf[r] || 0; }))
+        : (conf.casa || 0.5);
+      target = 0.30 + 0.35 * roomsFactor + 0.30 * maxConf;
+    }
+    wave.setEnergy(target);
+
+    if(roomsEl){
+      roomsEl.textContent = "";
+      realOccupied.forEach(function(name){
+        var chip = document.createElement("span");
+        chip.className = "core-room-chip";
+        var dot = document.createElement("span");
+        dot.className = "core-dot"; dot.setAttribute("aria-hidden", "true"); dot.textContent = "●";
+        chip.appendChild(dot);
+        chip.appendChild(document.createTextNode(" " + name));   // room name is RoomState data (untrusted) — textContent only
+        roomsEl.appendChild(chip);
+      });
+    }
+  }
+  renderHero();
+  if(!document.hidden) wave.start();   // don't spin up the loop if the kiosk happened to load backgrounded
+
+  var _rsCore = window.__wavrRS;
+  window.__wavrRS = function(rs){
+    try{ if(_rsCore) _rsCore(rs); }catch(e){}
+    try{
+      haveFrame = true;
+      // "Movement" pulse: THIS frame's room just flipped from unoccupied to occupied — a
+      // fresh detection event, not steady state — gives the wave a brief lift on top of the
+      // smoothed baseline (design: "if there's movement the line gets more alive").
+      if(rs && rs.room && rs.occupied && !prevRoomOcc[rs.room]) wave.pulse();
+      if(rs && rs.room) prevRoomOcc[rs.room] = !!rs.occupied;
+      renderHero();
+    }catch(e){}
+  };
+
+  // ---------------- Core / Rede health (top-right) ----------------
+  var coreHealthCoreEl = document.getElementById("coreHealthCore");
+  var coreHealthNetEl  = document.getElementById("coreHealthNet");
+  var wsDownCore = false;        // Core: the live WS to the backend is down/reconnecting
+  var internetOkCore = null;     // Rede: null = unknown (monitor off, or no /api/status yet)
+
+  function renderCoreHealth(){
+    if(coreHealthCoreEl){
+      coreHealthCoreEl.textContent = "Core " + (wsDownCore ? "⚠" : "✓");
+      coreHealthCoreEl.className = "core-health-item" + (wsDownCore ? " core-health-warn" : "");
+    }
+    if(coreHealthNetEl){
+      var label = internetOkCore === true ? "Rede ✓" : internetOkCore === false ? "Rede ⚠" : "Rede …";
+      coreHealthNetEl.textContent = label;
+      coreHealthNetEl.className = "core-health-item" + (internetOkCore === false ? " core-health-warn" : "");
+    }
+  }
+  renderCoreHealth();
+
+  if(typeof window.setReconnecting === "function"){
+    var _srCore = window.setReconnecting;
+    window.setReconnecting = function(on){
+      try{ _srCore(on); }catch(e){}
+      wsDownCore = !!on;
+      renderCoreHealth();
+    };
+  }
+
+  var _statusCore = window.__wavrStatus;
+  window.__wavrStatus = function(s){
+    try{ if(_statusCore) _statusCore(s); }catch(e){}
+    try{
+      var inet = (s && s.internet && typeof s.internet === "object") ? s.internet : {};
+      internetOkCore = inet.ok === true ? true : inet.ok === false ? false : null;
+      renderCoreHealth();
+    }catch(e){}
+  };
+
+  // ---------------- Alert count (bottom-right): mirrors #alertList, zero new fetches ----------------
+  var alertsEl = document.getElementById("coreAlerts");
+  function renderCoreAlerts(){
+    if(!alertsEl) return;
+    var list = document.getElementById("alertList");
+    var n = list ? list.querySelectorAll(".alert-row").length : 0;
+    alertsEl.hidden = !n;
+    alertsEl.textContent = n ? (n + (n > 1 ? " alertas" : " alerta")) : "";
+  }
+  var alertListEl = document.getElementById("alertList");
+  if(alertListEl) new MutationObserver(renderCoreAlerts).observe(alertListEl, {childList: true});
+  renderCoreAlerts();
+
+  // ---------------- Wake / idle: touch, tap, click or keydown anywhere reveals the
+  // dashboard; about 60s of no interaction brings the ambient face back. One fade,
+  // no perpetual loop (respects prefers-reduced-motion via the CSS media query above).
+  // The wave field is stopped for the entire time the ambient face is covered by the
+  // dashboard — no reason to keep spending frames animating a canvas nobody can see. ----------------
+  var IDLE_MS = 60000;
+  var idleTimer = null;
+  var dissolved = false;
+
+  function returnToAmbient(){
+    dissolved = false;
+    panel.classList.remove("core-dissolved");
+    panel.removeAttribute("aria-hidden");
+    clearTimeout(idleTimer);
+    if(!document.hidden) wave.start();   // ambient face is back on top: resume the wave
+  }
+  function wake(){
+    if(!dissolved){
+      dissolved = true;
+      panel.classList.add("core-dissolved");
+      panel.setAttribute("aria-hidden", "true");
+      wave.stop();   // dashboard is now on top: stop spending frames on a hidden canvas
+    }
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(returnToAmbient, IDLE_MS);
+  }
+  ["pointerdown", "touchstart", "keydown"].forEach(function(evt){
+    document.addEventListener(evt, wake, true);
+  });
+
+  // Also pause while the document itself is hidden (screen off / app backgrounded) —
+  // rAF may already throttle in that state on some browsers, but this makes the stop
+  // explicit and instant rather than relying on that, and resumes on return only if the
+  // ambient face is actually the one on top (not mid-dashboard-interaction).
+  document.addEventListener("visibilitychange", function(){
+    if(document.hidden) wave.stop();
+    else if(!dissolved) wave.start();
+  });
 })();
 </script>
 </body>
