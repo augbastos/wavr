@@ -1,8 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- WebView navigation requires INTERNET even for loopback. Nothing else. -->
+    <!-- WebView navigation requires INTERNET even for loopback. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- System status indicators surfaced to the panel via window.WavrNative. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Bluetooth on/off read. BLUETOOTH_CONNECT (API 31+) is declared but NOT
+         requested at runtime: reading adapter state does not require it, and a
+         kiosk simply reports bt:false rather than prompting. Legacy BLUETOOTH
+         covers API 26-30. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Biometric unlock. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
         android:allowBackup="false"

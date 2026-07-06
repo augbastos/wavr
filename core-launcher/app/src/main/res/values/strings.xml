@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">Wavr Core</string>
     <string name="starting">Wavr Core starting…</string>
+    <string name="auth_title">Unlock Wavr</string>
+    <string name="auth_cancel">Cancel</string>
 </resources>
