@@ -149,8 +149,15 @@ class NetworkSource:
                  room: str = "casa", interval: float = 15.0,
                  grace: int = 2, present_confidence: float = 0.8,
                  known: dict[str, str] | None = None,
-                 emit_identity: bool = False):
+                 emit_identity: bool = False,
+                 known_provider: Callable[[], dict[str, str]] | None = None):
         self._known = {m.replace("-", ":").lower() for m in known_macs}
+        # LIVE consent registry seam: when a provider is injected it is re-read at the
+        # start of every scan cycle; its {mac: person} entries are UNIONED into both
+        # the presence MAC set and the identity labels, so a network device REGISTERED
+        # (or opted-out) via the identity registry counts (or stops counting) toward
+        # presence on the next cycle -- no restart. Default None -> unchanged.
+        self._known_provider = known_provider
         self._scan = scan or arp_scan
         self._room = room
         self._interval = interval
@@ -165,9 +172,19 @@ class NetworkSource:
         self._emit_identity = emit_identity
         self._missed = grace + 1  # start "absent" until first sighting
 
+    def _current(self) -> tuple[set[str], dict[str, str]]:
+        """(presence MAC set, {mac: person} labels) for THIS cycle: the frozen
+        construction values unioned with the live provider result when injected."""
+        if self._known_provider is None:
+            return self._known, self._known_labels
+        prov = {m.replace("-", ":").lower(): p
+                for m, p in self._known_provider().items()}
+        return self._known | set(prov), {**self._known_labels, **prov}
+
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:
-            if self._known:
+            known, known_labels = self._current()
+            if known:
                 try:
                     seen = await self._scan()
                 except Exception:
@@ -175,7 +192,7 @@ class NetworkSource:
                     seen = set()
             else:
                 seen = set()
-            if self._known & seen:
+            if known & seen:
                 self._missed = 0
             else:
                 self._missed += 1
@@ -184,11 +201,11 @@ class NetworkSource:
             # when the gate is on. rssi is None — an ARP scan gives no signal
             # strength. Empty during a grace-held miss (nothing seen this cycle).
             identities: tuple = ()
-            if present and self._emit_identity and self._known_labels:
+            if present and self._emit_identity and known_labels:
                 identities = tuple(
-                    Identity(person=self._known_labels[m], source="network", rssi=None)
-                    for m in sorted(self._known_labels)
-                    if m in seen and self._known_labels.get(m)
+                    Identity(person=known_labels[m], source="network", rssi=None)
+                    for m in sorted(known_labels)
+                    if m in seen and known_labels.get(m)
                 )
             yield SensingEvent(
                 room=self._room, modality="network", presence=present,
