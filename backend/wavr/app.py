@@ -5,12 +5,15 @@ import copy
 import hmac
 import ipaddress
 import logging
+import math
 import re
 import sqlite3
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -191,6 +194,28 @@ def _camera_factory(cam: dict, cfg, on_health=None):
                                 interval=cfg.cam_interval, confidence=cam["confidence"],
                                 on_health=on_health,
                                 unhealthy_secs=cfg.cam_unhealthy_secs)
+
+
+def _json_safe(value):
+    """Recursively replace non-finite floats (NaN/+Inf/-Inf) with their string form so a
+    structure is safe for Starlette's JSONResponse.render, which calls
+    json.dumps(..., allow_nan=False) and raises ValueError on a bare NaN/Inf.
+
+    This is the load-bearing half of the non-finite-telemetry fix: FastAPI's default
+    RequestValidationError handler echoes the OFFENDING input back in each error's
+    "input"/"ctx" fields. When a client sends a raw body like `{"battery_pct": NaN}`
+    (Starlette's json.loads accepts the literal), that NaN reaches the 422 render and turns
+    it into a 500 + traceback -- breaking the "malformed -> 4xx, never 500" invariant. Only
+    non-finite floats are rewritten; every ordinary value passes through unchanged, so the
+    normal 422 body shape is preserved byte-for-byte. Applied app-wide because the footgun
+    affects every float-validated route, not just /api/telemetry."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
@@ -514,6 +539,21 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     _devices.close()
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_handler(request: Request, exc: RequestValidationError):
+        # JSON-SAFE 422 render (app-wide). FastAPI's default handler returns
+        # {"detail": jsonable_encoder(exc.errors())} -- but exc.errors() echoes the caller's
+        # OFFENDING input, and a raw body like `{"battery_pct": NaN}` (Starlette's json.loads
+        # accepts the NaN/Infinity literals; `1e400` parses to +Inf) leaves a non-finite float
+        # in that echo. Starlette's JSONResponse.render then does json.dumps(allow_nan=False)
+        # -> ValueError -> 500 + traceback, breaking "malformed -> 4xx, never 500". We mirror
+        # the default shape EXACTLY and only sanitize non-finite floats, so ordinary
+        # validation errors keep their usual detail list untouched. Same 422 status.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": _json_safe(jsonable_encoder(exc.errors()))},
+        )
 
     # Phone-telemetry ingest seam (blueprint §4). The hub (built above, before the source
     # register loop, so PhoneSensorSource binds the SAME instance) is attached here; the

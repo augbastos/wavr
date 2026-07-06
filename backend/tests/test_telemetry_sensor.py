@@ -162,6 +162,81 @@ def test_malformed_payload_is_4xx_never_500(app, bad):
     assert r.status_code != 500
 
 
+# --- STEP 2b: non-finite float hardening (red-team MEDIUM) -------------------------
+# Starlette's json.loads ACCEPTS the bare `NaN`/`Infinity`/`-Infinity` literals (and
+# `1e400` parses to +Inf), so a RAW body can smuggle a non-finite float past the
+# client-side encoder that httpx's json= rejects. Two failure modes this closes:
+#   (1) battery_pct/rssi = non-finite -> the 422 validation-error render echoed the NaN
+#       and Starlette's json.dumps(allow_nan=False) turned it into a 500 + traceback.
+#   (2) sensors.accel/gyro/mag/pressure/light = non-finite -> ACCEPTED (200) and enqueued
+#       onto the fusion hub -- a poison reading.
+# These MUST reach the server as a RAW body (content=), NOT json= (which rejects them
+# client-side), and the peer is built with raise_server_exceptions=False so a regressed
+# 500 surfaces as a RESPONSE we can assert on rather than an exception that errors the test.
+
+def _pair_raw(app, role="sensor"):
+    """Pair a device and return (peer, headers) where the peer surfaces a server 500 as a
+    RESPONSE (raise_server_exceptions=False) and the headers carry a JSON content type so a
+    raw `content=` body is parsed as JSON by Starlette."""
+    central = TestClient(app)
+    code = central.post("/api/pair-code", json={"role": role}, headers=CSRF).json()["code"]
+    peer = TestClient(app, client=("192.168.1.50", 12345), raise_server_exceptions=False)
+    body = peer.post("/api/pair", json={"code": code, "device_name": f"{role}-raw"}).json()
+    return peer, {"Authorization": f"Bearer {body['token']}", "Content-Type": "application/json"}
+
+
+NONFINITE_RAW_BODIES = [
+    '{"battery_pct": NaN}',
+    '{"rssi": Infinity}',
+    '{"rssi": -Infinity}',
+    '{"rssi": 1e400}',                        # 1e400 parses to +Inf
+    '{"battery_pct": 1e400}',
+    '{"sensors": {"accel": [NaN]}}',
+    '{"sensors": {"accel": [Infinity, 1.0]}}',
+]
+
+
+@pytest.mark.parametrize("raw", NONFINITE_RAW_BODIES)
+def test_nonfinite_raw_body_is_422_not_500(app, raw):
+    peer, headers = _pair_raw(app)
+    r = peer.post("/api/telemetry", content=raw, headers=headers)
+    assert r.status_code != 500, (raw, r.text)
+    assert r.status_code == 422, (raw, r.status_code, r.text)
+    # The 422 render itself must be valid JSON (proves it didn't choke echoing the NaN).
+    body = r.json()
+    assert isinstance(body, dict) and "detail" in body
+    # Nothing non-finite leaked onto the fusion hub.
+    assert app.state.telemetry_hub.qsize() == 0
+
+
+def test_accel_poison_is_rejected_and_not_enqueued(app):
+    # The array-element case explicitly: every sensor array must reject a non-finite sample
+    # and enqueue NOTHING, so no poison ever reaches PhoneSensorSource.
+    peer, headers = _pair_raw(app)
+    for raw in ('{"sensors": {"accel": [NaN]}}',
+                '{"sensors": {"accel": [Infinity, 1.0]}}',
+                '{"sensors": {"gyro": [-Infinity]}}',
+                '{"sensors": {"pressure": [1e400]}}',
+                '{"sensors": {"light": [NaN, 0.0]}}'):
+        r = peer.post("/api/telemetry", content=raw, headers=headers)
+        assert r.status_code == 422, (raw, r.status_code, r.text)
+        assert r.status_code != 500
+    assert app.state.telemetry_hub.qsize() == 0   # poison never reached the fusion hub
+
+
+def test_normal_invalid_value_still_clean_422_with_detail(app):
+    # Control: an ordinary out-of-range (finite) value still yields the usual 422 whose
+    # detail list carries the offending input -- the sanitizer only rewrites NON-finite
+    # floats, so normal validation errors are byte-identical to before.
+    peer, headers = _pair_raw(app)
+    r = peer.post("/api/telemetry", content='{"battery_pct": 999}', headers=headers)
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert isinstance(detail, list) and detail
+    assert any(e.get("input") == 999 for e in detail), detail
+    assert all(isinstance(e.get("msg"), str) and e.get("loc") for e in detail)
+
+
 def test_telemetry_without_token_is_rejected(app):
     # A tokenless in-subnet peer cannot even load /api/telemetry (middleware 403 -- no
     # token -> role None). Loopback root (no device) gets 401 from the handler itself.

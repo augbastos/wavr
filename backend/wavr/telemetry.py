@@ -49,7 +49,14 @@ class SensorBlock(BaseModel):
     sensor (denied permission, no baro/light hardware) is simply omitted, exactly
     as `sensors.ts` emits. Extra keys are rejected so junk can't ride along."""
 
-    model_config = ConfigDict(extra="forbid")
+    # allow_inf_nan=False: reject NaN/+Inf/-Inf on EVERY float here, INCLUDING the
+    # list-element floats (accel/gyro/mag/pressure/light). pydantic's default
+    # allow_inf_nan=True would accept `{"accel":[Infinity, NaN]}` (Starlette's json.loads
+    # parses those literals) and that non-finite garbage would be enqueued onto the fusion
+    # hub -- a poison read. Setting it on the model config makes each element a
+    # `finite_number`, so a non-finite sensor sample fails validation (422) at the boundary
+    # and nothing non-finite ever reaches PhoneSensorSource.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     accel: list[float] | None = Field(default=None, max_length=_MAX_AXIS)
     gyro: list[float] | None = Field(default=None, max_length=_MAX_AXIS)
@@ -72,7 +79,12 @@ class TelemetryPayload(BaseModel):
     Ranges are loose sanity bounds (reject obvious garbage, tolerate real hardware).
     Extra top-level keys are rejected: the contract is frozen for Phase 1."""
 
-    model_config = ConfigDict(extra="forbid")
+    # allow_inf_nan=False: reject NaN/+Inf/-Inf on battery_pct/rssi. Starlette's json.loads
+    # accepts the `NaN`/`Infinity` literals and `1e400` parses to +Inf; without this a
+    # non-finite battery_pct/rssi would either be accepted or (with ge/le) rejected in a way
+    # whose error render still echoes the non-finite value -> 500. Belt with braces: the
+    # JSON-safe validation-error handler in app.py also sanitizes the echoed input.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     device: str | None = Field(default=None, max_length=128)   # IGNORED for identity
     sensors: SensorBlock | None = None
