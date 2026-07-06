@@ -232,7 +232,19 @@ def test_status_shape_and_no_secrets():
 
         assert isinstance(body["sources"], list) and body["sources"]
         for s in body["sources"]:
-            assert set(s) == {"name", "active"}
+            # Item 5: honest source state -- name/active kept (additive), plus
+            # enabled/configured/state so the frontend can tell configured+active
+            # from configured+idle from off (absence => not configured / no hw).
+            assert set(s) == {"name", "active", "enabled", "configured", "state"}
+            assert isinstance(s["active"], bool) and isinstance(s["enabled"], bool)
+            assert s["configured"] is True          # in the list => configured
+            assert s["state"] in {"active", "idle", "off"}
+            # derived-state honesty: state must agree with the two bools, and an
+            # active task is always enabled (the manager only spawns enabled sources).
+            expected = "active" if s["active"] else "idle" if s["enabled"] else "off"
+            assert s["state"] == expected
+            if s["active"]:
+                assert s["enabled"] is True
         assert any(s["name"] == "sim" for s in body["sources"])
 
         expected_features = {

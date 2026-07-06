@@ -25,12 +25,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 import wavr.host_binding as host_binding_mod
+import wavr.netinventory as netinv_mod
 from wavr.app import create_app
 from wavr.camera_store import CameraStore
 from wavr.events import SensingEvent
 from wavr.fusion import _DEFAULT_FRESHNESS_S
 from wavr.host_binding import PairedHostBinder
-from wavr.netinventory import Device
+from wavr.netinventory import Device, apply_recognition, guess_device_type
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.recog import recognize, _WEIGHTS
 from wavr.sources.simulated import SimulatedSource
@@ -284,6 +285,43 @@ def test_recog_paired_sets_label_but_user_pin_wins_type():
     assert both.device_type == "laptop"                        # user pin is never overridden
     assert both.label == "Augusto phone"                       # label authority is the paired one
     assert any(s["signal"] == "paired" for s in both.sources)
+
+
+def test_scan_path_never_feeds_recog_a_paired_signal(monkeypatch):
+    """Guard (item-4 reviewers): the `paired` recog branch is INERT server-side.
+    The ONLY producer of a `paired` signal is the consent-gated view-time resolver
+    (wavr.api_inventory via PairedHostBinder). The scan/inventory recognition path
+    (guess_device_type / apply_recognition) must NEVER inject a `paired` key into
+    recog's signals dict -- so no client- or scan-controlled `paired` reaches recog
+    server-side. TEST-ONLY: recog.py behavior is unchanged; this pins the invariant."""
+    captured: list[dict] = []
+
+    real_recognize = netinv_mod.recognize
+
+    def _spy(signals):
+        captured.append(dict(signals))
+        return real_recognize(signals)
+
+    # Patch the name `apply_recognition`/`guess_device_type` actually call (both use
+    # the module-level `recognize` imported into wavr.netinventory).
+    monkeypatch.setattr(netinv_mod, "recognize", _spy)
+
+    dev = Device(mac="aa:bb:cc:dd:ee:ff", ip="192.168.1.50", vendor="Apple",
+                 device_type="unknown", known=True, hostname="augusto-iphone",
+                 open_ports=(80,))
+    # Exercise BOTH scan-path entry points, including every optional collector kwarg
+    # apply_recognition accepts -- none is `paired`, and none may smuggle one in.
+    guess_device_type("Apple", "augusto-iphone", "aa:bb:cc:dd:ee:ff")
+    apply_recognition(dev, pin="phone",
+                      bonjour={"device_type": "phone"}, upnp={"device_type": "phone"},
+                      snmp={"device_type": "router"}, netbios={"device_type": "pc"},
+                      dhcp={"device_type": "phone"}, ha={"device_type": "phone"})
+
+    assert captured, "spy must have observed at least one recognize() call"
+    for signals in captured:
+        assert "paired" not in signals, (
+            "the scan/inventory path must NEVER pass a `paired` signal into recog -- "
+            "the only legitimate producer is the consent-gated api_inventory view overlay")
 
 
 def test_user_type_pin_still_wins_device_type_at_view(tmp_path, monkeypatch):

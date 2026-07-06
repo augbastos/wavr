@@ -463,7 +463,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def _ingest(event):
         rs = _fusion.update(event)
         d = rs.to_dict()
-        await asyncio.to_thread(_storage.insert_state, rs)  # fsync off the event loop
+        # History is EVENT-based (Item 3): persist ONLY on an occupancy transition
+        # (first sighting or occupied flip), NEVER on steady-state ticks -- so
+        # `room_states` records occupancy events, not per-tick noise. The LIVE path
+        # below (latest + _hub.publish) is UNCHANGED and still runs on every tick, so
+        # /api/state and the SSE/WS stream are byte-for-byte unaffected.
+        await asyncio.to_thread(_storage.insert_if_transition, rs)  # fsync off the loop
         latest[d["room"]] = d
         await _hub.publish(d)
 
@@ -1023,13 +1028,33 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.get("/api/status")
     async def status():
-        # READ-ONLY, NO SECRETS: sources are name+active only (no rtsp/mac), features
-        # are opt-in booleans only (no urls/tokens), house is a bare count. Gated by
-        # the same loopback_or_authed middleware as every other GET route.
+        # READ-ONLY, NO SECRETS: sources are name/active/enabled/configured/state
+        # BOOL+enum only (no rtsp/mac/token), features are opt-in booleans only (no
+        # urls/tokens), house is a bare count. Gated by the same loopback_or_authed
+        # middleware as every other GET route.
+        #
+        # Source honesty (Item 5): a source is in this list BECAUSE it was configured
+        # (registered) -- so `configured` is always True and ABSENCE means "not
+        # configured / no hardware" (the frontend renders that). `enabled` is the
+        # runtime on/off flag; `active` is whether its task is currently running.
+        # `state` is a derived, honest enum:
+        #   "active" -> configured, enabled AND producing (task running)
+        #   "idle"   -> configured + enabled but NOT currently running (starting,
+        #               self-terminated OR crashed -- the SourceManager cannot
+        #               distinguish these, so they are honestly lumped, never faked
+        #               as a specific "error")
+        #   "off"    -> configured but turned OFF by config (enabled=False)
         return {
             "version": __version__,
             "sources": [
-                {"name": s["name"], "active": s["active"]}
+                {
+                    "name": s["name"],
+                    "active": s["active"],
+                    "enabled": s["enabled"],
+                    "configured": True,
+                    "state": ("active" if s["active"]
+                              else "idle" if s["enabled"] else "off"),
+                }
                 for s in manager.status()["sources"]
             ],
             "features": {
