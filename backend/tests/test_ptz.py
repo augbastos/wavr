@@ -15,13 +15,18 @@ from fastapi.testclient import TestClient
 
 from wavr.app import create_app
 from wavr.camera_store import CameraStore
+import math
+
+from wavr.localize import normalized_pan_tilt_to_radians
 from wavr.ptz import (
     CameraPTZ,
     _clamp_unit,
     build_continuous_move,
+    build_get_status,
     build_stop,
     parse_presets,
     parse_ptz_service,
+    parse_ptz_status,
 )
 
 # --------------------------------------------------------------------------- #
@@ -67,6 +72,19 @@ _PRESETS_XML = (
 )
 
 
+_STATUS_XML = (
+    '<?xml version="1.0"?>'
+    '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">'
+    '<s:Body><tptz:GetStatusResponse'
+    ' xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"'
+    ' xmlns:tt="http://www.onvif.org/ver10/schema">'
+    "<tptz:PTZStatus><tt:Position>"
+    '<tt:PanTilt x="0.5000" y="-0.2500"/><tt:Zoom x="0.1000"/>'
+    "</tt:Position><tt:MoveStatus><tt:PanTilt>IDLE</tt:PanTilt></tt:MoveStatus>"
+    "</tptz:PTZStatus></tptz:GetStatusResponse></s:Body></s:Envelope>"
+)
+
+
 def _services_xml(host: str, with_ptz: bool = True) -> str:
     svc = (
         "<tds:Service>"
@@ -105,6 +123,8 @@ def _fake_ptz_soap(host="10.0.0.5", sink=None, with_ptz_service=True,
             return _services_xml(host, with_ptz=with_ptz_service)
         if "GetPresets" in body:
             return presets_xml if presets_xml is not None else _PRESETS_XML
+        if "GetStatus" in body:
+            return _STATUS_XML
         return _OK_XML   # ContinuousMove / Stop / GotoPreset
     return soap
 
@@ -155,6 +175,53 @@ def test_parse_presets():
     assert parse_presets(_PRESETS_XML) == [
         {"token": "1", "name": "Door"}, {"token": "2", "name": "Window"}]
     assert parse_presets("garbage") == []
+
+
+def test_build_get_status_shape_and_no_password():
+    body = build_get_status("Profile_1", "admin", "pw")
+    assert "<tptz:GetStatus" in body
+    assert "<tptz:ProfileToken>Profile_1</tptz:ProfileToken>" in body
+    assert "admin" in body and "pw" not in body   # WS-UsernameToken digest, no plaintext pw
+    # token XML-escaped
+    assert "a&amp;b" in build_get_status("a&b", "u", "p")
+
+
+def test_parse_ptz_status_reads_position():
+    st = parse_ptz_status(_STATUS_XML)
+    assert st == {"pan": 0.5, "tilt": -0.25, "zoom": 0.1}
+
+
+def test_parse_ptz_status_no_zoom_omits_key():
+    xml = (
+        '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>'
+        '<tptz:GetStatusResponse xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"'
+        ' xmlns:tt="http://www.onvif.org/ver10/schema">'
+        '<tt:Position><tt:PanTilt x="0.0" y="1.0"/></tt:Position>'
+        "</tptz:GetStatusResponse></s:Body></s:Envelope>"
+    )
+    assert parse_ptz_status(xml) == {"pan": 0.0, "tilt": 1.0}
+
+
+def test_parse_ptz_status_rejects_garbage_and_nonfinite():
+    assert parse_ptz_status("<not xml") is None
+    assert parse_ptz_status("<a/>") is None            # no PanTilt at all
+    nan_xml = (
+        '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>'
+        '<tt:PanTilt xmlns:tt="http://www.onvif.org/ver10/schema" x="NaN" y="0.1"/>'
+        "</s:Body></s:Envelope>"
+    )
+    assert parse_ptz_status(nan_xml) is None           # non-finite pan refused
+
+
+def test_normalized_pan_tilt_to_radians_scaffold():
+    # Centre (0,0) -> level bearing.
+    assert normalized_pan_tilt_to_radians(0.0, 0.0) == (0.0, 0.0)
+    # Full-right pan (+1) -> +pan_half_range; clamped input can't exceed the range.
+    pan_rad, tilt_rad = normalized_pan_tilt_to_radians(9.0, -9.0)
+    assert pan_rad == math.radians(170.0)              # clamp to +1 then * half-range
+    assert tilt_rad == math.radians(-45.0)
+    # Garbage/degree-valued input is clamped, never a wild angle.
+    assert normalized_pan_tilt_to_radians(float("nan"), float("inf")) == (0.0, 0.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -213,6 +280,30 @@ async def test_capabilities_true_false():
     assert await ptz_yes.capabilities("cam", _LAN_RTSP) == {"ptz": True}
     ptz_no = CameraPTZ(soap=_fake_ptz_soap())
     assert await ptz_no.capabilities("cam", "rtsp://admin:pw@8.8.8.8/s") == {"ptz": False}
+
+
+async def test_get_status_reads_bearing():
+    ptz = CameraPTZ(soap=_fake_ptz_soap())
+    assert await ptz.get_status("cam", _LAN_RTSP) == {"pan": 0.5, "tilt": -0.25, "zoom": 0.1}
+
+
+async def test_get_status_fault_returns_none():
+    ptz = CameraPTZ(soap=_fake_ptz_soap(fault_on="GetStatus"))
+    assert await ptz.get_status("cam", _LAN_RTSP) is None
+
+
+async def test_get_status_non_lan_never_contacted():
+    sink: list = []
+    ptz = CameraPTZ(soap=_fake_ptz_soap(sink=sink))
+    assert await ptz.get_status("cam", "rtsp://admin:pw@8.8.8.8:554/s") is None
+    assert sink == []                              # SSRF: never contacted
+
+
+async def test_get_status_no_creds_in_result():
+    ptz = CameraPTZ(soap=_fake_ptz_soap())
+    st = await ptz.get_status("cam", _LAN_RTSP)
+    dump = repr(st)
+    assert "pw" not in dump and "admin" not in dump and "10.0.0.5" not in dump
 
 
 async def test_no_creds_in_any_result_repr():
@@ -299,6 +390,7 @@ def test_routes_503_when_flag_off(tmp_path, monkeypatch):
         assert c.get("/api/ptz/cam1/presets").status_code == 503
         assert c.post("/api/ptz/cam1/preset/1").status_code == 503
         assert c.get("/api/ptz/cam1/capabilities").status_code == 503
+        assert c.get("/api/ptz/cam1/status").status_code == 503
 
 
 def test_move_requires_local_header(tmp_path, monkeypatch):
@@ -358,6 +450,30 @@ def test_capabilities_and_presets_routes_no_creds(tmp_path, monkeypatch):
         assert rp.json() == [{"token": "1", "name": "Door"},
                              {"token": "2", "name": "Window"}]
         assert "pw" not in rp.text
+
+
+def test_status_route_reads_bearing_no_creds(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch, ptz_soap=_fake_ptz_soap()) as c:
+        r = c.get("/api/ptz/cam1/status")
+        assert r.status_code == 200
+        assert r.json() == {"status": {"pan": 0.5, "tilt": -0.25, "zoom": 0.1}}
+        assert "pw" not in r.text and "10.0.0.5" not in r.text
+
+
+def test_status_route_unknown_camera_404(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch, ptz_soap=_fake_ptz_soap()) as c:
+        assert c.get("/api/ptz/nope/status").status_code == 404
+
+
+def test_status_route_non_lan_camera_null_no_soap(tmp_path, monkeypatch):
+    sink: list = []
+    seed = [{"name": "cam1", "room": "sala",
+             "rtsp_url": "rtsp://admin:pw@8.8.8.8:554/s", "confidence": 0.5}]
+    with _client(tmp_path, monkeypatch, seed=seed,
+                 ptz_soap=_fake_ptz_soap(sink=sink)) as c:
+        r = c.get("/api/ptz/cam1/status")
+        assert r.status_code == 200 and r.json() == {"status": None}
+        assert sink == []                          # SSRF: never contacted
 
 
 def test_capabilities_non_lan_camera_false_no_soap(tmp_path, monkeypatch):

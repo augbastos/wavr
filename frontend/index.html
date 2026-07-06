@@ -288,6 +288,10 @@
   .radar-roomlabel{fill:var(--dim);font-size:.24px;text-transform:capitalize;}
   .radar-dot{fill:var(--accent);}
   .radar-target{transition:transform .25s cubic-bezier(.22,1,.36,1);}
+  /* Estimated position (monocular prior / low position-confidence): softer fill + a haze
+     ring so an APPROXIMATE spot never reads as a pinpoint. A calibrated (homography) dot
+     stays crisp. Static styling only — no new motion (calm-by-default). */
+  .radar-target.est .radar-dot{opacity:.55;stroke:var(--accent);stroke-opacity:.3;stroke-width:.07;}
   .radar-posture{fill:var(--dim);font-size:.28px;text-anchor:middle;}
   .room-poly{fill:rgba(61,181,74,.05);stroke:var(--line-strong);stroke-width:.02;
              vector-effect:non-scaling-stroke;pointer-events:none;}
@@ -469,6 +473,49 @@
   .ptz-presets{background:var(--elevated);color:var(--text);border:1px solid var(--line);
     border-radius:8px;padding:8px 11px;font-size:.8rem;min-height:44px;max-width:180px;cursor:pointer;}
   .ptz-presets:hover,.ptz-presets:focus-visible{border-color:var(--accent);outline:none;}
+
+  /* Camera person-localization calibration (spec A). Per-camera panel: a monocular MOUNT
+     prior (immediate approximate estimate) + an accurate 4-POINT homography. Marking uses a
+     TRANSIENT still the operator supplies locally — held in the browser, never uploaded,
+     never persisted (ADR-0002). Numbers use tabular-nums. */
+  .calib-wrap{border:1px solid var(--line);border-radius:10px;padding:12px;margin:2px 0 12px;
+    background:var(--surface);display:flex;flex-direction:column;gap:14px;}
+  .calib-status{font-size:.82rem;color:var(--dim);}
+  .calib-status b{color:var(--text);}
+  .calib-sec{border-top:1px solid var(--line);padding-top:12px;}
+  .calib-sec:first-of-type{border-top:0;padding-top:0;}
+  .calib-sec h4{margin:0 0 4px;font-size:.92rem;}
+  .calib-sec .hint{margin:0 0 8px;font-size:.78rem;color:var(--dim);}
+  .calib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;}
+  .calib-grid label{display:flex;flex-direction:column;gap:3px;font-size:.72rem;color:var(--dim);}
+  .calib-grid input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:9px;font:inherit;font-variant-numeric:tabular-nums;min-height:40px;}
+  .calib-grid input:focus-visible{border-color:var(--accent);outline:none;}
+  .calib-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;}
+  .calib-btns button{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:9px 13px;font:inherit;cursor:pointer;min-height:40px;}
+  .calib-btns button:hover,.calib-btns button:focus-visible{border-color:var(--accent);outline:none;}
+  .calib-btns button.danger:hover,.calib-btns button.danger:focus-visible{border-color:var(--danger);color:var(--danger);}
+  .calib-btns button[disabled]{opacity:.45;cursor:default;border-color:var(--line);color:var(--dim);}
+  .calib-stage{position:relative;width:100%;max-width:440px;aspect-ratio:16/9;margin-top:8px;
+    border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:crosshair;touch-action:none;
+    background:linear-gradient(var(--line) 1px,transparent 1px) 0 0/100% 12.5%,
+      linear-gradient(90deg,var(--line) 1px,transparent 1px) 0 0/12.5% 100%,var(--elevated);}
+  .calib-stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;}
+  .calib-mark{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;
+    border:2px solid var(--accent);background:rgba(61,181,74,.35);pointer-events:none;
+    font-size:9px;line-height:13px;text-align:center;color:var(--text);font-variant-numeric:tabular-nums;}
+  .calib-pts{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+  .calib-pt{display:flex;gap:6px;align-items:center;font-size:.74rem;color:var(--dim);
+    font-variant-numeric:tabular-nums;}
+  .calib-pt .idx{width:1.4em;color:var(--text);}
+  .calib-pt input{width:66px;background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:6px;padding:7px;font:inherit;font-variant-numeric:tabular-nums;}
+  .calib-pt input:focus-visible{border-color:var(--accent);outline:none;}
+  .calib-pt .rmpt{width:32px;min-height:32px;background:none;border:0;color:var(--dim);cursor:pointer;font-size:1.1rem;}
+  .calib-pt .rmpt:hover{color:var(--danger);}
+  .calib-fb{font-size:.8rem;min-height:1.1em;margin-top:8px;}
+  .calib-fb.ok{color:var(--accent);}.calib-fb.err{color:var(--danger);}
 
   /* ---------------- Stage 2: Devices — sub-tabs, catalog, explainer, setup ladder ---------------- */
   .dsub-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -2321,6 +2368,9 @@ async function renderCameras(){
   const camFb = document.getElementById("camFb");
   const post = (url,body)=> fetch(location.origin+url,{method:"POST",
     headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+  const putJson = (url,body)=> fetch(location.origin+url,{method:"PUT",
+    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+  const del = (url)=> fetch(location.origin+url,{method:"DELETE", headers:{"X-Wavr-Local":"1"}});
   // ---- PTZ d-pad (A4.3): ONVIF pan/tilt/zoom over the SAME require-local channel. Built per
   // camera only when GET /api/ptz/{name}/capabilities returns {ptz:true}. Hold-to-move with a
   // ~1s keepalive so the server's 2s auto-stop only fires when the client actually goes silent.
@@ -2329,6 +2379,8 @@ async function renderCameras(){
   const PTZ_KEYVEC = {ArrowUp:{pan:0,tilt:1}, ArrowDown:{pan:0,tilt:-1},
                       ArrowLeft:{pan:-1,tilt:0}, ArrowRight:{pan:1,tilt:0}};
   let ptzCleanups = [];   // stopMove()s of live pads; drained before refresh() rebuilds the list
+  let calibCleanups = []; // object-URL revokers of open calibration panels; drained on rebuild
+  const errText = async (r)=>{ try{ return r ? ((await r.json()).detail || "") : ""; }catch{ return ""; } };
   function buildPtzPad(name){
     const enc = encodeURIComponent(name);
     const wrap = document.createElement("div");
@@ -2413,8 +2465,213 @@ async function renderCameras(){
     wrap.appendChild(aux);
     return wrap;
   }
+  // ---- Spec A: per-camera person-localization calibration panel -------------------------
+  // Writes PUT /api/cameras/{name}/calibration (the endpoints the localization phase added).
+  // Two composable calibrations: a monocular MOUNT prior (immediate approximate estimate) and
+  // an accurate 4-POINT homography (solved SERVER-SIDE from image<->floor correspondences —
+  // the client never sends a matrix). Marking uses a TRANSIENT still the operator loads
+  // LOCALLY: an object URL held in the browser, revoked on clear/rebuild, NEVER uploaded or
+  // persisted (ADR-0002). All DOM via createElement + textContent (XSS-safe).
+  function buildCalibPanel(name){
+    const enc = encodeURIComponent(name);
+    const wrap = document.createElement("div");
+    wrap.className = "calib-wrap";
+    wrap.setAttribute("role","group");
+    wrap.setAttribute("aria-label", `Localization calibration for ${name}`);
+    const status = document.createElement("p"); status.className = "calib-status";
+    status.textContent = "Loading calibration…";
+    const fb = document.createElement("p"); fb.className = "calib-fb"; fb.setAttribute("role","status");
+    const setFb = (ok, msg)=>{ fb.className = "calib-fb " + (ok?"ok":"err"); fb.textContent = msg; };
+    wrap.appendChild(status);
+
+    // -- Section 1: monocular mount prior (approximate immediate estimate) --
+    const s1 = document.createElement("div"); s1.className = "calib-sec";
+    const h1 = document.createElement("h4"); h1.textContent = "Quick estimate (mount position)";
+    const p1 = document.createElement("p"); p1.className = "hint";
+    p1.textContent = "Approximate: drop the camera on the map and give its height and downward tilt. "
+      + "The person is placed on the floor right away as a hazy dot — an estimate, not exact.";
+    s1.appendChild(h1); s1.appendChild(p1);
+    const grid = document.createElement("div"); grid.className = "calib-grid";
+    const mountFields = [
+      {k:"pos_x",    label:"X on map (m)"},
+      {k:"pos_y",    label:"Y on map (m)"},
+      {k:"height",   label:"Height (m)"},
+      {k:"tilt_deg", label:"Down tilt (°)"},
+      {k:"yaw_deg",  label:"Facing (°)"},
+      {k:"hfov_deg", label:"Field of view (°)"},
+    ];
+    const mountInputs = {};
+    mountFields.forEach(f=>{
+      const l = document.createElement("label");
+      const span = document.createElement("span"); span.textContent = f.label;
+      const inp = document.createElement("input"); inp.type = "number"; inp.step = "0.1";
+      inp.setAttribute("aria-label", `${f.label} for ${name}`);
+      mountInputs[f.k] = inp; l.appendChild(span); l.appendChild(inp); grid.appendChild(l);
+    });
+    s1.appendChild(grid);
+    const b1 = document.createElement("div"); b1.className = "calib-btns";
+    const saveMount = document.createElement("button"); saveMount.type = "button";
+    saveMount.textContent = "Save estimate";
+    b1.appendChild(saveMount); s1.appendChild(b1);
+    wrap.appendChild(s1);
+    saveMount.onclick = async ()=>{
+      const mount = {};
+      for(const k in mountInputs){
+        const v = parseFloat(mountInputs[k].value);
+        if(!isFinite(v)){ setFb(false, "fill every mount field with a number"); return; }
+        mount[k] = v;
+      }
+      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`, {mount}); }catch{}
+      if(r && r.ok){ setFb(true, "estimate saved — re-enable the camera to apply"); loadStatus(); }
+      else { setFb(false, (await errText(r)) || "couldn't save the estimate"); }
+    };
+
+    // -- Section 2: accurate 4-point homography --
+    const s2 = document.createElement("div"); s2.className = "calib-sec";
+    const h2 = document.createElement("h4"); h2.textContent = "Precise (mark 4 floor points)";
+    const p2 = document.createElement("p"); p2.className = "hint";
+    p2.textContent = "Accurate: load a still from this camera (stays on this device, never uploaded), "
+      + "then click 4+ points on the floor and type where each is on your map, in metres. "
+      + "Use the camera's full frame at its stream resolution for the best fit.";
+    s2.appendChild(h2); s2.appendChild(p2);
+    const resGrid = document.createElement("div"); resGrid.className = "calib-grid";
+    const mkRes = (label, val)=>{
+      const l = document.createElement("label");
+      const s = document.createElement("span"); s.textContent = label;
+      const inp = document.createElement("input"); inp.type = "number"; inp.step = "1"; inp.min = "1";
+      inp.value = val; inp.setAttribute("aria-label", `${label} for ${name}`);
+      l.appendChild(s); l.appendChild(inp); resGrid.appendChild(l); return inp;
+    };
+    const imgWInp = mkRes("Stream width (px)", "1920");
+    const imgHInp = mkRes("Stream height (px)", "1080");
+    s2.appendChild(resGrid);
+    const fileBtns = document.createElement("div"); fileBtns.className = "calib-btns";
+    const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*";
+    fileInput.style.display = "none"; fileInput.setAttribute("aria-hidden","true");
+    const loadBtn = document.createElement("button"); loadBtn.type = "button"; loadBtn.textContent = "Load still…";
+    const clearImgBtn = document.createElement("button"); clearImgBtn.type = "button"; clearImgBtn.textContent = "Clear still";
+    fileBtns.appendChild(loadBtn); fileBtns.appendChild(clearImgBtn); fileBtns.appendChild(fileInput);
+    s2.appendChild(fileBtns);
+    const stage = document.createElement("div"); stage.className = "calib-stage";
+    stage.setAttribute("role","application");
+    stage.setAttribute("aria-label", `Mark floor points for ${name}`);
+    s2.appendChild(stage);
+    let stageImg = null, objUrl = null;
+    const revoke = ()=>{ if(objUrl){ URL.revokeObjectURL(objUrl); objUrl = null; } };
+    calibCleanups.push(revoke);
+    loadBtn.onclick = ()=> fileInput.click();
+    fileInput.onchange = ()=>{
+      const f = fileInput.files && fileInput.files[0]; if(!f) return;
+      revoke(); objUrl = URL.createObjectURL(f);
+      if(!stageImg){ stageImg = document.createElement("img"); stageImg.alt = "";
+        stage.insertBefore(stageImg, stage.firstChild); }
+      stageImg.src = objUrl;
+      fileInput.value = "";   // frame lives ONLY in the object URL; nothing written to disk
+    };
+    clearImgBtn.onclick = ()=>{ revoke(); if(stageImg){ stageImg.remove(); stageImg = null; } };
+    const pts = [];
+    const ptsList = document.createElement("div"); ptsList.className = "calib-pts";
+    s2.appendChild(ptsList);
+    const renumber = ()=> pts.forEach((p,i)=>{ p.mark.textContent = String(i+1); p.idx.textContent = String(i+1); });
+    stage.addEventListener("pointerdown", (e)=>{
+      const rect = stage.getBoundingClientRect();
+      if(rect.width<=0 || rect.height<=0) return;
+      const fx = Math.min(Math.max((e.clientX-rect.left)/rect.width, 0), 1);
+      const fy = Math.min(Math.max((e.clientY-rect.top)/rect.height, 0), 1);
+      const mark = document.createElement("div"); mark.className = "calib-mark";
+      mark.style.left = (fx*100)+"%"; mark.style.top = (fy*100)+"%";
+      stage.appendChild(mark);
+      const row = document.createElement("div"); row.className = "calib-pt";
+      const idx = document.createElement("span"); idx.className = "idx";
+      const arrow = document.createElement("span"); arrow.textContent = "→ floor";
+      const inX = document.createElement("input"); inX.type = "number"; inX.step = "0.1";
+      inX.placeholder = "x m"; inX.setAttribute("aria-label","floor x metres");
+      const inY = document.createElement("input"); inY.type = "number"; inY.step = "0.1";
+      inY.placeholder = "y m"; inY.setAttribute("aria-label","floor y metres");
+      const rmpt = document.createElement("button"); rmpt.type = "button"; rmpt.className = "rmpt";
+      rmpt.textContent = "✕"; rmpt.setAttribute("aria-label","remove point");
+      row.appendChild(idx); row.appendChild(arrow); row.appendChild(inX); row.appendChild(inY); row.appendChild(rmpt);
+      ptsList.appendChild(row);
+      const p = {fx, fy, mark, idx, inX, inY, row};
+      pts.push(p);
+      rmpt.onclick = ()=>{ const i = pts.indexOf(p); if(i>=0) pts.splice(i,1); mark.remove(); row.remove(); renumber(); };
+      renumber();
+    });
+    const b2 = document.createElement("div"); b2.className = "calib-btns";
+    const saveH = document.createElement("button"); saveH.type = "button"; saveH.textContent = "Save precise calibration";
+    const clearPts = document.createElement("button"); clearPts.type = "button"; clearPts.textContent = "Clear points";
+    b2.appendChild(saveH); b2.appendChild(clearPts);
+    s2.appendChild(b2);
+    wrap.appendChild(s2);
+    clearPts.onclick = ()=>{ pts.splice(0).forEach(p=>{ p.mark.remove(); p.row.remove(); }); };
+    saveH.onclick = async ()=>{
+      const imgW = parseInt(imgWInp.value,10), imgH = parseInt(imgHInp.value,10);
+      if(!(imgW>0 && imgH>0)){ setFb(false, "set the stream width and height in pixels"); return; }
+      const image_points = [], floor_points = [];
+      for(const p of pts){
+        const x = parseFloat(p.inX.value), y = parseFloat(p.inY.value);
+        if(!isFinite(x) || !isFinite(y)) continue;   // skip points with no floor coord yet
+        image_points.push([p.fx*imgW, p.fy*imgH]);
+        floor_points.push([x, y]);
+      }
+      if(image_points.length < 4){ setFb(false, "need 4+ points with a floor position filled in"); return; }
+      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`,
+        {image_points, floor_points, img_w:imgW, img_h:imgH}); }catch{}
+      if(r && r.ok){ setFb(true, "precise calibration saved — re-enable the camera to apply"); loadStatus(); }
+      else { setFb(false, (await errText(r)) || "couldn't save (points may be collinear/coincident)"); }
+    };
+
+    // -- Section 3: walk-to-auto-calibrate — honest roadmap affordance (not yet wired) --
+    const s3 = document.createElement("div"); s3.className = "calib-sec";
+    const h3 = document.createElement("h4"); h3.textContent = "Walk to auto-calibrate";
+    const p3 = document.createElement("p"); p3.className = "hint";
+    p3.textContent = "Planned: with the quick estimate on, walking your room would let Wavr refine the "
+      + "fit from your movement over time. The refinement isn't wired up yet — for now use the quick "
+      + "estimate or mark 4 points above.";
+    const b3 = document.createElement("div"); b3.className = "calib-btns";
+    const walkBtn = document.createElement("button"); walkBtn.type = "button";
+    walkBtn.textContent = "Coming soon"; walkBtn.disabled = true; walkBtn.setAttribute("aria-disabled","true");
+    b3.appendChild(walkBtn);
+    s3.appendChild(h3); s3.appendChild(p3); s3.appendChild(b3);
+    wrap.appendChild(s3);
+
+    // -- Footer: remove all calibration + feedback line --
+    const foot = document.createElement("div"); foot.className = "calib-btns";
+    const rmCal = document.createElement("button"); rmCal.type = "button"; rmCal.className = "danger";
+    rmCal.textContent = "Remove all calibration";
+    rmCal.onclick = async ()=>{
+      let r; try{ r = await del(`/api/cameras/${enc}/calibration`); }catch{}
+      if(r && r.ok){ setFb(true, "calibration removed — camera reverts to room-centred"); loadStatus(); }
+      else setFb(false, "couldn't remove calibration");
+    };
+    foot.appendChild(rmCal);
+    wrap.appendChild(foot);
+    wrap.appendChild(fb);
+
+    async function loadStatus(){
+      let c;
+      try{ c = await (await fetch(location.origin+`/api/cameras/${enc}/calibration`,
+        {headers:{"X-Wavr-Local":"1"}})).json(); }
+      catch{ status.textContent = "Couldn't read calibration."; return; }
+      if(c && c.mount) for(const k in mountInputs) if(c.mount[k] != null) mountInputs[k].value = c.mount[k];
+      let lead;
+      if(c && c.homography) lead = "Calibrated (precise 4-point). ";
+      else if(c && c.mount) lead = "Estimate active (approximate). ";
+      else lead = "Not calibrated — this camera reports its room only. ";
+      status.textContent = "";
+      const b = document.createElement("b"); b.textContent = lead;
+      status.appendChild(b);
+      status.appendChild(document.createTextNode(
+        c && c.localizes ? "People are placed on the map." : "Add an estimate or 4 points to place people on the map."));
+    }
+    loadStatus();
+    wrap._cleanup = revoke;   // toggle-off calls this before removing the panel
+    return wrap;
+  }
+
   async function refresh(){
     ptzCleanups.splice(0).forEach(fn=>{ try{ fn(); }catch{} });   // stop any live hold before rebuild
+    calibCleanups.splice(0).forEach(fn=>{ try{ fn(); }catch{} }); // revoke any open still object-URLs
     let cams; try{ cams = await (await fetch(location.origin+"/api/cameras")).json(); }catch{ return; }
     window.__wavrCameras?.(cams);   // Stage-2 hook: Detected excludes already-configured cameras
     // PTZ is default-OFF: only probe per-camera capabilities when the global feature flag is on.
@@ -2453,6 +2710,18 @@ async function renderCameras(){
         if(r && r.ok){ actionFeedback(camFb, true); refresh(); }
         else { actionFeedback(camFb, false, "couldn't remove the camera"); }
       };
+      // Spec A: per-camera localization calibration. Toggles a panel (estimate + 4-point
+      // homography + roadmap auto-calibrate) right below the row.
+      const cal = document.createElement("button"); cal.className = "rm"; cal.type = "button";
+      cal.textContent = "Calibrate"; cal.setAttribute("aria-expanded","false");
+      let calPanel = null;
+      cal.onclick = ()=>{
+        if(calPanel){ try{ calPanel._cleanup?.(); }catch{} calPanel.remove(); calPanel = null;
+          cal.setAttribute("aria-expanded","false"); return; }
+        calPanel = buildCalibPanel(c.name); row.after(calPanel);
+        cal.setAttribute("aria-expanded","true");
+      };
+      row.appendChild(cal);
       row.appendChild(rm); list.appendChild(row);
       // Lazily probe PTZ capability for this camera; if the ONVIF camera exposes PTZ, drop the
       // d-pad in on its own line just below the row. Hidden entirely when ptz:false / offline.
@@ -3187,6 +3456,16 @@ function loadZones(){
 function saveZones(zones){ try{ localStorage.setItem(ZONE_KEY, JSON.stringify(zones)); }catch{} }
 let zones = loadZones();
 
+// A camera Target carries a POSITION-quality confidence when it is positioned (x/y set):
+// ~0.85 for an accurate 4-point homography, ~0.45 for the approximate monocular prior
+// (backend localize.Q_HOMOGRAPHY / Q_MONOCULAR). This threshold splits "calibrated" from
+// "estimated" so the map can render an approximate spot honestly (hazy). An UNpositioned
+// target (x/y null -> room-centred) is neither: its confidence is a detection score, not a
+// position score, so it is never styled as estimated here.
+const POS_EST_MAX = 0.6;
+const isPositioned = (t) => t && t.x != null && t.y != null;
+const isEstimated  = (t) => isPositioned(t) && (t.confidence ?? 0) < POS_EST_MAX;
+
 function dot(room, t){
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", "radar-target");
@@ -3210,8 +3489,12 @@ function placeDot(g, room, t){
   // CSS px == SVG user units here; style.transform (not the attribute) so the
   // .radar-target transition animates movement between updates.
   g.style.transform = `translate(${x}px, ${y}px)`;
+  // Hazy marker = an ESTIMATED (monocular) spot; crisp = calibrated or room-centred.
+  const est = isEstimated(t);
+  g.classList.toggle("est", est);
   g.querySelector("title").textContent =
-    `person ${t.id ?? "?"} · confidence ${Math.round((t.confidence ?? 0)*100)}%`;
+    `person ${t.id ?? "?"} · confidence ${Math.round((t.confidence ?? 0)*100)}%` +
+    (est ? " · estimated position" : "");
   const txt = g.querySelector("text");
   // Compensate the viewBox's user-space scaling so the caption reads at a real ~10px
   // regardless of room/viewport size (see radarPxPerM comment above).
@@ -3488,6 +3771,11 @@ async function renderRadar(){
           // without competing with the active floor. Shared, built once, never disposed.
           const personMatGhost = new THREE.MeshStandardMaterial({
             color: 0x3db54a, opacity: GHOST.personGhost, transparent: true, depthWrite: false });
+          // Estimated-position marker (monocular prior): semi-transparent so an APPROXIMATE
+          // spot reads softer than a calibrated (homography) one on the active floor. Shared,
+          // built once, never disposed — same discipline as the other person materials.
+          const personMatEst = new THREE.MeshStandardMaterial({
+            color: 0x3db54a, opacity: 0.5, transparent: true, depthWrite: false });
           // ---- v2 in-3D editor: handle gizmos + drag previews. All geometries/materials
           // here are SHARED (built once, never disposed) — rebuildHandles3D()/the drag
           // machine only add/remove Mesh wrappers, exactly the peopleGroup discipline.
@@ -3565,7 +3853,7 @@ async function renderRadar(){
             if(hit) window.__wavrSelectRoom?.(hit.object.userData.room);
           });
           three3d = { THREE, renderer, scene, camera, controls, roomGroup,
-                      peopleGroup, personGeo, personMat, personMatGhost,
+                      peopleGroup, personGeo, personMat, personMatGhost, personMatEst,
                       handleGroup, hVertGeo, hHitGeo, hEdgeGeo,
                       hVertMat, hEdgeMat, hHoverMat, hDragMat, hHitMat,
                       previewLine, previewWall, snapRing, raf: null, ro };
@@ -3933,7 +4221,7 @@ async function renderRadar(){
   // No-ops until the user has entered 3D at least once (three3d built lazily by ensure3D()).
   function updatePeople3D(){
     if(!three3d) return;
-    const { THREE, peopleGroup, personGeo, personMat, personMatGhost } = three3d;
+    const { THREE, peopleGroup, personGeo, personMat, personMatGhost, personMatEst } = three3d;
     // Clear last frame's markers. personGeo/personMat(Ghost) are shared + reused across
     // every frame (created once in ensure3D(), never disposed) — only the Mesh wrapper
     // objects are per-frame, so removing them from the group is all that's needed here.
@@ -3943,7 +4231,10 @@ async function renderRadar(){
       const y = offsetForLevel(f.level) + 0.9;
       (f.rooms || []).forEach(r => {
         (liveTargets[r.name] || []).forEach(p => {
-          const m = new THREE.Mesh(personGeo, active ? personMat : personMatGhost);
+          // Active floor: an estimated (monocular) spot uses the softer material; a
+          // calibrated/room-centred one stays solid. Ghost floors always use the ghost mat.
+          const mat = active ? (p.est ? personMatEst : personMat) : personMatGhost;
+          const m = new THREE.Mesh(personGeo, mat);
           m.position.set(p.x, y, p.y);
           m.userData.room = r.name;   // §6: lets the render loop pulse only the linked room's markers
           m.userData.baseScale = active ? 1 : 0.6;
@@ -5024,7 +5315,9 @@ async function renderRadar(){
       if(!seen.has(k)){ e.dots.get(k).remove(); e.dots.delete(k); }
     });
     // Feed absolute target positions to the zone hit-test, then re-highlight zones.
-    liveTargets[rs.room] = (rs.targets||[]).map(t => absTargetPoint(e.r, t));
+    liveTargets[rs.room] = (rs.targets||[]).map(t => {
+      const p = absTargetPoint(e.r, t); p.est = isEstimated(t); return p;   // est -> hazy 3D marker
+    });
     updateZoneOcc();   // per-frame: only re-highlight (no DOM rebuild); structure rebuilt on zone change
     updatePeople3D();  // keep the 3D people markers in sync with the same live target data
     tintRoom3D(rs.room);   // §6: floor tint tracks this frame's confidence (roomOcc/roomConf
