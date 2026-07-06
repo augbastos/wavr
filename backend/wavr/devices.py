@@ -30,6 +30,17 @@ from datetime import datetime, timezone
 # exist once it is listed here. Free-text TEXT column -> no DB migration needed.
 VALID_ROLES = frozenset({"central", "user", "sensor"})
 
+# Per-device CONSENT TIER (privacy centerpiece). Monotone green ⊃ yellow ⊃ red; consent
+# is purely SUBTRACTIVE -- it can only REDUCE what a device contributes, never raise trust.
+#   green  -> full telemetry ingested; device NAMED in who's-home; coarse presence vote.
+#   yellow -> telemetry ingested but REDUCED server-side (rssi/ssid/bssid=None, sensors={});
+#             device votes present but ANONYMOUS (never named in who's-home).
+#   red    -> telemetry DROPPED server-side (never reaches the hub); not present, not named.
+# Unlike `role` (which existed from schema v1), `consent` is a NEW column, so an existing
+# wavr.db needs the additive ALTER migration in DeviceStore.__init__ below -- CREATE TABLE
+# IF NOT EXISTS is a no-op on a table that already exists and would silently skip it.
+VALID_CONSENT = frozenset({"green", "yellow", "red"})
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
     device_id    TEXT PRIMARY KEY,
@@ -38,7 +49,8 @@ CREATE TABLE IF NOT EXISTS devices (
     token_hash   TEXT    NOT NULL UNIQUE,
     created_ts   TEXT    NOT NULL,
     last_seen_ts TEXT,
-    revoked      INTEGER NOT NULL DEFAULT 0
+    revoked      INTEGER NOT NULL DEFAULT 0,
+    consent      TEXT    NOT NULL DEFAULT 'green'
 );
 """
 
@@ -53,6 +65,7 @@ class Device:
     created_ts: str
     last_seen_ts: str | None
     revoked: bool
+    consent: str = "green"
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +75,7 @@ class Device:
             "created_ts": self.created_ts,
             "last_seen_ts": self.last_seen_ts,
             "revoked": self.revoked,
+            "consent": self.consent,
         }
 
 
@@ -87,6 +101,21 @@ class DeviceStore:
         self._now = now_fn
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._migrate_consent()
+
+    def _migrate_consent(self) -> None:
+        """Idempotent additive migration for the `consent` column (privacy tiers).
+        A fresh db already has it from _SCHEMA; an EXISTING v1 db does NOT -- CREATE
+        TABLE IF NOT EXISTS never touches an existing table. Detect via PRAGMA and
+        ALTER it on only when absent, so opening an old wavr.db backfills the column
+        (defaulting every prior device to 'green' -- no behavioural change on upgrade)
+        while a fresh db is a no-op. Runs once at construction (single-threaded)."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(devices)").fetchall()}
+        if "consent" not in cols:
+            self._conn.execute(
+                "ALTER TABLE devices ADD COLUMN consent TEXT NOT NULL DEFAULT 'green'"
+            )
+            self._conn.commit()
 
     def add(self, name: str, role: str) -> tuple[str, str]:
         """Create a device and return (device_id, token). The token is generated
@@ -117,7 +146,7 @@ class DeviceStore:
         ts = self._now()
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, revoked FROM devices"
+                "SELECT device_id, name, role, created_ts, revoked, consent FROM devices"
                 " WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()
@@ -128,9 +157,12 @@ class DeviceStore:
                 (ts, row["device_id"]),
             )
             self._conn.commit()
+        # consent is read off this SAME already-fetched row -> the telemetry hot path
+        # (verify -> consent gate) costs no extra query.
         return Device(
             device_id=row["device_id"], name=row["name"], role=row["role"],
             created_ts=row["created_ts"], last_seen_ts=ts, revoked=False,
+            consent=row["consent"],
         )
 
     def list(self) -> list[Device]:
@@ -138,7 +170,7 @@ class DeviceStore:
         includes token material."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, consent"
                 " FROM devices ORDER BY created_ts, device_id"
             ).fetchall()
         return [self._to_device(r) for r in rows]
@@ -146,7 +178,7 @@ class DeviceStore:
     def get(self, device_id: str) -> Device | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, consent"
                 " FROM devices WHERE device_id = ?",
                 (device_id,),
             ).fetchone()
@@ -186,12 +218,37 @@ class DeviceStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def set_consent(self, device_id: str, level: str) -> bool:
+        """Set a paired device's CONSENT TIER (green/yellow/red). Returns True if the
+        device exists (row updated), False for an unknown id. Touches ONLY the consent
+        column -- never the token hash, revoked flag, or role -- so a consent change can
+        neither grant/void credentials nor alter authorization; it is purely subtractive
+        at the ingest/who's-home layer. Raises ValueError for a level outside
+        VALID_CONSENT (validated before touching the db), mirroring set_role's discipline."""
+        if level not in VALID_CONSENT:
+            raise ValueError(
+                f"invalid consent: {level!r} (expected one of {sorted(VALID_CONSENT)})")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE devices SET consent = ? WHERE device_id = ?", (level, device_id)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def get_consent(self, device_id: str) -> str | None:
+        """Current consent tier for a device_id, or None if unknown. Thin read-only
+        accessor for PhoneSensorSource's who's-home / queue-residue re-check -- resolves
+        the tier by device_id without returning token material. A None result (unknown/
+        deleted device) is treated fail-closed by callers (not named, not recorded)."""
+        d = self.get(device_id)
+        return d.consent if d else None
+
     @staticmethod
     def _to_device(r: sqlite3.Row) -> Device:
         return Device(
             device_id=r["device_id"], name=r["name"], role=r["role"],
             created_ts=r["created_ts"], last_seen_ts=r["last_seen_ts"],
-            revoked=bool(r["revoked"]),
+            revoked=bool(r["revoked"]), consent=r["consent"],
         )
 
     def close(self) -> None:

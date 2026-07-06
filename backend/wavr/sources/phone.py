@@ -52,12 +52,18 @@ class PhoneSensorSource:
 
     def __init__(self, hub: TelemetryHub,
                  get_label: Callable[[str], str | None] | None = None,
+                 get_consent: Callable[[str], str | None] | None = None,
                  room: str = "casa", tick: float = 15.0,
                  freshness_s: float | None = None,
                  present_confidence: float = 0.8,
                  now_fn: Callable[[], datetime] = _utcnow):
         self._hub = hub
         self._get_label = get_label
+        # CONSENT resolver (per-device tier), injected from DeviceStore.get_consent. Purely
+        # SUBTRACTIVE: it only ever HIDES a name or DROPS a stale-red record -- it can never
+        # raise a device's weight/confidence/presence. When None (single-device/legacy path
+        # with no consent surface) this source behaves exactly as before.
+        self._get_consent = get_consent
         self._room = room
         self._tick = tick
         self._freshness_s = _DEFAULT_FRESHNESS_S if freshness_s is None else freshness_s
@@ -80,12 +86,19 @@ class PhoneSensorSource:
         """Sorted operator labels for devices seen within `freshness_s`, resolved from
         the DeviceStore (`get_label`) by device_id, falling back to the id when unnamed.
         Read-only (no state mutation): the who's-home view for the UI. The label is
-        derived HERE and never rides the SensingEvent -- that is the privacy boundary."""
+        derived HERE and never rides the SensingEvent -- that is the privacy boundary.
+
+        CONSENT: with a resolver wired, ONLY green-tier devices are NAMED here. yellow is
+        anonymous (it still votes present via the coarse fusion event, just never appears
+        by name); red never reaches `_last_seen` at all. Fail-closed: an unknown/None tier
+        is not named. No resolver (legacy path) => name everyone, as before."""
         now = self._now()
         labels: set[str] = set()
         for device_id, seen in self._last_seen.items():
             if not self._fresh(seen, now):
                 continue
+            if self._get_consent is not None and self._get_consent(device_id) != "green":
+                continue                       # yellow=anonymous, red=absent, unknown=hidden
             label = self._get_label(device_id) if self._get_label else None
             labels.add(label or device_id)
         return sorted(labels)
@@ -100,7 +113,15 @@ class PhoneSensorSource:
                 reading = None
             now = self._now()
             if reading is not None:
-                self._last_seen[reading.device_id] = now
+                # Defense-in-depth for the queue-residue window: a reading admitted by the
+                # app.py chokepoint microseconds BEFORE a RED flip could still be sitting on
+                # the hub. Re-check the device's CURRENT consent at CONSUME time and skip
+                # recording presence if it is now red, so a just-withdrawn device leaves no
+                # lingering vote. (The chokepoint already drops red at ingest; this closes
+                # the race.) No resolver => record as before.
+                if not (self._get_consent is not None
+                        and self._get_consent(reading.device_id) == "red"):
+                    self._last_seen[reading.device_id] = now
             self._prune(now)
             present = bool(self._last_seen)
             yield SensingEvent(

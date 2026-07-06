@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -127,6 +127,16 @@ class TelemetryReading:
             bssid=payload.bssid,
             sensors=payload.sensors.present() if payload.sensors else {},
         )
+
+    def reduced(self) -> "TelemetryReading":
+        """YELLOW consent: a data-minimized copy of this reading. The network-locating
+        identifiers (rssi/ssid/bssid) and every raw sensor sample are stripped server-side
+        BEFORE the reading reaches the fusion hub, so a yellow device still contributes a
+        coarse presence vote but leaks no location/signal detail. battery_pct + charging
+        survive (they carry no location and are harmless for the coarse vote). This is the
+        SINGLE source of truth for the yellow subset -- the enforcement chokepoint in
+        app.py calls exactly this, never a hand-rolled field list."""
+        return replace(self, rssi=None, ssid=None, bssid=None, sensors={})
 
     def to_dict(self) -> dict:
         return {

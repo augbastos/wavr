@@ -16,6 +16,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 
@@ -57,7 +58,7 @@ from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
 from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
-from wavr.devices import DeviceStore
+from wavr.devices import DeviceStore, VALID_CONSENT
 from wavr.pairing import PairingManager
 from wavr.telemetry import TelemetryHub, TelemetryReading, TelemetryPayload, PerDeviceRateLimiter
 from wavr.auth import authorize, parse_bearer, can_change_state, in_subnet
@@ -113,7 +114,25 @@ def _is_token_exempt(path: str) -> bool:
 # pre-auth exemptions (static shell, /api/pair) are already handled earlier in the
 # middleware -- they resolve to role=None, never role='sensor' -- so they need no entry
 # here. user/central/root roles never touch this check.
-_SENSOR_ALLOWED_PATHS = frozenset({"/api/telemetry"})
+#
+# /api/consent is LOAD-BEARING here (GDPR withdrawal): a sensor-only node MUST be able to
+# lower/raise its OWN consent tier -- without this entry a sensor hits the confinement 403
+# and can never withdraw. It is write-only + self-scoped (derives its device_id from its
+# own token, carries no device field), so it opens NO read surface.
+_SENSOR_ALLOWED_PATHS = frozenset({"/api/telemetry", "/api/consent"})
+
+
+class _ConsentBody(BaseModel):
+    """Body for POST /api/consent: `{"level": "green"|"yellow"|"red"}`. `extra='forbid'`
+    so a body that tries to smuggle a `device`, `consent`, or any other field is rejected
+    422 -- a device may set only its OWN consent LEVEL (its device_id comes from its token,
+    never the body). The level string itself is validated against VALID_CONSENT in the
+    handler (single source of truth), which returns 422 for an out-of-set value."""
+
+    model_config = ConfigDict(extra="forbid")
+    # max_length bounds the allocation for a hostile oversized body (the valid values are
+    # <= 6 chars); an out-of-set-but-short value is caught by the VALID_CONSENT check.
+    level: str = Field(..., max_length=16)
 
 
 def _default_sources(cfg):
@@ -440,7 +459,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # label/rssi never ride the SensingEvent (privacy invariant).
     if cfg.multidevice:
         manager.register("phone", lambda: PhoneSensorSource(
-            _telemetry_hub, get_label=_devices.get_label), True)
+            _telemetry_hub, get_label=_devices.get_label,
+            get_consent=_devices.get_consent), True)
 
     _owns_cameras = camera_store is None   # only close a store this function built itself
     _cameras = camera_store or CameraStore(cfg.db_path)
@@ -563,6 +583,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # even when multidevice is off (inert objects; the /api/telemetry route itself is gated).
     app.state.telemetry_hub = _telemetry_hub
     app.state.telemetry_limiter = PerDeviceRateLimiter(
+        capacity=cfg.telemetry_rate_capacity, refill_per_sec=cfg.telemetry_rate_refill)
+    # Separate per-device bucket for POST /api/consent, so a telemetry flood can't starve a
+    # device's ability to withdraw consent (and vice versa). Same class, own instance; tests
+    # can override it on app.state exactly like the telemetry limiter.
+    app.state.consent_limiter = PerDeviceRateLimiter(
         capacity=cfg.telemetry_rate_capacity, refill_per_sec=cfg.telemetry_rate_refill)
 
     def require_central(request: Request):
@@ -1286,9 +1311,40 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 raise HTTPException(status_code=401, detail="device token required")
             if not request.app.state.telemetry_limiter.allow(device.device_id):
                 raise HTTPException(status_code=429, detail="telemetry rate limit exceeded")
+            # CONSENT TIER gate (privacy centerpiece), read off the row verify() already
+            # fetched (no extra query). Purely SUBTRACTIVE -- it only ever DROPS or REDUCES,
+            # never raises trust. Rate-limit stays BEFORE this so a red flood still 429s.
+            #   red    -> drop server-side; the reading NEVER reaches the hub. Return HTTP 200
+            #             {accepted:False}: a 4xx would trip the on-device shim's token-wipe
+            #             and force an un-pair, which is NOT what a privacy withdrawal means.
+            #   yellow -> ingest a data-minimized copy (reduced(): rssi/ssid/bssid=None,
+            #             sensors={}) -> anonymous presence vote, no location/signal leak.
+            #   green  -> ingest the full reading, as today.
+            if device.consent == "red":
+                return {"accepted": False, "device_id": device.device_id, "consent": "red"}
             reading = TelemetryReading.from_payload(payload, device.device_id)
+            if device.consent == "yellow":
+                reading = reading.reduced()
             request.app.state.telemetry_hub.offer(reading)
             return {"accepted": True, "device_id": device.device_id}
+
+        @app.post("/api/consent")
+        async def consent(body: _ConsentBody, request: Request):
+            # Self-service consent withdrawal/restore (GDPR). Bearer-authed by the same
+            # loopback_or_authed middleware as /api/telemetry; NO require_local/CSRF -- a
+            # token-authed device is header-independent. The device_id is derived from the
+            # CALLER'S OWN token here (verify), NEVER from the body -- a device sets only its
+            # OWN tier, so the body carries no device field (extra='forbid' rejects one).
+            token = parse_bearer(request.headers.get("authorization"))
+            device = _devices.verify(token) if (token and _devices is not None) else None
+            if device is None:
+                raise HTTPException(status_code=401, detail="device token required")
+            if not request.app.state.consent_limiter.allow(device.device_id):
+                raise HTTPException(status_code=429, detail="consent rate limit exceeded")
+            if body.level not in VALID_CONSENT:
+                raise HTTPException(status_code=422, detail="invalid consent level")
+            _devices.set_consent(device.device_id, body.level)
+            return {"device_id": device.device_id, "level": body.level}
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):

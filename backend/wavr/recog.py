@@ -68,6 +68,14 @@ their key, no engine change needed):
                device self-reports, so they must not forge "high" without a 2nd
                independent (non-self_report) family agreeing.
 """
+# CONSENT FORWARD-GUARD (per-device tier, privacy centerpiece): recog has NO paired-phone
+# signal today and this module is deliberately UNCHANGED by the consent work. If a
+# paired-phone recognition signal is EVER added later (blueprint item 4 -- a phone
+# contributing to device *identity*, not just coarse presence), it MUST consult the
+# device's consent tier (DeviceStore.get_consent) and PAUSE that signal at `red` (binding
+# paused), the same subtractive rule the telemetry chokepoint and PhoneSensorSource apply.
+# Do NOT build item 4 here; this is only the guardrail so a future author cannot wire a
+# phone into identity while bypassing consent.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
