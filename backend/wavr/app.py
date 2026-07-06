@@ -44,7 +44,7 @@ from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
-from wavr.device_meta import DeviceMeta, normalize_mac
+from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
 from wavr.netinventory import _same_ip
 from wavr.ha_client import client_from_config
 from wavr.ha_import import fetch_registry, import_devices
@@ -65,10 +65,13 @@ from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
-from wavr.auth import authorize, parse_bearer, can_change_state, in_subnet
+from wavr.auth import authorize, parse_bearer, can_change_state, can_view, in_subnet
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.local_token import resolve_local_token
 from wavr import arp_block
+from wavr.companion_presence import resolve_source_mac, mac_prefix
+from wavr.pin_store import PinStore
+from wavr.pin_ratelimit import PinAttemptLimiter
 
 
 _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
@@ -158,6 +161,10 @@ _URL_SHAPE_RE = re.compile(r"^rtsps?://.+", re.IGNORECASE)
 # clients/tests send none). Blocks a drive-by cross-site page from opening the live
 # targets/vitals stream. "testserver" matches the Host allowlist for the TestClient.
 _ORIGIN_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\]|testserver)(:\d+)?$")
+# Core Panel unlock PIN: digits only, a reasonable length band (rejects a
+# oversized string reaching pbkdf2, and an empty/1-digit PIN that offers no
+# real protection).
+_PIN_RE = re.compile(r"^[0-9]{4,12}$")
 
 
 def _mask_rtsp(url: str) -> str:
@@ -256,7 +263,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                dns_query_fn=None, speedtest_fn=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
-               connector_store=None) -> FastAPI:
+               connector_store=None, pin_store=None, companion_resolve_mac=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -517,6 +524,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _owns_connectors = connector_store is None
     _connectors = connector_store or ConnectorStore(cfg.db_path)
 
+    # Core Panel admin unlock PIN: always built (like CameraStore/ConnectorStore),
+    # inert until POST /api/core/pin sets one -- an unset PIN just verifies False
+    # (never a crash / never a bypass). PinAttemptLimiter is pure in-memory
+    # (ephemeral by design, mirrors PairingManager's failed-attempt window) so it
+    # is never persisted/injectable via create_app.
+    _owns_pin_store = pin_store is None
+    _pin_store = pin_store or PinStore(cfg.db_path)
+    _pin_limiter = PinAttemptLimiter()
+
+    # Companion presence self-registration (Feature: a paired LAN companion
+    # registers its OWN device by source IP -> ARP -> MAC). Injectable for tests
+    # (a canned resolver keyed by IP); defaults to the real ARP-table resolver.
+    _resolve_companion_mac = companion_resolve_mac or resolve_source_mac
+
     def _ble_known_provider() -> dict:
         merged = dict(cfg.ble_known)
         merged.update(_identity_store.as_ble_map())   # registry wins ties
@@ -698,6 +719,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_connectors:
                 with suppress(Exception):
                     _connectors.close()
+            if _owns_pin_store:
+                with suppress(Exception):
+                    _pin_store.close()
             if _owns_device_meta:
                 with suppress(Exception):
                     _device_meta.close()
@@ -855,6 +879,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # build every request is already 'root', so this is a no-op there.
         if getattr(request.state, "role", None) != "root":
             raise HTTPException(status_code=403, detail="blocking is loopback-root only")
+
+    def require_authenticated(request: Request):
+        # Like require_local's CSRF rule for loopback "root", but WITHOUT the
+        # central-only role restriction: a plain 'user'-role paired companion (the
+        # owner's own phone, not a central) must be able to self-register its OWN
+        # presence / verify the panel PIN -- can_view allows root/central/user (the
+        # same set the global middleware already resolved every non-exempt request
+        # to; a denied role never reaches here at all). An authenticated LAN peer
+        # already proved possession of a bearer token, so -- same as require_local --
+        # it needs no CSRF header; only the loopback root (cookie/session-adjacent,
+        # no token) does.
+        role = getattr(request.state, "role", None)
+        if role == "root":
+            if request.headers.get("x-wavr-local") != "1":
+                raise HTTPException(status_code=403, detail="missing X-Wavr-Local header")
+            return
+        if not can_view(role):
+            raise HTTPException(status_code=403, detail="authentication required")
 
     # PUT /api/inventory/name is state-changing (Feature A) -- gated by the same
     # require_local rule as the camera/system/pair-code routes, so registration
@@ -1293,6 +1335,92 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # synchronous-call convention netinventory_service already uses for
         # this same store). Safe to call on every GET.
         return build_report(_device_meta)
+
+    @app.post("/api/presence/register-companion")
+    async def register_companion(request: Request, label: str = Body(..., embed=True),
+                                 _=Depends(require_authenticated)):
+        # Companion presence self-registration: the caller's OWN device becomes a
+        # named presence signal. The MAC is NEVER client-supplied -- it is derived
+        # from the REQUEST'S OWN source IP via the local ARP table (the same seam
+        # wavr.sources.network / wavr.netinventory use), so a companion can only
+        # ever register the device it is actually calling FROM, never an arbitrary
+        # MAC. Persisted into the SAME consent-first registry the admin identity
+        # routes use (IdentityStore, origin='companion') -- its as_net_map() is
+        # already merged into NetworkSource's live known-device provider
+        # (_net_known_provider above), so this takes effect on the network
+        # source's very next scan cycle, no restart, and survives one. Only a
+        # MAC PREFIX is ever returned (never the full address). 200 (never
+        # 4xx/5xx) on a failed resolution -- "Core has no ARP access" is an
+        # honest, expected outcome (not rooted / IP not yet in the table), not
+        # an error, so the mobile side can show a clear message rather than a
+        # generic failure.
+        try:
+            who = sanitize_name(label)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        host = request.client.host if request.client else None
+        mac = await _resolve_companion_mac(host) if host else None
+        if not mac:
+            return {"mac_registered": False, "reason": "no-arp-resolution"}
+        _identity_store.add(mac, who, source="network", origin="companion")
+        return {"mac_registered": True, "label": who, "mac_prefix": mac_prefix(mac)}
+
+    @app.delete("/api/presence/register-companion")
+    async def unregister_companion(request: Request, _=Depends(require_authenticated)):
+        # Self-service opt-out: resolve the CALLER's own source IP the same way
+        # the POST does (never a client-supplied MAC/label) and remove that
+        # address from the registry -- "this MAC is me, stop tracking it" is one
+        # consistent un-registration regardless of whether the row came from this
+        # self-add path or an earlier admin add for the same device.
+        host = request.client.host if request.client else None
+        mac = await _resolve_companion_mac(host) if host else None
+        if not mac:
+            return {"mac_unregistered": False, "reason": "no-arp-resolution"}
+        removed = _identity_store.delete(mac)
+        return {"mac_unregistered": removed, "mac_prefix": mac_prefix(mac)}
+
+    @app.post("/api/core/pin")
+    async def set_core_pin(pin: str = Body(..., embed=True), _=Depends(require_local)):
+        # Admin-only (require_local: loopback root + CSRF header, or a multidevice
+        # 'central'). Sets/replaces the Core Panel unlock PIN -- persisted HASHED
+        # (salted pbkdf2, wavr.pin_store) -- never the plaintext, never echoed back.
+        if not isinstance(pin, str) or not _PIN_RE.match(pin):
+            raise HTTPException(status_code=400,
+                                detail="pin must be 4-12 digits")
+        _pin_store.set_pin(pin)
+        return {"set": True}
+
+    @app.post("/api/core/pin/verify")
+    async def verify_core_pin(pin: str = Body(..., embed=True),
+                              _=Depends(require_authenticated)):
+        # Reachable by the panel: loopback (CSRF-gated, like every other loopback
+        # state check) or any authenticated LAN peer showing the panel -- see
+        # require_authenticated. Rate-limited (wavr.pin_ratelimit): checked BEFORE
+        # touching the store, so a caller under lockout never reaches the
+        # (deliberately slow) pbkdf2 compare. Locked-out or malformed input both
+        # degrade to an honest {"ok": false} rather than a distinguishable error
+        # code, so a caller learns nothing beyond "not unlocked" either way.
+        if _pin_limiter.locked():
+            return {"ok": False}
+        # Bound the input BEFORE it reaches pbkdf2 (hygiene, not a real amplification
+        # vector -- pbkdf2 cost is dominated by the iteration count -- but a huge
+        # string has no legitimate reason to reach a numeric-PIN compare).
+        if not isinstance(pin, str) or not pin or len(pin) > 128:
+            _pin_limiter.record_failure()
+            return {"ok": False}
+        ok = _pin_store.verify(pin)
+        if ok:
+            _pin_limiter.record_success()
+        else:
+            _pin_limiter.record_failure()
+        return {"ok": ok}
+
+    @app.get("/api/core/pin/status")
+    async def core_pin_status():
+        # Read-only, no secret (bool only) -- lets the panel know whether a PIN
+        # lock is configured at all, same gate as every other plain GET (the
+        # loopback_or_authed middleware).
+        return {"pin_set": _pin_store.is_set()}
 
     @app.get("/api/health")
     async def health(_=Depends(require_local)):
