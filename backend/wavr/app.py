@@ -32,7 +32,8 @@ from wavr.sources.camera import CameraSource, yolo_pose_detect
 from wavr.sources.mmwave import MmWaveSource
 from wavr.camera_store import CameraStore
 from wavr.calib_store import CalibrationStore, validate_mount, CalibrationError
-from wavr.localize import make_localizer, homography_from_points
+from wavr.localize import make_localizer, homography_from_points, floor_spots_for_room
+from wavr.calib_sample import CalibSampleStore
 from wavr.camera_health import CameraHealthMonitor
 from wavr.camera_url import rebind_rtsp_host, rtsp_host
 from wavr.netaddr import is_lan_ip
@@ -192,7 +193,8 @@ def _rebind_ip_ok(ip: str) -> bool:
         return False
 
 
-def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None):
+def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
+                    sample_store=None, sampling=False):
     # F3: pass the camera name + the health monitor's report callback + the unhealthy
     # threshold so a drifted/dead camera is edge-reported (name+bool only, never a
     # frame -- ADR-0002). `on_health` is None for callers that don't wire the monitor.
@@ -206,6 +208,7 @@ def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None):
     # only; no frame is ever read or persisted (ADR-0002).
     pose = False
     pose_detect = None
+    loc = None
     if calib is not None and house is not None:
         try:
             c = calib.get(cam["name"])
@@ -216,9 +219,27 @@ def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None):
             if poly:
                 loc = make_localizer(poly, homography=c.get("homography"),
                                      mount=c.get("mount"))
-                if loc is not None:
-                    pose = True
-                    pose_detect = functools.partial(yolo_pose_detect, localize=loc)
+    # Walk-to-calibrate SAMPLING: when a calibration session is active, run the pose
+    # pass to capture the walker's raw FEET PIXEL into the sample store so GET
+    # calib-sample can pair it with the known floor spot. Turns pose ON even with NO
+    # calibration (the raw pixel is all the wizard needs), and coexists with a localizer
+    # if one already exists. The closure hands the store ONLY a coordinate + image dims
+    # + confidence -- never a frame (ADR-0002).
+    on_feet = None
+    if sampling and sample_store is not None:
+        _nm = cam["name"]
+
+        def on_feet(feet_px, img_size, conf, _nm=_nm, _sink=sample_store):
+            _sink.record(_nm, feet_px, img_size[0], img_size[1], conf)
+
+    if loc is not None or on_feet is not None:
+        pose = True
+        kwargs = {}
+        if loc is not None:
+            kwargs["localize"] = loc
+        if on_feet is not None:
+            kwargs["on_feet"] = on_feet
+        pose_detect = functools.partial(yolo_pose_detect, **kwargs)
     return lambda: CameraSource(cam["room"], cam["rtsp_url"], name=cam["name"],
                                 interval=cfg.cam_interval, confidence=cam["confidence"],
                                 on_health=on_health,
@@ -531,6 +552,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # homography). Always built (like CameraStore/DeviceMeta) -- inert until a camera has
     # a row; NEVER a frame, only stored matrices/detection-space parameters (ADR-0002).
     _calib = CalibrationStore(cfg.db_path)
+    # Walk-to-calibrate feet-pixel sink (Spec A). In-memory, ephemeral, coordinate-only
+    # -- NEVER a frame (ADR-0002). Populated ONLY while a calibration session is active
+    # (see POST /api/cameras/{name}/calib-session); read by GET calib-sample. Inert and
+    # empty out of the box, so it costs nothing until an operator starts a walk.
+    _calib_sample = CalibSampleStore()
     # F3 camera IP-drift monitor: always available (like _device_meta), inert until a
     # camera reports down AND a stored MAC drifts. Reads camera defs from _cameras and
     # the current LAN devices from _inventory (opt-in WAVR_NET_INVENTORY -- when off,
@@ -663,6 +689,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #    assert the /api/cameras liveness tri-state (names only, no frame/creds).
     app.state.refuse_once = _refuse_once
     app.state.camera_health = _camera_health
+    #  * calib_sample: the walk-to-calibrate feet-pixel sink, so a test can record a
+    #    coordinate and assert GET calib-sample surfaces it (never a frame -- ADR-0002).
+    app.state.calib_sample = _calib_sample
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
@@ -1443,6 +1472,74 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         removed = _calib.delete(name)
         await _reregister_camera(name)   # source reverts to room-centred on next start
         return {"camera": name, "removed": removed}
+
+    @app.get("/api/cameras/{name}/calib-spots")
+    async def get_calib_spots(name: str, _=Depends(require_central)):
+        # Walk-to-calibrate KNOWN floor spots (FLOOR metres): room centroid + polygon
+        # corners the wizard guides the person to, one at a time. Pure geometry from the
+        # house map -- no frame, no credential (ADR-0002). Read-only but central+loopback
+        # gated (require_central) like the live sample below. 404 for an unknown camera.
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        cam = _cameras.get(name)
+        if not cam:
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        poly = room_polygon(_house, cam["room"])
+        spots = floor_spots_for_room(poly) if poly else []
+        out = [{"x": x, "y": y, "label": ("centre" if i == 0 else f"corner-{i}")}
+               for i, (x, y) in enumerate(spots)]
+        return {"camera": name, "room": cam["room"], "spots": out}
+
+    @app.get("/api/cameras/{name}/calib-sample")
+    async def get_calib_sample(name: str, _=Depends(require_central)):
+        # Walk-to-calibrate READ path. Returns ONLY the latest detected person's FEET
+        # PIXEL (a coordinate) + image dims + detection confidence for this camera, or
+        # nulls when there is no FRESH detection (no session, no person, or a stale
+        # sample -> `person: false`). ADR-0002: a pixel coordinate is NOT image data --
+        # NO frame/crop/image is ever read here or returned. Central+loopback gated
+        # (require_central), so a multidevice 'user' can't read live positions.
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        if not _cameras.get(name):
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        s = _calib_sample.latest(name)
+        if s is None:
+            return {"camera": name, "person": False, "feet_px": None,
+                    "img_w": None, "img_h": None, "confidence": None}
+        return {"camera": name, "person": True,
+                "feet_px": [s["feet_px"][0], s["feet_px"][1]],
+                "img_w": s["img_w"], "img_h": s["img_h"],
+                "confidence": s["confidence"]}
+
+    @app.post("/api/cameras/{name}/calib-session")
+    async def calib_session(name: str, active: bool = Body(..., embed=True),
+                            _=Depends(require_local)):
+        # Start/stop a walk-to-calibrate SAMPLING session. ACTIVE: re-register the camera
+        # so its pose pass records the walker's FEET PIXEL (coordinate only, ADR-0002)
+        # into the sample store, and START it running so frames flow -- the operator is
+        # about to walk the room. This is an explicit, operator-initiated maintenance
+        # action, so it MAY run the camera (the only way to see the walker); ENDING the
+        # session STOPS it again (cameras off by default). No calibration is written here
+        # -- the wizard PUTs the collected (feet_px, floor_point) pairs to /calibration
+        # when done. require_local (CSRF + central role).
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        cam = _cameras.get(name)
+        if not cam:
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        with suppress(KeyError):
+            await manager.unregister(name)   # kill before re-register (mirror rebind)
+        if active:
+            manager.register(name, _camera_factory(
+                cam, cfg, _camera_health.report, _calib, _house,
+                sample_store=_calib_sample, sampling=True), True)   # boots ON to walk
+        else:
+            _calib_sample.clear(name)         # drop any lingering feet pixel
+            manager.register(name, _camera_factory(
+                cam, cfg, _camera_health.report, _calib, _house), False)  # back OFF
+        active_now = {s["name"]: s["active"] for s in manager.status()["sources"]}
+        return {"camera": name, "sampling": active,
+                "active": bool(active_now.get(name))}
 
     @app.get("/api/cameras/suggestions")
     async def camera_suggestions():

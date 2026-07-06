@@ -300,6 +300,32 @@ def make_localizer(room_poly, *, homography=None, mount: MountPose | None = None
     return _loc
 
 
+def floor_spots_for_room(poly, *, dedup_eps: float = 0.05):
+    """KNOWN floor target spots (FLOOR metres) the walk-to-calibrate wizard guides the
+    person to stand on, one at a time: the room CENTROID first, then each polygon VERTEX
+    (corner) in order. The wizard pairs each spot with the FEET PIXEL captured while the
+    person stands on it (GET calib-sample) to build the image<->floor correspondences
+    `homography_from_points` solves.
+
+    De-duplicates coincident / near-coincident points (within `dedup_eps` metres) so a
+    later solve isn't fed a duplicate (degenerate) correspondence. A degenerate polygon
+    (< 3 finite vertices) yields an empty list -- the wizard has nothing valid to guide
+    to. The centroid is the vertex average: exact for the convex rooms the map editor
+    produces, and only ever an approximate 'stand roughly here' guide (the CORNERS are
+    the load-bearing correspondences), so a non-convex room's centroid falling slightly
+    outside is harmless. Pure geometry: no frame, no I/O (ADR-0002)."""
+    pts = [(float(p[0]), float(p[1])) for p in poly if _finite_point(p)]
+    if len(pts) < 3:
+        return []
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    out: list[tuple[float, float]] = []
+    for s in [(cx, cy), *pts]:
+        if not any(math.hypot(s[0] - o[0], s[1] - o[1]) <= dedup_eps for o in out):
+            out.append(s)
+    return out
+
+
 def default_mount_for_room(poly, *, height: float = 2.4, tilt_deg: float = 30.0,
                            hfov_deg: float = 90.0) -> MountPose:
     """A sane, EDITABLE monocular prior for a freshly-added camera with zero setup:
