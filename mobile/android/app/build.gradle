@@ -7,7 +7,7 @@ android {
 
     sourceSets {
         main {
-            java.srcDirs += ['../../plugins/wavr-net', '../../plugins/wavr-secure-storage']
+            java.srcDirs += ['../../plugins/wavr-net', '../../plugins/wavr-secure-storage', '../../plugins/wavr-sensor']
         }
     }
     defaultConfig {
