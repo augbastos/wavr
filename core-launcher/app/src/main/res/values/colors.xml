@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wavr_bg">#0B0F14</color>
+    <color name="wavr_accent">#4ECDC4</color>
+    <color name="wavr_muted">#8A97A5</color>
+    <color name="ic_launcher_background">#0B0F14</color>
+</resources>
