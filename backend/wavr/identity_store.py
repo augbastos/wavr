@@ -11,6 +11,11 @@ store, both consented:
     have paired their phone to the shared PC once -> the admin must be able to
     uncheck it). origin='bonded'.
   * manual add -- address + label typed for anything not bonded. origin='manual'.
+  * companion self-register -- a PAIRED LAN companion (or the loopback operator)
+    registers ITS OWN device via POST /api/presence/register-companion; the MAC
+    is derived server-side from the request's own source IP (never client-
+    supplied), so this is a THIRD, self-attested consent path distinct from an
+    admin confirming someone else's device. origin='companion'.
 
 Un-registering a row IS the participation opt-out: it immediately stops the device
 being a presence signal (the live known-provider stops returning it on the next
@@ -33,7 +38,7 @@ from wavr.device_meta import normalize_mac, sanitize_name
 # A registered device feeds exactly one presence modality.
 VALID_SOURCES = frozenset({"ble", "network"})
 # How the admin's consent was expressed (see module docstring).
-VALID_ORIGINS = frozenset({"bonded", "manual"})
+VALID_ORIGINS = frozenset({"bonded", "manual", "companion"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS identity_devices (
