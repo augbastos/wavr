@@ -749,6 +749,30 @@
                       font-size:.76rem;font-variant-numeric:tabular-nums;}
   .id-bonded-tag{flex-shrink:0;font-size:.7rem;color:var(--dim);}
 
+  /* ---------------- Connectors & services — the single egress surface (gear) ----------------
+     project_wavr_connectors_vision: the ONLY screen that manages anything reaching outward;
+     everything OFF by default. One card per connector; labels/scope are server/registry data
+     rendered via textContent (never innerHTML). */
+  .conn-summary{margin:0 0 6px;font-size:.8rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .conn-list{display:flex;flex-direction:column;gap:10px;}
+  .conn-card{border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--elevated);
+             display:flex;flex-direction:column;gap:7px;max-width:60ch;}
+  .conn-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+  .conn-name{margin:0;font-size:.92rem;font-weight:600;color:var(--text);overflow-wrap:anywhere;}
+  .conn-dir{font-size:.64rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+            color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;
+            white-space:nowrap;flex-shrink:0;}
+  .conn-desc{margin:0;font-size:.82rem;color:var(--dim);line-height:1.5;}
+  .conn-scope{margin:0;font-size:.78rem;color:var(--dim);overflow-wrap:anywhere;}
+  .conn-scope b{color:var(--text);font-weight:600;}
+  .conn-scope.egress b{color:var(--warn);}
+  .conn-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:3px;}
+  .conn-state{font-size:.74rem;font-weight:600;color:var(--dim);font-variant-numeric:tabular-nums;
+              overflow-wrap:anywhere;}
+  .conn-state.active{color:var(--accent);}
+  .conn-state.revoked{color:var(--danger);}
+  .conn-state.setup{color:var(--warn);}
+
   /* ---------------- House editor (gear) ---------------- */
   .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .hed-tools .primary{border-color:var(--accent);color:var(--accent);}
@@ -1824,6 +1848,22 @@
       <h4 class="pair-sub">Registered devices</h4>
       <div id="idDevList" class="pair-dev-list" aria-live="polite"></div>
     </div>
+    <!-- Connectors & services — the SINGLE outward-facing surface (project_wavr_connectors_vision).
+         Wavr is local and MUTE by default; this is the ONLY screen that manages anything reaching
+         OUTWARD, and everything is OFF by default. Live/central only: GET /api/connectors is
+         router require_central (a multidevice 'user' peer gets 403 and this panel stays hidden);
+         the enable toggle additionally carries require_local (X-Wavr-Local CSRF). Every label/scope
+         is server/registry data rendered via textContent — NEVER innerHTML. An empty registry =>
+         every built-in renders off/ready => nothing egresses (byte-identical to default). -->
+    <div id="connectors" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="conn-h">Connectors &amp; services</h2><span class="hint">the only place Wavr reaches outward</span></div>
+      <p class="pair-hint" style="margin:-2px 0 10px">This is the one screen where Wavr can reach the
+        outside world. Everything here is <b>off by default</b> — a connector runs only after you turn
+        it on, and turning it off revokes it immediately.
+        <span id="connFb" class="action-fb" aria-live="polite"></span></p>
+      <p id="connSummary" class="conn-summary" aria-live="polite"></p>
+      <div id="connList" class="conn-list" aria-live="polite"></div>
+    </div>
     <!-- Stage 3b (§2.6/§7#6/#10 + §9): Privacy & security — the brand's trust screen,
          visible in EVERY mode (demo included). Invariants are static truth; the kill-switch
          shortcut and the export act on live/loaded data where available. -->
@@ -2810,7 +2850,13 @@ function renderNarrate(){
     setSending(true);
     try{
       const r = await fetch(location.origin+"/api/narrate",{method:"POST",headers:{"X-Wavr-Local":"1"}});
-      if(r.status===503){ out.textContent = "narration not configured (set GEMINI_API_KEY + WAVR_NARRATE_ENABLED)"; }
+      if(r.status===503){
+        // 503 now covers two honest cases: not-configured OR revoked in the Connectors screen.
+        // Surface the server's own detail (textContent) so a revoked narrator reads accurately
+        // instead of the misleading "not configured" hint. Fall back if the body is absent.
+        let detail=""; try{ detail=(await r.json()).detail||""; }catch{}
+        out.textContent = detail || "narration not configured (set WAVR_NARRATE_ENABLED and configure a provider)";
+      }
       else if(!r.ok){ out.textContent = "couldn't generate the narration"; }
       else { const d = await r.json(); out.className = "narrate-out"; out.textContent = d.narration || "(no response)"; }
     }catch{ out.textContent = "connection failed"; }
@@ -3373,6 +3419,134 @@ async function renderIdentity(){
   renderList(seed);                          // seed the registered list from the probe we already read
 }
 renderIdentity();
+
+// ---- Connectors & services: the single outward-facing surface ----
+// (project_wavr_connectors_vision) Wavr is local and MUTE by default; this is the ONLY screen
+// that manages anything reaching outward, and everything is OFF by default. Live/central only:
+// GET /api/connectors is router require_central (a multidevice 'user' peer 403s -> panel stays
+// hidden, like the identity registry); the enable toggle adds require_local (X-Wavr-Local CSRF).
+// Descriptor shape from the backend: {id,kind,direction,label,available,active,suppressed,
+// enforcement,scope,env_flag}. Enforcement decides the control:
+//   * 'registry-overlay' (built-in kill-switch) -> "Allowed"/"Revoked" toggle. A row can only
+//     SUPPRESS a live feature; the chokepoint still ANDs the env flag, so this can NEVER enable
+//     egress beyond env. When permitted-but-not-active the chip names the env flag to set (honest,
+//     no overclaim).
+//   * 'env' (bound in a separate process, e.g. MCP control) -> NO live toggle; the card reflects
+//     the flag + names the env var to edit, rather than faking a dead switch.
+//   * 'registry' (generic connector) -> the registry IS the full gate: "On"/"Off" flips it.
+// Every label/scope is server/registry data -> textContent, never innerHTML. An absent registry
+// row => all built-ins render off/ready => nothing egresses (byte-identical to today).
+const CONN_DESC = {
+  "narrator":   "Turns live presence into a short natural-language summary with an LLM.",
+  "ha-import":  "Imports device and area names from Home Assistant on your LAN.",
+  "ha-control": "Lets Wavr send control commands to your Home Assistant devices.",
+  "mcp-read":   "Exposes a read-only view of the house (RoomState) to AI agents over MCP.",
+};
+async function renderConnectors(){
+  if(MODE!=="live") return;                  // live/central only; never companion/demo
+  const hdr = {"X-Wavr-Local":"1"};          // same local-only guard as the other gear panels
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/connectors",{headers:hdr}); }
+  catch{ return; }                           // backend unreachable — stay hidden
+  if(!probe.ok) return;                      // 403 (multidevice 'user') — stay hidden
+  let list; try{ list = (await probe.json()).connectors; }catch{ list = []; }
+  document.getElementById("connectors").hidden = false;
+
+  const host = document.getElementById("connList");
+  const summary = document.getElementById("connSummary");
+  const fb = document.getElementById("connFb");
+
+  function directionWord(dir){ return dir === "inbound" ? "Reads in" : "Sends out"; }
+  // Egress honesty: an outbound connector whose scope does NOT start with "local" leaves the box.
+  function isEgress(c){ return c.direction === "outbound" && !/^local/i.test(c.scope || ""); }
+
+  function stateFor(c){                       // honest per-enforcement status chip
+    if(c.suppressed) return {word:"revoked", cls:"revoked"};
+    if(c.active)     return {word:"active",  cls:"active"};
+    if(c.enforcement === "env" && !c.env_flag) return {word:"read-only · separate MCP server", cls:""};
+    if(!c.available) return {word:"needs setup", cls:"setup"};
+    return {word:"ready", cls:""};            // configured, but its enable flag is still off
+  }
+
+  function render(connectors){
+    connectors = Array.isArray(connectors) ? connectors : [];
+    host.textContent = "";
+    let activeN = 0;
+    connectors.forEach(c => {
+      if(c.active) activeN++;
+      const card = document.createElement("div"); card.className = "conn-card";
+
+      const top = document.createElement("div"); top.className = "conn-top";
+      const nm = document.createElement("h4"); nm.className = "conn-name";
+      nm.textContent = c.label || c.id;        // textContent — server/registry data (never innerHTML)
+      const dir = document.createElement("span"); dir.className = "conn-dir";
+      dir.textContent = c.direction || "outbound";
+      top.appendChild(nm); top.appendChild(dir);
+      card.appendChild(top);
+
+      const desc = CONN_DESC[c.id];
+      if(desc){ const p = document.createElement("p"); p.className = "conn-desc"; p.textContent = desc; card.appendChild(p); }
+
+      if(c.scope){
+        const sc = document.createElement("p"); sc.className = "conn-scope" + (isEgress(c) ? " egress" : "");
+        const b = document.createElement("b"); b.textContent = directionWord(c.direction) + ": ";
+        sc.appendChild(b); sc.appendChild(document.createTextNode(c.scope)); // textContent path — hostile scope is data
+        card.appendChild(sc);
+      }
+
+      const foot = document.createElement("div"); foot.className = "conn-foot";
+      const st = stateFor(c);
+      if(c.enforcement === "env"){
+        // No live toggle: the gate lives in a separate process/flag. Reflect it honestly.
+        const note = document.createElement("span"); note.className = "conn-state " + st.cls;
+        note.textContent = st.word + (c.env_flag ? (" · set " + c.env_flag + " and restart") : "");
+        foot.appendChild(note);
+      } else {
+        // registry (generic full gate) OR registry-overlay (built-in kill-switch): a live toggle.
+        const isGeneric = c.enforcement === "registry";
+        const on = isGeneric ? c.active : !c.suppressed;   // overlay: on = permitted (not suppressed)
+        const tog = document.createElement("button"); tog.type = "button";
+        tog.className = "ctl switch" + (on ? " on" : "");
+        tog.setAttribute("aria-pressed", on ? "true" : "false");
+        tog.setAttribute("aria-label",
+          (isGeneric ? (on ? "turn off " : "turn on ") : (on ? "revoke " : "allow ")) + (c.label || c.id));
+        tog.textContent = isGeneric ? (on ? "On" : "Off") : (on ? "Allowed" : "Revoked");
+        tog.onclick = async ()=>{
+          tog.disabled = true;
+          let r;
+          try{ r = await fetch(location.origin+"/api/connectors/"+encodeURIComponent(c.id)+"/enable",
+            {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+             body:JSON.stringify({enabled: !on})}); }catch{}
+          if(r && r.ok){
+            let j; try{ j = await r.json(); }catch{ j = {}; }
+            const updated = j.connector;
+            if(updated){
+              const idx = connectors.findIndex(x => x.id === updated.id);
+              if(idx >= 0) connectors[idx] = updated;
+            }
+            actionFeedback(fb, true, null, on ? "✓ revoked" : "✓ enabled");
+            render(connectors);               // re-render from the authoritative descriptor
+          } else {
+            tog.disabled = false;
+            actionFeedback(fb, false,
+              (r && r.status === 409) ? "controlled by an environment flag" : "couldn't change");
+          }
+        };
+        foot.appendChild(tog);
+        const stch = document.createElement("span"); stch.className = "conn-state " + st.cls;
+        stch.textContent = (st.word === "ready" && c.env_flag) ? ("ready · set " + c.env_flag) : st.word;
+        foot.appendChild(stch);
+      }
+      card.appendChild(foot);
+      host.appendChild(card);
+    });
+    summary.textContent = activeN === 0
+      ? "Nothing is reaching outward right now — every connector is off."
+      : (activeN + (activeN === 1 ? " connector is active." : " connectors are active."));
+  }
+  render(list);
+}
+renderConnectors();
 
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
