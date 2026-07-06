@@ -239,11 +239,32 @@ def yolo_detect(frame, conf_threshold: float = 0.0) -> Detection:
     return Detection(count=len(persons), confidence=max(persons) if persons else 0.0)
 
 
-def yolo_pose_detect(frame, confidence: float = 0.0) -> list[Target]:
-    """Posture-only targets: no homography yet, so x/y stay None — only
-    `posture` (derived from COCO-17 keypoints via `classify_posture`) and the
-    box confidence are meaningful here."""
+def feet_point(xyxy) -> tuple[float, float]:
+    """Ground-contact pixel = bottom-centre of a person bbox (x1, y1, x2, y2): the point
+    a localizer projects to the floor. Pure pixel arithmetic on a DETECTION coordinate --
+    it never reads or keeps frame contents (ADR-0002)."""
+    x1, _y1, x2, y2 = (float(v) for v in xyxy)
+    return ((x1 + x2) / 2.0, y2)
+
+
+def yolo_pose_detect(frame, confidence: float = 0.0, localize=None) -> list[Target]:
+    """Per-person targets from YOLO-pose. `posture` derives from COCO-17 keypoints via
+    `classify_posture`.
+
+    When a `localize` callable is supplied -- ``(feet_px, (img_w, img_h)) ->
+    (x, y, conf) | None`` in ROOM-LOCAL metres -- the person's FEET pixel (bottom-centre
+    of the box) is projected to a floor (x, y) and that POSITION-quality confidence rides
+    the Target. Without it (no calibration), x/y stay None so the camera stays
+    room-centred (honest fallback). The frame is read ONLY for its pixel size
+    (`frame.shape`); it is never stored (ADR-0002)."""
     results = _pose_model()(frame)
+    img_size = None
+    if localize is not None:
+        try:
+            h, w = frame.shape[:2]
+            img_size = (float(w), float(h))
+        except Exception:
+            img_size = None       # unknown frame size -> skip positioning, keep posture
     targets: list[Target] = []
     for r in results:
         boxes = getattr(r, "boxes", None)
@@ -254,9 +275,18 @@ def yolo_pose_detect(frame, confidence: float = 0.0) -> list[Target]:
             if int(cls) != 0 or float(conf) < confidence:  # COCO class 0 = person
                 continue
             kps = [(float(x), float(y)) for x, y in kpts.xy[i]]
+            tx = ty = None
+            tconf = float(conf)                            # detection conf when unpositioned
+            if localize is not None and img_size is not None:
+                try:
+                    loc = localize(feet_point(boxes.xyxy[i]), img_size)
+                except Exception:
+                    loc = None
+                if loc is not None:
+                    tx, ty, tconf = float(loc[0]), float(loc[1]), float(loc[2])
             targets.append(Target(
-                id=i + 1, x=None, y=None,
+                id=i + 1, x=tx, y=ty,
                 posture=classify_posture(kps),
-                confidence=float(conf),
+                confidence=tconf,
             ))
     return targets

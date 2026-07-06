@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import hmac
 import ipaddress
 import logging
@@ -19,7 +20,7 @@ from starlette.responses import JSONResponse
 
 from wavr import __version__
 from wavr.config import load_config
-from wavr.housemap import load_house_map, room_names, save_house_map, upsert_room, HouseMapError
+from wavr.housemap import load_house_map, room_names, room_polygon, save_house_map, upsert_room, HouseMapError
 from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine
@@ -27,9 +28,11 @@ from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
 from wavr.sources.network import NetworkSource, _local_ipv4
 from wavr.sources.ruview import RuViewSource
-from wavr.sources.camera import CameraSource
+from wavr.sources.camera import CameraSource, yolo_pose_detect
 from wavr.sources.mmwave import MmWaveSource
 from wavr.camera_store import CameraStore
+from wavr.calib_store import CalibrationStore, validate_mount, CalibrationError
+from wavr.localize import make_localizer, homography_from_points
 from wavr.camera_health import CameraHealthMonitor
 from wavr.camera_url import rebind_rtsp_host, rtsp_host
 from wavr.netaddr import is_lan_ip
@@ -187,14 +190,38 @@ def _rebind_ip_ok(ip: str) -> bool:
         return False
 
 
-def _camera_factory(cam: dict, cfg, on_health=None):
+def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None):
     # F3: pass the camera name + the health monitor's report callback + the unhealthy
     # threshold so a drifted/dead camera is edge-reported (name+bool only, never a
     # frame -- ADR-0002). `on_health` is None for callers that don't wire the monitor.
+    #
+    # Spec A localization: when the camera has a stored calibration (a 4-point
+    # homography OR a mount prior) AND its room polygon is known, build a localizer and
+    # turn the pose pass ON so the source emits POSITIONED Target(x, y). Without a
+    # calibration the camera keeps its old behaviour exactly (pose off, room-centred) --
+    # so a freshly added, uncalibrated camera never pays the pose-inference cost and is
+    # byte-identical to before. The localizer works on the feet PIXEL + stored matrices
+    # only; no frame is ever read or persisted (ADR-0002).
+    pose = False
+    pose_detect = None
+    if calib is not None and house is not None:
+        try:
+            c = calib.get(cam["name"])
+        except Exception:
+            c = None
+        if c and (c.get("homography") or c.get("mount")):
+            poly = room_polygon(house, cam["room"])
+            if poly:
+                loc = make_localizer(poly, homography=c.get("homography"),
+                                     mount=c.get("mount"))
+                if loc is not None:
+                    pose = True
+                    pose_detect = functools.partial(yolo_pose_detect, localize=loc)
     return lambda: CameraSource(cam["room"], cam["rtsp_url"], name=cam["name"],
                                 interval=cfg.cam_interval, confidence=cam["confidence"],
                                 on_health=on_health,
-                                unhealthy_secs=cfg.cam_unhealthy_secs)
+                                unhealthy_secs=cfg.cam_unhealthy_secs,
+                                pose=pose, pose_detect=pose_detect)
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
@@ -489,6 +516,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     _owns_cameras = camera_store is None   # only close a store this function built itself
     _cameras = camera_store or CameraStore(cfg.db_path)
+    # Spec A per-camera localization calibration (mount prior + optional 4-point
+    # homography). Always built (like CameraStore/DeviceMeta) -- inert until a camera has
+    # a row; NEVER a frame, only stored matrices/detection-space parameters (ADR-0002).
+    _calib = CalibrationStore(cfg.db_path)
     # F3 camera IP-drift monitor: always available (like _device_meta), inert until a
     # camera reports down AND a stored MAC drifts. Reads camera defs from _cameras and
     # the current LAN devices from _inventory (opt-in WAVR_NET_INVENTORY -- when off,
@@ -496,7 +527,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _camera_health = CameraHealthMonitor(
         get_camera=_cameras.get, latest_inventory=_inventory.latest_inventory)
     for cam in _cameras.list():                       # persisted cameras -> boot-OFF sources
-        manager.register(cam["name"], _camera_factory(cam, cfg, _camera_health.report), False)
+        manager.register(cam["name"],
+                         _camera_factory(cam, cfg, _camera_health.report, _calib, _house),
+                         False)
 
     def _masked_cameras():
         # Per-camera liveness tri-state (read-only, name+enum only — no frame, no
@@ -590,6 +623,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_cameras:
                 with suppress(Exception):
                     _cameras.close()
+            with suppress(Exception):
+                _calib.close()
             if _owns_identity:
                 with suppress(Exception):
                     _identity_store.close()
@@ -1159,7 +1194,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _cameras.add(name, room, rtsp_url, confidence, mac=clean_mac)
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail=f"camera exists: {name}")
-        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report), False)  # boots OFF
+        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house), False)  # boots OFF
         return _masked_cameras()
 
     @app.post("/api/onvif/probe")
@@ -1204,6 +1239,122 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _camera_health.clear(name)   # drop any stale drift suggestion for the removed cam
         return _masked_cameras()
 
+    def _calib_view(name: str) -> dict:
+        # Read-only calibration view. Carries NO credentials (calibration is pure
+        # geometry: a mount prior + a homography matrix + the pixel size it was marked
+        # at). A corrupt stored blob degrades to null (store.get never raises).
+        c = _calib.get(name)
+        if c is None:
+            return {"camera": name, "mount": None, "homography": None,
+                    "img_w": None, "img_h": None, "updated": None, "localizes": False}
+        localizes = bool(c.get("homography") or c.get("mount"))
+        return {"camera": name,
+                "mount": c["mount"].to_dict() if c.get("mount") else None,
+                "homography": c.get("homography"),
+                "img_w": c.get("img_w"), "img_h": c.get("img_h"),
+                "updated": c.get("updated"), "localizes": localizes}
+
+    async def _reregister_camera(name: str) -> None:
+        # Rebuild the source factory so it picks up the new calibration (mirrors
+        # set_url/rebind exactly). unregister() KILLS a running source, then we
+        # re-register boot-OFF -- so a calibration change stops a live camera and the
+        # operator re-enables it, at which point the new localizer takes effect. A
+        # calibration change never auto-enables a camera (ADR-0002).
+        cam = _cameras.get(name)
+        if not cam:
+            return
+        with suppress(KeyError):
+            await manager.unregister(name)   # kill before re-register (mirror rebind)
+        manager.register(name,
+                         _camera_factory(cam, cfg, _camera_health.report, _calib, _house),
+                         False)
+
+    @app.get("/api/cameras/{name}/calibration")
+    async def get_calibration(name: str):
+        # Read-only (loopback middleware is the gate, like GET /api/inventory). 404 for
+        # an unknown camera so the UI can't probe arbitrary names.
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        if not _cameras.get(name):
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        return _calib_view(name)
+
+    @app.put("/api/cameras/{name}/calibration")
+    async def put_calibration(
+        name: str,
+        mount: dict | None = Body(None),
+        image_points: list | None = Body(None),
+        floor_points: list | None = Body(None),
+        img_w: int | None = Body(None),
+        img_h: int | None = Body(None),
+        _=Depends(require_local),
+    ):
+        # Spec A. Two independent, composable calibrations, both state-changing
+        # (require_local / CSRF): a MONOCULAR mount prior (approximate immediate
+        # estimate) and/or an accurate 4-POINT homography. The homography is ALWAYS
+        # solved server-side from image<->floor correspondences via
+        # localize.homography_from_points, so the degeneracy guard (collinear/coincident)
+        # runs before anything is persisted -- the client never hands us a raw matrix.
+        # No frame is involved: image_points are the operator's marks (pixels), never a
+        # stored image (ADR-0002).
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        if not _cameras.get(name):
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        wrote = False
+        if mount is not None:
+            try:
+                pose = validate_mount(mount)
+            except CalibrationError as exc:
+                raise HTTPException(status_code=422, detail=f"mount: {exc}")
+            _calib.set_mount(name, pose)
+            wrote = True
+        if image_points is not None or floor_points is not None:
+            if not isinstance(image_points, list) or not isinstance(floor_points, list):
+                raise HTTPException(status_code=422,
+                                    detail="image_points and floor_points must both be arrays")
+            if len(image_points) != len(floor_points):
+                raise HTTPException(status_code=422,
+                                    detail="image_points and floor_points must be the same length")
+            if len(image_points) < 4:
+                raise HTTPException(status_code=422,
+                                    detail="need >= 4 point correspondences")
+            if len(image_points) > 1000:
+                # Bound the DLT input (defence-in-depth: even a local operator shouldn't
+                # be able to hand us a pathologically large SVD).
+                raise HTTPException(status_code=422,
+                                    detail="too many point correspondences (max 1000)")
+            if not (isinstance(img_w, int) and isinstance(img_h, int)
+                    and 0 < img_w <= 100_000 and 0 < img_h <= 100_000):
+                raise HTTPException(status_code=422,
+                                    detail="img_w and img_h must be positive integers")
+            try:
+                h = homography_from_points(image_points, floor_points)
+            except ValueError as exc:
+                # Degenerate / non-finite / malformed correspondences -> 422, never a
+                # silently near-singular matrix that mislocates every later projection.
+                raise HTTPException(status_code=422, detail=f"homography: {exc}")
+            try:
+                _calib.set_homography(name, [float(v) for v in h.flatten()], img_w, img_h)
+            except CalibrationError as exc:
+                raise HTTPException(status_code=422, detail=f"homography: {exc}")
+            wrote = True
+        if not wrote:
+            raise HTTPException(status_code=400,
+                                detail="provide a mount and/or image_points+floor_points")
+        await _reregister_camera(name)
+        return _calib_view(name)
+
+    @app.delete("/api/cameras/{name}/calibration")
+    async def delete_calibration(name: str, _=Depends(require_local)):
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        if not _cameras.get(name):
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        removed = _calib.delete(name)
+        await _reregister_camera(name)   # source reverts to room-centred on next start
+        return {"camera": name, "removed": removed}
+
     @app.get("/api/cameras/suggestions")
     async def camera_suggestions():
         # F3 read-only IP-drift suggestions (loopback middleware is the gate, like
@@ -1242,7 +1393,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         with suppress(KeyError):
             await manager.unregister(name)   # mirror delete_camera: kill before re-register
         # Re-register boot-OFF (ADR-0002: a rebind never auto-enables a camera).
-        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report), False)
+        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house), False)
         _camera_health.clear(name)
         return _masked_cameras()
 
@@ -1304,6 +1455,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def ptz_capabilities(camera_id: str):
         cam = _ptz_cam(camera_id)
         return await _ptz.capabilities(camera_id, cam["rtsp_url"])
+
+    @app.get("/api/ptz/{camera_id}/status")
+    async def ptz_status(camera_id: str):
+        # Read-only PTZ position (pan/tilt/zoom) -- the BEARING SEAM for person
+        # localization on a pan/tilt camera. Same gate/pattern as capabilities:
+        # WAVR_PTZ + loopback; reads ONLY ONVIF control metadata, NEVER a frame
+        # (ADR-0002). Creds come from the stored rtsp_url and never reach the response.
+        # None (non-PTZ/offline/faulting camera) surfaces as {"status": null}.
+        cam = _ptz_cam(camera_id)
+        return {"status": await _ptz.get_status(camera_id, cam["rtsp_url"])}
 
     if cfg.multidevice:
         @app.post("/api/pair-code")

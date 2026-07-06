@@ -1,4 +1,4 @@
-from wavr.housemap import DEFAULT_MAP, load_house_map, room_names
+from wavr.housemap import DEFAULT_MAP, load_house_map, room_names, room_polygon
 
 
 def test_default_map_is_v2():
@@ -44,6 +44,30 @@ def test_room_names_flattens_v2_across_floors():
 
 def test_room_names_tolerates_v1():
     assert room_names({"rooms": [{"name": "sala"}]}) == ["sala"]
+
+
+def test_room_polygon_returns_named_polygon():
+    poly = room_polygon(DEFAULT_MAP, "quarto")
+    assert poly == [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]
+
+
+def test_room_polygon_unknown_room_is_none():
+    assert room_polygon(DEFAULT_MAP, "no-such-room") is None
+
+
+def test_room_polygon_level_filter():
+    house = {"floors": [
+        {"level": 0, "rooms": [{"name": "sala", "polygon": [[0, 0], [1, 0], [1, 1]]}]},
+        {"level": 1, "rooms": [{"name": "loft", "polygon": [[0, 0], [2, 0], [2, 2]]}]},
+    ]}
+    assert room_polygon(house, "loft", level=1) == [[0, 0], [2, 0], [2, 2]]
+    assert room_polygon(house, "loft", level=0) is None      # wrong level -> not found
+
+
+def test_room_polygon_rejects_degenerate_polygon():
+    house = {"floors": [{"level": 0, "rooms": [
+        {"name": "line", "polygon": [[0, 0], [1, 1]]}]}]}    # < 3 vertices
+    assert room_polygon(house, "line") is None
 
 
 # Task 2: Validation tests

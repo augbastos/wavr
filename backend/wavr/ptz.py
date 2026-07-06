@@ -84,6 +84,7 @@ _ACT_CONTINUOUS = f"{_NS_PTZ}/ContinuousMove"
 _ACT_STOP = f"{_NS_PTZ}/Stop"
 _ACT_GET_PRESETS = f"{_NS_PTZ}/GetPresets"
 _ACT_GOTO_PRESET = f"{_NS_PTZ}/GotoPreset"
+_ACT_GET_STATUS = f"{_NS_PTZ}/GetStatus"
 _ACT_GET_SERVICES = f"{_NS_DEVICE}/GetServices"
 
 
@@ -157,6 +158,15 @@ def build_goto_preset(token: str, preset: str, user: str | None, pw: str | None)
     return _envelope(body, user, pw)
 
 
+def build_get_status(token: str, user: str | None, pw: str | None) -> str:
+    """GetStatus for a profile -- reads the camera's CURRENT pan/tilt/zoom position (the
+    bearing seam for localize.ptz_bearing_floor_point). Control metadata only, no frame."""
+    tok = _xml_escape(token)
+    body = (f'<tptz:GetStatus xmlns:tptz="{_NS_PTZ}">'
+            f"<tptz:ProfileToken>{tok}</tptz:ProfileToken></tptz:GetStatus>")
+    return _envelope(body, user, pw)
+
+
 # --------------------------------------------------------------------------- #
 # Response parsers (namespace-agnostic, XXE-safe -- never raise).
 # --------------------------------------------------------------------------- #
@@ -191,6 +201,42 @@ def parse_presets(xml_text: str) -> list[dict]:
         out.append({"token": token[:100], "name": (name[:100] if name else None)})
         if len(out) >= 64:
             break
+    return out
+
+
+def _finite_attr(el, name: str) -> float | None:
+    """A finite float attribute value, or None (missing / non-numeric / NaN / inf)."""
+    v = el.get(name)
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def parse_ptz_status(xml_text: str) -> dict | None:
+    """GetStatusResponse -> {'pan','tilt'[,'zoom']} NORMALIZED ONVIF position (PanTilt
+    x,y + Zoom x attrs), or None. Namespace/XXE-safe; never raises; non-finite refused.
+    Range is per-model; radian conversion (`normalized_pan_tilt_to_radians`) NOT VERIFIED."""
+    root = _safe_root(xml_text)
+    if root is None:
+        return None
+    pan = tilt = None
+    for pt in _iter_local(root, "PanTilt"):        # skips a MoveStatus PanTilt (no x/y)
+        px, py = _finite_attr(pt, "x"), _finite_attr(pt, "y")
+        if px is not None and py is not None:
+            pan, tilt = px, py
+            break
+    if pan is None or tilt is None:
+        return None
+    out = {"pan": pan, "tilt": tilt}
+    for z in _iter_local(root, "Zoom"):
+        zv = _finite_attr(z, "x")
+        if zv is not None:
+            out["zoom"] = zv
+        break
     return out
 
 
@@ -391,6 +437,31 @@ class CameraPTZ:
         except Exception:
             _LOG.warning("ptz: capability probe failed for a camera")
             return {"ptz": False}
+
+    async def get_status(self, name: str, rtsp_url: str,
+                         timeout: float = 4.0) -> dict | None:
+        """Read the camera's current PTZ position -> {'pan','tilt'[,'zoom']} (normalized
+        ONVIF units), or None on a non-LAN/offline/faulting/non-PTZ camera. The BEARING
+        SEAM for person-localization: a centred auto-track's pan/tilt is the bearing to
+        the person. Reads ONLY ONVIF control metadata -- NO frame (ADR-0002); creds come
+        only from the stored rtsp_url and never appear in the result."""
+        resolved = await self.discover(name, rtsp_url, timeout)
+        if resolved is None:
+            return None
+        ptz_url, token = resolved
+        ep = self._endpoints(rtsp_url)
+        if ep is None:
+            return None
+        _host, user, pw = ep
+        try:
+            resp = await self._soap(
+                ptz_url, build_get_status(token, user, pw), _ACT_GET_STATUS, timeout)
+        except Exception:
+            _LOG.warning("ptz: GetStatus SOAP failed for a LAN camera")
+            return None
+        if _is_fault(resp):
+            return None
+        return parse_ptz_status(resp)
 
     # -- runaway-slew guard -- #
     def _arm_autostop(self, name: str, rtsp_url: str) -> None:
