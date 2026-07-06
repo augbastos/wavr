@@ -845,6 +845,15 @@
   .precision-posture::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;
                  background:var(--dim);margin-top:6px;}
   .precision-posture.t-presence::before{background:var(--accent);}
+  /* Compact by default (2026-07-06): shrink the sensing-mode meter so the room cards
+     sit closer / fit on screen together — less padding, slimmer segments, tighter copy. */
+  .precision-tile{padding:12px 14px;}
+  .precision-tile .tile-head{margin-bottom:8px;}
+  .precision-tile .tile-head h2{font-size:1rem;}
+  .precision-seg{max-width:360px;}
+  .precision-seg .seg-btn{padding:6px 8px;font-size:.82rem;}
+  .precision-posture{margin-top:8px;font-size:.8rem;line-height:1.35;}
+  .precision-actions{margin-top:8px;}
   .precision-posture.t-precise::before{background:var(--warn);}
   .precision-posture b{color:var(--text);font-weight:600;}
   .precision-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px;}
