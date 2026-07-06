@@ -81,7 +81,7 @@ def test_empty_registry_lists_builtins_all_inactive(tmp_path, monkeypatch):
     c, _s = _client(tmp_path, monkeypatch)
     body = c.get("/api/connectors").json()
     by_id = {x["id"]: x for x in body["connectors"]}
-    assert set(by_id) == {"narrator", "ha-import", "ha-control", "mcp-read"}  # no generics
+    assert set(by_id) == {"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http"}  # no generics
     # DEFAULT-OFF: nothing is active with a bare env + empty registry.
     assert all(x["active"] is False for x in by_id.values())
     assert by_id["narrator"]["available"] is False          # no provider configured
@@ -89,7 +89,7 @@ def test_empty_registry_lists_builtins_all_inactive(tmp_path, monkeypatch):
     assert by_id["ha-control"]["enforcement"] == "env"
     # catalog is the built-ins only, decoupled from generics
     cat = c.get("/api/connectors/catalog").json()["catalog"]
-    assert {x["id"] for x in cat} == {"narrator", "ha-import", "ha-control", "mcp-read"}
+    assert {x["id"] for x in cat} == {"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http"}
 
 
 def test_empty_registry_status_badge_zero_and_byte_identical_narrate(tmp_path, monkeypatch):

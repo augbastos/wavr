@@ -295,6 +295,9 @@ def test_status_shape_and_no_secrets():
             # Connectors & Services: count of ACTIVE connectors (int, not a flag) --
             # a non-egress header badge; per-connector state lives on /api/connectors.
             "connectors_active",
+            # ADR-0008 Slice 1: in-app READ-ONLY MCP-over-HTTP inbound listener (bool;
+            # true only when wired + enabled). Default install -> False.
+            "mcp_http",
         }
         assert set(body["features"]) == expected_features
         # Every feature is a bool flag EXCEPT connectors_active, an int count.
@@ -348,6 +351,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "api_token": False, "health_gate": True,
             # Connectors & Services: nothing active on a default install (DEFAULT-OFF).
             "connectors_active": 0,
+            # ADR-0008 Slice 1: MCP-over-HTTP listener off by default.
+            "mcp_http": False,
         }
 
 

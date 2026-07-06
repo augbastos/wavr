@@ -616,8 +616,33 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _block_local_ip = _local_ipv4() or ""
     _blocker = arp_block.ArpBlocker(send=arp_send)
 
+    # MCP-over-streamable-HTTP (ADR-0008, Slice 1): mount the READ-ONLY MCP transport
+    # in-process at /mcp so it inherits loopback_or_authed + TrustedHostMiddleware + TLS +
+    # DeviceStore. Wired ONLY when multidevice is ON (TLS present) AND the [mcp] extra is
+    # importable; the per-request mcp-http kill-switch (Connectors, default-OFF) is enforced
+    # inside the guard. call_ha_service is ABSENT from this transport (read-only). The stdio
+    # bridge (wavr.mcp_serve) keeps the full gated toolset, unchanged.
+    _mcp_http_route = None
+    _mcp_http_sm = None
+    if cfg.multidevice:
+        try:
+            from wavr.mcp import FusionStateProvider
+            from wavr.mcp_http import build_mcp_http_mount
+            _mcp_http_route, _mcp_http_sm = build_mcp_http_mount(
+                FusionStateProvider(_fusion, _house),
+                is_enabled=lambda: _connectors.is_enabled("mcp-http"),
+                local_ip=_local_ip, ha_client=client_from_config(cfg))
+        except ImportError:
+            logging.info("MCP-over-HTTP mount skipped: [mcp] extra not installed")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # MCP-over-HTTP session manager (once per process) when the read-only mount is
+        # wired. The CM is created here but ENTERED last -- just before the yield below,
+        # AFTER every fallible startup step -- so a failure in manager.start() or any
+        # collector start can't leave the session-manager task group orphaned (appsec LOW).
+        # Exited in the finally. No-op when the mount is absent.
+        _mcp_cm = _mcp_http_sm.run() if _mcp_http_sm is not None else None
         await manager.start()
         if cfg.net_inventory:
             await _inventory.start()   # opt-in (WAVR_NET_INVENTORY): real LAN scan loop
@@ -639,6 +664,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # unoccupied instead of freezing its last reading.
         refuse_task = (asyncio.create_task(_refuse_loop())
                        if cfg.refuse_interval > 0 else None)
+        # Enter the MCP-over-HTTP session manager LAST: all fallible startup is done, so it
+        # can't be orphaned by an earlier failure. Requests aren't served until after the
+        # yield, so the transport is live before the first /mcp dispatch.
+        if _mcp_cm is not None:
+            await _mcp_cm.__aenter__()
         try:
             yield
         finally:
@@ -680,6 +710,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _devices is not None:
                 with suppress(Exception):
                     _devices.close()
+            if _mcp_cm is not None:
+                with suppress(Exception):
+                    await _mcp_cm.__aexit__(None, None, None)
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
     # Test seams (not routes — never reachable over HTTP, carry no secrets):
@@ -793,6 +826,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # a LAN companion still needs to be an authenticated peer under WAVR_MULTIDEVICE.
     app.mount("/vendor", StaticFiles(directory=_VENDOR_DIR), name="vendor")
 
+    # ADR-0008 Slice 1: register the READ-ONLY MCP-over-HTTP route at exactly /mcp (a Route,
+    # not a Mount -> no trailing-slash redirect). It sits behind loopback_or_authed +
+    # TrustedHostMiddleware like every other route; the guard adds the mcp-http kill-switch +
+    # Origin + rate-limit before dispatch. Only present under multidevice with the [mcp] extra.
+    if _mcp_http_route is not None:
+        app.router.routes.append(_mcp_http_route)
+
     def require_local(request: Request):
         # State-changing routes. Loopback "root" (the local dashboard) still needs the
         # CSRF header (blocks drive-by browser POSTs). An authenticated LAN peer must be
@@ -877,6 +917,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
              "label": "MCP Server (read-only)", "available": True,
              "active": False, "suppressed": False,
              "enforcement": "env", "scope": "read-only RoomState; runs as a separate MCP server",
+             "env_flag": None},
+            # ADR-0008 Slice 1: the in-app READ-ONLY MCP-over-HTTP listener. Available only
+            # when the mount is actually wired (multidevice ON + [mcp] extra). DEFAULT-OFF;
+            # registry-overlay so the toggle is a real per-request kill-switch (is_enabled).
+            {"id": "mcp-http", "kind": "builtin", "direction": "inbound",
+             "label": "MCP Server (HTTP, read-only)",
+             "available": _mcp_http_route is not None,
+             "active": _mcp_http_route is not None and _connectors.is_enabled("mcp-http"),
+             "suppressed": False, "enforcement": "registry-overlay",
+             "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp: RoomState + house map + HA entity list (no vitals/targets/identities, no secrets)",
              "env_flag": None},
         ]
 
@@ -1221,6 +1271,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # ACTIVE (live built-ins + enabled generics). A non-egress header
                 # badge; the per-connector state/scope lives on GET /api/connectors.
                 "connectors_active": _connectors_active(),
+                # ADR-0008 Slice 1: honest disclosure of the in-app READ-ONLY
+                # MCP-over-HTTP inbound listener -- true only when it is wired
+                # (multidevice + [mcp]) AND enabled in the Connectors screen.
+                "mcp_http": bool(_mcp_http_route is not None
+                                 and _connectors.is_enabled("mcp-http")),
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
