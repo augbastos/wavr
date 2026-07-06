@@ -2661,19 +2661,126 @@ async function renderCameras(){
       else { setFb(false, (await errText(r)) || "couldn't save (points may be collinear/coincident)"); }
     };
 
-    // -- Section 3: walk-to-auto-calibrate — honest roadmap affordance (not yet wired) --
+    // -- Section 3: GUIDED WALK-TO-CALIBRATE (Spec A, the standard setup flow) --
+    // The person WALKS to known floor spots (room centre, each corner); at each spot the
+    // camera detects their FEET PIXEL (bottom-centre of the YOLO box) and the wizard pairs
+    // it with that spot's known metre coordinate. 4+ pairs -> an accurate homography solved
+    // SERVER-SIDE (PUT /calibration). No snapshot is ever taken — the body IS the marker
+    // (ADR-0002): GET calib-sample returns ONLY a pixel coordinate + image dims, never a
+    // frame. All DOM via createElement + textContent (XSS-safe).
     const s3 = document.createElement("div"); s3.className = "calib-sec";
-    const h3 = document.createElement("h4"); h3.textContent = "Walk to auto-calibrate";
+    const h3 = document.createElement("h4"); h3.textContent = "Calibrate by walking (recommended)";
     const p3 = document.createElement("p"); p3.className = "hint";
-    p3.textContent = "Planned: with the quick estimate on, walking your room would let Wavr refine the "
-      + "fit from your movement over time. The refinement isn't wired up yet — for now use the quick "
-      + "estimate or mark 4 points above.";
-    const b3 = document.createElement("div"); b3.className = "calib-btns";
-    const walkBtn = document.createElement("button"); walkBtn.type = "button";
-    walkBtn.textContent = "Coming soon"; walkBtn.disabled = true; walkBtn.setAttribute("aria-disabled","true");
-    b3.appendChild(walkBtn);
-    s3.appendChild(h3); s3.appendChild(p3); s3.appendChild(b3);
+    p3.textContent = "Most accurate and no snapshot needed: Wavr guides you to a few known spots "
+      + "(the room centre and each corner). Stand on each, facing the camera, and capture — your "
+      + "feet mark the floor. No image is taken or saved; only the point where you stand is used.";
+    s3.appendChild(h3); s3.appendChild(p3);
+
+    const walkStart = document.createElement("div"); walkStart.className = "calib-btns";
+    const startWalk = document.createElement("button"); startWalk.type = "button";
+    startWalk.textContent = "Calibrate by walking";
+    walkStart.appendChild(startWalk); s3.appendChild(walkStart);
+
+    // Live wizard sub-panel (hidden until started).
+    const wiz = document.createElement("div"); wiz.className = "calib-sec"; wiz.hidden = true;
+    wiz.style.borderTop = "0"; wiz.style.paddingTop = "0";
+    const live = document.createElement("p"); live.className = "calib-status";
+    live.setAttribute("role","status"); live.setAttribute("aria-live","polite");
+    const step = document.createElement("p"); step.className = "hint"; step.style.color = "var(--text)";
+    const prog = document.createElement("p"); prog.className = "hint";
+    wiz.appendChild(live); wiz.appendChild(step); wiz.appendChild(prog);
+    const wizBtns = document.createElement("div"); wizBtns.className = "calib-btns";
+    const capBtn = document.createElement("button"); capBtn.type = "button"; capBtn.textContent = "Capture this spot";
+    const solveBtn = document.createElement("button"); solveBtn.type = "button"; solveBtn.textContent = "Solve & save";
+    const cancelWalk = document.createElement("button"); cancelWalk.type = "button"; cancelWalk.className = "danger"; cancelWalk.textContent = "Cancel";
+    wizBtns.appendChild(capBtn); wizBtns.appendChild(solveBtn); wizBtns.appendChild(cancelWalk);
+    wiz.appendChild(wizBtns); s3.appendChild(wiz);
     wrap.appendChild(s3);
+
+    // Wizard state: spots (known floor points), captured (feet_px paired to a spot), the
+    // live-detection poll, and the frame dims the feet pixels are measured in.
+    const walk = { on:false, spots:[], idx:0, captured:[], pollId:null, imgW:null, imgH:null, seen:false };
+    const stopPoll = ()=>{ if(walk.pollId){ clearInterval(walk.pollId); walk.pollId = null; } };
+    const renderWalk = ()=>{
+      const spot = walk.spots[walk.idx];
+      if(spot){
+        const label = spot.label === "centre" ? "the CENTRE of the room"
+          : ("the corner near x=" + spot.x.toFixed(1) + " m, y=" + spot.y.toFixed(1) + " m");
+        step.textContent = "Step " + (walk.idx+1) + " of " + walk.spots.length
+          + ": stand on " + label + ", facing the camera, then Capture.";
+      } else {
+        step.textContent = "All spots captured. Press Solve & save.";
+      }
+      prog.textContent = walk.captured.length + " of " + walk.spots.length
+        + " spots captured (4+ needed for an accurate fit).";
+      capBtn.disabled = !spot;
+      solveBtn.disabled = walk.captured.length < 4;
+    };
+    const setLive = (present)=>{
+      walk.seen = present;
+      live.textContent = present ? "● Person detected — you're in view." : "○ No person seen — step into the camera's view.";
+      live.style.color = present ? "var(--accent)" : "var(--dim)";
+    };
+    // Ending the session ALWAYS stops the camera again (cameras off by default) + clears
+    // the in-memory sample. Registered in calibCleanups so a list rebuild also ends it.
+    const endWalk = async ()=>{
+      stopPoll(); walk.on = false;
+      try{ await post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{}
+      wiz.hidden = true; startWalk.disabled = false;
+    };
+    calibCleanups.push(()=>{ stopPoll(); if(walk.on){ walk.on=false;
+      // best-effort session close on teardown (fire-and-forget; page is tearing down)
+      try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{} } });
+
+    startWalk.onclick = async ()=>{
+      startWalk.disabled = true;
+      let r; try{ r = await post(`/api/cameras/${enc}/calib-session`, {active:true}); }catch{}
+      if(!(r && r.ok)){ startWalk.disabled = false; setFb(false, (await errText(r)) || "couldn't start calibration"); return; }
+      let sp; try{ sp = await (await fetch(location.origin+`/api/cameras/${enc}/calib-spots`,
+        {headers:{"X-Wavr-Local":"1"}})).json(); }catch{}
+      const spots = (sp && Array.isArray(sp.spots)) ? sp.spots : [];
+      if(spots.length < 4){ await endWalk(); startWalk.disabled = false;
+        setFb(false, "this camera's room needs a 4+ corner floor plan first (edit the map)"); return; }
+      const js = r.json ? await r.json().catch(()=>({})) : {};
+      walk.on = true; walk.spots = spots; walk.idx = 0; walk.captured = []; walk.imgW = null; walk.imgH = null;
+      wiz.hidden = false; setFb(true, "");
+      if(js && js.active === false){ setFb(false, "monitoring is off — turn Wavr on so the camera can see you"); }
+      setLive(false); renderWalk();
+      // Live person indicator: poll the feet-pixel sample (coordinate only, never a frame).
+      walk.pollId = setInterval(async ()=>{
+        let s; try{ s = await (await fetch(location.origin+`/api/cameras/${enc}/calib-sample`,
+          {headers:{"X-Wavr-Local":"1"}})).json(); }catch{ return; }
+        setLive(!!(s && s.person));
+      }, 700);
+    };
+
+    capBtn.onclick = async ()=>{
+      const spot = walk.spots[walk.idx]; if(!spot) return;
+      let s; try{ s = await (await fetch(location.origin+`/api/cameras/${enc}/calib-sample`,
+        {headers:{"X-Wavr-Local":"1"}})).json(); }catch{}
+      if(!(s && s.person && Array.isArray(s.feet_px))){
+        setFb(false, "no person detected — stand where the camera can see you, then capture"); return; }
+      walk.imgW = s.img_w; walk.imgH = s.img_h;
+      walk.captured.push({ feet:[s.feet_px[0], s.feet_px[1]], floor:[spot.x, spot.y] });
+      setFb(true, "captured spot " + (walk.idx+1));
+      if(walk.idx < walk.spots.length - 1) walk.idx++; else walk.idx = walk.spots.length;
+      renderWalk();
+    };
+
+    solveBtn.onclick = async ()=>{
+      if(walk.captured.length < 4){ setFb(false, "capture 4+ spots first"); return; }
+      const imgW = Math.round(walk.imgW), imgH = Math.round(walk.imgH);
+      if(!(imgW>0 && imgH>0)){ setFb(false, "missing image size from the camera — recapture a spot"); return; }
+      const image_points = walk.captured.map(c=>c.feet);
+      const floor_points = walk.captured.map(c=>c.floor);
+      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`,
+        {image_points, floor_points, img_w:imgW, img_h:imgH}); }catch{}
+      if(r && r.ok){ await endWalk(); setFb(true, "calibrated by walking — accurate placement is on. Re-enable the camera to apply.");
+        loadStatus(); }
+      else { setFb(false, (await errText(r)) || "couldn't solve (spots may be too close or in a line — try again)"); }
+    };
+
+    cancelWalk.onclick = async ()=>{ await endWalk(); setFb(true, "calibration walk cancelled — camera turned back off"); };
 
     // -- Footer: remove all calibration + feedback line --
     const foot = document.createElement("div"); foot.className = "calib-btns";
@@ -2705,7 +2812,11 @@ async function renderCameras(){
         c && c.localizes ? "People are placed on the map." : "Add an estimate or 4 points to place people on the map."));
     }
     loadStatus();
-    wrap._cleanup = revoke;   // toggle-off calls this before removing the panel
+    // toggle-off calls this before removing the panel: revoke the still object-URL AND
+    // stop any live walk poll + end the sampling session (so a collapsed panel never
+    // leaves the camera running or a poll ticking).
+    wrap._cleanup = ()=>{ revoke(); stopPoll();
+      if(walk.on){ walk.on = false; try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{} } };
     return wrap;
   }
 
