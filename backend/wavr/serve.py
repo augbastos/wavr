@@ -24,6 +24,24 @@ from wavr.config import load_config
 
 def main() -> None:
     cfg = load_config()
+    # Warm up torch/ultralytics in the MAIN thread before uvicorn's event loop starts.
+    # On Windows, torch's c10.dll initialization (WinError 1114) fails when torch is first
+    # imported LATE inside a `to_thread` worker of the already-running server, even though
+    # it imports cleanly standalone — so YOLO person-detection silently died and camera
+    # rooms vanished. Importing it here, early, in the main thread fixes the load context.
+    # Fully guarded: a base install without the [camera] extra just skips this (no torch),
+    # and a genuine torch/DLL failure is logged, never crashing startup.
+    import logging as _lg
+    try:
+        from ultralytics import YOLO as _Y  # noqa: F401  (import for its side effect: load torch now)
+        _lg.getLogger("wavr").info("torch/ultralytics warmed up in main thread (camera detection ready)")
+    except ImportError:
+        pass  # [camera] extra not installed — normal for a network-only install
+    except Exception:
+        _lg.getLogger("wavr").warning(
+            "torch/ultralytics main-thread warm-up failed; camera detection may be unavailable",
+            exc_info=True,
+        )
     if cfg.multidevice:
         # LAN mode: HTTPS/WSS with a local cert. tls + cryptography are imported
         # ONLY here, so the default (off) path never needs the [tls] extra.
