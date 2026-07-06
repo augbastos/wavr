@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from wavr.app import create_app
+from wavr.app import create_app, _assert_consent_wired
 from wavr.camera_store import CameraStore
 from wavr.devices import DeviceStore, VALID_CONSENT
 from wavr.fusion import FusionEngine, _DEFAULT_FRESHNESS_S, _DEFAULT_STALE_S
@@ -557,3 +557,94 @@ def test_14_last_seen_frozen_on_red(ctx):
         assert store.get(device_id).last_seen_ts == before          # FROZEN on red
     finally:
         store.close()
+
+
+# --- HARDENING 15: last_seen_ts is FROZEN on YELLOW too (anonymous != live oracle) -------
+
+def test_15_last_seen_frozen_on_yellow(ctx):
+    """The freeze is a WHITELIST, not a red-only blacklist: a YELLOW device is 'present but
+    ANONYMOUS', so a live per-device last-contacted stamp on GET /api/devices would re-identify
+    the very device the UI leaves unnamed. Yellow telemetry STILL ingests (participates), but its
+    last_seen_ts must NOT advance. Green advancing is the over-freeze regression guard."""
+    peer, auth, device_id = _pair(ctx.app)
+    store = DeviceStore(ctx.db_path)
+    try:
+        # CONTROL: green telemetry advances last_seen_ts (NULL after pairing -> a stamp).
+        assert store.get(device_id).last_seen_ts is None            # never contacted yet
+        assert peer.post("/api/telemetry", json=_sample_payload(),
+                         headers=auth).json()["accepted"] is True
+        assert store.get(device_id).last_seen_ts is not None        # green advanced it
+
+        # Downgrade to yellow (this last green-era verify records a contact); freeze from here.
+        assert peer.post("/api/consent", json={"level": "yellow"},
+                         headers=auth).status_code == 200
+        before = store.get(device_id).last_seen_ts
+        assert before is not None
+        # A YELLOW POST is ACCEPTED (still participates, reduced) but must NOT advance the stamp.
+        assert peer.post("/api/telemetry", json=_sample_payload(),
+                         headers=auth).json()["accepted"] is True   # yellow still ingests
+        # store.get reads the SAME last_seen_ts column /api/devices to_dict serializes to the
+        # operator -> the frozen value here is the frozen value the central would see.
+        assert store.get(device_id).last_seen_ts == before          # FROZEN on yellow
+        assert store.get(device_id).consent == "yellow"
+    finally:
+        store.close()
+
+
+# --- HARDENING 16: last_seen_ts is FROZEN for a garbage/unknown tier (defense-in-depth) --
+
+def test_16_last_seen_frozen_on_garbage_tier(ctx):
+    """Fail-closed whitelist: any tier that is not exactly 'green' freezes last_seen_ts. A
+    direct-DB garbage write (bypassing VALID_CONSENT + the fresh-db CHECK) must not reopen the
+    presence oracle the red/yellow freeze closed."""
+    peer, auth, device_id = _pair(ctx.app)
+    store = DeviceStore(ctx.db_path)
+    try:
+        assert peer.post("/api/telemetry", json=_sample_payload(),
+                         headers=auth).json()["accepted"] is True
+        before = store.get(device_id).last_seen_ts
+        assert before is not None                                   # green stamped it
+
+        _inject_consent(ctx.db_path, device_id, "purple")           # bypasses app + DB CHECK
+        rp = peer.post("/api/telemetry", json=_sample_payload(), headers=auth)
+        assert rp.json() == {"accepted": False, "device_id": device_id, "consent": "purple"}
+        assert store.get(device_id).last_seen_ts == before          # FROZEN on garbage tier
+    finally:
+        store.close()
+
+
+# --- HARDENING 17: multidevice wiring assertion (get_consent must stay wired, fail LOUD) --
+
+def test_17_consent_wiring_assertion():
+    """Belt-and-braces: on a multidevice build (a DeviceStore present) BOTH PhoneSensorSource
+    and PairedHostBinder must receive a non-None get_consent, else they silently revert to the
+    legacy fail-OPEN name-everyone path. Missing either -> RuntimeError at startup. A single-
+    device build (devices is None) legitimately has None resolvers and must NOT raise."""
+    devices = object()                                    # stand-in for a live DeviceStore
+    # Both wired -> no raise.
+    _assert_consent_wired(devices, lambda d: "green", lambda d: "green")
+    # Phone resolver missing -> raise.
+    with pytest.raises(RuntimeError):
+        _assert_consent_wired(devices, None, lambda d: "green")
+    # Binder resolver missing -> raise.
+    with pytest.raises(RuntimeError):
+        _assert_consent_wired(devices, lambda d: "green", None)
+    # Single-device (no DeviceStore): None resolvers are correct -> no raise.
+    _assert_consent_wired(None, None, None)
+
+
+def test_17b_real_multidevice_app_wires_consent(ctx):
+    """The real multidevice app (ctx fixture, WAVR_MULTIDEVICE=1) builds without tripping the
+    wiring assertion -- proof the guard does not fire on a legitimately-wired build."""
+    assert ctx.app is not None                            # multidevice build succeeded
+
+
+def test_17c_single_device_app_unaffected(tmp_path, monkeypatch):
+    """A single-device build (WAVR_MULTIDEVICE unset -> _devices is None) legitimately has None
+    resolvers and the source name-everyone path is correct -- the wiring guard must be a no-op
+    there and the app must build fine."""
+    monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    assert app is not None                                # single-device build unaffected

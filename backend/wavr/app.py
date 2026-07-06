@@ -239,6 +239,25 @@ def _json_safe(value):
     return value
 
 
+def _assert_consent_wired(devices, phone_get_consent, binder_get_consent) -> None:
+    """Fail-LOUD wiring invariant for a multidevice build (belt-and-braces, Fix 2).
+
+    The consume-side consent re-checks -- PhoneSensorSource's queue-residue drop
+    (sources/phone.py) and PairedHostBinder's read-time is_green (host_binding.py) -- are the
+    load-bearing GDPR backstop for a device that SILENTLY withdrew. BOTH revert to the legacy
+    fail-OPEN "name everyone" path when their injected get_consent is None. So on a build that
+    HAS a DeviceStore, refuse to start unless BOTH resolvers are wired, rather than degrade in
+    the dark after a future refactor. Single-device (`devices is None`) legitimately has None
+    resolvers (the name-everyone path is correct there) -> no-op. Raises (not asserts) so the
+    guard survives `python -O`. Message names no tokens/tiers/IPs (log-safe)."""
+    if devices is None:
+        return
+    if phone_get_consent is None or binder_get_consent is None:
+        raise RuntimeError(
+            "multidevice build requires a wired get_consent resolver on BOTH PhoneSensorSource "
+            "and PairedHostBinder (fail-closed); refusing to start on a fail-open path")
+
+
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
                internet_monitor=None, health_check=None, dhcp_monitor=None,
@@ -486,9 +505,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # the rogue-suppression predicate (_is_bound above) reuses its resolve. get_label/
     # get_consent are late-bound to `_devices` so the binder opens no DB of its own and stays
     # inert when multidevice is off (get_consent None -> fail-closed, resolve yields nothing).
+    # Named so the multidevice wiring assertion below can confirm the SAME resolver the binder
+    # received is non-None -- a fail-open reversion (get_consent=None on a multidevice build)
+    # must be caught at startup, not discovered when a withdrawn device gets named anyway.
+    _binder_get_consent = (
+        (lambda did: _devices.get_consent(did)) if _devices is not None else None)
     _host_binder = PairedHostBinder(
         get_label=(lambda did: _devices.get_label(did)) if _devices is not None else None,
-        get_consent=(lambda did: _devices.get_consent(did)) if _devices is not None else None)
+        get_consent=_binder_get_consent)
 
     def _mac_of_ip(ip: str | None) -> str | None:
         # The current MAC observed at `ip` by the running LAN inventory (ARP-based, zero
@@ -514,9 +538,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # shared telemetry hub and resolves the who's-home operator label via DeviceStore; the
     # label/rssi never ride the SensingEvent (privacy invariant).
     if cfg.multidevice:
+        # FAIL-LOUD wiring invariant (belt-and-braces, Fix 2): both consume-side re-checks depend
+        # on a live get_consent staying bound to the DeviceStore. Assert BOTH resolvers are wired
+        # on a multidevice build BEFORE registering the source, so a future refactor that passes
+        # None cannot silently revert to the legacy fail-OPEN name-everyone path.
+        _phone_get_consent = _devices.get_consent
+        _assert_consent_wired(_devices, _phone_get_consent, _binder_get_consent)
         manager.register("phone", lambda: PhoneSensorSource(
             _telemetry_hub, get_label=_devices.get_label,
-            get_consent=_devices.get_consent), True)
+            get_consent=_phone_get_consent), True)
 
     _owns_cameras = camera_store is None   # only close a store this function built itself
     _cameras = camera_store or CameraStore(cfg.db_path)

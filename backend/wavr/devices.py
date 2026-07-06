@@ -144,7 +144,8 @@ class DeviceStore:
         return device_id, token
 
     def verify(self, token: str) -> Device | None:
-        """Return the Device for a valid, non-revoked token (updating last_seen), or
+        """Return the Device for a valid, non-revoked token (advancing last_seen ONLY for a
+        green-consented device; frozen for every non-green tier -- see below), or
         None if the token is unknown or the device is revoked. Constant work either
         way from the caller's view — the lookup is by token_hash."""
         if not token:
@@ -159,21 +160,30 @@ class DeviceStore:
             ).fetchone()
             if row is None or row["revoked"]:
                 return None
-            # GDPR-red completeness (appsec): a withdrawn (red) device that keeps POSTing must
-            # NOT advance its "last contacted" timestamp -- otherwise the central GET
-            # /api/devices exposes a live presence oracle for a device that opted OUT of being
-            # tracked. Skip the last_seen UPDATE for red (freeze it at the last non-red
-            # contact); green/yellow update as before. The consent-gate in app.py already
-            # drops/reduces the reading itself -- this closes the residual metadata channel.
-            if row["consent"] == "red":
-                last_seen = row["last_seen_ts"]
-            else:
+            # CONSENT completeness (appsec): last_seen_ts is a live "last contacted" oracle on
+            # the central GET /api/devices. Advance it ONLY for green -- the SOLE tier the app
+            # NAMES in who's-home -- and FREEZE it (leave the last green contact) for EVERY
+            # non-green tier. red = withdrawn (opted OUT of being tracked; a live stamp is a
+            # presence oracle for an opted-out device); yellow = present but ANONYMOUS (a live
+            # per-device last-contacted stamp re-identifies the device the UI deliberately leaves
+            # unnamed); any unexpected/garbage tier freezes too. Fail-closed WHITELIST -- green is
+            # the only pass -- matching the ingest gate (app.py) and the phone consume side
+            # (sources/phone.py). Single choke point: covers GET /api/devices and any MCP
+            # passthrough of the device list. The consent-gate in app.py already drops/reduces the
+            # reading itself; this closes the residual metadata channel.
+            #
+            # SAFE: freezing yellow's DB stamp does NOT dampen its coarse occupancy vote -- that
+            # runs off PhoneSensorSource._last_seen (in-memory, sources/phone.py), a SEPARATE
+            # signal from this column, so a participating (yellow) device still votes present.
+            if row["consent"] == "green":
                 self._conn.execute(
                     "UPDATE devices SET last_seen_ts = ? WHERE device_id = ?",
                     (ts, row["device_id"]),
                 )
                 self._conn.commit()
                 last_seen = ts
+            else:
+                last_seen = row["last_seen_ts"]
         # consent is read off this SAME already-fetched row -> the telemetry hot path
         # (verify -> consent gate) costs no extra query.
         return Device(
