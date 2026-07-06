@@ -16,6 +16,13 @@ from wavr.roomstate import RoomState
 DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
                    "network": 0.5, "phone": 0.5, "sim": 0.6}
 
+# Coarse/house-level modalities: they vote presence for the whole home but are too
+# coarse to localize a person in a room. ALONE they may only RAISE confidence, never
+# flip a room to occupied. This is a STRUCTURAL floor, independent of any weight/
+# threshold tuning (A1.3): occupancy requires >=1 live non-coarse source. A future
+# house-level source with no room-localization MUST be added here.
+_COARSE_MODALITIES = frozenset({"phone", "network"})
+
 # Freshness decay window (seconds). A source votes at full trust up to
 # FRESHNESS_S, then its trust decays linearly to zero at STALE_S — so a source
 # that stopped reporting gradually loses its vote instead of freezing the fused
@@ -169,6 +176,7 @@ class FusionEngine:
         num = 0.0        # weighted mass saying "present"
         den = 0.0        # total weighted mass
         strength = 0.0   # best present evidence (weight × confidence)
+        has_noncoarse_present = False  # >=1 LIVE non-coarse source votes present (A1.3)
         sources = []
         vitals: dict = {}
         decays: dict[str, float] = {}  # modality -> trust multiplier, reused for target gating
@@ -192,6 +200,12 @@ class FusionEngine:
             if e.presence:
                 num += mass
                 strength = max(strength, mass)
+                # Gate on mass > 0.0 (LIVE trust), NOT bare e.presence: a stale/
+                # decayed-to-zero non-coarse source (e.g. a 10-min-old camera)
+                # contributes no trust and must NOT count as a corroborator that
+                # could license a lone coarse source (A1.3).
+                if mass > 0.0 and modality not in _COARSE_MODALITIES:
+                    has_noncoarse_present = True
             sources.append({"modality": modality, "presence": e.presence,
                             "confidence": round(e.confidence, 3),
                             "age_s": round(age_s), "health": health})
@@ -202,9 +216,21 @@ class FusionEngine:
         # >1) must never drive the fused confidence outside [0, 1].
         confidence = round(min(1.0, max(0.0, agreement * strength)), 3)
         raw_occupied = confidence >= self._threshold
+        # A1.3 coarse-class occupancy floor: only-coarse evidence (phone/network)
+        # may RAISE confidence but must never flip a room to occupied on its own.
+        # Gated BEFORE the debounce so a lone/only-coarse picture never triggers the
+        # fast-to-occupied path; a room still held by a departed non-coarse source
+        # (e.g. a just-left camera) keeps running its normal vacate dwell.
+        coarse_floor_fired = raw_occupied and not has_noncoarse_present
+        if coarse_floor_fired:
+            raw_occupied = False
         occupied, pending_s = self._debounce_occupancy(room, raw_occupied, ref)
         parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
         explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
+        if coarse_floor_fired:
+            # Explainability: confidence cleared the threshold on coarse-only
+            # evidence, so occupancy was withheld. Additive marker only.
+            explanation += " · só corroboração (sem sensor de presença)"
         if pending_s is not None:
             # Confidence has dropped below threshold but the room is still HELD
             # occupied by the dwell -- show the countdown, do not hide the doubt.
