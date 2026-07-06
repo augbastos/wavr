@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 # Fixed slugs for the built-in connectors surfaced from existing gated features.
 # A registry row for one of these is an OVERLAY (kill-switch), never the source of
 # truth for whether the feature is configured -- that stays the env flag / config.
-BUILTIN_IDS = frozenset({"narrator", "ha-import", "ha-control", "mcp-read"})
+BUILTIN_IDS = frozenset({"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS connectors (
