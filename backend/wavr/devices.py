@@ -21,8 +21,14 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-# The two grantable device roles (the loopback root central needs no token/row).
-VALID_ROLES = frozenset({"central", "user"})
+# The grantable device roles (the loopback root central needs no token/row).
+#   central -> full admin over the LAN transport   user -> read + own-device telemetry
+#   sensor  -> WRITE-ONLY phone telemetry; confined by app.py middleware to
+#              POST /api/telemetry (403 on every read route + /ws/live). Smallest
+#              blast radius for a stolen token (mobile unification, blueprint step 1).
+# Both add() and set_role() validate against this set, so a "sensor" row can only ever
+# exist once it is listed here. Free-text TEXT column -> no DB migration needed.
+VALID_ROLES = frozenset({"central", "user", "sensor"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (

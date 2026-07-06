@@ -55,6 +55,7 @@ from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
+from wavr.telemetry import TelemetryHub, TelemetryReading, TelemetryPayload, PerDeviceRateLimiter
 from wavr.auth import authorize, parse_bearer, can_change_state, in_subnet
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.local_token import resolve_local_token
@@ -99,6 +100,16 @@ _TOKEN_EXEMPT_PATHS = frozenset({
 
 def _is_token_exempt(path: str) -> bool:
     return path in _TOKEN_EXEMPT_PATHS or path.startswith("/vendor/")
+
+
+# Mobile unification (blueprint step 3): the ONLY authenticated path a write-only
+# 'sensor'-role token may reach. Anything else -> 403 at the single choke point in
+# loopback_or_authed below, so a stolen sensor token can inject its own telemetry and
+# read NOTHING (no history/state/house/inventory/devices/cameras, no /ws/live). The
+# pre-auth exemptions (static shell, /api/pair) are already handled earlier in the
+# middleware -- they resolve to role=None, never role='sensor' -- so they need no entry
+# here. user/central/root roles never touch this check.
+_SENSOR_ALLOWED_PATHS = frozenset({"/api/telemetry"})
 
 
 def _default_sources(cfg):
@@ -488,6 +499,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     app = FastAPI(title="Wavr", lifespan=lifespan)
 
+    # Phone-telemetry ingest seam (blueprint §4, step 2). The hub is the bounded queue
+    # PhoneSensorSource (step 4) will consume; the limiter throttles POST /api/telemetry
+    # per authenticated device. Both are attached to app.state so they are a single
+    # per-app instance the handler reads and tests can inspect/override (a stolen sensor
+    # token flooding telemetry trips the limiter -> 429). Built even when multidevice is
+    # off (they are inert objects; the /api/telemetry route itself is multidevice-gated).
+    app.state.telemetry_hub = TelemetryHub()
+    app.state.telemetry_limiter = PerDeviceRateLimiter(
+        capacity=cfg.telemetry_rate_capacity, refill_per_sec=cfg.telemetry_rate_refill)
+
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
         # revoke devices; a 'user' is read-only (audit C1). Applied via include_router
@@ -575,6 +596,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if role is None:
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         request.state.role = role
+        # Confinement (blueprint step 3): a write-only 'sensor' token is boxed to
+        # POST /api/telemetry only. This is the SINGLE choke point -- reads are open to
+        # any authed role today, so without this a sensor token would read the whole
+        # house. Only reachable via the token branch, so 'root'/None (loopback + static
+        # shell) can never be a 'sensor'; user/central are untouched.
+        if role == "sensor" and request.url.path not in _SENSOR_ALLOWED_PATHS:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
         return await call_next(request)
 
     _allowed_hosts = ["localhost", "127.0.0.1", "testserver"]
@@ -1168,8 +1196,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         async def pair_code(role: str = Body("user", embed=True), _=Depends(require_local)):
             # Operator (loopback root / central) mints a one-time pairing code that a
             # companion then redeems at POST /api/pair. Gated by require_local.
-            if role not in ("central", "user"):
-                raise HTTPException(status_code=400, detail="role must be central or user")
+            # 'sensor' (blueprint step 1) mints a write-only phone-telemetry code.
+            if role not in ("central", "user", "sensor"):
+                raise HTTPException(status_code=400, detail="role must be central, user, or sensor")
             # Out-of-band MitM defense (audit blocking #1): return the SHA-256 fingerprint
             # of the LIVE serving cert, read off this TRUSTED loopback response, so the
             # operator can verify it against the fingerprint the phone's browser shows in
@@ -1179,6 +1208,31 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             from wavr.tls import cert_fingerprint, resolved_cert_path
             fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
             return {"code": _pairing.mint_code(role), "cert_fingerprint": fingerprint}
+
+        @app.post("/api/telemetry")
+        async def telemetry(payload: TelemetryPayload, request: Request):
+            # Phone sensor telemetry (blueprint step 2). Bearer-authed by the
+            # loopback_or_authed middleware (any authed device role, incl. 'sensor');
+            # NO require_local/CSRF -- a token-authed LAN device is header-independent,
+            # the same rule every token route follows. A malformed body fails the
+            # TelemetryPayload model BEFORE this coroutine runs -> 422, never 500.
+            #
+            # IDENTITY: the reading is keyed to the CALLER'S OWN device_id, re-derived
+            # from the presented token here (same pattern as /api/ws-ticket), NEVER from
+            # payload.device -- so a phone can never attribute telemetry to another
+            # device. No house-state write: the normalized reading is enqueued for
+            # PhoneSensorSource (step 4) to fold into fusion.
+            token = parse_bearer(request.headers.get("authorization"))
+            device = _devices.verify(token) if (token and _devices is not None) else None
+            if device is None:
+                # Loopback root (no token) / any tokenless caller: telemetry is a paired-
+                # device feature, there is no own-device to key the reading to.
+                raise HTTPException(status_code=401, detail="device token required")
+            if not request.app.state.telemetry_limiter.allow(device.device_id):
+                raise HTTPException(status_code=429, detail="telemetry rate limit exceeded")
+            reading = TelemetryReading.from_payload(payload, device.device_id)
+            request.app.state.telemetry_hub.offer(reading)
+            return {"accepted": True, "device_id": device.device_id}
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
@@ -1199,7 +1253,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 await ws.close(code=1008)
                 return
             dev = _devices.get(did)
-            if dev is None or dev.revoked:
+            # Reject unknown/revoked AND 'sensor' devices. Confinement defence-in-depth
+            # (blueprint step 3): the http choke point already 403s a sensor at
+            # POST /api/ws-ticket so it can never MINT a ticket -- this closes the WS
+            # handshake directly too, mirroring the M1 revoke re-check, so /ws/live is
+            # sensor-proof even if a ticket somehow existed. user/central unaffected.
+            if dev is None or dev.revoked or dev.role == "sensor":
                 await ws.close(code=1008)
                 return
         else:

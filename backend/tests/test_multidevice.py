@@ -114,7 +114,9 @@ def test_add_rejects_invalid_role(tmp_path):
     store = _store(tmp_path)
     with pytest.raises(ValueError):
         store.add("x", "admin")
-    assert VALID_ROLES == {"central", "user"}
+    # 'sensor' added for phone telemetry (mobile unification, blueprint step 1); it is
+    # confined to POST /api/telemetry by app.py middleware (see test_telemetry_sensor.py).
+    assert VALID_ROLES == {"central", "user", "sensor"}
 
 
 # --------------------------------------------------------------------------- #

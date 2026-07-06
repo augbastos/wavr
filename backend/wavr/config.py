@@ -59,6 +59,11 @@ class Config:
     tls_cert: str
     tls_key: str
     port: int
+    # Phone-telemetry ingest (mobile unification, blueprint step 2): per-device token
+    # bucket on POST /api/telemetry. capacity = burst size, refill = tokens/sec. Defaults
+    # comfortably sustain the 1 Hz sensor cadence while tripping 429 on a flood.
+    telemetry_rate_capacity: float
+    telemetry_rate_refill: float
     # Home Assistant read-side (ADR-0005) — the "brain on HA" READ half. LOCAL-ONLY:
     # the user's own HA on the LAN + a locally-stored token. Both empty => disabled.
     ha_url: str
@@ -258,6 +263,10 @@ def load_config() -> Config:
         tls_key=os.getenv("WAVR_TLS_KEY", ""),
         # Listen port for `python -m wavr.serve` (both plain and TLS modes).
         port=int(os.getenv("WAVR_PORT", "8000")),
+        # Telemetry rate limit (blueprint step 2): 60-token burst refilling 2/sec by
+        # default -> a 1 Hz phone streams forever, a flood trips 429 within ~1 minute.
+        telemetry_rate_capacity=float(os.getenv("WAVR_TELEMETRY_RATE_CAPACITY", "60")),
+        telemetry_rate_refill=float(os.getenv("WAVR_TELEMETRY_RATE_REFILL", "2")),
         # HA read-side (ADR-0005): empty => disabled. Local HA URL + long-lived token.
         ha_url=os.getenv("WAVR_HA_URL", ""),
         ha_token=os.getenv("WAVR_HA_TOKEN", ""),
