@@ -17,6 +17,13 @@
     <!-- Biometric unlock. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- On-device camera as a local MJPEG source (loopback only). Requested at
+         runtime the first time WavrNative.setCamera(true) is called; the stream
+         defaults OFF and the camera device is closed until then. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- A camera is not required to run the kiosk (feature is opt-in). -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

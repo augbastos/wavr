@@ -33,6 +33,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
@@ -93,11 +95,28 @@ class MainActivity : FragmentActivity() {
     /** True when the current main-frame navigation failed (so we keep retrying). */
     private var pageHadError = false
 
+    /** On-device camera -> loopback MJPEG source. Off by default. */
+    private lateinit var cameraStreamer: CameraMjpegStreamer
+
+    /** Runtime CAMERA-permission dialog result -> forwarded to the streamer. */
+    private lateinit var cameraPermLauncher: ActivityResultLauncher<String>
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Keep the panel awake indefinitely — it is a wall/stand display.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Camera streamer + its permission launcher. Registering the launcher in
+        // onCreate is required (must exist before the activity is STARTED). The
+        // camera stays CLOSED and nothing is bound until the Core panel calls
+        // WavrNative.setCamera(true).
+        cameraPermLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted -> cameraStreamer.onPermissionResult(granted) }
+        cameraStreamer = CameraMjpegStreamer(this) {
+            cameraPermLauncher.launch(android.Manifest.permission.CAMERA)
+        }
 
         val root = FrameLayout(this).apply {
             setBackgroundColor(BG_COLOR)
@@ -307,6 +326,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(retryRunnable)
+        // Release the camera + close the loopback MJPEG server.
+        cameraStreamer.shutdown()
         webView.destroy()
         super.onDestroy()
     }
@@ -351,6 +372,43 @@ class MainActivity : FragmentActivity() {
                 } catch (t: Throwable) {
                     deliverAuthResult(false, "error")
                 }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // On-device camera MJPEG source (loopback: http://127.0.0.1:8081/video)
+        // -----------------------------------------------------------------
+
+        /**
+         * Turn the phone's own camera + local MJPEG stream on/off. OFF by default.
+         * On first `true` this requests the CAMERA runtime permission if needed.
+         * When off, the camera device is released (green light off) and no frame
+         * is captured or written anywhere. Never throws into JS.
+         */
+        @JavascriptInterface
+        fun setCamera(on: Boolean) {
+            try {
+                cameraStreamer.setEnabled(on)
+            } catch (t: Throwable) {
+                // swallow — state() reflects the real outcome
+            }
+        }
+
+        /** `{"on":Boolean,"lens":"back|front","port":8081[,"reason":"..."]}`. */
+        @JavascriptInterface
+        fun getCameraState(): String = try {
+            cameraStreamer.state()
+        } catch (t: Throwable) {
+            "{\"on\":false,\"lens\":\"back\",\"port\":8081,\"reason\":\"error\"}"
+        }
+
+        /** Select the lens: "back" (default) or "front". Rebinds live if on. */
+        @JavascriptInterface
+        fun setCameraLens(lens: String) {
+            try {
+                cameraStreamer.setLens(lens)
+            } catch (t: Throwable) {
+                // swallow — state() reflects the real lens
             }
         }
     }

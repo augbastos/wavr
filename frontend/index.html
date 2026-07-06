@@ -1870,6 +1870,10 @@
             <button type="submit" class="ctl small">Save</button>
             <span id="coreLockAdminFb" class="action-fb" aria-live="polite"></span>
           </form>
+          <div class="corelock-form" style="margin-top:12px">
+            <button id="coreCamBtn" type="button" class="ctl small">Toggle Core camera</button>
+            <span id="coreCamStatus" class="action-fb" aria-live="polite">camera: unknown</span>
+          </div>
         </div>
         <p class="panel-note" id="sisNote" hidden>Detailed system status is available on the hub's panel (local access).</p>
       </section>
@@ -3176,6 +3180,27 @@ async function renderCoreLockAdmin(){
       actionFeedback(fb, false, "couldn't save the PIN — try again");
     }
   };
+  // Core camera: on-device MJPEG streamer (native launcher bridge) + the core-cam
+  // source that reads it. Native bridge only exists inside the Wavr launcher.
+  const camBtn = document.getElementById("coreCamBtn");
+  const camStatus = document.getElementById("coreCamStatus");
+  function camState(){
+    if(!(window.WavrNative && WavrNative.getCameraState)) return null;
+    try{ return JSON.parse(WavrNative.getCameraState()); }catch{ return null; }
+  }
+  function refreshCam(){
+    if(!camStatus) return;
+    if(!(window.WavrNative && WavrNative.setCamera)){ camStatus.textContent="camera: launcher only"; if(camBtn) camBtn.disabled=true; return; }
+    const st=camState();
+    camStatus.textContent = "camera: " + (st&&st.on ? ("on ("+(st.lens||"?")+")") : "off");
+  }
+  if(camBtn) camBtn.onclick = async ()=>{
+    const st=camState(); const turnOn = !(st && st.on);
+    if(window.WavrNative && WavrNative.setCamera) WavrNative.setCamera(turnOn);
+    try{ await fetch(location.origin+"/api/sources/core-cam/toggle", {method:"POST", headers:{"X-Wavr-Local":"1"}}); }catch{}
+    setTimeout(refreshCam, 700);
+  };
+  refreshCam();
   refresh();
 }
 renderCoreLockAdmin();
