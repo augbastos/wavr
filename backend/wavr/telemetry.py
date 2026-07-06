@@ -89,7 +89,7 @@ class TelemetryPayload(BaseModel):
     device: str | None = Field(default=None, max_length=128)   # IGNORED for identity
     sensors: SensorBlock | None = None
     battery_pct: float | None = Field(default=None, ge=0, le=100)
-    charging: bool | None = None
+    charging: str | None = Field(default=None, max_length=32)
     rssi: int | None = Field(default=None, ge=-200, le=100)
     ssid: str | None = Field(default=None, max_length=64)
     bssid: str | None = Field(default=None, max_length=64)
@@ -108,7 +108,7 @@ class TelemetryReading:
     device_id: str
     ts: str
     battery_pct: float | None = None
-    charging: bool | None = None
+    charging: str | None = None
     rssi: int | None = None
     ssid: str | None = None
     bssid: str | None = None

@@ -56,7 +56,7 @@ def _sample_payload(device_field="phone"):
     return {
         "device": device_field,
         "sensors": {"accel": [0.0, 0.1, 9.8], "gyro": [0.0, 0.0, 0.0], "pressure": [1013.2]},
-        "battery_pct": 72, "charging": True, "rssi": -47, "ssid": "home", "bssid": "aa:bb:cc:dd:ee:ff",
+        "battery_pct": 72, "charging": "CHARGING", "rssi": -47, "ssid": "home", "bssid": "aa:bb:cc:dd:ee:ff",
     }
 
 
@@ -235,6 +235,32 @@ def test_normal_invalid_value_still_clean_422_with_detail(app):
     assert isinstance(detail, list) and detail
     assert any(e.get("input") == 999 for e in detail), detail
     assert all(isinstance(e.get("msg"), str) and e.get("loc") for e in detail)
+
+
+def test_charging_is_a_string_wire_contract(app):
+    # REGRESSION (on-device 422): the WavrSensor plugin (TelemetrySampler.kt) sends `charging`
+    # as a STRING -- one of "CHARGING"/"UNPLUGGED"/"FULL"/"UNKNOWN" -- exactly as the telemetry.ts
+    # wire contract emits. The model briefly froze `charging: bool | None`, so pydantic v2 rejected
+    # EVERY real device POST with 422 (16/16 on-device). This pins charging as a string so a future
+    # revert to bool fails loudly here instead of only on a physical phone.
+    #
+    # (a) Every real plugin value is accepted (200) and carried onto the fusion hub verbatim.
+    peer, auth, _ = _pair(app, "sensor")
+    for value in ("CHARGING", "UNPLUGGED", "FULL", "UNKNOWN"):
+        payload = _sample_payload()
+        payload["charging"] = value
+        r = peer.post("/api/telemetry", json=payload, headers=auth)
+        assert r.status_code == 200, (value, r.status_code, r.text)
+        reading = app.state.telemetry_hub._q.get_nowait()
+        assert reading.charging == value               # string carried through, not coerced/dropped
+    assert app.state.telemetry_hub.qsize() == 0
+
+    # (b) A BOOL charging (the old frozen type) must now be REJECTED (422). Sent as a RAW body so a
+    # future revert to `charging: bool` -- which WOULD accept `true` -- makes this assertion fail.
+    raw_peer, raw_headers = _pair_raw(app)
+    r = raw_peer.post("/api/telemetry", content='{"charging": true}', headers=raw_headers)
+    assert r.status_code == 422, (r.status_code, r.text)
+    assert app.state.telemetry_hub.qsize() == 0        # the bool never reached the fusion hub
 
 
 def test_telemetry_without_token_is_rejected(app):
