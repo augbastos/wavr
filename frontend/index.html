@@ -273,8 +273,18 @@
   .radar-room.occ{fill:rgba(61,181,74,.08);stroke:var(--accent);}
   .radar-roomlabel{fill:var(--dim);font-size:.24px;text-transform:capitalize;}
   .radar-dot{fill:var(--accent);}
-  .radar-target{transition:transform .25s cubic-bezier(.22,1,.36,1);}
+  /* FIX 3: group opacity (set inline in placeDot) fades with per-target confidence, so a
+     low-confidence just-occupied marker reads clearly tentative vs a high-confidence lock. */
+  .radar-target{transition:transform .25s cubic-bezier(.22,1,.36,1),opacity .25s ease-out;}
   .radar-posture{fill:var(--dim);font-size:.28px;text-anchor:middle;}
+  /* FIX 2: uncertainty region — someone present, position unknown. A distinct diagonal hatch
+     (never a positioned dot), visually separate from the flat .radar-room.occ tint. The whole
+     overlay is pointer-transparent so it never steals the house editor's pointer events. */
+  .radar-uncertain-g{pointer-events:none;}
+  .radar-uncertain{fill:url(#uncertainHatch);pointer-events:none;transition:opacity .25s ease-out;}
+  .uhatch{stroke:var(--accent);stroke-width:.03;}
+  .radar-uncertain-label{fill:var(--accent);text-anchor:middle;pointer-events:none;
+                         font-variant-numeric:tabular-nums;}
   .room-poly{fill:rgba(61,181,74,.05);stroke:var(--line-strong);stroke-width:.02;
              vector-effect:non-scaling-stroke;pointer-events:none;}
   .wall{stroke:var(--text);stroke-width:.05;stroke-linecap:round;vector-effect:non-scaling-stroke;}
@@ -2932,6 +2942,19 @@ function loadZones(){
 function saveZones(zones){ try{ localStorage.setItem(ZONE_KEY, JSON.stringify(zones)); }catch{} }
 let zones = loadZones();
 
+// ---- Honest positioning (spatial-geometry + sensor-fusion specs) ----
+// THE sole gate for rendering a POSITIONED body: a finite (x, y). Never the modality — the
+// backend's locatable-modality allowlist (c4297d9) is the first layer of this same invariant;
+// this gate is the second. A target with a non-finite coordinate is real presence WITHOUT a
+// known position → it becomes an uncertainty region, never an invented centered dot.
+const isLocated = t => !!t && Number.isFinite(t.x) && Number.isFinite(t.y);
+// Per-target confidence → marker channel (size + opacity), the sensor-fusion spec. Driven by
+// t.confidence (NOT the room confidence), so the dot matches its own hover tooltip.
+const OCC_THRESHOLD = 0.5;
+const confLevel = C => Math.min(Math.max(((+C || 0) - OCC_THRESHOLD) / 0.5, 0), 1);   // L in [0,1]
+const markerRadius2D  = C => 0.075 + 0.045 * confLevel(C);   // metres: 0.075 → 0.120
+const markerOpacity2D = C => 0.45  + 0.55  * confLevel(C);   // group opacity: 0.45 → 1.0
+
 function dot(room, t){
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", "radar-target");
@@ -2947,14 +2970,20 @@ function dot(room, t){
 }
 
 function placeDot(g, room, t){
-  const r = 0.12;
-  let x = t.x != null ? room.x + t.x : room.x + room.w/2;
-  let y = t.y != null ? room.y + t.y : room.y + room.h/2;
+  // FIX 1: NO center-drop fallback. placeDot is only reached via the isLocated gate in
+  // radarUpdate(), so t.x/t.y are finite — no code path here may invent a coordinate.
+  const C = t.confidence ?? 0;
+  const r = markerRadius2D(C);                       // FIX 3: radius reflects per-target confidence
+  let x = room.x + t.x;
+  let y = room.y + t.y;
   x = Math.min(Math.max(x, room.x + r), room.x + room.w - r);
   y = Math.min(Math.max(y, room.y + r), room.y + room.h - r);
   // CSS px == SVG user units here; style.transform (not the attribute) so the
   // .radar-target transition animates movement between updates.
   g.style.transform = `translate(${x}px, ${y}px)`;
+  g.style.opacity = String(markerOpacity2D(C));      // FIX 3: fades the group (dot + posture caption)
+  const circle = g.querySelector("circle");
+  if(circle) circle.setAttribute("r", r);            // FIX 3: low-confidence marker reads tentative
   g.querySelector("title").textContent =
     `person ${t.id ?? "?"} · confidence ${Math.round((t.confidence ?? 0)*100)}%`;
   const txt = g.querySelector("text");
@@ -3047,6 +3076,23 @@ async function renderRadar(){
   let cancelHed3dIfActive = () => {};
   // Layer order (document order = paint order, first = bottom): true house geometry, zones,
   // room rects + dots, then the in-progress zone-drawing preview on top of everything.
+  // FIX 2: uncertainty hatch — ONE shared <pattern> in the radar's own <defs>. Diagonal hatch
+  // (a vertical line rotated 45°), user-space units (metres) so it reads consistently across
+  // room/viewport sizes. Stroke colour comes from CSS (.uhatch → --accent); per-room intensity
+  // is applied on each .radar-uncertain rect. Guarded so a re-entrant renderRadar() can't dupe id.
+  if(!svg.querySelector("#uncertainHatch")){
+    const defs = document.createElementNS(SVG_NS, "defs");
+    const pat  = document.createElementNS(SVG_NS, "pattern");
+    pat.setAttribute("id", "uncertainHatch");
+    pat.setAttribute("patternUnits", "userSpaceOnUse");
+    pat.setAttribute("width", "0.34"); pat.setAttribute("height", "0.34");
+    pat.setAttribute("patternTransform", "rotate(45)");
+    const ln = document.createElementNS(SVG_NS, "line");
+    ln.setAttribute("class", "uhatch");
+    ln.setAttribute("x1", "0"); ln.setAttribute("y1", "0");
+    ln.setAttribute("x2", "0"); ln.setAttribute("y2", "0.34");
+    pat.appendChild(ln); defs.appendChild(pat); svg.appendChild(defs);
+  }
   const houseLayer = document.createElementNS(SVG_NS, "g"); houseLayer.id = "houseLayer";
   const zoneLayer  = document.createElementNS(SVG_NS, "g");
   const roomsLayer = document.createElementNS(SVG_NS, "g"); roomsLayer.id = "roomsLayer";
@@ -3131,12 +3177,47 @@ async function renderRadar(){
       label.setAttribute("x", r.x + 0.15); label.setAttribute("y", r.y + 0.35);
       label.style.fontSize = (11 / radarPxPerM) + "px";
       label.textContent = r.name;
+      // FIX 2: per-room uncertainty region — hatch fill + centroid caption, hidden until
+      // radarUpdate() flags this room occupied-without-position. pointer-events:none (CSS) so it
+      // never steals the house editor's clicks; rebuilt with the room, so no stale refs.
+      const unc = makeUncertainRegion(r);
       const layer = document.createElementNS(SVG_NS, "g");
-      g.appendChild(rect); g.appendChild(label); g.appendChild(layer);
+      g.appendChild(rect); g.appendChild(label); g.appendChild(unc.g); g.appendChild(layer);
       roomsLayer.appendChild(g);
-      roomIdx[r.name] = {r, rect, layer, dots: new Map()};
+      roomIdx[r.name] = {r, rect, layer, dots: new Map(), unc};
     });
     renderHouseOverlay(f);
+  }
+  // FIX 2: build one room's uncertainty overlay (inset hatch rect + centroid caption). The
+  // caption is a STATIC string set via textContent (never innerHTML) — XSS-safe by construction.
+  function makeUncertainRegion(r){
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttribute("class", "radar-uncertain-g");
+    g.style.display = "none";                        // shown only while occupied-without-position
+    const inset = Math.min(0.15, r.w * 0.2, r.h * 0.2);
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("class", "radar-uncertain");
+    rect.setAttribute("x", r.x + inset); rect.setAttribute("y", r.y + inset);
+    rect.setAttribute("width",  Math.max(r.w - 2 * inset, 0));
+    rect.setAttribute("height", Math.max(r.h - 2 * inset, 0));
+    const label = document.createElementNS(SVG_NS, "text");
+    label.setAttribute("class", "radar-uncertain-label");
+    label.setAttribute("x", r.x + r.w / 2); label.setAttribute("y", r.y + r.h / 2);
+    label.setAttribute("dominant-baseline", "middle");
+    const str = "someone here · position uncertain";
+    // Shrink the caption to fit the room width (avg advance ≈ 0.5em/char) so a long string in a
+    // small room never overflows into a neighbour; capped at the ~10px the posture caption uses.
+    const fitPx = Math.min(10, (r.w * 0.92 * radarPxPerM) / (str.length * 0.5));
+    label.style.fontSize = (Math.max(fitPx, 5) / radarPxPerM) + "px";
+    label.textContent = str;
+    g.appendChild(rect); g.appendChild(label);
+    return { g, rect, label };
+  }
+  // Toggle a room's uncertainty region; its hatch intensity tracks the room confidence (FIX 3).
+  function setUncertain(e, on, conf){
+    const u = e && e.unc; if(!u) return;
+    u.g.style.display = on ? "" : "none";
+    if(on) u.rect.style.opacity = String(0.5 + 0.5 * confLevel(conf ?? 0));
   }
 
   // ---- 3D house view (self-hosted three.js): singleton renderer, built once on first
@@ -3197,11 +3278,38 @@ async function renderRadar(){
           // reference these same shared buffers, so there's nothing to leak.
           const peopleGroup = new THREE.Group(); scene.add(peopleGroup);
           const personGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.3, 12);
-          const personMat = new THREE.MeshStandardMaterial({ color: 0x3db54a });
+          const personMat = new THREE.MeshStandardMaterial({ color: 0x3db54a });   // opaque = full confidence
+          // FIX 3: fixed POOL of opacity-bucketed active-floor person materials (5), pre-created
+          // ONCE here and reused every frame — NEVER a material per frame (preserves the 3D path's
+          // no-per-frame-allocation discipline). Index chosen by confLevel(C); the top bucket IS
+          // personMat (opaque), so no material is dead. Low confidence → dimmer, tentative marker.
+          const PERSON_BUCKETS = 5;
+          const personMatPool = [];
+          for(let i = 0; i < PERSON_BUCKETS; i++){
+            const op = 0.45 + 0.55 * (i / (PERSON_BUCKETS - 1));   // 0.45 → 1.0
+            personMatPool.push(i === PERSON_BUCKETS - 1
+              ? personMat
+              : new THREE.MeshStandardMaterial({ color: 0x3db54a, opacity: op, transparent: true }));
+          }
           // Ghost-floor person marker material (v2 floor stack): "someone's upstairs" reads
           // without competing with the active floor. Shared, built once, never disposed.
           const personMatGhost = new THREE.MeshStandardMaterial({
             color: 0x3db54a, opacity: GHOST.personGhost, transparent: true, depthWrite: false });
+          // FIX 2 (3D): flat translucent disc over an occupied-without-position room — the 3D
+          // analogue of the 2D hatch region (never a positioned body). Shared unit-circle geometry
+          // scaled per room; a fixed pool of confidence-bucketed materials (active floor) + one
+          // ghost material (non-active floors), all built ONCE here, never per frame.
+          const uncertainGroup = new THREE.Group(); scene.add(uncertainGroup);
+          const uncGeo = new THREE.CircleGeometry(1, 40);
+          const UNC_BUCKETS = 5;
+          const uncMatPool = [];
+          for(let i = 0; i < UNC_BUCKETS; i++){
+            const op = 0.10 + 0.14 * (i / (UNC_BUCKETS - 1));   // 0.10 → 0.24, subtle
+            uncMatPool.push(new THREE.MeshBasicMaterial({
+              color: 0x3db54a, transparent: true, opacity: op, depthWrite: false, side: THREE.DoubleSide }));
+          }
+          const uncMatGhost = new THREE.MeshBasicMaterial({
+            color: 0x3db54a, transparent: true, opacity: 0.05, depthWrite: false, side: THREE.DoubleSide });
           // ---- v2 in-3D editor: handle gizmos + drag previews. All geometries/materials
           // here are SHARED (built once, never disposed) — rebuildHandles3D()/the drag
           // machine only add/remove Mesh wrappers, exactly the peopleGroup discipline.
@@ -3279,7 +3387,8 @@ async function renderRadar(){
             if(hit) window.__wavrSelectRoom?.(hit.object.userData.room);
           });
           three3d = { THREE, renderer, scene, camera, controls, roomGroup,
-                      peopleGroup, personGeo, personMat, personMatGhost,
+                      peopleGroup, personGeo, personMat, personMatPool, personMatGhost,
+                      uncertainGroup, uncGeo, uncMatPool, uncMatGhost,
                       handleGroup, hVertGeo, hHitGeo, hEdgeGeo,
                       hVertMat, hEdgeMat, hHoverMat, hDragMat, hHitMat,
                       previewLine, previewWall, snapRing, raf: null, ro };
@@ -3645,23 +3754,51 @@ async function renderRadar(){
   // No-ops until the user has entered 3D at least once (three3d built lazily by ensure3D()).
   function updatePeople3D(){
     if(!three3d) return;
-    const { THREE, peopleGroup, personGeo, personMat, personMatGhost } = three3d;
-    // Clear last frame's markers. personGeo/personMat(Ghost) are shared + reused across
-    // every frame (created once in ensure3D(), never disposed) — only the Mesh wrapper
-    // objects are per-frame, so removing them from the group is all that's needed here.
+    const { THREE, peopleGroup, personGeo, personMatPool, personMatGhost,
+            uncertainGroup, uncGeo, uncMatPool, uncMatGhost } = three3d;
+    // Clear last frame's markers + uncertainty discs. All geometry/materials are shared + reused
+    // every frame (created once in ensure3D(), never disposed) — only the Mesh wrapper objects
+    // are per-frame, so removing them from the groups is all that's needed here.
     while(peopleGroup.children.length) peopleGroup.remove(peopleGroup.children[0]);
+    while(uncertainGroup.children.length) uncertainGroup.remove(uncertainGroup.children[0]);
     (HOUSE.floors || []).forEach(f => {
       const active = f.level === currentFloor;
       const y = offsetForLevel(f.level) + 0.9;
+      const yFloor = offsetForLevel(f.level) + 0.02;   // disc rests just above the floor plate
       (f.rooms || []).forEach(r => {
+        // Positioned bodies: LOCATED targets only (liveTargets is already isLocated-filtered).
         (liveTargets[r.name] || []).forEach(p => {
-          const m = new THREE.Mesh(personGeo, active ? personMat : personMatGhost);
+          const L = confLevel(p.c);
+          // FIX 3: opacity from the pre-built pool (bucketed by L — NO per-frame allocation);
+          // size s(C)=0.625+0.375*L folded into baseScale (ghost floors keep their 0.6 shrink).
+          const mat = active ? personMatPool[Math.round(L * (personMatPool.length - 1))] : personMatGhost;
+          const m = new THREE.Mesh(personGeo, mat);
           m.position.set(p.x, y, p.y);
           m.userData.room = r.name;   // §6: lets the render loop pulse only the linked room's markers
-          m.userData.baseScale = active ? 1 : 0.6;
+          m.userData.baseScale = (active ? 1 : 0.6) * (0.625 + 0.375 * L);
           m.scale.setScalar(m.userData.baseScale);
           peopleGroup.add(m);
         });
+        // FIX 2: occupied-without-position → a flat disc over the room (NOT a body). Ghosted on
+        // non-active floors (matching the floor-ghosting); intensity tracks the room confidence.
+        const uconf = uncertainRooms[r.name];
+        if(uconf != null){
+          const poly = r.polygon || [];
+          if(poly.length >= 3){
+            const xs = poly.map(pt => pt[0]), ys = poly.map(pt => pt[1]);
+            const minX = Math.min(...xs), maxX = Math.max(...xs);
+            const minY = Math.min(...ys), maxY = Math.max(...ys);
+            const L = confLevel(uconf);
+            const mat = active ? uncMatPool[Math.round(L * (uncMatPool.length - 1))] : uncMatGhost;
+            const disc = new THREE.Mesh(uncGeo, mat);
+            disc.rotation.x = -Math.PI / 2;   // unit circle (XY plane) → flat on the floor (XZ)
+            disc.position.set((minX + maxX) / 2, yFloor, (minY + maxY) / 2);
+            disc.scale.set(Math.max((maxX - minX) / 2 - 0.15, 0.1),
+                           Math.max((maxY - minY) / 2 - 0.15, 0.1), 1);
+            disc.renderOrder = 2;   // paints after the floor plate (translucent, depthWrite:false)
+            uncertainGroup.add(disc);
+          }
+        }
       });
     });
   }
@@ -3899,7 +4036,8 @@ async function renderRadar(){
   // ---- Zone editor overlay (draw/name/delete rectangles; label occupied zones) ----
   // zoneLayer/drawLayer are created above (fixed order); drawLayer stays on top so the
   // in-progress rectangle is visible while dragging, and room dots stay on top of both.
-  const liveTargets = {};                 // room -> [{x,y}] absolute, latest fusion frame
+  const liveTargets = {};                 // room -> [{x,y,c}] absolute (located only), latest fusion frame
+  const uncertainRooms = {};              // room -> room confidence, ONLY while occupied-without-position (FIX 2)
   const zoneEditBtn = document.getElementById("zoneEdit");
   const zoneHintEl  = document.getElementById("zoneHint");
   const zonePanel   = document.getElementById("zonePanel");
@@ -3911,12 +4049,14 @@ async function renderRadar(){
   const round2 = (n) => Math.round(n*100)/100;
 
   function absTargetPoint(room, t){       // mirror placeDot's in-room clamp so zone hit-test matches the dot
-    const r = 0.12;
-    let x = t.x!=null ? room.x + t.x : room.x + room.w/2;
-    let y = t.y!=null ? room.y + t.y : room.y + room.h/2;
+    // FIX 1: no center-drop fallback — only ever fed isLocated targets (finite x/y). Carries the
+    // per-target confidence through to the 3D marker (size/opacity), matching the 2D dot.
+    const r = markerRadius2D(t.confidence ?? 0);
+    let x = room.x + t.x;
+    let y = room.y + t.y;
     x = Math.min(Math.max(x, room.x + r), room.x + room.w - r);
     y = Math.min(Math.max(y, room.y + r), room.y + room.h - r);
-    return {x, y};
+    return {x, y, c: t.confidence ?? 0};
   }
   function zoneOccupied(z){
     for(const room in liveTargets)
@@ -4687,10 +4827,14 @@ async function renderRadar(){
   radarUpdate = (rs)=>{
     const e = roomIdx[rs.room]; if(!e) return;
     e.rect.classList.toggle("occ", !!rs.occupied);
+    // FIX 1/2: the SOLE gate for a positioned body is a finite (x, y) — never the modality.
+    // A coarse-only occupied room (or a camera room whose target carries no position) filters
+    // to an EMPTY located[] here, so zero dots are ever created for it.
+    const located = (rs.targets || []).filter(isLocated);
     // Reuse dots keyed by target id so movement TRANSITIONS instead of teleporting
     // (a person walking reads as motion, not a slideshow of positions).
     const seen = new Set();
-    (rs.targets||[]).forEach(t=>{
+    located.forEach(t=>{
       const key = String(t.id ?? "?");
       seen.add(key);
       const g = e.dots.get(key);
@@ -4700,10 +4844,14 @@ async function renderRadar(){
     [...e.dots.keys()].forEach(k=>{
       if(!seen.has(k)){ e.dots.get(k).remove(); e.dots.delete(k); }
     });
-    // Feed absolute target positions to the zone hit-test, then re-highlight zones.
-    liveTargets[rs.room] = (rs.targets||[]).map(t => absTargetPoint(e.r, t));
+    // FIX 2: occupied but NOTHING locatable → one uncertainty region over the room, no body.
+    const uncertain = !!rs.occupied && located.length === 0;
+    setUncertain(e, uncertain, rs.confidence);
+    if(uncertain) uncertainRooms[rs.room] = rs.confidence; else delete uncertainRooms[rs.room];
+    // Feed ONLY located absolute positions to the zone hit-test + 3D markers (no invented coords).
+    liveTargets[rs.room] = located.map(t => absTargetPoint(e.r, t));
     updateZoneOcc();   // per-frame: only re-highlight (no DOM rebuild); structure rebuilt on zone change
-    updatePeople3D();  // keep the 3D people markers in sync with the same live target data
+    updatePeople3D();  // keep the 3D people markers + uncertainty discs in sync with this frame
     tintRoom3D(rs.room);   // §6: floor tint tracks this frame's confidence (roomOcc/roomConf
                            // were already updated by updateHouse() — handle() runs it first)
   };
