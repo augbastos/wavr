@@ -32,4 +32,14 @@ android {
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:2.2.0"
+
+    // FragmentActivity host required by BiometricPrompt. Pinned to the cached
+    // modern versions so the framework NoActionBar theme keeps working (a plain
+    // FragmentActivity imposes no Theme.AppCompat requirement) and biometric's
+    // older transitive fragment/appcompat are upgraded from the local cache.
+    implementation "androidx.appcompat:appcompat:1.7.1"
+    implementation "androidx.fragment:fragment:1.8.9"
+
+    // System biometric / device-credential prompt + availability check.
+    implementation "androidx.biometric:biometric:1.1.0"
 }
