@@ -1006,6 +1006,14 @@
   .diag-row .dv.ok{color:var(--accent);}
   .diag-row .dv.warn{color:var(--warn);}
   .diag-row .dv.danger{color:var(--danger);}
+  /* System tab: Core Panel lock admin (sets/changes the ambient-touchscreen PIN; see the
+     #corePanel lock module further down for what actually gates the wake with it). Same
+     input/feedback look as the rest of this section, own class since it isn't camera-shaped. */
+  .corelock-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .corelock-form input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+                       border-radius:8px;padding:8px 11px;font-size:.82rem;width:190px;
+                       font-variant-numeric:tabular-nums;letter-spacing:.15em;}
+  .corelock-form input::placeholder{color:var(--dim);opacity:1;letter-spacing:normal;}
   /* gear → Privacy & security: the 4 invariants (trust screen, ALL modes) */
   .inv-list{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;}
   .inv-list li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;
@@ -1165,6 +1173,79 @@
   .core-dot{color:var(--accent);font-size:.6em;}
   .core-alerts{font-size:clamp(13px,1.8vw,18px);color:var(--warn);font-weight:600;}
 
+  /* ---------------- Feature 1: wifi / bluetooth / battery (native-bridge only) ----------------
+     Native [hidden] whenever window.WavrNative is absent (a plain browser/dev tab never shows
+     this — no errors, no placeholder, see the gated poll below). Deliberately monochrome: even
+     "connected"/"charging" states stay --text/--dim, never --accent (reserved for presence +
+     primary actions, §palette discipline above). */
+  .core-sys{display:flex;align-items:center;gap:12px;font-size:clamp(12px,1.6vw,17px);color:var(--dim);}
+  .core-wifi{display:inline-flex;align-items:flex-end;gap:2px;height:.85em;}
+  .core-wifi i{display:block;width:.16em;border-radius:1px;background:var(--dim);opacity:.3;}
+  .core-wifi i:nth-child(1){height:30%;}
+  .core-wifi i:nth-child(2){height:55%;}
+  .core-wifi i:nth-child(3){height:78%;}
+  .core-wifi i:nth-child(4){height:100%;}
+  .core-wifi[data-level="1"] i:nth-child(-n+1),
+  .core-wifi[data-level="2"] i:nth-child(-n+2),
+  .core-wifi[data-level="3"] i:nth-child(-n+3),
+  .core-wifi[data-level="4"] i:nth-child(-n+4){opacity:.85;background:var(--text);}
+  .core-bt-icon{width:1em;height:1em;color:var(--dim);}
+  .core-batt{display:inline-flex;align-items:center;gap:.2em;}
+  .core-batt-body{position:relative;width:1.7em;height:.9em;border:.11em solid var(--dim);
+                  border-radius:.2em;box-sizing:border-box;padding:.1em;}
+  .core-batt-body::after{content:"";position:absolute;top:50%;right:-.28em;
+                         transform:translateY(-50%);width:.16em;height:.4em;
+                         background:var(--dim);border-radius:0 .1em .1em 0;}
+  .core-batt-fill{display:block;height:100%;background:var(--dim);border-radius:.08em;
+                  transition:width .4s ease;}
+  .core-batt-low .core-batt-fill{background:var(--warn);}
+  .core-batt-low .core-batt-body{border-color:var(--warn);}
+  .core-batt-low .core-batt-body::after{background:var(--warn);}
+  .core-batt-bolt{width:.85em;height:.85em;color:var(--text);margin-left:.05em;}
+
+  /* ---------------- Feature 2: glance-free lock (wake gate) ----------------
+     Layered OVER the ambient face, never replacing it — wave/clock/rooms/coreSys keep running
+     dimmed behind the scrim, matching "glance-free" (you can still see status; you just can't
+     reach the dashboard without unlocking). Only ever shown when wake() finds a lock actually
+     configured (native biometric or backend PIN); otherwise stays [hidden] and unused, so the
+     no-lock path is the byte-for-byte instant reveal (see the JS gate for the one honest caveat:
+     a not-yet-warm PIN-status cache on a touch within ~1 tick of page load). --danger never used
+     here either, same "soft, self-healing state" discipline as Core/Rede health above — a wrong
+     PIN uses --warn. */
+  .core-lock{position:absolute;inset:0;z-index:10;display:flex;align-items:center;
+             justify-content:center;background:rgba(11,14,18,.62);
+             backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+             animation:coreLockIn .35s ease;}
+  @keyframes coreLockIn{from{opacity:0} to{opacity:1}}
+  .core-lock-card{width:min(86vw,340px);padding:clamp(20px,3vw,32px);border-radius:20px;
+                  background:var(--elevated);border:1px solid var(--line);
+                  box-shadow:0 20px 60px rgba(0,0,0,.4);text-align:center;}
+  .core-lock-title{margin:0 0 18px;font-size:clamp(15px,2vw,19px);font-weight:600;color:var(--text);}
+  .core-lock-dots{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-bottom:10px;min-height:14px;}
+  .core-lock-dot{width:10px;height:10px;border-radius:50%;border:1.4px solid var(--dim);
+                 box-sizing:border-box;transition:background .15s ease,border-color .15s ease,transform .15s ease;}
+  .core-lock-dot-filled{background:var(--text);border-color:var(--text);transform:scale(1.08);}
+  .core-lock-err{min-height:1.3em;margin:0 0 10px;font-size:13px;color:var(--warn);font-weight:600;}
+  .core-lock-keys{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+  .core-lock-key{aspect-ratio:1;border-radius:50%;border:1px solid var(--line);
+                 background:var(--surface);color:var(--text);font-size:clamp(18px,2.4vw,24px);
+                 font-weight:500;font-variant-numeric:tabular-nums;
+                 display:flex;align-items:center;justify-content:center;
+                 transition:background .12s ease,transform .12s ease;}
+  .core-lock-key:active{transform:scale(.92);background:var(--line);}
+  .core-lock-key-fn{color:var(--dim);font-size:clamp(15px,2vw,19px);background:transparent;border-color:transparent;}
+  .core-lock-key-ok{background:var(--accent);color:#08130a;border-color:var(--accent);}
+  .core-lock-key-ok:disabled{background:transparent;color:var(--dim);border-color:var(--line);}
+  .core-lock-key-ok svg{width:20px;height:20px;}
+  .core-lock-shake{animation:coreLockShake .38s ease;}
+  @keyframes coreLockShake{
+    10%,90%{transform:translateX(-1px)} 20%,80%{transform:translateX(3px)}
+    30%,50%,70%{transform:translateX(-6px)} 40%,60%{transform:translateX(6px)}
+  }
+  .core-lock-biom{display:flex;flex-direction:column;align-items:center;gap:14px;padding:8px 0;}
+  .core-lock-biom-icon{width:40px;height:40px;color:var(--text);}
+  .core-lock-biom-txt{margin:0;font-size:15px;color:var(--dim);}
+
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
     .bar>i,.ctl,.rm,.radar-target,.radar-zone,.pill,.house,.hero-line1,.radar-room,
@@ -1175,6 +1256,9 @@
     .scan-spin{animation:none;border-top-color:var(--line-strong);}   /* scan busy: static ring, no spin */
     .tip-pop{transition:none;}       /* v2 tooltips: no fade — popover just appears */
     #corePanel{transition:none;}     /* Core Panel: wake/sleep jump-cuts instead of fading */
+    .core-batt-fill{transition:none;}
+    .core-lock,.core-lock-shake{animation:none;}
+    .core-lock-dot,.core-lock-key{transition:none;}
   }
 </style>
 </head>
@@ -1226,6 +1310,9 @@
   <symbol id="ic-devices" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 16.5H4.7A1.7 1.7 0 0 1 3 14.8V6.7A1.7 1.7 0 0 1 4.7 5h14.6A1.7 1.7 0 0 1 21 6.7v.8"/><path d="M8.5 16.5V20M6 20h5"/><rect x="14" y="10" width="7" height="11" rx="1.8"/><circle cx="17.5" cy="18.7" r=".8" fill="currentColor" stroke="none"/></symbol>
   <!-- v2 tooltips: Help Mode toggle (circle + question mark) -->
   <symbol id="ic-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.3a2.65 2.65 0 0 1 5.2.7c0 1.7-2.6 2.1-2.6 3.6"/><circle cx="12" cy="16.9" r=".55" fill="currentColor" stroke="none"/></symbol>
+  <!-- Core Panel: charging bolt (the battery body/fill itself is a CSS box, not SVG, so its
+       level tracks the native-bridge payload directly; this is only the charging glyph) -->
+  <symbol id="ic-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 5 13.5h5.5L10 21l8-10.5h-5.5Z"/></symbol>
 </svg>
 
 <div class="app" id="app">
@@ -1766,6 +1853,19 @@
           <div class="tile-head"><h2 id="diag-h">Diagnostics</h2><span class="hint">connection · sensors · this session</span></div>
           <div id="diagList" class="diag-list"></div>
         </div>
+        <!-- Core Panel lock (admin, live/loopback only): sets/changes the PIN that gates the
+             ambient touchscreen build's (?core / window.WAVR_CORE) wake-to-dashboard step. The
+             touchscreen itself only ever verifies against this endpoint — it never sets it. -->
+        <div id="coreLockPanel" class="tile" hidden aria-labelledby="corelock-h">
+          <div class="tile-head"><h2 id="corelock-h">Core Panel lock</h2><span class="hint">PIN for the ambient touchscreen</span></div>
+          <p id="coreLockAdminStatus" class="panel-note">checking…</p>
+          <form id="coreLockAdminForm" class="corelock-form" aria-labelledby="corelock-h">
+            <input id="coreLockAdminPin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}"
+                   minlength="4" maxlength="12" placeholder="new PIN (4–12 digits)" aria-label="new PIN" required>
+            <button type="submit" class="ctl small">Save</button>
+            <span id="coreLockAdminFb" class="action-fb" aria-live="polite"></span>
+          </form>
+        </div>
         <p class="panel-note" id="sisNote" hidden>Detailed system status is available on the hub's panel (local access).</p>
       </section>
     </main>
@@ -1983,6 +2083,18 @@
     <div id="coreHealth" class="core-health" aria-live="polite">
       <span id="coreHealthCore" class="core-health-item">Core …</span>
       <span id="coreHealthNet" class="core-health-item">Rede …</span>
+      <!-- Feature 1 (wifi/bluetooth/battery): native-bridge only (window.WavrNative). Stays
+           [hidden] in a plain browser/dev tab — no errors, no placeholder; aria-label is set
+           dynamically from the parsed status so screen readers get the same summary sighted
+           users glance at. See the gated poll in the script block near the end of <body>. -->
+      <span id="coreSys" class="core-sys" hidden>
+        <span id="coreSysWifi" class="core-wifi" hidden aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <svg id="coreSysBt" class="core-bt-icon" hidden aria-hidden="true"><use href="#ic-bt"/></svg>
+        <span id="coreSysBatt" class="core-batt" hidden aria-hidden="true">
+          <span class="core-batt-body"><i id="coreSysBattFill" class="core-batt-fill"></i></span>
+          <svg id="coreSysBattBolt" class="core-batt-bolt" hidden><use href="#ic-bolt"/></svg>
+        </span>
+      </span>
     </div>
   </div>
   <div class="core-hero">
@@ -1992,6 +2104,41 @@
   <div class="core-bottom">
     <div id="coreRooms" class="core-rooms"></div>
     <span id="coreAlerts" class="core-alerts" hidden></span>
+  </div>
+  <!-- Feature 2 (glance-free lock): overlays the ambient face above (never replaces it) once
+       wake() finds a lock configured — window.WavrNative.hasBiometric() or the backend's
+       GET /api/core/pin/status -> {pin_set:true}. Stays [hidden] otherwise: the no-lock path
+       is today's instant touch-to-dashboard reveal. See the lock module in the gated script
+       block near the end of <body>. -->
+  <div id="coreLock" class="core-lock" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Wavr Core bloqueado">
+    <div class="core-lock-card">
+      <div id="coreLockBiom" class="core-lock-biom" hidden>
+        <svg class="core-lock-biom-icon" aria-hidden="true"><use href="#ic-shield"/></svg>
+        <p id="coreLockBiomTxt" class="core-lock-biom-txt" aria-live="polite">Autenticando…</p>
+        <button id="coreLockBiomRetry" type="button" class="ctl small" hidden>Tentar novamente</button>
+      </div>
+      <div id="coreLockPad" class="core-lock-pin" hidden>
+        <p id="coreLockTitle" class="core-lock-title">Desbloquear Wavr Core</p>
+        <div id="coreLockDots" class="core-lock-dots" aria-hidden="true"></div>
+        <p id="coreLockErr" class="core-lock-err" role="alert" aria-live="assertive"></p>
+        <div class="core-lock-keys">
+          <button type="button" class="core-lock-key" data-k="1">1</button>
+          <button type="button" class="core-lock-key" data-k="2">2</button>
+          <button type="button" class="core-lock-key" data-k="3">3</button>
+          <button type="button" class="core-lock-key" data-k="4">4</button>
+          <button type="button" class="core-lock-key" data-k="5">5</button>
+          <button type="button" class="core-lock-key" data-k="6">6</button>
+          <button type="button" class="core-lock-key" data-k="7">7</button>
+          <button type="button" class="core-lock-key" data-k="8">8</button>
+          <button type="button" class="core-lock-key" data-k="9">9</button>
+          <button type="button" id="coreLockBack" class="core-lock-key core-lock-key-fn" aria-label="apagar">⌫</button>
+          <button type="button" class="core-lock-key" data-k="0">0</button>
+          <button type="button" id="coreLockOk" class="core-lock-key core-lock-key-fn core-lock-key-ok" aria-label="confirmar" disabled>
+            <svg aria-hidden="true"><use href="#ic-check"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2983,6 +3130,50 @@ async function renderCameras(){
   refresh();
 }
 renderCameras();
+
+// ---- Core Panel lock admin (Plano A / live only) ----
+// Sets/changes the PIN that gates the ambient touchscreen build's (?core / window.WAVR_CORE)
+// wake-to-dashboard step — see the lock module in that gated script block near the end of this
+// file. This dashboard only ever WRITES the PIN (POST /api/core/pin, loopback-admin, same
+// X-Wavr-Local guard as every other write here); the touchscreen itself only ever VERIFIES
+// against it (POST /api/core/pin/verify) and never calls this route.
+async function renderCoreLockAdmin(){
+  const tile = document.getElementById("coreLockPanel");
+  if(!tile) return;
+  if(MODE!=="live") return;   // admin-only, loopback; never in companion/demo
+  tile.hidden = false;
+  const statusEl = document.getElementById("coreLockAdminStatus");
+  const form = document.getElementById("coreLockAdminForm");
+  const pinInput = document.getElementById("coreLockAdminPin");
+  const fb = document.getElementById("coreLockAdminFb");
+  async function refresh(){
+    let s;
+    try{ s = await (await fetch(location.origin+"/api/core/pin/status", {headers:{"X-Wavr-Local":"1"}})).json(); }
+    catch{ if(statusEl) statusEl.textContent = "couldn't reach the hub — try again"; return; }
+    if(statusEl) statusEl.textContent = (s && s.pin_set)
+      ? "A PIN is set for the Core Panel touchscreen."
+      : "No PIN set — the Core Panel touchscreen wakes straight to the dashboard.";
+  }
+  form.onsubmit = async (e)=>{
+    e.preventDefault();
+    const pin = pinInput.value;
+    if(!/^[0-9]{4,12}$/.test(pin)){ actionFeedback(fb, false, "PIN must be 4–12 digits"); return; }
+    let r;
+    try{
+      r = await fetch(location.origin+"/api/core/pin", {method:"POST",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body: JSON.stringify({pin})});
+    }catch{}
+    if(r && r.ok){
+      form.reset();
+      actionFeedback(fb, true, null, "✓ PIN saved");
+      refresh();
+    } else {
+      actionFeedback(fb, false, "couldn't save the PIN — try again");
+    }
+  };
+  refresh();
+}
+renderCoreLockAdmin();
 
 // ---- Narration (Plano A / live only) ----
 // Stage 3b (§9): the narrator is the app's ONLY egress, so its trigger is structurally
@@ -9526,6 +9717,65 @@ try {
     }catch(e){}
   };
 
+  // ---------------- Feature 1: wifi / bluetooth / battery (top-right, native-bridge only) ----------------
+  // window.WavrNative only exists inside the launcher build; a plain browser/dev tab never has
+  // it, so #coreSys stays [hidden] (its default HTML state) and this whole block is a no-op —
+  // no errors, no placeholder polling, per the contract. Polled every ~5s, separate from every
+  // other feed on this page (it isn't RoomState/`/api/status`), guarded end-to-end: a malformed
+  // bridge payload just leaves the last good render instead of throwing.
+  var sysEl         = document.getElementById("coreSys");
+  var sysWifiEl     = document.getElementById("coreSysWifi");
+  var sysBtEl       = document.getElementById("coreSysBt");
+  var sysBattEl     = document.getElementById("coreSysBatt");
+  var sysBattFillEl = document.getElementById("coreSysBattFill");
+  var sysBattBoltEl = document.getElementById("coreSysBattBolt");
+  var SYS_POLL_MS   = 5000;
+
+  function renderCoreSys(status){
+    if(!sysEl) return;
+    if(!status || typeof status !== "object"){ sysEl.hidden = true; return; }
+    sysEl.hidden = false;
+    var labelParts = [];
+
+    var wifi = (status.wifi && typeof status.wifi === "object") ? status.wifi : {};
+    var level = Math.max(0, Math.min(4, parseInt(wifi.level, 10) || 0));
+    var lvl = wifi.connected ? level : 0;
+    if(sysWifiEl){
+      sysWifiEl.hidden = false;
+      sysWifiEl.setAttribute("data-level", String(lvl));
+    }
+    labelParts.push(wifi.connected ? ("Wi-Fi: sinal " + lvl + "/4") : "Wi-Fi: desconectado");
+
+    var bt = (status.bluetooth && typeof status.bluetooth === "object") ? status.bluetooth : {};
+    if(sysBtEl) sysBtEl.hidden = !bt.on;
+    if(bt.on) labelParts.push("Bluetooth ligado");
+
+    var batt = (status.battery && typeof status.battery === "object") ? status.battery : null;
+    if(sysBattEl){
+      if(batt && typeof batt.level === "number"){
+        sysBattEl.hidden = false;
+        var pct = Math.max(0, Math.min(100, batt.level));
+        if(sysBattFillEl) sysBattFillEl.style.width = pct + "%";
+        sysBattEl.classList.toggle("core-batt-low", pct <= 15 && !batt.charging);
+        if(sysBattBoltEl) sysBattBoltEl.hidden = !batt.charging;
+        labelParts.push("Bateria " + Math.round(pct) + "%" + (batt.charging ? " (carregando)" : ""));
+      } else {
+        sysBattEl.hidden = true;
+      }
+    }
+    sysEl.setAttribute("aria-label", labelParts.join(" · "));
+  }
+
+  function pollCoreSys(){
+    if(!window.WavrNative || typeof window.WavrNative.getSystemStatus !== "function") return;
+    try{ renderCoreSys(JSON.parse(window.WavrNative.getSystemStatus())); }
+    catch(e){ /* malformed bridge payload: keep the last good render, never throw into the ambient loop */ }
+  }
+  if(window.WavrNative && typeof window.WavrNative.getSystemStatus === "function"){
+    pollCoreSys();
+    setInterval(pollCoreSys, SYS_POLL_MS);
+  }
+
   // ---------------- Alert count (bottom-right): mirrors #alertList, zero new fetches ----------------
   var alertsEl = document.getElementById("coreAlerts");
   function renderCoreAlerts(){
@@ -9539,31 +9789,247 @@ try {
   if(alertListEl) new MutationObserver(renderCoreAlerts).observe(alertListEl, {childList: true});
   renderCoreAlerts();
 
+  // ---------------- Feature 2: lock (glance-free ambient face, control-gated wake) ----------------
+  // The ambient face above (clock/wave/rooms/alerts/coreSys) is NEVER gated — only the reveal
+  // of the dashboard underneath is. "Configured" means either a device biometric
+  // (window.WavrNative.hasBiometric()) or a backend PIN (GET /api/core/pin/status ->
+  // {pin_set:true}). With neither configured, wake() behaves exactly as it always did: touch ->
+  // dashboard, no gate. Re-armed every time returnToAmbient() runs, so the kiosk re-locks after
+  // every ~60s idle cycle, same moment the dashboard itself hides.
+  var lockEl      = document.getElementById("coreLock");
+  var biomEl      = document.getElementById("coreLockBiom");
+  var biomTxtEl   = document.getElementById("coreLockBiomTxt");
+  var biomRetryEl = document.getElementById("coreLockBiomRetry");
+  var padEl       = document.getElementById("coreLockPad");
+  var dotsEl      = document.getElementById("coreLockDots");
+  var errEl       = document.getElementById("coreLockErr");
+  var okKeyEl     = document.getElementById("coreLockOk");
+  var backKeyEl   = document.getElementById("coreLockBack");
+  var PIN_MIN = 4, PIN_MAX = 12, PIN_CACHE_MS = 4000;   // matches the backend's PIN length contract (4-12 digits)
+
+  var authenticated    = false;  // flips true only on a verified unlock; reset by returnToAmbient()
+  var gatingInProgress = false;  // dedupes the pointerdown+touchstart+keydown triplet of one physical tap
+  var pinBuf           = "";
+  var pinBusy          = false;  // a verify POST is in flight — keys/OK ignored meanwhile
+  var biomPending      = false;  // a requestAuth() call is outstanding — a late/duplicate result no-ops otherwise
+  var pinStatusCache   = null;   // {value, at}: short cache so a rapid double-tap wake fires one loopback GET, not two
+
+  function hasBiometricLock(){
+    try{
+      return !!(window.WavrNative && typeof window.WavrNative.hasBiometric === "function"
+                && window.WavrNative.hasBiometric());
+    }catch(e){ return false; }
+  }
+  function fetchPinConfigured(){
+    var now = Date.now();
+    if(pinStatusCache && (now - pinStatusCache.at) < PIN_CACHE_MS) return Promise.resolve(pinStatusCache.value);
+    return fetch(location.origin + "/api/core/pin/status", {headers:{"X-Wavr-Local":"1"}})
+      .then(function(r){ return r.ok ? r.json() : {pin_set:false}; })
+      .then(function(j){ var v = !!(j && j.pin_set); pinStatusCache = {value:v, at:Date.now()}; return v; })
+      // Backend unreachable: fail OPEN (treat as "no PIN configured") — a transient local
+      // hiccup shouldn't lock the owner out of their own kiosk. Flagged assumption, see report.
+      .catch(function(){ return false; });
+  }
+  fetchPinConfigured();   // eager warm-up: primes pinStatusCache so the very first real wake
+                          // touch (seconds away, realistically) resolves synchronously below
+                          // instead of waiting on a loopback round-trip.
+  function lockPadOpen(){ return lockEl ? !lockEl.hidden : false; }
+
+  function renderDots(){
+    if(!dotsEl) return;
+    dotsEl.textContent = "";
+    var n = Math.max(pinBuf.length, PIN_MIN);
+    for(var i = 0; i < n; i++){
+      var d = document.createElement("i");
+      d.className = "core-lock-dot" + (i < pinBuf.length ? " core-lock-dot-filled" : "");
+      dotsEl.appendChild(d);
+    }
+    if(okKeyEl) okKeyEl.disabled = pinBuf.length < PIN_MIN || pinBusy;
+  }
+  function resetPinPad(){
+    pinBuf = ""; pinBusy = false;
+    if(errEl) errEl.textContent = "";
+    if(padEl) padEl.classList.remove("core-lock-shake");
+    renderDots();
+  }
+  function openLockPad(){
+    if(!lockEl) return;
+    if(biomEl) biomEl.hidden = true;
+    if(padEl) padEl.hidden = false;
+    resetPinPad();
+    lockEl.hidden = false;
+    lockEl.focus();
+    armIdle();
+  }
+  function closeLockPad(){
+    if(!lockEl) return;
+    lockEl.hidden = true;
+    biomPending = false;
+    if(biomEl) biomEl.hidden = true;
+    if(padEl) padEl.hidden = true;
+    resetPinPad();
+  }
+  function pinKeydown(k){
+    if(pinBusy || pinBuf.length >= PIN_MAX) return;
+    pinBuf += k;
+    if(errEl) errEl.textContent = "";
+    renderDots();
+  }
+  function pinBackspace(){
+    if(pinBusy) return;
+    pinBuf = pinBuf.slice(0, -1);
+    renderDots();
+  }
+  function pinShakeError(msg){
+    if(errEl) errEl.textContent = msg || "PIN incorreto";
+    if(padEl && !REDUCED_MOTION.matches){
+      padEl.classList.remove("core-lock-shake");
+      void padEl.offsetWidth;   // restart the shake keyframes on repeated wrong entries
+      padEl.classList.add("core-lock-shake");
+    }
+    pinBuf = "";
+    renderDots();
+  }
+  function submitPin(){
+    if(pinBusy || pinBuf.length < PIN_MIN) return;
+    pinBusy = true;
+    renderDots();
+    var pin = pinBuf;
+    fetch(location.origin + "/api/core/pin/verify", {
+      method: "POST", headers: {"Content-Type":"application/json","X-Wavr-Local":"1"},
+      body: JSON.stringify({pin: pin})
+    }).then(function(r){
+      if(!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function(j){
+      pinBusy = false;
+      if(j && j.ok === true){
+        authenticated = true;
+        closeLockPad();
+        revealDashboard();
+      } else {
+        // A wrong PIN and a rate-limited attempt both degrade to {ok:false} by backend
+        // design (wavr.pin_ratelimit: "a caller learns nothing beyond 'not unlocked'
+        // either way") — same message either way, on purpose, never distinguished client-side.
+        pinShakeError("PIN incorreto");
+      }
+    }).catch(function(){
+      pinBusy = false;
+      pinShakeError("Falha ao verificar — tente novamente");
+    });
+  }
+  if(padEl){
+    padEl.querySelectorAll(".core-lock-key[data-k]").forEach(function(btn){
+      btn.addEventListener("click", function(){ pinKeydown(btn.getAttribute("data-k")); });
+    });
+  }
+  if(backKeyEl) backKeyEl.addEventListener("click", pinBackspace);
+  if(okKeyEl) okKeyEl.addEventListener("click", submitPin);
+  if(lockEl){
+    // Kiosk hardware-keyboard fallback alongside the on-screen pad — harmless no-op on a
+    // touch-only panel, since nothing ever dispatches keydown there in the first place.
+    lockEl.addEventListener("keydown", function(e){
+      if(!padEl || padEl.hidden) return;
+      if(e.key >= "0" && e.key <= "9"){ pinKeydown(e.key); e.stopPropagation(); }
+      else if(e.key === "Backspace"){ pinBackspace(); e.stopPropagation(); }
+      else if(e.key === "Enter"){ submitPin(); e.stopPropagation(); }
+    });
+  }
+
+  function startBiometricAuth(){
+    if(!lockEl) return;
+    if(padEl) padEl.hidden = true;
+    if(biomEl){
+      biomEl.hidden = false;
+      if(biomTxtEl) biomTxtEl.textContent = "Autenticando…";
+      if(biomRetryEl) biomRetryEl.hidden = true;
+    }
+    lockEl.hidden = false;
+    lockEl.focus();
+    armIdle();
+    biomPending = true;
+    window.wavrOnAuthResult = function(ok, method){
+      if(!biomPending) return;   // stale/duplicate result after the flow already moved on (e.g. idle-timeout already closed the prompt)
+      biomPending = false;
+      if(ok){
+        authenticated = true;
+        closeLockPad();
+        revealDashboard();
+      } else {
+        // Cancel/error: fall through to the PIN pad — but only if one is actually set on the
+        // backend; a PIN pad with nothing to verify against would be a dead end, so that case
+        // instead offers a retry of the biometric prompt (flagged assumption, see report).
+        fetchPinConfigured().then(function(pinSet){
+          if(pinSet){ openLockPad(); }
+          else if(biomEl){
+            if(biomTxtEl) biomTxtEl.textContent = "Autenticação cancelada";
+            if(biomRetryEl) biomRetryEl.hidden = false;
+          }
+        });
+      }
+    };
+    try{ window.WavrNative.requestAuth("Desbloquear Wavr Core"); }
+    catch(e){
+      biomPending = false;
+      fetchPinConfigured().then(function(pinSet){ if(pinSet) openLockPad(); });
+    }
+  }
+  if(biomRetryEl) biomRetryEl.addEventListener("click", startBiometricAuth);
+
   // ---------------- Wake / idle: touch, tap, click or keydown anywhere reveals the
-  // dashboard; about 60s of no interaction brings the ambient face back. One fade,
-  // no perpetual loop (respects prefers-reduced-motion via the CSS media query above).
-  // The wave field is stopped for the entire time the ambient face is covered by the
-  // dashboard — no reason to keep spending frames animating a canvas nobody can see. ----------------
+  // dashboard (through the lock gate above, when one is configured); about 60s of no
+  // interaction brings the ambient face back. One fade, no perpetual loop (respects
+  // prefers-reduced-motion via the CSS media query above). The wave field is stopped for
+  // the entire time the ambient face is covered by the DASHBOARD — no reason to keep
+  // spending frames animating a canvas nobody can see. It keeps running behind the LOCK
+  // overlay though (glance-free, not a blackout). ----------------
   var IDLE_MS = 60000;
   var idleTimer = null;
   var dissolved = false;
 
+  function armIdle(){
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(returnToAmbient, IDLE_MS);
+  }
   function returnToAmbient(){
     dissolved = false;
+    authenticated = false;   // re-arm: the next wake needs auth again
+    closeLockPad();          // in case a pad/biometric prompt was left open mid-entry
     panel.classList.remove("core-dissolved");
     panel.removeAttribute("aria-hidden");
     clearTimeout(idleTimer);
     if(!document.hidden) wave.start();   // ambient face is back on top: resume the wave
   }
-  function wake(){
+  function revealDashboard(){
     if(!dissolved){
       dissolved = true;
       panel.classList.add("core-dissolved");
       panel.setAttribute("aria-hidden", "true");
       wave.stop();   // dashboard is now on top: stop spending frames on a hidden canvas
     }
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(returnToAmbient, IDLE_MS);
+    armIdle();
+  }
+  function wake(){
+    if(dissolved){ armIdle(); return; }             // dashboard already up: just keep it alive
+    if(lockPadOpen()){ armIdle(); return; }          // pad/biometric prompt has its own handlers
+    if(authenticated){ revealDashboard(); return; }
+    if(gatingInProgress) return;
+    if(hasBiometricLock()){ startBiometricAuth(); return; }
+    // Fast path: a warm pinStatusCache (primed above, or refreshed by an earlier wake this
+    // idle cycle) resolves the gate synchronously — the byte-for-byte-instant reveal the
+    // no-lock-configured path always had, minus one genuine edge case: a touch within the
+    // same tick as page load, before the eager warm-up above has resolved (falls to the
+    // async branch below instead).
+    if(pinStatusCache && (Date.now() - pinStatusCache.at) < PIN_CACHE_MS){
+      if(pinStatusCache.value) openLockPad(); else { authenticated = true; revealDashboard(); }
+      return;
+    }
+    gatingInProgress = true;
+    fetchPinConfigured().then(function(pinSet){
+      gatingInProgress = false;
+      if(pinSet){ openLockPad(); }
+      else { authenticated = true; revealDashboard(); }   // nothing configured: today's behavior, unchanged
+    });
   }
   ["pointerdown", "touchstart", "keydown"].forEach(function(evt){
     document.addEventListener(evt, wake, true);
