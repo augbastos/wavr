@@ -36,6 +36,11 @@
   // "WavrNet" and the Keystore-backed store as "WavrSecureStorage".
   var WavrNet = plugin("WavrNet");
   var SecureStorage = plugin("WavrSecureStorage");
+  // Sensor-node plugin (blueprint §2). Native owns the sample+POST loop, the foreground service, and
+  // the Bearer token (read straight from Keystore -- it never crosses into JS). JS only start/stop/
+  // getStatus/permission-intents + a 'status' event. ABSENT on a viewer-only build -> every call site
+  // is null-guarded and the sensor UI degrades to disabled rather than throwing.
+  var WavrSensor = plugin("WavrSensor");
 
   // ---------- Secure-storage adapter (capacitor-shell-engineer implements the plugin) ----------
   // Expected API (async, EncryptedSharedPreferences/Keystore-backed, DURABLE commit before resolve):
@@ -67,6 +72,13 @@
   // onPaired) and last-known role are cached in Keystore so boot reads them SYNCHRONOUSLY (like the
   // token), and detectRole() can find our own row in GET /api/devices. Neither is ever logged.
   var K_DEVICE_ID = "wavr.deviceId", K_ROLE = "wavr.role";
+  // wavr.caps: a purely-LOCAL capability declaration {sensor,viewer,admin} chosen at first launch. It
+  // NEVER implies a backend capability (the token's granted role does). Read SYNCHRONOUSLY at boot like
+  // the token so decideScreen() branches without a flash. wavr.onboarded: a one-time flag so the sensor
+  // permission wizard (notifications/battery/autostart) is shown ONCE before the first Start -- required
+  // because the 8-digit pair success reloads the page (index.html:1904), so the "pairing -> wizard ->
+  // node" sequence crosses a reboot and cannot rely on the pre-token render alone.
+  var K_CAPS = "wavr.caps", K_ONBOARDED = "wavr.onboarded";
 
   // FIX-E3(b): durable-write helper for the PAIR / RE-PIN paths. Resolves only once every write of the
   // pairing state has committed; rejects if ANY write fails, so the caller surfaces a save error and
@@ -85,6 +97,25 @@
   var _token = null;
   var _deviceId = null;   // our own device_id (from the pair response), persisted to Keystore
   var _role = null;       // "central" | "user" | null  (null is treated as viewer everywhere)
+  var _caps = null;       // {sensor,viewer,admin} | null   (null = true first launch -> chooser)
+  var _onboarded = false; // sensor permission wizard completed at least once
+
+  // caps helpers. A sensor-ONLY device must never boot the index.html viewer: its sensor-role token
+  // 403s every read, so CompanionProvider would self-wipe the token in a reload loop (companionAuthFailed
+  // -> reload). tokenGet() hides the token from index.html in that one case so it falls to the inert
+  // NullProvider; the native sensor loop reads its OWN Keystore token independently. Combo devices
+  // (sensor+viewer) keep the token visible so the dashboard boots exactly as today.
+  function capsHasSensor(){ return !!(_caps && _caps.sensor); }
+  function capsSensorOnly(){ return !!(_caps && _caps.sensor && !_caps.viewer && !_caps.admin); }
+  function parseCaps(raw){
+    if(!raw) return null;
+    try{
+      var c = JSON.parse(raw);
+      if(c && typeof c === "object" && (c.sensor || c.viewer || c.admin))
+        return { sensor: !!c.sensor, viewer: !!c.viewer, admin: !!c.admin };
+    }catch(_){}
+    return null;   // empty / malformed -> treat as first launch (show the chooser)
+  }
 
   // ---------- ready gate ----------
   var _resolveReady;
@@ -178,7 +209,15 @@
   // FIX-E2: tokenGet MUST NOT throw. index.html reads it synchronously at parse time under mobile, so a
   // throw there would halt boot. Reading a local var cannot throw today, but wrap defensively so any
   // future change can only ever yield null (treated as "not paired") rather than a boot-halting error.
-  function tokenGet(){ try{ return _token; }catch(_){ return null; } }
+  function tokenGet(){
+    try{
+      // Sensor-ONLY node: hide the token from index.html so it boots the inert NullProvider (no authed
+      // reads that would 403 under sensor-role confinement and trigger a token-wiping reload loop). The
+      // native sensor loop still reads its own Keystore token. Viewer/admin/combo/migrated are unaffected.
+      if(capsSensorOnly()) return null;
+      return _token;
+    }catch(_){ return null; }
+  }
   // FIX-E3(a): update the in-memory cache SYNCHRONOUSLY first (so tokenGet is correct immediately for
   // index.html's synchronous read), then persist. Returns the durable-write promise so a caller MAY
   // await it; index.html does not, so we also attach a no-op handler to suppress unhandled-rejection
@@ -349,7 +388,29 @@
       ".wavrm-spin{width:34px;height:34px;border-radius:50%;margin:6px auto;" +
       "border:3px solid var(--line,rgba(255,255,255,.12));border-top-color:var(--accent,#3db54a);" +
       "animation:wavrm-rot .8s linear infinite;}" +
-      "@keyframes wavrm-rot{to{transform:rotate(360deg);}}";
+      "@keyframes wavrm-rot{to{transform:rotate(360deg);}}" +
+      // capability chooser cards
+      ".wavrm-choice{width:100%;text-align:left;background:var(--bg,#0B0E12);color:var(--text,#EAECEE);" +
+      "border:1px solid var(--line,rgba(255,255,255,.07));border-radius:12px;padding:14px 16px;" +
+      "display:grid;grid-template-columns:24px 1fr;gap:3px 12px;cursor:pointer;}" +
+      ".wavrm-choice.primary{border-color:var(--accent,#3db54a);}" +
+      ".wavrm-choice.on{outline:2px solid var(--accent,#3db54a);outline-offset:1px;}" +
+      ".wavrm-choice-mark{grid-row:1/3;grid-column:1;align-self:start;margin-top:1px;width:24px;height:24px;" +
+      "border-radius:7px;border:1px solid var(--line,rgba(255,255,255,.18));color:var(--accent,#3db54a);" +
+      "font-weight:700;font-size:.9rem;display:flex;align-items:center;justify-content:center;}" +
+      ".wavrm-choice.on .wavrm-choice-mark{border-color:var(--accent,#3db54a);}" +
+      ".wavrm-choice-t{grid-column:2;font-weight:600;}" +
+      ".wavrm-choice-s{grid-column:2;color:var(--dim,#9AA4AD);font-size:.82rem;}" +
+      // node screen status row
+      ".wavrm-node-stat{display:flex;align-items:center;justify-content:space-between;gap:10px;" +
+      "background:var(--elevated,#1C232C);border:1px solid var(--line,rgba(255,255,255,.07));" +
+      "border-radius:10px;padding:12px 14px;}" +
+      ".wavrm-node-state{font-weight:700;letter-spacing:.06em;font-size:.8rem;color:var(--dim,#9AA4AD);}" +
+      ".wavrm-node-state.streaming{color:var(--accent,#3db54a);}" +
+      ".wavrm-node-state.error{color:var(--danger,#e8726a);}" +
+      ".wavrm-node-counts{color:var(--dim,#9AA4AD);font-size:.82rem;font-variant-numeric:tabular-nums;}" +
+      // sensor pill injected into index.html's header .status-pills
+      "#wavrm-pill{cursor:pointer;}";
     var s = el("style"); s.id = "wavrm-style"; s.textContent = css;
     (document.head || document.documentElement).appendChild(s);
   }
@@ -567,34 +628,309 @@
     });
   }
 
+  // ================= SENSOR-NODE UX (blueprint §3; shim overlay chrome only, ZERO index.html edits) ====
+  // wavr.caps is LOCAL only: choosing "sensor" here never grants a backend capability -- the token's
+  // role does. Nothing below ever logs the token, caps, or role. All heavy logic (sampling, POST, FGS)
+  // lives in the native WavrSensor plugin; JS stays thin -- start/stop + render status.
+
+  function persistCaps(caps){ _caps = caps; return secureSet(K_CAPS, JSON.stringify(caps)); }
+  function markOnboarded(){ _onboarded = true; secureSet(K_ONBOARDED, "1").catch(function(){}); }
+
+  // A best-effort, LOCAL default node name (editable on the node screen). Derived from the WebView UA
+  // model token -- never a network call. The native plugin may override with Build.MODEL. Falls back
+  // to "phone". (NOT VERIFIED: exact model formatting on-device; the value is user-editable anyway.)
+  function defaultNodeName(){
+    try{
+      var m = /Android[^;]*;\s*([^;)]+?)\s*(?:Build\/|\))/.exec(navigator.userAgent || "");
+      var name = ((m && m[1]) || "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9.\-]/g, "");
+      return name || "phone";
+    }catch(_){ return "phone"; }
+  }
+
+  // ----- Sensor plugin bridge: start/stop + live status (STREAMING/IDLE/sent/err) -----
+  var _sensorReady = false, _lastStatus = null, _nodeUi = null, _pillUi = null, _statusTimer = null;
+  var _sensorAuthFailedOnce = false;
+  function sensorAvailable(){ return !!(WavrSensor && typeof WavrSensor.start === "function"); }
+  function callSensor(fn, arg){
+    if(!(WavrSensor && typeof WavrSensor[fn] === "function")) return Promise.resolve(null);
+    try{ return Promise.resolve(WavrSensor[fn](arg)).catch(function(){ return null; }); }
+    catch(_){ return Promise.resolve(null); }
+  }
+
+  // Mirror companionAuthFailed (index.html:1815): a 401/403 on the pinned telemetry POST -> stop the
+  // service, wipe the token (cache + Keystore), reload -> the reboot lands on caps.sensor && !token ->
+  // pairing. Latched so a burst of ERROR events fires it once. Never logs the token.
+  function sensorAuthFailed(){
+    if(_sensorAuthFailedOnce) return; _sensorAuthFailedOnce = true;
+    try{ if(WavrSensor && typeof WavrSensor.stop === "function") WavrSensor.stop(); }catch(_){}
+    tokenSet(null);
+    try{ location.reload(); }catch(_){}
+  }
+
+  // Fail-closed classification against the FROZEN WavrSensor contract (wavr-sensor.d.ts): the 'status'
+  // event / getStatus() snapshot is { running, state:'STREAMING'|'IDLE'|'ERROR', sent, err, lastError?,
+  // presentedFp? }. lastError is a MACHINE CODE -> exact string equality only, no regex/heuristics:
+  //   TERMINAL  (state==='ERROR'): PIN_MISMATCH | AUTH_REVOKED | NOT_PAIRED | NO_TLS | FGS_TIMEOUT |
+  //                                START_FAILED
+  //   TRANSIENT (streaming continues, err++):  NETWORK | HTTP_<code>  (e.g. HTTP_404, HTTP_429)
+  // Only two codes drive control flow here. EVERY other code -- incl. unknown FUTURE ones -- is a
+  // non-terminal ERROR: surfaced by renderSensor(), token + pin KEPT, Start may retry. Fail-closed but
+  // never fail-destructive.
+  function lastErr(ev){ return (ev && ev.lastError) || ""; }
+  // Hard-fail "certificate changed" screen -> deliberate re-verify ONLY (same UX as WavrNet's
+  // PIN_MISMATCH). Fires solely on the terminal PIN_MISMATCH; never auto-recovers, never a silent re-pin.
+  function isPinMismatch(ev){ return !!ev && ev.state === "ERROR" && lastErr(ev) === "PIN_MISMATCH"; }
+  // Token wipe -> pairing (mirrors companionAuthFailed): the terminal AUTH_REVOKED (native has ALREADY
+  // wiped the token), plus a defensive HTTP_401/HTTP_403 should a build surface the raw HTTP code. A
+  // transient NETWORK / HTTP_5xx / FGS_TIMEOUT is availability, NOT auth -> it must NEVER wipe the token.
+  function isAuthFail(ev){
+    var c = lastErr(ev);
+    return c === "AUTH_REVOKED" || c === "HTTP_401" || c === "HTTP_403";
+  }
+  function handleStatus(ev){
+    ev = ev || {}; _lastStatus = ev;
+    // presentedFp is a TOP-LEVEL field of WavrSensorStatus (addListener delivers the status object
+    // directly -- unlike a WavrNet.request rejection, there is no Capacitor err.data wrapper here).
+    if(isPinMismatch(ev)){ onPinMismatch(ev.presentedFp || null); }
+    else if(isAuthFail(ev)){ sensorAuthFailed(); }
+    renderSensor();
+  }
+  function ensureSensor(){
+    if(_sensorReady || !sensorAvailable()) return;
+    _sensorReady = true;
+    try{ if(typeof WavrSensor.addListener === "function") WavrSensor.addListener("status", handleStatus); }catch(_){}
+    // Low-frequency, visible-only getStatus poll so counters recover even if a push event is missed.
+    _statusTimer = setInterval(function(){
+      if(document.visibilityState !== "visible" || typeof WavrSensor.getStatus !== "function") return;
+      WavrSensor.getStatus().then(function(s){ if(s){ _lastStatus = s; renderSensor(); } }).catch(function(){});
+    }, 3000);
+  }
+  function pollStatusOnce(){
+    if(!(sensorAvailable() && typeof WavrSensor.getStatus === "function")) return;
+    WavrSensor.getStatus().then(function(s){ if(s){ _lastStatus = s; renderSensor(); } }).catch(function(){});
+  }
+  function startSensor(name){
+    if(!sensorAvailable()) return; ensureSensor();
+    callSensor("start", { name: name || defaultNodeName() }).then(function(s){ if(s){ _lastStatus = s; renderSensor(); } });
+  }
+  function stopSensor(){
+    if(!sensorAvailable()) return;
+    callSensor("stop").then(function(s){ if(s){ _lastStatus = s; renderSensor(); } });
+  }
+  function isRunning(){ return !!(_lastStatus && (_lastStatus.running || _lastStatus.state === "STREAMING")); }
+  function stateLabel(){
+    if(_lastStatus && (_lastStatus.state === "STREAMING" || _lastStatus.running)) return "streaming";
+    if(_lastStatus && _lastStatus.state === "ERROR") return "error";
+    return "idle";
+  }
+  function renderSensor(){
+    var running = isRunning(), lab = stateLabel();
+    var sent = (_lastStatus && _lastStatus.sent) || 0, err = (_lastStatus && _lastStatus.err) || 0;
+    if(_nodeUi){
+      _nodeUi.state.textContent = lab.toUpperCase();
+      _nodeUi.state.className = "wavrm-node-state " + lab;
+      _nodeUi.sent.textContent = String(sent);
+      _nodeUi.err.textContent = String(err);
+      _nodeUi.btn.textContent = running ? "Stop" : "Start";
+      _nodeUi.btn.className = running ? "wavrm-btn ghost" : "wavrm-btn";
+    }
+    if(_pillUi){
+      _pillUi.dot.style.background = running ? "var(--accent,#3db54a)"
+        : (lab === "error" ? "var(--danger,#e8726a)" : "var(--dim,#9AA4AD)");
+      _pillUi.txt.textContent = running ? ("streaming · " + sent) : (lab === "error" ? "sensor error" : "contribute");
+    }
+  }
+  // Gate any Start behind the one-time onboarding wizard ("gated before the first Start").
+  function ensureOnboardedThen(proceed){
+    if(_onboarded || !capsHasSensor()){ proceed(); return; }
+    showWizard(proceed);
+  }
+
+  // ----- Capability chooser (true first launch). Sensing is the BASE capability -> presented first
+  // and emphasized. >=1 selection required (Continue disabled until then); Continue persists caps then
+  // routes into the UNCHANGED pinned setup flow. -----
+  function showChooser(){
+    var card = ensureOverlay("chooser");
+    card.appendChild(el("h2", "wavrm-h", "What will this device do?"));
+    card.appendChild(el("p", "wavrm-sub", "Choose one or more. You'll connect this device to your hub next."));
+    var sel = { sensor: false, viewer: false, admin: false };
+    var opts = [
+      { key: "sensor", primary: true,  h: "Contribute presence",  s: "Use this device's sensors to help your home know who's in. This is the core Wavr node." },
+      { key: "viewer", primary: false, h: "Watch the home",        s: "See live presence and rooms on this device." },
+      { key: "admin",  primary: false, h: "Manage the home",       s: "Edit rooms and settings. Needs an admin code from the hub." }
+    ];
+    var cont = el("button", "wavrm-btn", "Continue"); cont.type = "button"; cont.disabled = true;
+    var msg = el("p", "wavrm-msg", "");
+    function refresh(){ cont.disabled = !(sel.sensor || sel.viewer || sel.admin); }
+    opts.forEach(function(o){
+      var b = el("button", "wavrm-choice" + (o.primary ? " primary" : "")); b.type = "button";
+      b.setAttribute("aria-pressed", "false");
+      var mark = el("span", "wavrm-choice-mark", "");
+      b.appendChild(mark);
+      b.appendChild(el("div", "wavrm-choice-t", o.h));
+      b.appendChild(el("div", "wavrm-choice-s", o.s));
+      b.onclick = function(){
+        sel[o.key] = !sel[o.key];
+        b.classList.toggle("on", sel[o.key]);
+        b.setAttribute("aria-pressed", sel[o.key] ? "true" : "false");
+        mark.textContent = sel[o.key] ? "✓" : "";
+        refresh();
+      };
+      card.appendChild(b);
+    });
+    cont.onclick = function(){
+      if(cont.disabled) return;
+      cont.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "";
+      persistCaps({ sensor: sel.sensor, viewer: sel.viewer, admin: sel.admin }).then(function(){
+        showSetup();
+      }, function(){
+        cont.disabled = false; msg.className = "wavrm-msg err";
+        msg.textContent = "Couldn't save your choice securely. Try again.";
+      });
+    };
+    card.appendChild(cont); card.appendChild(msg);
+  }
+
+  // ----- Onboarding wizard (sensor devices only, once, before the first Start). Each step fires a
+  // native intent through WavrSensor; a denied/unavailable intent DEGRADES gracefully -> it NEVER
+  // blocks Start. OEM detection (Samsung/Xiaomi) is native (Build.MANUFACTURER). onDone re-enters the
+  // caller's flow (node screen, or start for the combo pill). -----
+  function showWizard(onDone){
+    var steps = [
+      { h: "Allow notifications", s: "Wavr keeps a quiet ongoing notification while this device contributes, so Android lets it run in the background.",
+        cta: "Allow", run: function(){ return callSensor("requestPermissions", {}); } },
+      { h: "Keep Wavr running", s: "Let Wavr run without battery limits, so presence keeps flowing when the screen is off.",
+        cta: "Open battery settings", run: function(){ return callSensor("openBatteryExemption"); } },
+      { h: "Stop the system killing it", s: "Some phones (Samsung, Xiaomi) close background apps. If prompted, allow auto-start for Wavr. You can skip this.",
+        cta: "Open auto-start settings", run: function(){ return callSensor("openOemAutostart"); } },
+      { h: "Wi-Fi presence (optional)", s: "Optionally use Wi-Fi signal to improve presence. This needs location permission and never leaves your home. You can skip.",
+        cta: "Enable Wi-Fi presence", run: function(){ return callSensor("requestPermissions", { wifiIdentity: true }); } }
+    ];
+    var i = 0;
+    function render(){
+      var st = steps[i];
+      var card = ensureOverlay("wizard");
+      card.appendChild(el("p", "wavrm-sub", "Set up " + (i + 1) + " of " + steps.length));
+      card.appendChild(el("h2", "wavrm-h", st.h));
+      card.appendChild(el("p", "wavrm-sub", st.s));
+      var act = el("button", "wavrm-btn", st.cta); act.type = "button";
+      act.onclick = function(){ try{ st.run(); }catch(_){} };   // fire intent; best-effort, never blocks
+      var next = el("button", "wavrm-btn ghost", i < steps.length - 1 ? "Next" : "Done"); next.type = "button";
+      next.onclick = function(){
+        i++;
+        if(i < steps.length){ render(); }
+        else { markOnboarded(); if(typeof onDone === "function") onDone(); }
+      };
+      card.appendChild(act); card.appendChild(next);
+    }
+    render();
+  }
+
+  // ----- Node screen (sensor-only). Name prefilled + editable, big Start/Stop, live STREAMING/IDLE +
+  // sent/err from status events + getStatus poll. -----
+  function showNode(){
+    ensureSensor();
+    var card = ensureOverlay("node");
+    card.appendChild(el("h2", "wavrm-h", "Sensor node"));
+    card.appendChild(el("p", "wavrm-sub",
+      "This device contributes presence to your home. Nothing leaves your local network."));
+    var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", "Device name"));
+    var nameIn = el("input", "wavrm-input"); nameIn.type = "text"; nameIn.autocomplete = "off";
+    nameIn.value = defaultNodeName(); nameIn.setAttribute("aria-label", "device name");
+    f.appendChild(nameIn); card.appendChild(f);
+    var stat = el("div", "wavrm-node-stat");
+    var stateEl = el("span", "wavrm-node-state idle", "IDLE");
+    var counts = el("span", "wavrm-node-counts", "");
+    var sentEl = el("b", null, "0"), errEl = el("b", null, "0");
+    counts.appendChild(document.createTextNode("sent ")); counts.appendChild(sentEl);
+    counts.appendChild(document.createTextNode("  ·  err ")); counts.appendChild(errEl);
+    stat.appendChild(stateEl); stat.appendChild(counts); card.appendChild(stat);
+    var btn = el("button", "wavrm-btn", "Start"); btn.type = "button";
+    _nodeUi = { state: stateEl, sent: sentEl, err: errEl, btn: btn };
+    if(!sensorAvailable()){
+      btn.disabled = true;
+      card.appendChild(btn);
+      card.appendChild(el("p", "wavrm-msg err", "Sensor service is not available on this build."));
+    } else {
+      btn.onclick = function(){
+        if(isRunning()) stopSensor();
+        else startSensor((nameIn.value || "").trim() || defaultNodeName());
+      };
+      card.appendChild(btn);
+    }
+    pollStatusOnce();   // reflect an already-running FGS on relaunch (one-tap resume)
+    renderSensor();
+  }
+
+  // ----- Sensor pill (sensor+viewer). A compact "this device" toggle injected into index.html's
+  // existing header pill row (.status-pills) as shim overlay chrome -- NOT an index.html edit. -----
+  function injectSensorPill(){
+    ensureSensor();
+    if(document.getElementById("wavrm-pill")) return;
+    var row = document.querySelector(".status-pills"); if(!row) return;
+    var b = el("button", "tpill"); b.id = "wavrm-pill"; b.type = "button";
+    b.title = "This device — contribute presence";
+    var dot = el("i", "p-dot"); var txt = el("span", "p-txt", "contribute");
+    b.appendChild(dot); b.appendChild(txt);
+    b.onclick = function(){
+      if(isRunning()) stopSensor();
+      else ensureOnboardedThen(function(){ hideOverlay(); startSensor(defaultNodeName()); });
+    };
+    row.appendChild(b);
+    _pillUi = { dot: dot, txt: txt, btn: b };
+    pollStatusOnce();
+    renderSensor();
+  }
+
   // ----- Boot: load caches, resolve the gate, then decide which screen to show -----
   function decideScreen(){
     whenDom(function(){
       injectStyle();
       if(_token){
-        // Have a token: index.html boots the read-only viewer. Clear the pairing chrome class that
-        // index.html sets at parse time (token cache was empty then) and mask the boot flash.
+        // Already paired -> never show the chooser. Clear the pairing chrome class index.html sets at
+        // parse time (token cache was empty then) and mask the boot flash.
         try{ document.body.classList.remove("pairing-mode"); }catch(_){}
-        showConnecting("Connecting to your home…");
-        setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
+        if(capsSensorOnly()){
+          // Dedicated sensor node: no dashboard (its token is hidden from index.html -> NullProvider).
+          // Show the permission wizard once before the first Start, then the node screen.
+          if(!_onboarded) showWizard(showNode); else showNode();
+        } else if(capsHasSensor()){
+          // sensor + viewer/admin: the dashboard is PRIMARY (boots exactly as the viewer path below);
+          // inject the compact "this device" sensor pill into the header chrome. The wizard is deferred
+          // to the pill's first Start (ensureOnboardedThen) so viewing is never blocked.
+          showConnecting("Connecting to your home…");
+          setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
+          injectSensorPill();
+        } else {
+          // viewer / admin / migrated (token, no caps): EXACTLY today's boot, byte-for-byte UNCHANGED.
+          showConnecting("Connecting to your home…");
+          setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
+        }
+      } else if(!_caps && !_base){
+        // True first launch (nothing chosen AND nothing entered) -> capability chooser before setup.
+        showChooser();
       } else if(_base && _pinnedFp){
-        // Verified central but no token (first-run resume after verify, or a 401/403 revoke):
-        // jump straight to the 8-digit code entry. No setup/verify re-prompt.
+        // Verified central but no token (resume after verify, a 401/403 revoke, or a pre-caps mid-pair
+        // upgrade): jump straight to the 8-digit code entry. No setup/verify re-prompt.
         revealCodeEntry(); hideOverlay();
       } else {
-        // Nothing (or verify incomplete): native setup, then out-of-band verify.
+        // caps chosen but not yet verified, or verify incomplete: native setup, then out-of-band verify.
         if(_base) showVerify(); else showSetup();
       }
     });
   }
 
   Promise.all([secureGet(K_URL), secureGet(K_FP), secureGet(K_TOKEN),
-               secureGet(K_DEVICE_ID), secureGet(K_ROLE)]).then(function(v){
+               secureGet(K_DEVICE_ID), secureGet(K_ROLE),
+               secureGet(K_CAPS), secureGet(K_ONBOARDED)]).then(function(v){
     _base = v[0] || ""; _pinnedFp = v[1] || null; _token = v[2] || null;
     _deviceId = v[3] || null; _role = v[4] || null;   // role read synchronously at boot, like the token
+    _caps = parseCaps(v[5]); _onboarded = (v[6] === "1");   // caps + onboarded read synchronously too
   }).catch(function(){}).then(function(){
     _resolveReady();   // caches populated: index.html's deferred boot may run now
-    if(_token) detectRole();   // once after ready + token exists; fire-and-forget, never blocks boot
+    // detectRole drives the DASHBOARD admin surface only; a sensor-ONLY node has no dashboard and its
+    // token 403s /api/devices, so skip it there. Viewer/admin/combo/migrated behave exactly as before.
+    if(_token && !capsSensorOnly()) detectRole();
     decideScreen();
   });
 })();
