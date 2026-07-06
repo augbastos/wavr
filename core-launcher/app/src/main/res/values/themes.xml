@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Framework Material theme, no ActionBar / no title bar. Using a framework
+      theme (not AppCompat) keeps this launcher dependency-free. The status bar
+      is intentionally kept visible (wifi / bt / battery); only the navigation
+      bar is hidden at runtime via WindowInsetsController in MainActivity.
+    -->
+    <style name="Theme.WavrCore" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/wavr_bg</item>
+        <item name="android:statusBarColor">@color/wavr_bg</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:colorBackground">@color/wavr_bg</item>
+    </style>
+</resources>
