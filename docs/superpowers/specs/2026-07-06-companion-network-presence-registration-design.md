@@ -1,7 +1,10 @@
 # Companion self-registers for network presence — Design (mobile side)
 
 **Date:** 2026-07-06
-**Status:** Approved (Augusto, 2026-07-06)
+**Status:** SUPERSEDED by `2026-07-07-wavr-mobile-core-attachment-design.md` (2026-07-07).
+Presence is no longer a standalone pill — it folds into the green/yellow/red consent control
+which now doubles as the enter/exit toggle (green/yellow = connect + register, red = disconnect
++ DELETE). Withdrawal is `DELETE /api/presence/register-companion`, not a new POST endpoint.
 **Scope:** Wavr Mobile companion (`dev.wavr.mobile`, worktree `C:\IA\wavr-phase1`, branch
 `mobile/phase-1`). Mobile side ONLY — the `/api/presence/*` endpoints are the Core
 terminal's job (see "Core contract — coordination"). All mobile work lands in the single
