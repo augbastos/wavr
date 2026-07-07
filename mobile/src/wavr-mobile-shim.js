@@ -41,6 +41,13 @@
   // getStatus/permission-intents + a 'status' event. ABSENT on a viewer-only build -> every call site
   // is null-guarded and the sensor UI degrades to disabled rather than throwing.
   var WavrSensor = plugin("WavrSensor");
+  // mDNS/DNS-SD browse for Cores advertising `_wavr._tcp` (capacitor-zeroconf@4.0.0). Registered
+  // native plugin name is "ZeroConf" (see node_modules/capacitor-zeroconf/dist/esm/index.js ->
+  // registerPlugin('ZeroConf', ...); android/.../ZeroConfPlugin.java -> @CapacitorPlugin(name =
+  // "ZeroConf")) -- capitalization matters, it is the bridge lookup key. ABSENT on a build without
+  // the native plugin -> discovery is skipped and the user falls to manual entry, never throws.
+  var Zeroconf = plugin("ZeroConf");
+  function zeroconfAvailable(){ return !!(Zeroconf && typeof Zeroconf.watch === "function"); }
 
   // ---------- Secure-storage adapter (capacitor-shell-engineer implements the plugin) ----------
   // Expected API (async, EncryptedSharedPreferences/Keystore-backed, DURABLE commit before resolve):
@@ -107,6 +114,9 @@
   // paired device to full participation, so an absent/first-launch value defaults to "green"; there is no
   // GET /api/consent yet, so we do NOT reconcile against the hub at boot (a GET reconciliation is a NEXT).
   var _consent = "green";
+  // Friendly name of the Core the user picked in showChooseCore() (mDNS `name` field). Informational
+  // only -- never persisted, never used for anything security-relevant (the pinned fingerprint is).
+  var _pendingCoreName = null;
 
   // caps helpers. A sensor-ONLY device must never boot the index.html viewer: its sensor-role token
   // 403s every read, so CompanionProvider would self-wipe the token in a reload loop (companionAuthFailed
@@ -472,6 +482,63 @@
     try{ document.body.classList.add("pairing-mode"); }catch(_){}
   }
 
+  // ----- Screen 0: discovery. Browse `_wavr._tcp` and let the user pick a Core; manual entry
+  // (Screen 1 below) is always one tap away and is what an absent/broken plugin falls back to. -----
+  var _coreWatchActive = false;
+  function showChooseCore(){
+    var card = ensureOverlay("chooseCore");
+    card.appendChild(el("h2", "wavrm-h", "Find your Wavr hub"));
+    card.appendChild(el("p", "wavrm-sub", "Looking for hubs on your Wi-Fi…"));
+    var list = el("div", "wavrm-field"); card.appendChild(list);
+    var msg = el("p", "wavrm-msg", "");
+    var manual = el("button", "wavrm-btn ghost", "Enter address manually"); manual.type = "button";
+    manual.onclick = function(){ stopCoreWatch(); showSetup(); };
+    var seen = {};
+    function addCore(svc){
+      var core = WavrLib.parseCoreService(svc); if(!core) return;
+      var key = core.host + ":" + core.port; if(seen[key]) return; seen[key] = true;
+      var b = el("button", "wavrm-choice primary"); b.type = "button";
+      b.appendChild(el("span", "wavrm-choice-mark", ""));
+      b.appendChild(el("div", "wavrm-choice-t", core.name));
+      b.appendChild(el("div", "wavrm-choice-s", core.host + ":" + core.port));
+      b.onclick = function(){
+        stopCoreWatch();
+        _base = "https://" + core.host + ":" + core.port;
+        _pendingCoreName = core.name;
+        showVerify();
+      };
+      list.appendChild(b);
+    }
+    card.appendChild(manual); card.appendChild(msg);
+    if(!zeroconfAvailable()){
+      msg.className = "wavrm-msg err";
+      msg.textContent = "Automatic discovery isn't available on this device — enter the address.";
+      return;
+    }
+    startCoreWatch(addCore, function(){
+      msg.className = "wavrm-msg err";
+      msg.textContent = "Couldn't search for hubs on this network — enter the address.";
+    });
+  }
+  // Only "resolved" events carry a usable address (jmdns fires "added" before resolution completes);
+  // parseCoreService's own host/port validation is a second line of defence against a half-resolved
+  // record slipping through. onFailure covers the watch() promise itself rejecting (e.g. multicast
+  // lock / IOException) so a broken plugin degrades to the visible manual-entry fallback, not silence.
+  function startCoreWatch(onFound, onFailure){
+    if(_coreWatchActive) return; _coreWatchActive = true;
+    try{
+      Zeroconf.watch({ type: "_wavr._tcp.", domain: "local." }, function(res){
+        if(res && res.action === "resolved" && res.service) onFound(res.service);
+      }).catch(function(){ _coreWatchActive = false; if(onFailure) onFailure(); });
+    }catch(_){ _coreWatchActive = false; if(onFailure) onFailure(); }
+  }
+  function stopCoreWatch(){
+    _coreWatchActive = false;
+    if(!Zeroconf) return;
+    try{ if(typeof Zeroconf.unwatch === "function") Zeroconf.unwatch({ type: "_wavr._tcp.", domain: "local." }); }catch(_){}
+    try{ if(typeof Zeroconf.stop === "function") Zeroconf.stop(); }catch(_){}
+  }
+
   // ----- Screen 1: setup (IP:port). No camera in Phase 1. -----
   function showSetup(){
     var card = ensureOverlay("setup");
@@ -799,7 +866,7 @@
       if(cont.disabled) return;
       cont.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "";
       persistCaps({ sensor: sel.sensor, viewer: sel.viewer, admin: sel.admin }).then(function(){
-        showSetup();
+        showChooseCore();
       }, function(){
         cont.disabled = false; msg.className = "wavrm-msg err";
         msg.textContent = "Couldn't save your choice securely. Try again.";
@@ -1105,8 +1172,9 @@
         // upgrade): jump straight to the 8-digit code entry. No setup/verify re-prompt.
         revealCodeEntry(); hideOverlay();
       } else {
-        // caps chosen but not yet verified, or verify incomplete: native setup, then out-of-band verify.
-        if(_base) showVerify(); else showSetup();
+        // caps chosen but not yet verified, or verify incomplete: an already-entered address resumes
+        // straight to verify; otherwise offer discovery first (manual entry stays one tap away).
+        if(_base) showVerify(); else showChooseCore();
       }
     });
   }
