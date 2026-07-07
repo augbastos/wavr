@@ -7,6 +7,13 @@
     <!-- System status indicators surfaced to the panel via window.WavrNative. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- LAN service advertisement (mDNS / DNS-SD via NsdManager) so Wavr Mobile
+         companions can auto-discover this Core as _wavr._tcp on port 8000. Some
+         devices only deliver/announce multicast mDNS while a WifiManager
+         MulticastLock is held; acquiring that lock needs this permission. No
+         data leaves the LAN — only the service name + tiny TXT (v/role/path). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Bluetooth on/off read. BLUETOOTH_CONNECT (API 31+) is declared but NOT
          requested at runtime: reading adapter state does not require it, and a
          kiosk simply reports bt:false rather than prompting. Legacy BLUETOOTH
