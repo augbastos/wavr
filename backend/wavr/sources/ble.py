@@ -43,8 +43,15 @@ class BLESource:
                  room: str = "casa", rssi_min: int = -80,
                  interval: float = 15.0, scan_window: float = 5.0,
                  grace: int = 2, present_confidence: float = 0.7,
-                 emit_identity: bool = False):
+                 emit_identity: bool = False,
+                 known_provider: Callable[[], dict[str, str]] | None = None):
         self._known = {_norm(a): p for a, p in known.items()}
+        # LIVE consent registry seam: when a provider is injected, the known map is
+        # re-read at the START of every scan cycle instead of frozen at construction,
+        # so a device REGISTERED (or opted-out) via the identity registry becomes (or
+        # stops being) a signal on the very next cycle -- no server restart. Default
+        # None -> byte-identical to before (the frozen env allowlist).
+        self._known_provider = known_provider
         self._rssi_min = rssi_min
         self._scan_window = scan_window
         self._scan = scan or (lambda: bleak_scan(self._scan_window))
@@ -58,15 +65,23 @@ class BLESource:
         self._emit_identity = emit_identity
         self._missed = grace + 1  # start "absent" until first sighting
 
-    def _present_addrs(self, seen: dict[str, int]) -> set[str]:
+    def _current_known(self) -> dict[str, str]:
+        """The known {address: person} map for THIS cycle: the live provider result
+        (normalized) when one is injected, else the frozen construction map."""
+        if self._known_provider is not None:
+            return {_norm(a): p for a, p in self._known_provider().items()}
+        return self._known
+
+    def _present_addrs(self, seen: dict[str, int], known: dict[str, str]) -> set[str]:
         """Known addresses seen at or above the RSSI floor. Unknown addresses are
         ignored; a known address below the floor counts as not seen (too far)."""
         return {a for a, rssi in seen.items()
-                if a in self._known and rssi >= self._rssi_min}
+                if a in known and rssi >= self._rssi_min}
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:
-            if self._known:
+            known = self._current_known()
+            if known:
                 try:
                     seen = await self._scan()
                 except Exception:
@@ -74,7 +89,7 @@ class BLESource:
                     seen = {}
             else:
                 seen = {}
-            present_addrs = self._present_addrs(seen)
+            present_addrs = self._present_addrs(seen, known)
             if present_addrs:
                 self._missed = 0
             else:
@@ -87,8 +102,8 @@ class BLESource:
             identities: tuple = ()
             if present and self._emit_identity:
                 identities = tuple(
-                    Identity(person=self._known[a], source="ble", rssi=seen[a])
-                    for a in sorted(present_addrs) if self._known.get(a)
+                    Identity(person=known[a], source="ble", rssi=seen[a])
+                    for a in sorted(present_addrs) if known.get(a)
                 )
             yield SensingEvent(
                 room=self._room, modality="ble", presence=present,

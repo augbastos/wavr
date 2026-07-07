@@ -257,6 +257,111 @@ def test_release_model_also_nulls_pose_model():
     assert _cam._POSE_MODEL is None
 
 
+# ---- Spec A: feet point + positioned Target emission ---------------------------
+
+def test_feet_point_is_bottom_centre():
+    # bbox (x1,y1,x2,y2) -> ((x1+x2)/2, y2)
+    assert _cam.feet_point((10.0, 20.0, 30.0, 80.0)) == (20.0, 80.0)
+
+
+class _Frame:
+    """Minimal frame stand-in: only .shape is read (never the pixels) -- ADR-0002."""
+    shape = (720, 1280, 3)   # (h, w, c)
+
+
+def _pose_result_with_box(xyxy, conf=0.9):
+    import types
+    return types.SimpleNamespace(
+        boxes=types.SimpleNamespace(cls=[0], conf=[conf], xyxy=[xyxy]),
+        keypoints=types.SimpleNamespace(xy=[[(0.0, 0.0)] * 17]),  # no usable kpts -> posture None
+    )
+
+
+def test_yolo_pose_detect_positions_target_with_localizer(monkeypatch):
+    monkeypatch.setattr(_cam, "_pose_model",
+                        lambda: (lambda frame: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0))]))
+    seen = {}
+    def fake_localize(feet, img_size):
+        seen["feet"] = feet
+        seen["img_size"] = img_size
+        return (1.5, 2.0, 0.85)           # room-local x, y, position-quality conf
+    targets = _cam.yolo_pose_detect(_Frame(), 0.0, localize=fake_localize)
+    assert len(targets) == 1
+    t = targets[0]
+    assert (t.x, t.y) == (1.5, 2.0)
+    assert t.confidence == 0.85           # position-quality rides Target.confidence
+    assert seen["feet"] == (200.0, 500.0)  # bottom-centre of the box
+    assert seen["img_size"] == (1280.0, 720.0)
+
+
+def test_yolo_pose_detect_none_safe_when_localizer_returns_none(monkeypatch):
+    monkeypatch.setattr(_cam, "_pose_model",
+                        lambda: (lambda frame: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0), conf=0.7)]))
+    targets = _cam.yolo_pose_detect(_Frame(), 0.0, localize=lambda feet, sz: None)
+    assert len(targets) == 1
+    t = targets[0]
+    assert t.x is None and t.y is None    # ray missed floor -> no fabricated point
+    assert t.confidence == 0.7            # falls back to detection confidence
+
+
+def test_yolo_pose_detect_no_localizer_keeps_xy_none(monkeypatch):
+    monkeypatch.setattr(_cam, "_pose_model",
+                        lambda: (lambda frame: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0))]))
+    targets = _cam.yolo_pose_detect(_Frame(), 0.0)   # no localizer at all
+    assert targets[0].x is None and targets[0].y is None
+
+
+async def test_camera_emits_positioned_target_end_to_end(monkeypatch):
+    import functools
+    from wavr.localize import make_localizer, MountPose
+    monkeypatch.setattr(_cam, "_pose_model",
+                        lambda: (lambda frame: [_pose_result_with_box((600.0, 300.0, 700.0, 700.0))]))
+    # quarto polygon from DEFAULT_MAP; a mount prior -> monocular estimate.
+    poly = [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]
+    loc = make_localizer(poly, mount=MountPose(pos_x=4.2, pos_y=0.0, height=2.4,
+                                               tilt_deg=40.0, yaw_deg=45.0, hfov_deg=90.0))
+    pose_detect = functools.partial(_cam.yolo_pose_detect, localize=loc)
+
+    async def frames(url):
+        yield _Frame()
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", interval=0, frames=frames,
+                       detect=lambda f: Detection(count=1, confidence=0.9),
+                       pose=True, pose_detect=pose_detect)
+    [ev] = await _first_n(src, 1)
+    assert ev.targets, "camera should emit a target"
+    t = ev.targets[0]
+    assert t.x is not None and t.y is not None      # POSITIONED, not room-centred
+    assert t.confidence == pytest.approx(0.45)      # monocular position-quality
+
+
+def test_camera_factory_enables_pose_when_calibrated():
+    # Directly verify the app wiring: a camera with a stored mount -> pose ON + a
+    # localizer bound into pose_detect; without one -> pose OFF (room-centred).
+    from wavr.app import _camera_factory
+    from wavr.config import load_config
+    from wavr.localize import MountPose
+    from wavr.housemap import DEFAULT_MAP
+    cfg = load_config()
+    cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": 0.4}
+
+    class _Calib:
+        def __init__(self, row):
+            self._row = row
+        def get(self, name):
+            return self._row
+
+    calibrated = _Calib({"mount": MountPose(pos_x=4.2, pos_y=0.0), "homography": None,
+                         "img_w": None, "img_h": None})
+    src = _camera_factory(cam, cfg, None, calibrated, DEFAULT_MAP)()
+    assert src._pose is True
+    assert src._pose_detect is not None
+
+    uncalibrated = _Calib(None)
+    src2 = _camera_factory(cam, cfg, None, uncalibrated, DEFAULT_MAP)()
+    assert src2._pose is False           # no calibration -> unchanged, room-centred
+
+
 # ---- F3: edge-triggered health hook (name+bool only, never a frame) -------------
 
 async def test_health_hook_edge_triggers_down_then_recovery():

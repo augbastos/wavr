@@ -47,6 +47,13 @@ class Device:
     created_ts: str
     last_seen_ts: str | None
     revoked: bool
+    # Wavr Pass (Phase 1): the device's OWN explicit scope grant, or None when it
+    # has never been granted one -- the backward-compat lever. `None` means
+    # "derive from role" (auth.effective_scopes); every row that existed before
+    # this column was added, and every row `add()` creates without an explicit
+    # `scopes=`, is None here. An explicit (even empty) frozenset means a P2
+    # consent flow has actually narrowed/widened this device's grant.
+    scopes: frozenset[str] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -69,6 +76,26 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_scopes(raw: str | None) -> frozenset[str] | None:
+    """Column value -> `Device.scopes`. NULL (`raw is None`) => None ("derive
+    from role" -- every pre-Wavr-Pass row and every default `add()` call reads
+    back this way). A non-NULL value (even `""`) is an EXPLICIT grant -- a
+    space-delimited scope list; `"".split()` correctly yields `[]` -> an
+    explicit empty frozenset (deny-all), distinct from NULL."""
+    if raw is None:
+        return None
+    return frozenset(raw.split())
+
+
+def _serialize_scopes(scopes: frozenset[str] | None) -> str | None:
+    """`Device.scopes` -> column value. None => NULL (unset). Sorted + space-
+    joined for a stable, human-readable value (helps eyeballing the db file
+    directly; verify()/list()/get() never rely on ordering)."""
+    if scopes is None:
+        return None
+    return " ".join(sorted(scopes))
+
+
 class DeviceStore:
     """SQLite-backed device/token store. Shares the db file with Storage but owns
     its own `devices` table. Tokens are stored hashed; `verify` is the only way a
@@ -81,11 +108,28 @@ class DeviceStore:
         self._now = now_fn
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._migrate_scopes_column()
 
-    def add(self, name: str, role: str) -> tuple[str, str]:
+    def _migrate_scopes_column(self) -> None:
+        """Wavr Pass (Phase 1), additive: add the nullable `scopes` column to an
+        existing `devices` table that predates it. PRAGMA-guarded so this is a
+        no-op (never a duplicate-column error) on every init after the first --
+        safe to call once per __init__, on a brand-new db (freshly created by
+        the CREATE TABLE above, column still absent) or a years-old one."""
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(devices)")}
+        if "scopes" not in cols:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN scopes TEXT")
+            self._conn.commit()
+
+    def add(self, name: str, role: str, scopes: frozenset[str] | None = None) -> tuple[str, str]:
         """Create a device and return (device_id, token). The token is generated
         here, stored hashed, and returned exactly once — the caller must hand it to
-        the device now; it can never be recovered later."""
+        the device now; it can never be recovered later.
+
+        `scopes` defaults to None (NULL column -- "derive from role", auth.
+        effective_scopes) so every EXISTING caller of `add(name, role)` keeps its
+        current behaviour byte-for-byte; pass an explicit frozenset only for a
+        future consent-granted device (P2)."""
         if role not in VALID_ROLES:
             raise ValueError(f"invalid role: {role!r} (expected one of {sorted(VALID_ROLES)})")
         device_id = secrets.token_hex(16)          # 128-bit opaque id
@@ -95,8 +139,8 @@ class DeviceStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO devices (device_id, name, role, token_hash, created_ts,"
-                " last_seen_ts, revoked) VALUES (?, ?, ?, ?, ?, NULL, 0)",
-                (device_id, name, role, token_hash, ts),
+                " last_seen_ts, revoked, scopes) VALUES (?, ?, ?, ?, ?, NULL, 0, ?)",
+                (device_id, name, role, token_hash, ts, _serialize_scopes(scopes)),
             )
             self._conn.commit()
         return device_id, token
@@ -111,7 +155,7 @@ class DeviceStore:
         ts = self._now()
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, revoked FROM devices"
+                "SELECT device_id, name, role, created_ts, revoked, scopes FROM devices"
                 " WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()
@@ -125,6 +169,7 @@ class DeviceStore:
         return Device(
             device_id=row["device_id"], name=row["name"], role=row["role"],
             created_ts=row["created_ts"], last_seen_ts=ts, revoked=False,
+            scopes=_parse_scopes(row["scopes"]),
         )
 
     def list(self) -> list[Device]:
@@ -132,7 +177,7 @@ class DeviceStore:
         includes token material."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes"
                 " FROM devices ORDER BY created_ts, device_id"
             ).fetchall()
         return [self._to_device(r) for r in rows]
@@ -140,7 +185,7 @@ class DeviceStore:
     def get(self, device_id: str) -> Device | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes"
                 " FROM devices WHERE device_id = ?",
                 (device_id,),
             ).fetchone()
@@ -177,7 +222,7 @@ class DeviceStore:
         return Device(
             device_id=r["device_id"], name=r["name"], role=r["role"],
             created_ts=r["created_ts"], last_seen_ts=r["last_seen_ts"],
-            revoked=bool(r["revoked"]),
+            revoked=bool(r["revoked"]), scopes=_parse_scopes(r["scopes"]),
         )
 
     def close(self) -> None:

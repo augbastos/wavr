@@ -1,0 +1,24 @@
+// Top-level build file. Versions pinned to match the toolchain already cached
+// on this machine (Gradle 8.14.3 wrapper, AGP 8.13.0, Kotlin 2.2.0) so the build
+// runs fully offline.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.13.0'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.0'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}
