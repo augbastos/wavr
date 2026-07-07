@@ -543,8 +543,14 @@
     }
     try{
       var p = Zeroconf.watch({ type: "_wavr._tcp.", domain: "local." }, function(res, err){
-        if(err || !res){ fail(); return; }                        // native error: callback(null, error)
-        if(res.action === "resolved" && res.service) onFound(res.service);
+        // Key the failure off `err` ONLY. ZeroConfPlugin.watch() fires a priming
+        // `call.setKeepAlive(true); call.resolve()` with NO data right after scheduling the browse
+        // (ZeroConfPlugin.java:126-127) -> the bridge delivers callback(undefined) (res=undefined,
+        // err=undefined) on every HEALTHY start. A real native reject always carries a truthy error
+        // object (callback(null, error)); the priming resolve never does. So `err` alone is the
+        // failure signal -- a `!res` clause here would false-fail every normal session.
+        if(err){ fail(); return; }                                // native reject -> callback(null, error)
+        if(res && res.action === "resolved" && res.service) onFound(res.service);
       });
       if(p && typeof p.catch === "function") p.catch(function(){ fail(); });
     }catch(_){ fail(); }
