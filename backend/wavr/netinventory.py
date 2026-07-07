@@ -208,7 +208,7 @@ async def _arp_output() -> str:
         async def ping(addr: str) -> None:
             async with sem:
                 with contextlib.suppress(Exception):
-                    await network._run("ping", "-n", "1", "-w", "200", addr)
+                    await network._run(*network.ping_argv(addr, 200))
 
         await asyncio.gather(*(ping(str(h)) for h in net.hosts()))
     return await network._run("arp", "-a")
