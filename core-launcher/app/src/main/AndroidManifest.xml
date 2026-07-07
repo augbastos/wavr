@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- WebView navigation requires INTERNET even for loopback. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- System status indicators surfaced to the panel via window.WavrNative. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- LAN service advertisement (mDNS / DNS-SD via NsdManager) so Wavr Mobile
+         companions can auto-discover this Core as _wavr._tcp on port 8000. Some
+         devices only deliver/announce multicast mDNS while a WifiManager
+         MulticastLock is held; acquiring that lock needs this permission. No
+         data leaves the LAN — only the service name + tiny TXT (v/role/path). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Bluetooth on/off read. BLUETOOTH_CONNECT (API 31+) is declared but NOT
+         requested at runtime: reading adapter state does not require it, and a
+         kiosk simply reports bt:false rather than prompting. Legacy BLUETOOTH
+         covers API 26-30. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Biometric unlock. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!-- On-device camera as a local MJPEG source (loopback only). Requested at
+         runtime the first time WavrNative.setCamera(true) is called; the stream
+         defaults OFF and the camera device is closed until then. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- A camera is not required to run the kiosk (feature is opt-in). -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WavrCore"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleInstance"
+            android:screenOrientation="landscape"
+            android:stateNotNeeded="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode|density|navigation"
+            android:theme="@style/Theme.WavrCore">
+
+            <!-- Registered as a HOME launcher so the device can boot straight into it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

@@ -292,9 +292,18 @@ def test_status_shape_and_no_secrets():
             # A5.1 hardening posture (bool-only, never the secret): local-API token
             # required + F6 health CSRF gate.
             "api_token", "health_gate",
+            # Connectors & Services: count of ACTIVE connectors (int, not a flag) --
+            # a non-egress header badge; per-connector state lives on /api/connectors.
+            "connectors_active",
+            # ADR-0008 Slice 1: in-app READ-ONLY MCP-over-HTTP inbound listener (bool;
+            # true only when wired + enabled). Default install -> False.
+            "mcp_http",
         }
         assert set(body["features"]) == expected_features
-        assert all(isinstance(v, bool) for v in body["features"].values())
+        # Every feature is a bool flag EXCEPT connectors_active, an int count.
+        assert all(isinstance(v, bool) for k, v in body["features"].items()
+                   if k != "connectors_active")
+        assert isinstance(body["features"]["connectors_active"], int)
 
         assert set(body["house"]) == {"floors", "rooms"}
         assert body["house"]["floors"] >= 1
@@ -340,6 +349,10 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "blocking": False,
             # A5.1 hardening: no local-API token by default; F6 health CSRF gate always on.
             "api_token": False, "health_gate": True,
+            # Connectors & Services: nothing active on a default install (DEFAULT-OFF).
+            "connectors_active": 0,
+            # ADR-0008 Slice 1: MCP-over-HTTP listener off by default.
+            "mcp_http": False,
         }
 
 

@@ -239,12 +239,44 @@ def yolo_detect(frame, conf_threshold: float = 0.0) -> Detection:
     return Detection(count=len(persons), confidence=max(persons) if persons else 0.0)
 
 
-def yolo_pose_detect(frame, confidence: float = 0.0) -> list[Target]:
-    """Posture-only targets: no homography yet, so x/y stay None — only
-    `posture` (derived from COCO-17 keypoints via `classify_posture`) and the
-    box confidence are meaningful here."""
+def feet_point(xyxy) -> tuple[float, float]:
+    """Ground-contact pixel = bottom-centre of a person bbox (x1, y1, x2, y2): the point
+    a localizer projects to the floor. Pure pixel arithmetic on a DETECTION coordinate --
+    it never reads or keeps frame contents (ADR-0002)."""
+    x1, _y1, x2, y2 = (float(v) for v in xyxy)
+    return ((x1 + x2) / 2.0, y2)
+
+
+def yolo_pose_detect(frame, confidence: float = 0.0, localize=None,
+                     on_feet=None) -> list[Target]:
+    """Per-person targets from YOLO-pose. `posture` derives from COCO-17 keypoints via
+    `classify_posture`.
+
+    When a `localize` callable is supplied -- ``(feet_px, (img_w, img_h)) ->
+    (x, y, conf) | None`` in ROOM-LOCAL metres -- the person's FEET pixel (bottom-centre
+    of the box) is projected to a floor (x, y) and that POSITION-quality confidence rides
+    the Target. Without it (no calibration), x/y stay None so the camera stays
+    room-centred (honest fallback).
+
+    When an `on_feet` callable is supplied -- ``(feet_px, (img_w, img_h), conf) ->
+    None`` -- the HIGHEST-confidence person's raw FEET PIXEL is handed to it once per
+    frame. This is the walk-to-calibrate sampling seam: the wizard pairs that pixel with
+    the known floor spot the person is standing on. ADR-0002: `on_feet` receives ONLY a
+    pixel COORDINATE + the image DIMENSIONS + a confidence scalar -- never a frame/crop.
+
+    The frame is read ONLY for its pixel size (`frame.shape`); it is never stored
+    (ADR-0002)."""
     results = _pose_model()(frame)
+    img_size = None
+    if localize is not None or on_feet is not None:
+        try:
+            h, w = frame.shape[:2]
+            img_size = (float(w), float(h))
+        except Exception:
+            img_size = None       # unknown frame size -> skip positioning, keep posture
+    want_feet = img_size is not None and (localize is not None or on_feet is not None)
     targets: list[Target] = []
+    best_feet = None              # (feet_px, conf) of the highest-confidence person
     for r in results:
         boxes = getattr(r, "boxes", None)
         kpts = getattr(r, "keypoints", None)
@@ -254,9 +286,34 @@ def yolo_pose_detect(frame, confidence: float = 0.0) -> list[Target]:
             if int(cls) != 0 or float(conf) < confidence:  # COCO class 0 = person
                 continue
             kps = [(float(x), float(y)) for x, y in kpts.xy[i]]
+            tx = ty = None
+            tconf = float(conf)                            # detection conf when unpositioned
+            feet = None
+            if want_feet:
+                try:
+                    feet = feet_point(boxes.xyxy[i])
+                except Exception:
+                    feet = None
+            if localize is not None and feet is not None:
+                try:
+                    loc = localize(feet, img_size)
+                except Exception:
+                    loc = None
+                if loc is not None:
+                    tx, ty, tconf = float(loc[0]), float(loc[1]), float(loc[2])
+            if on_feet is not None and feet is not None and (
+                    best_feet is None or float(conf) > best_feet[1]):
+                best_feet = (feet, float(conf))
             targets.append(Target(
-                id=i + 1, x=None, y=None,
+                id=i + 1, x=tx, y=ty,
                 posture=classify_posture(kps),
-                confidence=float(conf),
+                confidence=tconf,
             ))
+    if on_feet is not None and best_feet is not None:
+        # Coordinate + dims + confidence only -- no frame (ADR-0002). Tolerant: a broken
+        # sink never breaks the detection loop (same rule as the other injected hooks).
+        try:
+            on_feet(best_feet[0], img_size, best_feet[1])
+        except Exception:
+            logging.warning("yolo_pose_detect on_feet sink failed", exc_info=True)
     return targets

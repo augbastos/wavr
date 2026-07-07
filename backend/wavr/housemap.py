@@ -260,6 +260,21 @@ def room_at(house: dict, level: int, x: float, y: float) -> str | None:
     return None
 
 
+def room_polygon(house: dict, name: str, level: int | None = None) -> list | None:
+    """Return a room's polygon (list of [x, y] in metres) by name, or None if no room
+    with that name has a usable (>=3 vertex) polygon. Searches every floor in order
+    (or only `level` when given); deterministic first-match. Used by the camera
+    localizer to convert a projected FLOOR point to that room's local frame."""
+    for f in house.get("floors", []):
+        if level is not None and f.get("level") != level:
+            continue
+        for r in f.get("rooms", []):
+            if r.get("name") == name:
+                poly = r.get("polygon") or []
+                return poly if len(poly) >= 3 else None
+    return None
+
+
 def _unique_id(prefix: str, taken: set) -> str:
     """Smallest `<prefix><n>` (n>=1) not already in `taken`. Deterministic + collision-
     free -- used for a generated floor/room id so it never clashes with a hand-edited one."""

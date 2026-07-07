@@ -288,6 +288,10 @@
   .radar-roomlabel{fill:var(--dim);font-size:.24px;text-transform:capitalize;}
   .radar-dot{fill:var(--accent);}
   .radar-target{transition:transform .25s cubic-bezier(.22,1,.36,1);}
+  /* Estimated position (monocular prior / low position-confidence): softer fill + a haze
+     ring so an APPROXIMATE spot never reads as a pinpoint. A calibrated (homography) dot
+     stays crisp. Static styling only — no new motion (calm-by-default). */
+  .radar-target.est .radar-dot{opacity:.55;stroke:var(--accent);stroke-opacity:.3;stroke-width:.07;}
   .radar-posture{fill:var(--dim);font-size:.28px;text-anchor:middle;}
   .room-poly{fill:rgba(61,181,74,.05);stroke:var(--line-strong);stroke-width:.02;
              vector-effect:non-scaling-stroke;pointer-events:none;}
@@ -469,6 +473,49 @@
   .ptz-presets{background:var(--elevated);color:var(--text);border:1px solid var(--line);
     border-radius:8px;padding:8px 11px;font-size:.8rem;min-height:44px;max-width:180px;cursor:pointer;}
   .ptz-presets:hover,.ptz-presets:focus-visible{border-color:var(--accent);outline:none;}
+
+  /* Camera person-localization calibration (spec A). Per-camera panel: a monocular MOUNT
+     prior (immediate approximate estimate) + an accurate 4-POINT homography. Marking uses a
+     TRANSIENT still the operator supplies locally — held in the browser, never uploaded,
+     never persisted (ADR-0002). Numbers use tabular-nums. */
+  .calib-wrap{border:1px solid var(--line);border-radius:10px;padding:12px;margin:2px 0 12px;
+    background:var(--surface);display:flex;flex-direction:column;gap:14px;}
+  .calib-status{font-size:.82rem;color:var(--dim);}
+  .calib-status b{color:var(--text);}
+  .calib-sec{border-top:1px solid var(--line);padding-top:12px;}
+  .calib-sec:first-of-type{border-top:0;padding-top:0;}
+  .calib-sec h4{margin:0 0 4px;font-size:.92rem;}
+  .calib-sec .hint{margin:0 0 8px;font-size:.78rem;color:var(--dim);}
+  .calib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;}
+  .calib-grid label{display:flex;flex-direction:column;gap:3px;font-size:.72rem;color:var(--dim);}
+  .calib-grid input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:9px;font:inherit;font-variant-numeric:tabular-nums;min-height:40px;}
+  .calib-grid input:focus-visible{border-color:var(--accent);outline:none;}
+  .calib-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;}
+  .calib-btns button{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:9px 13px;font:inherit;cursor:pointer;min-height:40px;}
+  .calib-btns button:hover,.calib-btns button:focus-visible{border-color:var(--accent);outline:none;}
+  .calib-btns button.danger:hover,.calib-btns button.danger:focus-visible{border-color:var(--danger);color:var(--danger);}
+  .calib-btns button[disabled]{opacity:.45;cursor:default;border-color:var(--line);color:var(--dim);}
+  .calib-stage{position:relative;width:100%;max-width:440px;aspect-ratio:16/9;margin-top:8px;
+    border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:crosshair;touch-action:none;
+    background:linear-gradient(var(--line) 1px,transparent 1px) 0 0/100% 12.5%,
+      linear-gradient(90deg,var(--line) 1px,transparent 1px) 0 0/12.5% 100%,var(--elevated);}
+  .calib-stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;}
+  .calib-mark{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;
+    border:2px solid var(--accent);background:rgba(61,181,74,.35);pointer-events:none;
+    font-size:9px;line-height:13px;text-align:center;color:var(--text);font-variant-numeric:tabular-nums;}
+  .calib-pts{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+  .calib-pt{display:flex;gap:6px;align-items:center;font-size:.74rem;color:var(--dim);
+    font-variant-numeric:tabular-nums;}
+  .calib-pt .idx{width:1.4em;color:var(--text);}
+  .calib-pt input{width:66px;background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:6px;padding:7px;font:inherit;font-variant-numeric:tabular-nums;}
+  .calib-pt input:focus-visible{border-color:var(--accent);outline:none;}
+  .calib-pt .rmpt{width:32px;min-height:32px;background:none;border:0;color:var(--dim);cursor:pointer;font-size:1.1rem;}
+  .calib-pt .rmpt:hover{color:var(--danger);}
+  .calib-fb{font-size:.8rem;min-height:1.1em;margin-top:8px;}
+  .calib-fb.ok{color:var(--accent);}.calib-fb.err{color:var(--danger);}
 
   /* ---------------- Stage 2: Devices — sub-tabs, catalog, explainer, setup ladder ---------------- */
   .dsub-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -684,6 +731,48 @@
   .pair-dev-role{background:var(--elevated);color:var(--text);border:1px solid var(--line);
                  border-radius:8px;padding:6px 8px;font-size:.75rem;cursor:pointer;}
 
+  /* ---------------- My devices — consent-first identity registry (gear) ---------------- */
+  .pair-role input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+                   border-radius:8px;padding:8px 11px;font-size:.82rem;min-width:0;max-width:200px;
+                   font-variant-numeric:tabular-nums;}
+  .id-bonded-box{border:1px solid var(--line);border-radius:8px;padding:11px 13px;
+                 margin:2px 0 6px;background:var(--elevated);max-width:52ch;}
+  .id-bonded-list{display:flex;flex-direction:column;}
+  .id-bonded-row{display:flex;justify-content:space-between;align-items:center;gap:10px;
+                 font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
+  .id-bonded-row:first-child{border-top:none;}
+  .id-bonded-row.dim{opacity:.55;}
+  .id-bonded-row label{display:flex;align-items:center;gap:10px;cursor:pointer;min-width:0;
+                       overflow-wrap:anywhere;}
+  .id-bonded-row input[type=checkbox]{flex-shrink:0;width:16px;height:16px;accent-color:var(--accent);}
+  .id-bonded-row .mac{color:var(--dim);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+                      font-size:.76rem;font-variant-numeric:tabular-nums;}
+  .id-bonded-tag{flex-shrink:0;font-size:.7rem;color:var(--dim);}
+
+  /* ---------------- Connectors & services — the single egress surface (gear) ----------------
+     project_wavr_connectors_vision: the ONLY screen that manages anything reaching outward;
+     everything OFF by default. One card per connector; labels/scope are server/registry data
+     rendered via textContent (never innerHTML). */
+  .conn-summary{margin:0 0 6px;font-size:.8rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .conn-list{display:flex;flex-direction:column;gap:10px;}
+  .conn-card{border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--elevated);
+             display:flex;flex-direction:column;gap:7px;max-width:60ch;}
+  .conn-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+  .conn-name{margin:0;font-size:.92rem;font-weight:600;color:var(--text);overflow-wrap:anywhere;}
+  .conn-dir{font-size:.64rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+            color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;
+            white-space:nowrap;flex-shrink:0;}
+  .conn-desc{margin:0;font-size:.82rem;color:var(--dim);line-height:1.5;}
+  .conn-scope{margin:0;font-size:.78rem;color:var(--dim);overflow-wrap:anywhere;}
+  .conn-scope b{color:var(--text);font-weight:600;}
+  .conn-scope.egress b{color:var(--warn);}
+  .conn-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:3px;}
+  .conn-state{font-size:.74rem;font-weight:600;color:var(--dim);font-variant-numeric:tabular-nums;
+              overflow-wrap:anywhere;}
+  .conn-state.active{color:var(--accent);}
+  .conn-state.revoked{color:var(--danger);}
+  .conn-state.setup{color:var(--warn);}
+
   /* ---------------- House editor (gear) ---------------- */
   .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .hed-tools .primary{border-color:var(--accent);color:var(--accent);}
@@ -827,6 +916,15 @@
   .precision-posture::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;
                  background:var(--dim);margin-top:6px;}
   .precision-posture.t-presence::before{background:var(--accent);}
+  /* Compact by default (2026-07-06): shrink the sensing-mode meter so the room cards
+     sit closer / fit on screen together — less padding, slimmer segments, tighter copy. */
+  .precision-tile{padding:12px 14px;}
+  .precision-tile .tile-head{margin-bottom:8px;}
+  .precision-tile .tile-head h2{font-size:1rem;}
+  .precision-seg{max-width:360px;}
+  .precision-seg .seg-btn{padding:6px 8px;font-size:.82rem;}
+  .precision-posture{margin-top:8px;font-size:.8rem;line-height:1.35;}
+  .precision-actions{margin-top:8px;}
   .precision-posture.t-precise::before{background:var(--warn);}
   .precision-posture b{color:var(--text);font-weight:600;}
   .precision-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px;}
@@ -908,6 +1006,14 @@
   .diag-row .dv.ok{color:var(--accent);}
   .diag-row .dv.warn{color:var(--warn);}
   .diag-row .dv.danger{color:var(--danger);}
+  /* System tab: Core Panel lock admin (sets/changes the ambient-touchscreen PIN; see the
+     #corePanel lock module further down for what actually gates the wake with it). Same
+     input/feedback look as the rest of this section, own class since it isn't camera-shaped. */
+  .corelock-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .corelock-form input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
+                       border-radius:8px;padding:8px 11px;font-size:.82rem;width:190px;
+                       font-variant-numeric:tabular-nums;letter-spacing:.15em;}
+  .corelock-form input::placeholder{color:var(--dim);opacity:1;letter-spacing:normal;}
   /* gear → Privacy & security: the 4 invariants (trust screen, ALL modes) */
   .inv-list{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;}
   .inv-list li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;
@@ -1021,6 +1127,130 @@
        preventing iOS Safari zoom-on-focus and keeping the ~44px touch minimum. */
     .setup-form input,.onvif-connect input,.det-scan-creds input{font-size:16px;}
   }
+
+  /* ============================================================================
+     Wavr Core Panel (?core / window.WAVR_CORE): ambient home-status face.
+     Additive and self-contained: every rule below is scoped under #corePanel,
+     so it has zero visual effect in the three existing modes (live/companion/
+     simulated), since the element stays native [hidden] there and this block
+     never matches anything on screen. Deliberate palette discipline, distinct
+     from the rest of this file's louder chrome: the hero stays neutral
+     (--text); --accent (green) marks ONLY a confirmed-occupied room's dot
+     (reserved-green rule, §3); --warn marks a degraded Core/Rede signal or a
+     pending alert, but never --danger (a soft, usually self-healing state,
+     not a hard failure). One fade on wake/sleep, no perpetual animation: the
+     single allowed heartbeat lives on the dashboard underneath and is simply
+     covered while ambient, never duplicated (§2.1, calm-by-default).
+     See docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md.
+     ============================================================================ */
+  #corePanel{position:fixed;inset:0;z-index:900;display:flex;flex-direction:column;
+             justify-content:space-between;gap:3vh;padding:4vh 5vw;
+             background:radial-gradient(ellipse at 50% 38%,var(--surface) 0%,var(--bg) 72%);
+             color:var(--text);opacity:1;transition:opacity .6s ease;
+             font-variant-numeric:tabular-nums;}
+  #corePanel.core-dissolved{opacity:0;pointer-events:none;}
+  .core-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}
+  .core-time{margin:0;font-size:clamp(22px,3.4vw,36px);font-weight:600;letter-spacing:.01em;
+             font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .core-date{margin:3px 0 0;font-size:clamp(12px,1.5vw,16px);color:var(--dim);
+             text-transform:capitalize;}
+  .core-health{display:flex;gap:14px;}
+  .core-health-item{font-size:clamp(12px,1.6vw,17px);color:var(--dim);font-weight:500;}
+  .core-health-item.core-health-warn{color:var(--warn);}
+  .core-hero{flex:1;display:flex;align-items:center;justify-content:center;position:relative;
+             min-height:0;}
+  /* Signature ambient wave field (replaces the old big-text "CASA VAZIA"/"N EM CASA" hero,
+     see docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md): a canvas filling the
+     hero area, drawn by the gated Core Panel script below as layered green sine ribbons.
+     Decorative only (aria-hidden) — #coreHeroSr carries the equivalent text for screen
+     readers, same information the old text hero announced, just no longer painted. */
+  .core-wave{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  .core-bottom{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
+               flex-wrap:wrap;}
+  .core-rooms{display:flex;gap:18px;flex-wrap:wrap;}
+  .core-room-chip{display:inline-flex;align-items:center;gap:6px;
+                  font-size:clamp(14px,2vw,20px);color:var(--text);}
+  .core-dot{color:var(--accent);font-size:.6em;}
+  .core-alerts{font-size:clamp(13px,1.8vw,18px);color:var(--warn);font-weight:600;}
+
+  /* ---------------- Feature 1: wifi / bluetooth / battery (native-bridge only) ----------------
+     Native [hidden] whenever window.WavrNative is absent (a plain browser/dev tab never shows
+     this — no errors, no placeholder, see the gated poll below). Deliberately monochrome: even
+     "connected"/"charging" states stay --text/--dim, never --accent (reserved for presence +
+     primary actions, §palette discipline above). */
+  .core-sys{display:flex;align-items:center;gap:12px;font-size:clamp(12px,1.6vw,17px);color:var(--dim);}
+  .core-wifi{display:inline-flex;align-items:flex-end;gap:2px;height:.85em;}
+  .core-wifi i{display:block;width:.16em;border-radius:1px;background:var(--dim);opacity:.3;}
+  .core-wifi i:nth-child(1){height:30%;}
+  .core-wifi i:nth-child(2){height:55%;}
+  .core-wifi i:nth-child(3){height:78%;}
+  .core-wifi i:nth-child(4){height:100%;}
+  .core-wifi[data-level="1"] i:nth-child(-n+1),
+  .core-wifi[data-level="2"] i:nth-child(-n+2),
+  .core-wifi[data-level="3"] i:nth-child(-n+3),
+  .core-wifi[data-level="4"] i:nth-child(-n+4){opacity:.85;background:var(--text);}
+  .core-bt-icon{width:1em;height:1em;color:var(--dim);}
+  .core-batt{display:inline-flex;align-items:center;gap:.2em;}
+  .core-batt-body{position:relative;width:1.7em;height:.9em;border:.11em solid var(--dim);
+                  border-radius:.2em;box-sizing:border-box;padding:.1em;}
+  .core-batt-body::after{content:"";position:absolute;top:50%;right:-.28em;
+                         transform:translateY(-50%);width:.16em;height:.4em;
+                         background:var(--dim);border-radius:0 .1em .1em 0;}
+  .core-batt-fill{display:block;height:100%;background:var(--dim);border-radius:.08em;
+                  transition:width .4s ease;}
+  .core-batt-low .core-batt-fill{background:var(--warn);}
+  .core-batt-low .core-batt-body{border-color:var(--warn);}
+  .core-batt-low .core-batt-body::after{background:var(--warn);}
+  .core-batt-bolt{width:.85em;height:.85em;color:var(--text);margin-left:.05em;}
+
+  /* ---------------- Feature 2: glance-free lock (wake gate) ----------------
+     Layered OVER the ambient face, never replacing it — wave/clock/rooms/coreSys keep running
+     dimmed behind the scrim, matching "glance-free" (you can still see status; you just can't
+     reach the dashboard without unlocking). Only ever shown when wake() finds a lock actually
+     configured (native biometric or backend PIN); otherwise stays [hidden] and unused, so the
+     no-lock path is the byte-for-byte instant reveal (see the JS gate for the one honest caveat:
+     a not-yet-warm PIN-status cache on a touch within ~1 tick of page load). --danger never used
+     here either, same "soft, self-healing state" discipline as Core/Rede health above — a wrong
+     PIN uses --warn. */
+  .core-lock{position:absolute;inset:0;z-index:10;display:flex;align-items:center;
+             justify-content:center;background:rgba(11,14,18,.62);
+             backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+             animation:coreLockIn .35s ease;}
+  @keyframes coreLockIn{from{opacity:0} to{opacity:1}}
+  /* Landscape-first: the Core lives on its side, so the lock card + keypad are sized by
+     viewport HEIGHT (vh/vmin) — on a short landscape screen the whole pad always fits
+     without clipping the bottom row. */
+  .core-lock-card{width:auto;max-width:92vw;max-height:94vh;padding:clamp(10px,2.4vh,22px)
+                  clamp(16px,3vh,30px);border-radius:20px;
+                  background:var(--elevated);border:1px solid var(--line);
+                  box-shadow:0 20px 60px rgba(0,0,0,.4);text-align:center;}
+  .core-lock-title{margin:0 0 clamp(8px,1.6vh,16px);font-size:clamp(14px,2.4vh,18px);font-weight:600;color:var(--text);}
+  .core-lock-dots{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-bottom:clamp(6px,1.2vh,10px);min-height:12px;}
+  .core-lock-dot{width:10px;height:10px;border-radius:50%;border:1.4px solid var(--dim);
+                 box-sizing:border-box;transition:background .15s ease,border-color .15s ease,transform .15s ease;}
+  .core-lock-dot-filled{background:var(--text);border-color:var(--text);transform:scale(1.08);}
+  .core-lock-err{min-height:1.2em;margin:0 0 clamp(6px,1.2vh,10px);font-size:clamp(12px,1.8vh,14px);color:var(--warn);font-weight:600;}
+  .core-lock-keys{display:grid;grid-template-columns:repeat(3,auto);justify-content:center;gap:clamp(7px,1.5vh,13px);}
+  .core-lock-key{width:clamp(44px,13.5vh,86px);height:clamp(44px,13.5vh,86px);
+                 border-radius:50%;border:1px solid var(--line);
+                 background:var(--surface);color:var(--text);font-size:clamp(17px,3.4vh,24px);
+                 font-weight:500;font-variant-numeric:tabular-nums;
+                 display:flex;align-items:center;justify-content:center;
+                 transition:background .12s ease,transform .12s ease;}
+  .core-lock-key:active{transform:scale(.92);background:var(--line);}
+  .core-lock-key-fn{color:var(--dim);font-size:clamp(15px,2vw,19px);background:transparent;border-color:transparent;}
+  .core-lock-key-ok{background:var(--accent);color:#08130a;border-color:var(--accent);}
+  .core-lock-key-ok:disabled{background:transparent;color:var(--dim);border-color:var(--line);}
+  .core-lock-key-ok svg{width:20px;height:20px;}
+  .core-lock-shake{animation:coreLockShake .38s ease;}
+  @keyframes coreLockShake{
+    10%,90%{transform:translateX(-1px)} 20%,80%{transform:translateX(3px)}
+    30%,50%,70%{transform:translateX(-6px)} 40%,60%{transform:translateX(6px)}
+  }
+  .core-lock-biom{display:flex;flex-direction:column;align-items:center;gap:14px;padding:8px 0;}
+  .core-lock-biom-icon{width:40px;height:40px;color:var(--text);}
+  .core-lock-biom-txt{margin:0;font-size:15px;color:var(--dim);}
+
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
     .bar>i,.ctl,.rm,.radar-target,.radar-zone,.pill,.house,.hero-line1,.radar-room,
@@ -1030,6 +1260,10 @@
     .live-badge i{animation:none;}   /* heartbeat dot goes static, never removed */
     .scan-spin{animation:none;border-top-color:var(--line-strong);}   /* scan busy: static ring, no spin */
     .tip-pop{transition:none;}       /* v2 tooltips: no fade — popover just appears */
+    #corePanel{transition:none;}     /* Core Panel: wake/sleep jump-cuts instead of fading */
+    .core-batt-fill{transition:none;}
+    .core-lock,.core-lock-shake{animation:none;}
+    .core-lock-dot,.core-lock-key{transition:none;}
   }
 </style>
 </head>
@@ -1081,6 +1315,9 @@
   <symbol id="ic-devices" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 16.5H4.7A1.7 1.7 0 0 1 3 14.8V6.7A1.7 1.7 0 0 1 4.7 5h14.6A1.7 1.7 0 0 1 21 6.7v.8"/><path d="M8.5 16.5V20M6 20h5"/><rect x="14" y="10" width="7" height="11" rx="1.8"/><circle cx="17.5" cy="18.7" r=".8" fill="currentColor" stroke="none"/></symbol>
   <!-- v2 tooltips: Help Mode toggle (circle + question mark) -->
   <symbol id="ic-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.3a2.65 2.65 0 0 1 5.2.7c0 1.7-2.6 2.1-2.6 3.6"/><circle cx="12" cy="16.9" r=".55" fill="currentColor" stroke="none"/></symbol>
+  <!-- Core Panel: charging bolt (the battery body/fill itself is a CSS box, not SVG, so its
+       level tracks the native-bridge payload directly; this is only the charging glyph) -->
+  <symbol id="ic-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 5 13.5h5.5L10 21l8-10.5h-5.5Z"/></symbol>
 </svg>
 
 <div class="app" id="app">
@@ -1191,8 +1428,8 @@
     <!-- Companion pairing screen (private-LAN viewer, no token yet). Hidden in central + demo. -->
     <div id="companionPair" class="cpair" hidden>
       <form id="cpairForm" class="cpair-card" aria-labelledby="cpair-h">
-        <h2 id="cpair-h">Pair with the hub</h2>
-        <p class="cpair-sub">Enter the 8-digit code shown on the hub's panel to view this home on this device.</p>
+        <h2 id="cpair-h">Pair with the Core</h2>
+        <p class="cpair-sub">Enter the 8-digit code shown on the Core's panel to view this home on this device.</p>
         <input id="cpairCode" class="cpair-input" inputmode="numeric" autocomplete="one-time-code"
                pattern="[0-9]*" maxlength="8" placeholder="00000000" aria-label="pairing code" autofocus>
         <button type="submit" class="ctl cpair-btn" disabled>Pair</button>
@@ -1621,6 +1858,23 @@
           <div class="tile-head"><h2 id="diag-h">Diagnostics</h2><span class="hint">connection · sensors · this session</span></div>
           <div id="diagList" class="diag-list"></div>
         </div>
+        <!-- Core Panel lock (admin, live/loopback only): sets/changes the PIN that gates the
+             ambient touchscreen build's (?core / window.WAVR_CORE) wake-to-dashboard step. The
+             touchscreen itself only ever verifies against this endpoint — it never sets it. -->
+        <div id="coreLockPanel" class="tile" hidden aria-labelledby="corelock-h">
+          <div class="tile-head"><h2 id="corelock-h">Core Panel lock</h2><span class="hint">PIN for the ambient touchscreen</span></div>
+          <p id="coreLockAdminStatus" class="panel-note">checking…</p>
+          <form id="coreLockAdminForm" class="corelock-form" aria-labelledby="corelock-h">
+            <input id="coreLockAdminPin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}"
+                   minlength="4" maxlength="12" placeholder="new PIN (4–12 digits)" aria-label="new PIN" required>
+            <button type="submit" class="ctl small">Save</button>
+            <span id="coreLockAdminFb" class="action-fb" aria-live="polite"></span>
+          </form>
+          <div class="corelock-form" style="margin-top:12px">
+            <button id="coreCamBtn" type="button" class="ctl small">Toggle Core camera</button>
+            <span id="coreCamStatus" class="action-fb" aria-live="polite">camera: unknown</span>
+          </div>
+        </div>
         <p class="panel-note" id="sisNote" hidden>Detailed system status is available on the hub's panel (local access).</p>
       </section>
     </main>
@@ -1701,6 +1955,71 @@
       <h4 class="pair-sub">Authorized devices</h4>
       <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
     </div>
+    <!-- My devices — consent-first identity registry (2026-07-06 ethics decision).
+         The registry holds ONLY devices the admin confirms: a Bluetooth device bonded to
+         this PC is a SUGGESTION (pre-checked, uncheck a housemate's); manual add is for
+         anything not bonded. Un-registering = the participation opt-out. Live/central only
+         (like the pairing tile) — hidden until GET /api/identity/devices answers 200. All
+         names/addresses are rendered via textContent (PII/untrusted) — NEVER innerHTML. -->
+    <div id="myDevices" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="mydev-h">My devices</h2></div>
+      <p class="pair-hint" style="margin:-2px 0 12px">Only devices you confirm are registered as
+        presence signals. Un-registering stops it being a signal and removes its name — your
+        privacy opt-out.</p>
+      <h4 class="pair-sub">Confirm your paired devices</h4>
+      <div class="controls-row" style="margin-bottom:8px">
+        <button type="button" id="idDetectBtn" class="ctl small">Detect my paired devices</button>
+        <label class="pair-role">Your name
+          <input type="text" id="idBondedName" maxlength="64" placeholder="e.g. augusto"
+                 aria-label="your name for these devices">
+        </label>
+        <span id="idDetectFb" class="action-fb" aria-live="polite"></span>
+      </div>
+      <div id="idBondedBox" class="id-bonded-box" hidden>
+        <div id="idBondedList" class="id-bonded-list" aria-live="polite"></div>
+        <div class="controls-row" style="margin-top:10px">
+          <button type="button" id="idBondedRegister" class="ctl small primary">Register checked</button>
+          <span class="pair-hint">Checked devices are the ones you confirm are yours.</span>
+        </div>
+      </div>
+      <h4 class="pair-sub">Add a device manually</h4>
+      <form id="idManualForm" class="pair-form" aria-labelledby="mydev-h">
+        <label class="pair-role">Address
+          <input type="text" name="address" placeholder="aa:bb:cc:dd:ee:ff"
+                 aria-label="device MAC address" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="pair-role">Name
+          <input type="text" name="label" maxlength="64" placeholder="e.g. augusto"
+                 aria-label="device owner name">
+        </label>
+        <label class="pair-role">Signal
+          <select name="source" aria-label="signal type">
+            <option value="ble">Bluetooth</option>
+            <option value="network">Network (Wi-Fi/LAN)</option>
+          </select>
+        </label>
+        <button type="submit" class="ctl small">Add device</button>
+        <span id="idManualFb" class="action-fb" aria-live="polite"></span>
+      </form>
+      <h4 class="pair-sub">Registered devices</h4>
+      <div id="idDevList" class="pair-dev-list" aria-live="polite"></div>
+    </div>
+    <!-- Connectors & services — the SINGLE outward-facing surface (project_wavr_connectors_vision).
+         Wavr is local and MUTE by default; this is the ONLY screen that manages anything reaching
+         OUTWARD, and everything is OFF by default. Live/central only: GET /api/connectors is
+         router require_central (a multidevice 'user' peer gets 403 and this panel stays hidden);
+         the enable toggle additionally carries require_local (X-Wavr-Local CSRF). Every label/scope
+         is server/registry data rendered via textContent — NEVER innerHTML. An empty registry =>
+         every built-in renders off/ready => nothing egresses (byte-identical to default). -->
+    <div id="connectors" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="conn-h">Connectors &amp; services</h2><span class="hint">the only place Wavr reaches outward</span></div>
+      <p class="pair-hint" style="margin:-2px 0 10px">This is the one screen where Wavr can reach the
+        outside world. Everything here is <b>off by default</b> — a connector runs only after you turn
+        it on, and turning it off revokes it immediately.
+        <span id="connFb" class="action-fb" aria-live="polite"></span></p>
+      <p id="connSummary" class="conn-summary" aria-live="polite"></p>
+      <div id="connList" class="conn-list" aria-live="polite"></div>
+    </div>
     <!-- Stage 3b (§2.6/§7#6/#10 + §9): Privacy & security — the brand's trust screen,
          visible in EVERY mode (demo included). Invariants are static truth; the kill-switch
          shortcut and the export act on live/loaded data where available. -->
@@ -1754,6 +2073,82 @@
     <span class="lockbadge"><svg aria-hidden="true"><use href="#ic-lock"/></svg>Nothing leaves home</span>
   </div>
   <div class="overlay-content" id="setupContent"></div>
+</div>
+
+<!-- ============ CORE PANEL (Phase 1 of "Wavr OS"): ?core / window.WAVR_CORE ambient
+     home-status face. Native [hidden] and completely inert in the three existing modes
+     (live/companion/simulated); only the gated script block near the end of <body>
+     ever unhides it. Shown by default in Core mode; dissolves on any touch/click/keydown
+     to reveal the dashboard beneath, returns after ~60s idle. Every value below is filled
+     in by JS from data the dashboard already consumes (RoomState via __wavrRS, /api/status
+     via __wavrStatus, the existing #alertList poll); no new WebSocket, no new endpoint.
+     See docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md. ============ -->
+<div id="corePanel" hidden role="group" aria-label="Wavr Core ambient status">
+  <div class="core-top">
+    <div>
+      <p id="coreClockTime" class="core-time">--:--</p>
+      <p id="coreClockDate" class="core-date"></p>
+    </div>
+    <div id="coreHealth" class="core-health" aria-live="polite">
+      <span id="coreHealthCore" class="core-health-item">Core …</span>
+      <span id="coreHealthNet" class="core-health-item">Rede …</span>
+      <!-- Feature 1 (wifi/bluetooth/battery): native-bridge only (window.WavrNative). Stays
+           [hidden] in a plain browser/dev tab — no errors, no placeholder; aria-label is set
+           dynamically from the parsed status so screen readers get the same summary sighted
+           users glance at. See the gated poll in the script block near the end of <body>. -->
+      <span id="coreSys" class="core-sys" hidden>
+        <span id="coreSysWifi" class="core-wifi" hidden aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <svg id="coreSysBt" class="core-bt-icon" hidden aria-hidden="true"><use href="#ic-bt"/></svg>
+        <span id="coreSysBatt" class="core-batt" hidden aria-hidden="true">
+          <span class="core-batt-body"><i id="coreSysBattFill" class="core-batt-fill"></i></span>
+          <svg id="coreSysBattBolt" class="core-batt-bolt" hidden><use href="#ic-bolt"/></svg>
+        </span>
+      </span>
+    </div>
+  </div>
+  <div class="core-hero">
+    <canvas id="coreWave" class="core-wave" aria-hidden="true"></canvas>
+    <span id="coreHeroSr" class="sr-only" aria-live="polite">A carregar…</span>
+  </div>
+  <div class="core-bottom">
+    <div id="coreRooms" class="core-rooms"></div>
+    <span id="coreAlerts" class="core-alerts" hidden></span>
+  </div>
+  <!-- Feature 2 (glance-free lock): overlays the ambient face above (never replaces it) once
+       wake() finds a lock configured — window.WavrNative.hasBiometric() or the backend's
+       GET /api/core/pin/status -> {pin_set:true}. Stays [hidden] otherwise: the no-lock path
+       is today's instant touch-to-dashboard reveal. See the lock module in the gated script
+       block near the end of <body>. -->
+  <div id="coreLock" class="core-lock" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Wavr Core bloqueado">
+    <div class="core-lock-card">
+      <div id="coreLockBiom" class="core-lock-biom" hidden>
+        <svg class="core-lock-biom-icon" aria-hidden="true"><use href="#ic-shield"/></svg>
+        <p id="coreLockBiomTxt" class="core-lock-biom-txt" aria-live="polite">Autenticando…</p>
+        <button id="coreLockBiomRetry" type="button" class="ctl small" hidden>Tentar novamente</button>
+      </div>
+      <div id="coreLockPad" class="core-lock-pin" hidden>
+        <p id="coreLockTitle" class="core-lock-title">Desbloquear Wavr Core</p>
+        <div id="coreLockDots" class="core-lock-dots" aria-hidden="true"></div>
+        <p id="coreLockErr" class="core-lock-err" role="alert" aria-live="assertive"></p>
+        <div class="core-lock-keys">
+          <button type="button" class="core-lock-key" data-k="1">1</button>
+          <button type="button" class="core-lock-key" data-k="2">2</button>
+          <button type="button" class="core-lock-key" data-k="3">3</button>
+          <button type="button" class="core-lock-key" data-k="4">4</button>
+          <button type="button" class="core-lock-key" data-k="5">5</button>
+          <button type="button" class="core-lock-key" data-k="6">6</button>
+          <button type="button" class="core-lock-key" data-k="7">7</button>
+          <button type="button" class="core-lock-key" data-k="8">8</button>
+          <button type="button" class="core-lock-key" data-k="9">9</button>
+          <button type="button" id="coreLockBack" class="core-lock-key core-lock-key-fn" aria-label="apagar">⌫</button>
+          <button type="button" class="core-lock-key" data-k="0">0</button>
+          <button type="button" id="coreLockOk" class="core-lock-key core-lock-key-fn core-lock-key-ok" aria-label="confirmar" disabled>
+            <svg aria-hidden="true"><use href="#ic-check"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- v2 tooltips: THE one shared context-help popover (positioned by initTooltips; text is
@@ -2245,6 +2640,9 @@ async function renderCameras(){
   const camFb = document.getElementById("camFb");
   const post = (url,body)=> fetch(location.origin+url,{method:"POST",
     headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+  const putJson = (url,body)=> fetch(location.origin+url,{method:"PUT",
+    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+  const del = (url)=> fetch(location.origin+url,{method:"DELETE", headers:{"X-Wavr-Local":"1"}});
   // ---- PTZ d-pad (A4.3): ONVIF pan/tilt/zoom over the SAME require-local channel. Built per
   // camera only when GET /api/ptz/{name}/capabilities returns {ptz:true}. Hold-to-move with a
   // ~1s keepalive so the server's 2s auto-stop only fires when the client actually goes silent.
@@ -2253,6 +2651,8 @@ async function renderCameras(){
   const PTZ_KEYVEC = {ArrowUp:{pan:0,tilt:1}, ArrowDown:{pan:0,tilt:-1},
                       ArrowLeft:{pan:-1,tilt:0}, ArrowRight:{pan:1,tilt:0}};
   let ptzCleanups = [];   // stopMove()s of live pads; drained before refresh() rebuilds the list
+  let calibCleanups = []; // object-URL revokers of open calibration panels; drained on rebuild
+  const errText = async (r)=>{ try{ return r ? ((await r.json()).detail || "") : ""; }catch{ return ""; } };
   function buildPtzPad(name){
     const enc = encodeURIComponent(name);
     const wrap = document.createElement("div");
@@ -2337,8 +2737,324 @@ async function renderCameras(){
     wrap.appendChild(aux);
     return wrap;
   }
+  // ---- Spec A: per-camera person-localization calibration panel -------------------------
+  // Writes PUT /api/cameras/{name}/calibration (the endpoints the localization phase added).
+  // Two composable calibrations: a monocular MOUNT prior (immediate approximate estimate) and
+  // an accurate 4-POINT homography (solved SERVER-SIDE from image<->floor correspondences —
+  // the client never sends a matrix). Marking uses a TRANSIENT still the operator loads
+  // LOCALLY: an object URL held in the browser, revoked on clear/rebuild, NEVER uploaded or
+  // persisted (ADR-0002). All DOM via createElement + textContent (XSS-safe).
+  function buildCalibPanel(name){
+    const enc = encodeURIComponent(name);
+    const wrap = document.createElement("div");
+    wrap.className = "calib-wrap";
+    wrap.setAttribute("role","group");
+    wrap.setAttribute("aria-label", `Localization calibration for ${name}`);
+    const status = document.createElement("p"); status.className = "calib-status";
+    status.textContent = "Loading calibration…";
+    const fb = document.createElement("p"); fb.className = "calib-fb"; fb.setAttribute("role","status");
+    const setFb = (ok, msg)=>{ fb.className = "calib-fb " + (ok?"ok":"err"); fb.textContent = msg; };
+    wrap.appendChild(status);
+
+    // -- Section 1: monocular mount prior (approximate immediate estimate) --
+    const s1 = document.createElement("div"); s1.className = "calib-sec";
+    const h1 = document.createElement("h4"); h1.textContent = "Quick estimate (mount position)";
+    const p1 = document.createElement("p"); p1.className = "hint";
+    p1.textContent = "Approximate: drop the camera on the map and give its height and downward tilt. "
+      + "The person is placed on the floor right away as a hazy dot — an estimate, not exact.";
+    s1.appendChild(h1); s1.appendChild(p1);
+    const grid = document.createElement("div"); grid.className = "calib-grid";
+    const mountFields = [
+      {k:"pos_x",    label:"X on map (m)"},
+      {k:"pos_y",    label:"Y on map (m)"},
+      {k:"height",   label:"Height (m)"},
+      {k:"tilt_deg", label:"Down tilt (°)"},
+      {k:"yaw_deg",  label:"Facing (°)"},
+      {k:"hfov_deg", label:"Field of view (°)"},
+    ];
+    const mountInputs = {};
+    mountFields.forEach(f=>{
+      const l = document.createElement("label");
+      const span = document.createElement("span"); span.textContent = f.label;
+      const inp = document.createElement("input"); inp.type = "number"; inp.step = "0.1";
+      inp.setAttribute("aria-label", `${f.label} for ${name}`);
+      mountInputs[f.k] = inp; l.appendChild(span); l.appendChild(inp); grid.appendChild(l);
+    });
+    s1.appendChild(grid);
+    const b1 = document.createElement("div"); b1.className = "calib-btns";
+    const saveMount = document.createElement("button"); saveMount.type = "button";
+    saveMount.textContent = "Save estimate";
+    b1.appendChild(saveMount); s1.appendChild(b1);
+    wrap.appendChild(s1);
+    saveMount.onclick = async ()=>{
+      const mount = {};
+      for(const k in mountInputs){
+        const v = parseFloat(mountInputs[k].value);
+        if(!isFinite(v)){ setFb(false, "fill every mount field with a number"); return; }
+        mount[k] = v;
+      }
+      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`, {mount}); }catch{}
+      if(r && r.ok){ setFb(true, "estimate saved — re-enable the camera to apply"); loadStatus(); }
+      else { setFb(false, (await errText(r)) || "couldn't save the estimate"); }
+    };
+
+    // -- Section 2: accurate 4-point homography --
+    const s2 = document.createElement("div"); s2.className = "calib-sec";
+    const h2 = document.createElement("h4"); h2.textContent = "Precise (mark 4 floor points)";
+    const p2 = document.createElement("p"); p2.className = "hint";
+    p2.textContent = "Accurate: load a still from this camera (stays on this device, never uploaded), "
+      + "then click 4+ points on the floor and type where each is on your map, in metres. "
+      + "Use the camera's full frame at its stream resolution for the best fit.";
+    s2.appendChild(h2); s2.appendChild(p2);
+    const resGrid = document.createElement("div"); resGrid.className = "calib-grid";
+    const mkRes = (label, val)=>{
+      const l = document.createElement("label");
+      const s = document.createElement("span"); s.textContent = label;
+      const inp = document.createElement("input"); inp.type = "number"; inp.step = "1"; inp.min = "1";
+      inp.value = val; inp.setAttribute("aria-label", `${label} for ${name}`);
+      l.appendChild(s); l.appendChild(inp); resGrid.appendChild(l); return inp;
+    };
+    const imgWInp = mkRes("Stream width (px)", "1920");
+    const imgHInp = mkRes("Stream height (px)", "1080");
+    s2.appendChild(resGrid);
+    const fileBtns = document.createElement("div"); fileBtns.className = "calib-btns";
+    const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = "image/*";
+    fileInput.style.display = "none"; fileInput.setAttribute("aria-hidden","true");
+    const loadBtn = document.createElement("button"); loadBtn.type = "button"; loadBtn.textContent = "Load still…";
+    const clearImgBtn = document.createElement("button"); clearImgBtn.type = "button"; clearImgBtn.textContent = "Clear still";
+    fileBtns.appendChild(loadBtn); fileBtns.appendChild(clearImgBtn); fileBtns.appendChild(fileInput);
+    s2.appendChild(fileBtns);
+    const stage = document.createElement("div"); stage.className = "calib-stage";
+    stage.setAttribute("role","application");
+    stage.setAttribute("aria-label", `Mark floor points for ${name}`);
+    s2.appendChild(stage);
+    let stageImg = null, objUrl = null;
+    const revoke = ()=>{ if(objUrl){ URL.revokeObjectURL(objUrl); objUrl = null; } };
+    calibCleanups.push(revoke);
+    loadBtn.onclick = ()=> fileInput.click();
+    fileInput.onchange = ()=>{
+      const f = fileInput.files && fileInput.files[0]; if(!f) return;
+      revoke(); objUrl = URL.createObjectURL(f);
+      if(!stageImg){ stageImg = document.createElement("img"); stageImg.alt = "";
+        stage.insertBefore(stageImg, stage.firstChild); }
+      stageImg.src = objUrl;
+      fileInput.value = "";   // frame lives ONLY in the object URL; nothing written to disk
+    };
+    clearImgBtn.onclick = ()=>{ revoke(); if(stageImg){ stageImg.remove(); stageImg = null; } };
+    const pts = [];
+    const ptsList = document.createElement("div"); ptsList.className = "calib-pts";
+    s2.appendChild(ptsList);
+    const renumber = ()=> pts.forEach((p,i)=>{ p.mark.textContent = String(i+1); p.idx.textContent = String(i+1); });
+    stage.addEventListener("pointerdown", (e)=>{
+      const rect = stage.getBoundingClientRect();
+      if(rect.width<=0 || rect.height<=0) return;
+      const fx = Math.min(Math.max((e.clientX-rect.left)/rect.width, 0), 1);
+      const fy = Math.min(Math.max((e.clientY-rect.top)/rect.height, 0), 1);
+      const mark = document.createElement("div"); mark.className = "calib-mark";
+      mark.style.left = (fx*100)+"%"; mark.style.top = (fy*100)+"%";
+      stage.appendChild(mark);
+      const row = document.createElement("div"); row.className = "calib-pt";
+      const idx = document.createElement("span"); idx.className = "idx";
+      const arrow = document.createElement("span"); arrow.textContent = "→ floor";
+      const inX = document.createElement("input"); inX.type = "number"; inX.step = "0.1";
+      inX.placeholder = "x m"; inX.setAttribute("aria-label","floor x metres");
+      const inY = document.createElement("input"); inY.type = "number"; inY.step = "0.1";
+      inY.placeholder = "y m"; inY.setAttribute("aria-label","floor y metres");
+      const rmpt = document.createElement("button"); rmpt.type = "button"; rmpt.className = "rmpt";
+      rmpt.textContent = "✕"; rmpt.setAttribute("aria-label","remove point");
+      row.appendChild(idx); row.appendChild(arrow); row.appendChild(inX); row.appendChild(inY); row.appendChild(rmpt);
+      ptsList.appendChild(row);
+      const p = {fx, fy, mark, idx, inX, inY, row};
+      pts.push(p);
+      rmpt.onclick = ()=>{ const i = pts.indexOf(p); if(i>=0) pts.splice(i,1); mark.remove(); row.remove(); renumber(); };
+      renumber();
+    });
+    const b2 = document.createElement("div"); b2.className = "calib-btns";
+    const saveH = document.createElement("button"); saveH.type = "button"; saveH.textContent = "Save precise calibration";
+    const clearPts = document.createElement("button"); clearPts.type = "button"; clearPts.textContent = "Clear points";
+    b2.appendChild(saveH); b2.appendChild(clearPts);
+    s2.appendChild(b2);
+    wrap.appendChild(s2);
+    clearPts.onclick = ()=>{ pts.splice(0).forEach(p=>{ p.mark.remove(); p.row.remove(); }); };
+    saveH.onclick = async ()=>{
+      const imgW = parseInt(imgWInp.value,10), imgH = parseInt(imgHInp.value,10);
+      if(!(imgW>0 && imgH>0)){ setFb(false, "set the stream width and height in pixels"); return; }
+      const image_points = [], floor_points = [];
+      for(const p of pts){
+        const x = parseFloat(p.inX.value), y = parseFloat(p.inY.value);
+        if(!isFinite(x) || !isFinite(y)) continue;   // skip points with no floor coord yet
+        image_points.push([p.fx*imgW, p.fy*imgH]);
+        floor_points.push([x, y]);
+      }
+      if(image_points.length < 4){ setFb(false, "need 4+ points with a floor position filled in"); return; }
+      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`,
+        {image_points, floor_points, img_w:imgW, img_h:imgH}); }catch{}
+      if(r && r.ok){ setFb(true, "precise calibration saved — re-enable the camera to apply"); loadStatus(); }
+      else { setFb(false, (await errText(r)) || "couldn't save (points may be collinear/coincident)"); }
+    };
+
+    // -- Section 3: GUIDED WALK-TO-CALIBRATE (Spec A, the standard setup flow) --
+    // The person WALKS to known floor spots (room centre, each corner); at each spot the
+    // camera detects their FEET PIXEL (bottom-centre of the YOLO box) and the wizard pairs
+    // it with that spot's known metre coordinate. 4+ pairs -> an accurate homography solved
+    // SERVER-SIDE (PUT /calibration). No snapshot is ever taken — the body IS the marker
+    // (ADR-0002): GET calib-sample returns ONLY a pixel coordinate + image dims, never a
+    // frame. All DOM via createElement + textContent (XSS-safe).
+    const s3 = document.createElement("div"); s3.className = "calib-sec";
+    const h3 = document.createElement("h4"); h3.textContent = "Calibrate by walking (recommended)";
+    const p3 = document.createElement("p"); p3.className = "hint";
+    p3.textContent = "Most accurate and no snapshot needed: Wavr guides you to a few known spots "
+      + "(the room centre and each corner). Stand on each, facing the camera, and capture — your "
+      + "feet mark the floor. No image is taken or saved; only the point where you stand is used.";
+    s3.appendChild(h3); s3.appendChild(p3);
+
+    const walkStart = document.createElement("div"); walkStart.className = "calib-btns";
+    const startWalk = document.createElement("button"); startWalk.type = "button";
+    startWalk.textContent = "Calibrate by walking";
+    walkStart.appendChild(startWalk); s3.appendChild(walkStart);
+
+    // Live wizard sub-panel (hidden until started).
+    const wiz = document.createElement("div"); wiz.className = "calib-sec"; wiz.hidden = true;
+    wiz.style.borderTop = "0"; wiz.style.paddingTop = "0";
+    const live = document.createElement("p"); live.className = "calib-status";
+    live.setAttribute("role","status"); live.setAttribute("aria-live","polite");
+    const step = document.createElement("p"); step.className = "hint"; step.style.color = "var(--text)";
+    const prog = document.createElement("p"); prog.className = "hint";
+    wiz.appendChild(live); wiz.appendChild(step); wiz.appendChild(prog);
+    const wizBtns = document.createElement("div"); wizBtns.className = "calib-btns";
+    const capBtn = document.createElement("button"); capBtn.type = "button"; capBtn.textContent = "Capture this spot";
+    const solveBtn = document.createElement("button"); solveBtn.type = "button"; solveBtn.textContent = "Solve & save";
+    const cancelWalk = document.createElement("button"); cancelWalk.type = "button"; cancelWalk.className = "danger"; cancelWalk.textContent = "Cancel";
+    wizBtns.appendChild(capBtn); wizBtns.appendChild(solveBtn); wizBtns.appendChild(cancelWalk);
+    wiz.appendChild(wizBtns); s3.appendChild(wiz);
+    wrap.appendChild(s3);
+
+    // Wizard state: spots (known floor points), captured (feet_px paired to a spot), the
+    // live-detection poll, and the frame dims the feet pixels are measured in.
+    const walk = { on:false, spots:[], idx:0, captured:[], pollId:null, imgW:null, imgH:null, seen:false };
+    const stopPoll = ()=>{ if(walk.pollId){ clearInterval(walk.pollId); walk.pollId = null; } };
+    const renderWalk = ()=>{
+      const spot = walk.spots[walk.idx];
+      if(spot){
+        const label = spot.label === "centre" ? "the CENTRE of the room"
+          : ("the corner near x=" + spot.x.toFixed(1) + " m, y=" + spot.y.toFixed(1) + " m");
+        step.textContent = "Step " + (walk.idx+1) + " of " + walk.spots.length
+          + ": stand on " + label + ", facing the camera, then Capture.";
+      } else {
+        step.textContent = "All spots captured. Press Solve & save.";
+      }
+      prog.textContent = walk.captured.length + " of " + walk.spots.length
+        + " spots captured (4+ needed for an accurate fit).";
+      capBtn.disabled = !spot;
+      solveBtn.disabled = walk.captured.length < 4;
+    };
+    const setLive = (present)=>{
+      walk.seen = present;
+      live.textContent = present ? "● Person detected — you're in view." : "○ No person seen — step into the camera's view.";
+      live.style.color = present ? "var(--accent)" : "var(--dim)";
+    };
+    // Ending the session ALWAYS stops the camera again (cameras off by default) + clears
+    // the in-memory sample. Registered in calibCleanups so a list rebuild also ends it.
+    const endWalk = async ()=>{
+      stopPoll(); walk.on = false;
+      try{ await post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{}
+      wiz.hidden = true; startWalk.disabled = false;
+    };
+    calibCleanups.push(()=>{ stopPoll(); if(walk.on){ walk.on=false;
+      // best-effort session close on teardown (fire-and-forget; page is tearing down)
+      try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{} } });
+
+    startWalk.onclick = async ()=>{
+      startWalk.disabled = true;
+      let r; try{ r = await post(`/api/cameras/${enc}/calib-session`, {active:true}); }catch{}
+      if(!(r && r.ok)){ startWalk.disabled = false; setFb(false, (await errText(r)) || "couldn't start calibration"); return; }
+      let sp; try{ sp = await (await fetch(location.origin+`/api/cameras/${enc}/calib-spots`,
+        {headers:{"X-Wavr-Local":"1"}})).json(); }catch{}
+      const spots = (sp && Array.isArray(sp.spots)) ? sp.spots : [];
+      if(spots.length < 4){ await endWalk(); startWalk.disabled = false;
+        setFb(false, "this camera's room needs a 4+ corner floor plan first (edit the map)"); return; }
+      const js = r.json ? await r.json().catch(()=>({})) : {};
+      walk.on = true; walk.spots = spots; walk.idx = 0; walk.captured = []; walk.imgW = null; walk.imgH = null;
+      wiz.hidden = false; setFb(true, "");
+      if(js && js.active === false){ setFb(false, "monitoring is off — turn Wavr on so the camera can see you"); }
+      setLive(false); renderWalk();
+      // Live person indicator: poll the feet-pixel sample (coordinate only, never a frame).
+      walk.pollId = setInterval(async ()=>{
+        let s; try{ s = await (await fetch(location.origin+`/api/cameras/${enc}/calib-sample`,
+          {headers:{"X-Wavr-Local":"1"}})).json(); }catch{ return; }
+        setLive(!!(s && s.person));
+      }, 700);
+    };
+
+    capBtn.onclick = async ()=>{
+      const spot = walk.spots[walk.idx]; if(!spot) return;
+      let s; try{ s = await (await fetch(location.origin+`/api/cameras/${enc}/calib-sample`,
+        {headers:{"X-Wavr-Local":"1"}})).json(); }catch{}
+      if(!(s && s.person && Array.isArray(s.feet_px))){
+        setFb(false, "no person detected — stand where the camera can see you, then capture"); return; }
+      walk.imgW = s.img_w; walk.imgH = s.img_h;
+      walk.captured.push({ feet:[s.feet_px[0], s.feet_px[1]], floor:[spot.x, spot.y] });
+      setFb(true, "captured spot " + (walk.idx+1));
+      if(walk.idx < walk.spots.length - 1) walk.idx++; else walk.idx = walk.spots.length;
+      renderWalk();
+    };
+
+    solveBtn.onclick = async ()=>{
+      if(walk.captured.length < 4){ setFb(false, "capture 4+ spots first"); return; }
+      const imgW = Math.round(walk.imgW), imgH = Math.round(walk.imgH);
+      if(!(imgW>0 && imgH>0)){ setFb(false, "missing image size from the camera — recapture a spot"); return; }
+      const image_points = walk.captured.map(c=>c.feet);
+      const floor_points = walk.captured.map(c=>c.floor);
+      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`,
+        {image_points, floor_points, img_w:imgW, img_h:imgH}); }catch{}
+      if(r && r.ok){ await endWalk(); setFb(true, "calibrated by walking — accurate placement is on. Re-enable the camera to apply.");
+        loadStatus(); }
+      else { setFb(false, (await errText(r)) || "couldn't solve (spots may be too close or in a line — try again)"); }
+    };
+
+    cancelWalk.onclick = async ()=>{ await endWalk(); setFb(true, "calibration walk cancelled — camera turned back off"); };
+
+    // -- Footer: remove all calibration + feedback line --
+    const foot = document.createElement("div"); foot.className = "calib-btns";
+    const rmCal = document.createElement("button"); rmCal.type = "button"; rmCal.className = "danger";
+    rmCal.textContent = "Remove all calibration";
+    rmCal.onclick = async ()=>{
+      let r; try{ r = await del(`/api/cameras/${enc}/calibration`); }catch{}
+      if(r && r.ok){ setFb(true, "calibration removed — camera reverts to room-centred"); loadStatus(); }
+      else setFb(false, "couldn't remove calibration");
+    };
+    foot.appendChild(rmCal);
+    wrap.appendChild(foot);
+    wrap.appendChild(fb);
+
+    async function loadStatus(){
+      let c;
+      try{ c = await (await fetch(location.origin+`/api/cameras/${enc}/calibration`,
+        {headers:{"X-Wavr-Local":"1"}})).json(); }
+      catch{ status.textContent = "Couldn't read calibration."; return; }
+      if(c && c.mount) for(const k in mountInputs) if(c.mount[k] != null) mountInputs[k].value = c.mount[k];
+      let lead;
+      if(c && c.homography) lead = "Calibrated (precise 4-point). ";
+      else if(c && c.mount) lead = "Estimate active (approximate). ";
+      else lead = "Not calibrated — this camera reports its room only. ";
+      status.textContent = "";
+      const b = document.createElement("b"); b.textContent = lead;
+      status.appendChild(b);
+      status.appendChild(document.createTextNode(
+        c && c.localizes ? "People are placed on the map." : "Add an estimate or 4 points to place people on the map."));
+    }
+    loadStatus();
+    // toggle-off calls this before removing the panel: revoke the still object-URL AND
+    // stop any live walk poll + end the sampling session (so a collapsed panel never
+    // leaves the camera running or a poll ticking).
+    wrap._cleanup = ()=>{ revoke(); stopPoll();
+      if(walk.on){ walk.on = false; try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{} } };
+    return wrap;
+  }
+
   async function refresh(){
     ptzCleanups.splice(0).forEach(fn=>{ try{ fn(); }catch{} });   // stop any live hold before rebuild
+    calibCleanups.splice(0).forEach(fn=>{ try{ fn(); }catch{} }); // revoke any open still object-URLs
     let cams; try{ cams = await (await fetch(location.origin+"/api/cameras")).json(); }catch{ return; }
     window.__wavrCameras?.(cams);   // Stage-2 hook: Detected excludes already-configured cameras
     // PTZ is default-OFF: only probe per-camera capabilities when the global feature flag is on.
@@ -2377,6 +3093,18 @@ async function renderCameras(){
         if(r && r.ok){ actionFeedback(camFb, true); refresh(); }
         else { actionFeedback(camFb, false, "couldn't remove the camera"); }
       };
+      // Spec A: per-camera localization calibration. Toggles a panel (estimate + 4-point
+      // homography + roadmap auto-calibrate) right below the row.
+      const cal = document.createElement("button"); cal.className = "rm"; cal.type = "button";
+      cal.textContent = "Calibrate"; cal.setAttribute("aria-expanded","false");
+      let calPanel = null;
+      cal.onclick = ()=>{
+        if(calPanel){ try{ calPanel._cleanup?.(); }catch{} calPanel.remove(); calPanel = null;
+          cal.setAttribute("aria-expanded","false"); return; }
+        calPanel = buildCalibPanel(c.name); row.after(calPanel);
+        cal.setAttribute("aria-expanded","true");
+      };
+      row.appendChild(cal);
       row.appendChild(rm); list.appendChild(row);
       // Lazily probe PTZ capability for this camera; if the ONVIF camera exposes PTZ, drop the
       // d-pad in on its own line just below the row. Hidden entirely when ptz:false / offline.
@@ -2411,6 +3139,71 @@ async function renderCameras(){
   refresh();
 }
 renderCameras();
+
+// ---- Core Panel lock admin (Plano A / live only) ----
+// Sets/changes the PIN that gates the ambient touchscreen build's (?core / window.WAVR_CORE)
+// wake-to-dashboard step — see the lock module in that gated script block near the end of this
+// file. This dashboard only ever WRITES the PIN (POST /api/core/pin, loopback-admin, same
+// X-Wavr-Local guard as every other write here); the touchscreen itself only ever VERIFIES
+// against it (POST /api/core/pin/verify) and never calls this route.
+async function renderCoreLockAdmin(){
+  const tile = document.getElementById("coreLockPanel");
+  if(!tile) return;
+  if(MODE!=="live") return;   // admin-only, loopback; never in companion/demo
+  tile.hidden = false;
+  const statusEl = document.getElementById("coreLockAdminStatus");
+  const form = document.getElementById("coreLockAdminForm");
+  const pinInput = document.getElementById("coreLockAdminPin");
+  const fb = document.getElementById("coreLockAdminFb");
+  async function refresh(){
+    let s;
+    try{ s = await (await fetch(location.origin+"/api/core/pin/status", {headers:{"X-Wavr-Local":"1"}})).json(); }
+    catch{ if(statusEl) statusEl.textContent = "couldn't reach the hub — try again"; return; }
+    if(statusEl) statusEl.textContent = (s && s.pin_set)
+      ? "A PIN is set for the Core Panel touchscreen."
+      : "No PIN set — the Core Panel touchscreen wakes straight to the dashboard.";
+  }
+  form.onsubmit = async (e)=>{
+    e.preventDefault();
+    const pin = pinInput.value;
+    if(!/^[0-9]{4,12}$/.test(pin)){ actionFeedback(fb, false, "PIN must be 4–12 digits"); return; }
+    let r;
+    try{
+      r = await fetch(location.origin+"/api/core/pin", {method:"POST",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body: JSON.stringify({pin})});
+    }catch{}
+    if(r && r.ok){
+      form.reset();
+      actionFeedback(fb, true, null, "✓ PIN saved");
+      refresh();
+    } else {
+      actionFeedback(fb, false, "couldn't save the PIN — try again");
+    }
+  };
+  // Core camera: on-device MJPEG streamer (native launcher bridge) + the core-cam
+  // source that reads it. Native bridge only exists inside the Wavr launcher.
+  const camBtn = document.getElementById("coreCamBtn");
+  const camStatus = document.getElementById("coreCamStatus");
+  function camState(){
+    if(!(window.WavrNative && WavrNative.getCameraState)) return null;
+    try{ return JSON.parse(WavrNative.getCameraState()); }catch{ return null; }
+  }
+  function refreshCam(){
+    if(!camStatus) return;
+    if(!(window.WavrNative && WavrNative.setCamera)){ camStatus.textContent="camera: launcher only"; if(camBtn) camBtn.disabled=true; return; }
+    const st=camState();
+    camStatus.textContent = "camera: " + (st&&st.on ? ("on ("+(st.lens||"?")+")") : "off");
+  }
+  if(camBtn) camBtn.onclick = async ()=>{
+    const st=camState(); const turnOn = !(st && st.on);
+    if(window.WavrNative && WavrNative.setCamera) WavrNative.setCamera(turnOn);
+    try{ await fetch(location.origin+"/api/sources/core-cam/toggle", {method:"POST", headers:{"X-Wavr-Local":"1"}}); }catch{}
+    setTimeout(refreshCam, 700);
+  };
+  refreshCam();
+  refresh();
+}
+renderCoreLockAdmin();
 
 // ---- Narration (Plano A / live only) ----
 // Stage 3b (§9): the narrator is the app's ONLY egress, so its trigger is structurally
@@ -2465,7 +3258,13 @@ function renderNarrate(){
     setSending(true);
     try{
       const r = await fetch(location.origin+"/api/narrate",{method:"POST",headers:{"X-Wavr-Local":"1"}});
-      if(r.status===503){ out.textContent = "narration not configured (set GEMINI_API_KEY + WAVR_NARRATE_ENABLED)"; }
+      if(r.status===503){
+        // 503 now covers two honest cases: not-configured OR revoked in the Connectors screen.
+        // Surface the server's own detail (textContent) so a revoked narrator reads accurately
+        // instead of the misleading "not configured" hint. Fall back if the body is absent.
+        let detail=""; try{ detail=(await r.json()).detail||""; }catch{}
+        out.textContent = detail || "narration not configured (set WAVR_NARRATE_ENABLED and configure a provider)";
+      }
       else if(!r.ok){ out.textContent = "couldn't generate the narration"; }
       else { const d = await r.json(); out.className = "narrate-out"; out.textContent = d.narration || "(no response)"; }
     }catch{ out.textContent = "connection failed"; }
@@ -2888,6 +3687,275 @@ async function renderPairing(){
 }
 renderPairing();
 
+// ---- My devices — consent-first identity registry (live only, 2026-07-06 ethics) ----
+// The registry holds ONLY admin-confirmed devices. Three surfaces: (1) "Detect my paired
+// devices" -> GET /api/identity/bonded lists THIS PC's bonded BT devices PRE-CHECKED (a
+// pairing act is a suggestion, not consent — the admin unchecks a housemate's speaker and
+// confirms) -> POST /api/identity/devices. (2) manual add (address+name) for non-bonded.
+// (3) the registered list, each with Un-register = the participation opt-out (DELETE ->
+// the live provider stops returning it next scan cycle and its name is gone). Router-level
+// require_central: on loopback root (MODE==="live") the admin always passes; a multidevice
+// 'user' peer gets 403 and the panel stays hidden. `person` is PII — EVERY name/address is
+// rendered via textContent, NEVER innerHTML.
+async function renderIdentity(){
+  if(MODE!=="live") return;                 // live-only; never in companion/demo
+  const hdr = {"X-Wavr-Local":"1"};         // same local-only guard as the other panels
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/identity/devices",{headers:hdr}); }
+  catch{ return; }                          // backend unreachable — stay hidden
+  if(!probe.ok) return;                     // 403 (multidevice 'user') — stay hidden
+  let seed; try{ seed = (await probe.json()).devices; }catch{ seed = []; }
+  document.getElementById("myDevices").hidden = false;
+
+  const devList  = document.getElementById("idDevList");
+  const detectBtn = document.getElementById("idDetectBtn");
+  const bondedBox = document.getElementById("idBondedBox");
+  const bondedList = document.getElementById("idBondedList");
+  const bondedName = document.getElementById("idBondedName");
+  const bondedRegister = document.getElementById("idBondedRegister");
+  const detectFb = document.getElementById("idDetectFb");
+  const manualForm = document.getElementById("idManualForm");
+  const manualFb = document.getElementById("idManualFb");
+
+  // Registered list — each row is one consented device; Un-register is the opt-out.
+  function renderList(devices){
+    devices = Array.isArray(devices) ? devices : [];
+    devList.textContent = "";
+    if(!devices.length){
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "no registered devices yet";
+      devList.appendChild(e); return;
+    }
+    devices.forEach(d => {
+      const row = document.createElement("div"); row.className = "pair-dev-row";
+      const left = document.createElement("span");
+      const name = document.createElement("b"); name.textContent = d.person || "(unnamed)"; // textContent — PII
+      const meta = document.createElement("span"); meta.className = "pair-dev-meta";
+      const sig = MODALITY_LABEL[d.source] || d.source || "?";
+      const via = d.origin === "bonded" ? " · paired" : "";
+      meta.textContent = " · " + sig + " · " + (d.address || "") + via;   // textContent — server data
+      left.appendChild(name); left.appendChild(meta);
+      row.appendChild(left);
+      const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
+      rm.textContent = "Un-register";
+      rm.setAttribute("aria-label", "un-register " + (d.person || "device") + " — privacy opt-out");
+      rm.onclick = async ()=>{
+        let r;
+        try{ r = await fetch(location.origin+"/api/identity/devices/"+encodeURIComponent(d.address),
+          {method:"DELETE", headers:hdr}); }catch{}
+        if(r && r.ok){
+          let j; try{ j = await r.json(); }catch{ j = {}; }
+          actionFeedback(manualFb, true, null, "✓ opted out"); renderList(j.devices);
+        } else actionFeedback(manualFb, false, "couldn't un-register");
+      };
+      row.appendChild(rm); devList.appendChild(row);
+    });
+  }
+
+  // (1) Detect — read THIS PC's bonded BT devices; pre-check the not-yet-registered ones.
+  detectBtn.onclick = async ()=>{
+    let devices;
+    try{ devices = (await (await fetch(location.origin+"/api/identity/bonded",{headers:hdr})).json()).devices; }
+    catch{ actionFeedback(detectFb, false, "couldn't read paired devices"); return; }
+    devices = Array.isArray(devices) ? devices : [];
+    bondedList.textContent = "";
+    bondedBox.hidden = false;
+    if(!devices.length){
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "no paired Bluetooth devices found on this PC";
+      bondedList.appendChild(e); return;
+    }
+    devices.forEach(d => {
+      const already = !!d.already_registered;
+      const row = document.createElement("div");
+      row.className = "id-bonded-row" + (already ? " dim" : "");
+      const lab = document.createElement("label");
+      const cb = document.createElement("input"); cb.type = "checkbox";
+      cb.checked = !already;                 // SUGGESTION: pre-check unregistered, admin can uncheck
+      cb.disabled = already;                 // already registered -> not re-offered here
+      cb.dataset.address = d.address || "";
+      const nm = document.createElement("b"); nm.textContent = d.name || "(unnamed device)"; // textContent
+      const mac = document.createElement("span"); mac.className = "mac"; mac.textContent = d.address || ""; // textContent
+      lab.appendChild(cb); lab.appendChild(nm); lab.appendChild(mac);
+      row.appendChild(lab);
+      if(already){
+        const tag = document.createElement("span"); tag.className = "id-bonded-tag";
+        tag.textContent = "already registered";
+        row.appendChild(tag);
+      }
+      bondedList.appendChild(row);
+    });
+  };
+
+  // Register the checked bonded devices under the admin's name (origin='bonded').
+  bondedRegister.onclick = async ()=>{
+    const person = (bondedName.value || "").trim();
+    if(!person){ actionFeedback(detectFb, false, "enter your name first"); return; }
+    const checks = Array.from(bondedList.querySelectorAll('input[type=checkbox]'))
+                        .filter(cb => cb.checked && !cb.disabled);
+    if(!checks.length){ actionFeedback(detectFb, false, "check at least one device"); return; }
+    const devices = checks.map(cb => ({address: cb.dataset.address, source: "ble", origin: "bonded"}));
+    let r;
+    try{ r = await fetch(location.origin+"/api/identity/devices",
+      {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+       body:JSON.stringify({person, devices})}); }catch{}
+    if(r && r.ok){
+      let j; try{ j = await r.json(); }catch{ j = {}; }
+      actionFeedback(detectFb, true, null, "✓ registered"); renderList(j.devices);
+      bondedBox.hidden = true;               // collapse the suggestion list after a confirm
+    } else actionFeedback(detectFb, false, "couldn't register — check the name");
+  };
+
+  // (2) Manual add — address + name for anything not bonded (origin='manual').
+  manualForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const address = (manualForm.address.value || "").trim();
+    const label   = (manualForm.label.value || "").trim();
+    const source  = manualForm.source.value || "ble";
+    if(!address){ actionFeedback(manualFb, false, "enter an address"); return; }
+    if(!label){ actionFeedback(manualFb, false, "enter a name"); return; }
+    let r;
+    try{ r = await fetch(location.origin+"/api/identity/devices",
+      {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+       body:JSON.stringify({person: label, devices:[{address, source, origin:"manual"}]})}); }catch{}
+    if(r && r.ok){
+      let j; try{ j = await r.json(); }catch{ j = {}; }
+      actionFeedback(manualFb, true, null, "✓ added"); renderList(j.devices); manualForm.reset();
+    } else actionFeedback(manualFb, false, "invalid address or name");
+  };
+
+  renderList(seed);                          // seed the registered list from the probe we already read
+}
+renderIdentity();
+
+// ---- Connectors & services: the single outward-facing surface ----
+// (project_wavr_connectors_vision) Wavr is local and MUTE by default; this is the ONLY screen
+// that manages anything reaching outward, and everything is OFF by default. Live/central only:
+// GET /api/connectors is router require_central (a multidevice 'user' peer 403s -> panel stays
+// hidden, like the identity registry); the enable toggle adds require_local (X-Wavr-Local CSRF).
+// Descriptor shape from the backend: {id,kind,direction,label,available,active,suppressed,
+// enforcement,scope,env_flag}. Enforcement decides the control:
+//   * 'registry-overlay' (built-in kill-switch) -> "Allowed"/"Revoked" toggle. A row can only
+//     SUPPRESS a live feature; the chokepoint still ANDs the env flag, so this can NEVER enable
+//     egress beyond env. When permitted-but-not-active the chip names the env flag to set (honest,
+//     no overclaim).
+//   * 'env' (bound in a separate process, e.g. MCP control) -> NO live toggle; the card reflects
+//     the flag + names the env var to edit, rather than faking a dead switch.
+//   * 'registry' (generic connector) -> the registry IS the full gate: "On"/"Off" flips it.
+// Every label/scope is server/registry data -> textContent, never innerHTML. An absent registry
+// row => all built-ins render off/ready => nothing egresses (byte-identical to today).
+const CONN_DESC = {
+  "narrator":   "Turns live presence into a short natural-language summary with an LLM.",
+  "ha-import":  "Imports device and area names from Home Assistant on your LAN.",
+  "ha-control": "Lets Wavr send control commands to your Home Assistant devices.",
+  "mcp-read":   "Exposes a read-only view of the house (RoomState) to AI agents over MCP.",
+};
+async function renderConnectors(){
+  if(MODE!=="live") return;                  // live/central only; never companion/demo
+  const hdr = {"X-Wavr-Local":"1"};          // same local-only guard as the other gear panels
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/connectors",{headers:hdr}); }
+  catch{ return; }                           // backend unreachable — stay hidden
+  if(!probe.ok) return;                      // 403 (multidevice 'user') — stay hidden
+  let list; try{ list = (await probe.json()).connectors; }catch{ list = []; }
+  document.getElementById("connectors").hidden = false;
+
+  const host = document.getElementById("connList");
+  const summary = document.getElementById("connSummary");
+  const fb = document.getElementById("connFb");
+
+  function directionWord(dir){ return dir === "inbound" ? "Reads in" : "Sends out"; }
+  // Egress honesty: an outbound connector whose scope does NOT start with "local" leaves the box.
+  function isEgress(c){ return c.direction === "outbound" && !/^local/i.test(c.scope || ""); }
+
+  function stateFor(c){                       // honest per-enforcement status chip
+    if(c.suppressed) return {word:"revoked", cls:"revoked"};
+    if(c.active)     return {word:"active",  cls:"active"};
+    if(c.enforcement === "env" && !c.env_flag) return {word:"read-only · separate MCP server", cls:""};
+    if(!c.available) return {word:"needs setup", cls:"setup"};
+    return {word:"ready", cls:""};            // configured, but its enable flag is still off
+  }
+
+  function render(connectors){
+    connectors = Array.isArray(connectors) ? connectors : [];
+    host.textContent = "";
+    let activeN = 0;
+    connectors.forEach(c => {
+      if(c.active) activeN++;
+      const card = document.createElement("div"); card.className = "conn-card";
+
+      const top = document.createElement("div"); top.className = "conn-top";
+      const nm = document.createElement("h4"); nm.className = "conn-name";
+      nm.textContent = c.label || c.id;        // textContent — server/registry data (never innerHTML)
+      const dir = document.createElement("span"); dir.className = "conn-dir";
+      dir.textContent = c.direction || "outbound";
+      top.appendChild(nm); top.appendChild(dir);
+      card.appendChild(top);
+
+      const desc = CONN_DESC[c.id];
+      if(desc){ const p = document.createElement("p"); p.className = "conn-desc"; p.textContent = desc; card.appendChild(p); }
+
+      if(c.scope){
+        const sc = document.createElement("p"); sc.className = "conn-scope" + (isEgress(c) ? " egress" : "");
+        const b = document.createElement("b"); b.textContent = directionWord(c.direction) + ": ";
+        sc.appendChild(b); sc.appendChild(document.createTextNode(c.scope)); // textContent path — hostile scope is data
+        card.appendChild(sc);
+      }
+
+      const foot = document.createElement("div"); foot.className = "conn-foot";
+      const st = stateFor(c);
+      if(c.enforcement === "env"){
+        // No live toggle: the gate lives in a separate process/flag. Reflect it honestly.
+        const note = document.createElement("span"); note.className = "conn-state " + st.cls;
+        note.textContent = st.word + (c.env_flag ? (" · set " + c.env_flag + " and restart") : "");
+        foot.appendChild(note);
+      } else {
+        // registry (generic full gate) OR registry-overlay (built-in kill-switch): a live toggle.
+        const isGeneric = c.enforcement === "registry";
+        const on = isGeneric ? c.active : !c.suppressed;   // overlay: on = permitted (not suppressed)
+        const tog = document.createElement("button"); tog.type = "button";
+        tog.className = "ctl switch" + (on ? " on" : "");
+        tog.setAttribute("aria-pressed", on ? "true" : "false");
+        tog.setAttribute("aria-label",
+          (isGeneric ? (on ? "turn off " : "turn on ") : (on ? "revoke " : "allow ")) + (c.label || c.id));
+        tog.textContent = isGeneric ? (on ? "On" : "Off") : (on ? "Allowed" : "Revoked");
+        tog.onclick = async ()=>{
+          tog.disabled = true;
+          let r;
+          try{ r = await fetch(location.origin+"/api/connectors/"+encodeURIComponent(c.id)+"/enable",
+            {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+             body:JSON.stringify({enabled: !on})}); }catch{}
+          if(r && r.ok){
+            let j; try{ j = await r.json(); }catch{ j = {}; }
+            const updated = j.connector;
+            if(updated){
+              const idx = connectors.findIndex(x => x.id === updated.id);
+              if(idx >= 0) connectors[idx] = updated;
+            }
+            actionFeedback(fb, true, null, on ? "✓ revoked" : "✓ enabled");
+            render(connectors);               // re-render from the authoritative descriptor
+          } else {
+            tog.disabled = false;
+            actionFeedback(fb, false,
+              (r && r.status === 409) ? "controlled by an environment flag" : "couldn't change");
+          }
+        };
+        foot.appendChild(tog);
+        const stch = document.createElement("span"); stch.className = "conn-state " + st.cls;
+        stch.textContent = (st.word === "ready" && c.env_flag) ? ("ready · set " + c.env_flag) : st.word;
+        foot.appendChild(stch);
+      }
+      card.appendChild(foot);
+      host.appendChild(card);
+    });
+    summary.textContent = activeN === 0
+      ? "Nothing is reaching outward right now — every connector is off."
+      : (activeN + (activeN === 1 ? " connector is active." : " connectors are active."));
+  }
+  render(list);
+}
+renderConnectors();
+
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
 const POSTURE_LABEL = {walking:"walking", standing:"standing", sitting:"sitting", lying:"lying"};
@@ -2970,6 +4038,16 @@ function loadZones(){
 function saveZones(zones){ try{ localStorage.setItem(ZONE_KEY, JSON.stringify(zones)); }catch{} }
 let zones = loadZones();
 
+// A camera Target carries a POSITION-quality confidence when it is positioned (x/y set):
+// ~0.85 for an accurate 4-point homography, ~0.45 for the approximate monocular prior
+// (backend localize.Q_HOMOGRAPHY / Q_MONOCULAR). This threshold splits "calibrated" from
+// "estimated" so the map can render an approximate spot honestly (hazy). An UNpositioned
+// target (x/y null -> room-centred) is neither: its confidence is a detection score, not a
+// position score, so it is never styled as estimated here.
+const POS_EST_MAX = 0.6;
+const isPositioned = (t) => t && t.x != null && t.y != null;
+const isEstimated  = (t) => isPositioned(t) && (t.confidence ?? 0) < POS_EST_MAX;
+
 function dot(room, t){
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", "radar-target");
@@ -2993,8 +4071,12 @@ function placeDot(g, room, t){
   // CSS px == SVG user units here; style.transform (not the attribute) so the
   // .radar-target transition animates movement between updates.
   g.style.transform = `translate(${x}px, ${y}px)`;
+  // Hazy marker = an ESTIMATED (monocular) spot; crisp = calibrated or room-centred.
+  const est = isEstimated(t);
+  g.classList.toggle("est", est);
   g.querySelector("title").textContent =
-    `person ${t.id ?? "?"} · confidence ${Math.round((t.confidence ?? 0)*100)}%`;
+    `person ${t.id ?? "?"} · confidence ${Math.round((t.confidence ?? 0)*100)}%` +
+    (est ? " · estimated position" : "");
   const txt = g.querySelector("text");
   // Compensate the viewBox's user-space scaling so the caption reads at a real ~10px
   // regardless of room/viewport size (see radarPxPerM comment above).
@@ -3271,6 +4353,11 @@ async function renderRadar(){
           // without competing with the active floor. Shared, built once, never disposed.
           const personMatGhost = new THREE.MeshStandardMaterial({
             color: 0x3db54a, opacity: GHOST.personGhost, transparent: true, depthWrite: false });
+          // Estimated-position marker (monocular prior): semi-transparent so an APPROXIMATE
+          // spot reads softer than a calibrated (homography) one on the active floor. Shared,
+          // built once, never disposed — same discipline as the other person materials.
+          const personMatEst = new THREE.MeshStandardMaterial({
+            color: 0x3db54a, opacity: 0.5, transparent: true, depthWrite: false });
           // ---- v2 in-3D editor: handle gizmos + drag previews. All geometries/materials
           // here are SHARED (built once, never disposed) — rebuildHandles3D()/the drag
           // machine only add/remove Mesh wrappers, exactly the peopleGroup discipline.
@@ -3348,7 +4435,7 @@ async function renderRadar(){
             if(hit) window.__wavrSelectRoom?.(hit.object.userData.room);
           });
           three3d = { THREE, renderer, scene, camera, controls, roomGroup,
-                      peopleGroup, personGeo, personMat, personMatGhost,
+                      peopleGroup, personGeo, personMat, personMatGhost, personMatEst,
                       handleGroup, hVertGeo, hHitGeo, hEdgeGeo,
                       hVertMat, hEdgeMat, hHoverMat, hDragMat, hHitMat,
                       previewLine, previewWall, snapRing, raf: null, ro };
@@ -3716,7 +4803,7 @@ async function renderRadar(){
   // No-ops until the user has entered 3D at least once (three3d built lazily by ensure3D()).
   function updatePeople3D(){
     if(!three3d) return;
-    const { THREE, peopleGroup, personGeo, personMat, personMatGhost } = three3d;
+    const { THREE, peopleGroup, personGeo, personMat, personMatGhost, personMatEst } = three3d;
     // Clear last frame's markers. personGeo/personMat(Ghost) are shared + reused across
     // every frame (created once in ensure3D(), never disposed) — only the Mesh wrapper
     // objects are per-frame, so removing them from the group is all that's needed here.
@@ -3726,7 +4813,10 @@ async function renderRadar(){
       const y = offsetForLevel(f.level) + 0.9;
       (f.rooms || []).forEach(r => {
         (liveTargets[r.name] || []).forEach(p => {
-          const m = new THREE.Mesh(personGeo, active ? personMat : personMatGhost);
+          // Active floor: an estimated (monocular) spot uses the softer material; a
+          // calibrated/room-centred one stays solid. Ghost floors always use the ghost mat.
+          const mat = active ? (p.est ? personMatEst : personMat) : personMatGhost;
+          const m = new THREE.Mesh(personGeo, mat);
           m.position.set(p.x, y, p.y);
           m.userData.room = r.name;   // §6: lets the render loop pulse only the linked room's markers
           m.userData.baseScale = active ? 1 : 0.6;
@@ -4807,7 +5897,9 @@ async function renderRadar(){
       if(!seen.has(k)){ e.dots.get(k).remove(); e.dots.delete(k); }
     });
     // Feed absolute target positions to the zone hit-test, then re-highlight zones.
-    liveTargets[rs.room] = (rs.targets||[]).map(t => absTargetPoint(e.r, t));
+    liveTargets[rs.room] = (rs.targets||[]).map(t => {
+      const p = absTargetPoint(e.r, t); p.est = isEstimated(t); return p;   // est -> hazy 3D marker
+    });
     updateZoneOcc();   // per-frame: only re-highlight (no DOM rebuild); structure rebuilt on zone change
     updatePeople3D();  // keep the 3D people markers in sync with the same live target data
     tintRoom3D(rs.room);   // §6: floor tint tracks this frame's confidence (roomOcc/roomConf
@@ -8377,6 +9469,610 @@ try {
   }
   new MutationObserver(scheduleStamp).observe(document.body, { childList: true, subtree: true });
   stampSrTips();
+})();
+</script>
+<script>
+// ============================================================================
+// Wavr Core Panel (Phase 1 of "Wavr OS"): ?core / window.WAVR_CORE ambient
+// home-status face. Additive and fully gated: the very first statement below
+// returns immediately unless core mode is requested, so the three existing
+// modes (live/companion/simulated) run byte-for-byte unchanged. This block
+// touches nothing outside #corePanel and a handful of already-established
+// extension hooks when core mode is off.
+//
+// Reuses EXISTING data plumbing only, per the design spec's data-sources list:
+//   - RoomState: chains onto window.__wavrRS, the same hook the Stage-2/3
+//     command-center blocks above already chain onto (no second WebSocket).
+//     Reads the dashboard's own top-level `roomOcc` accumulator directly
+//     (updateHouse() populates it earlier in the same handle() call, before
+//     __wavrRS fires), the same documented "readable from later script
+//     blocks" pattern already used for MODE elsewhere in this file.
+//   - "Rede" (network) health: chains onto window.__wavrStatus, fed by the
+//     SAME /api/status poll renderStatus()/renderControls() already run
+//     every 3s in live mode. Deliberately NOT /api/health: that endpoint is a
+//     USER-TRIGGERED, confirm-gated egress check (see the "LOAD-BEARING"
+//     comment near healthBtn elsewhere in this file). Auto-polling it here
+//     would silently re-trigger a disclosed-only public-DNS ping on every
+//     idle cycle, which would violate that invariant. /api/status's existing
+//     internet-monitor field is the honest, already-flowing substitute.
+//   - "Core" (backend/stream) health: chains onto window.setReconnecting,
+//     which handle() already calls on every WS open/close.
+//   - Alert count: observes the EXISTING #alertList DOM (rebuilt every 15s by
+//     renderNetwork()'s own poll) via MutationObserver, the same zero-new-
+//     fetch technique the header's #pillRede badge already uses above.
+//
+// Assumption flagged for review: "N EM CASA" counts ROOMS with confirmed
+// presence, not a literal person headcount. RoomState never carries a people
+// count (fusion is per-room occupied/confidence, never a headcount), so
+// counting occupied rooms is the honest reading available from this feed.
+// See docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md.
+// ============================================================================
+(function(){
+  "use strict";
+  var CORE_MODE = false;
+  try{ CORE_MODE = new URLSearchParams(location.search).has("core") || !!window.WAVR_CORE; }catch(e){}
+  if(!CORE_MODE) return;   // gate: every existing mode exits here, nothing below ever runs
+
+  var panel = document.getElementById("corePanel");
+  if(!panel) return;
+  document.body.classList.add("core-mode");
+  panel.hidden = false;   // shown by default (ambient face); dissolves on the first interaction
+
+  // ---------------- Clock (top-left): local time, ticks once a second ----------------
+  var timeEl = document.getElementById("coreClockTime");
+  var dateEl = document.getElementById("coreClockDate");
+  function tickClock(){
+    var d = new Date();
+    if(timeEl) timeEl.textContent = d.toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
+    if(dateEl) dateEl.textContent = d.toLocaleDateString("pt-BR", {weekday:"short", day:"2-digit", month:"2-digit"});
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+
+  // ---------------- Ambient wave field (the hero) + active rooms: fed by RoomState
+  // (__wavrRS chain). The center hero is now a canvas wave, not text — the "signature
+  // animated green wave/radar" the owner asked for in place of the big "CASA VAZIA" word
+  // (see docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md; that doc's §"ambient
+  // face" text description of the hero predates this change). #coreHeroSr carries the exact
+  // same information the old text hero rendered, off-screen, so occupancy is still announced
+  // to screen readers even though sighted users now read the wave instead of a word.
+  var heroSrEl   = document.getElementById("coreHeroSr");
+  var roomsEl    = document.getElementById("coreRooms");
+  var waveCanvas = document.getElementById("coreWave");
+  var haveFrame  = false;   // no RoomState frame yet this session: calm/idle wave, neutral sr text
+  var prevRoomOcc = {};     // per-room edge detection: a fresh true flips a transient "pulse"
+
+  // ---- Wave engine -----------------------------------------------------------------
+  // A handful of layered sine ribbons, additive-blended (globalCompositeOperation
+  // "lighter") for a soft neon glow — no shadowBlur (recomputes per pixel every frame,
+  // too costly 24/7 on a weak always-on phone) and no three.js/WebGL (the dashboard's
+  // 3D map already owns the one GPU context this page needs; a fixed handful of sin()
+  // samples on Canvas 2D is orders of magnitude cheaper). A single scalar "energy"
+  // (0 = empty/calm .. ~1 = many confirmed rooms at high confidence/alive) drives
+  // amplitude, drift speed and brightness together, smoothly interpolated toward its
+  // target every drawn frame — never a hard cut between calm and alive. Capped at
+  // ~30fps and fully paused whenever the panel isn't the active view (dissolved by a
+  // touch, or the document itself hidden) via wave.stop()/start() below.
+  var wave = (function(){
+    var ctx = waveCanvas ? waveCanvas.getContext("2d") : null;
+    var FRAME_MS = 1000 / 30;
+    var W = 0, H = 0, dpr = 1;
+    var energy = 0, targetEnergy = 0, pulseE = 0;
+    var t0 = null, lastDraw = null, raf = null, running = false;
+    // amplitude/alpha/speed weights per layer — index 0 calmest/back, 2 liveliest/front
+    var LAYERS = [
+      { freq: 1.5,  speed: 0.05,   ampBase: 0.045, ampGain: 0.22, width: 1.3, alphaBase: 0.16, alphaGain: 0.24, phase: 0.0 },
+      { freq: 1.0,  speed: -0.03,  ampBase: 0.065, ampGain: 0.34, width: 1.7, alphaBase: 0.11, alphaGain: 0.30, phase: 2.1 },
+      { freq: 0.65, speed: 0.018,  ampBase: 0.085, ampGain: 0.48, width: 2.2, alphaBase: 0.08, alphaGain: 0.34, phase: 4.4 }
+    ];
+
+    function resize(){
+      if(!waveCanvas || !waveCanvas.parentElement) return;
+      var rect = waveCanvas.parentElement.getBoundingClientRect();
+      dpr = Math.min(window.devicePixelRatio || 1, 1.5);   // cap backing-store cost (G9 panel is ~2.75x)
+      W = Math.max(1, Math.round(rect.width));
+      H = Math.max(1, Math.round(rect.height));
+      waveCanvas.width  = Math.round(W * dpr);
+      waveCanvas.height = Math.round(H * dpr);
+      waveCanvas.style.width  = W + "px";
+      waveCanvas.style.height = H + "px";
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    // Pure function of (t, e): the animated loop feeds it real elapsed seconds, the
+    // reduced-motion path always feeds t=0 so the shape only ever changes with energy,
+    // never with the clock (§ reduced-motion below).
+    function renderFrame(t, e){
+      if(!ctx || !W || !H) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "lighter";
+      var midY = H / 2, steps = 48;   // cheap: ~48 sin() samples per layer per frame
+      LAYERS.forEach(function(layer){
+        var amp   = (layer.ampBase + layer.ampGain * e) * H * 0.5;
+        var alpha = Math.min(1, layer.alphaBase + layer.alphaGain * e);
+        var phase = layer.phase + t * layer.speed * (1 + e * 1.5) * Math.PI * 2;
+        ctx.beginPath();
+        for(var i = 0; i <= steps; i++){
+          var x = (i / steps) * W;
+          var y = midY + Math.sin((i / steps) * layer.freq * Math.PI * 2 + phase) * amp;
+          if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        // Cheap glow: a wide faint stroke under a thin bright one, both additive —
+        // instead of shadowBlur, which is too costly per-frame at three layers, 24/7.
+        ctx.lineWidth = layer.width * 3.2; ctx.strokeStyle = "rgba(61,181,74,"  + (alpha * 0.35) + ")"; ctx.stroke();
+        ctx.lineWidth = layer.width;       ctx.strokeStyle = "rgba(130,235,150," + alpha + ")";         ctx.stroke();
+      });
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+    function drawStatic(){
+      // reduced-motion: one deterministic frame, no clock — only "energy" ever moves it.
+      renderFrame(0, Math.min(1.15, targetEnergy));
+    }
+
+    function tick(now){
+      if(!running) return;
+      raf = requestAnimationFrame(tick);
+      if(lastDraw !== null && now - lastDraw < FRAME_MS) return;   // ~30fps cap regardless of panel refresh rate
+      lastDraw = now;
+      if(t0 === null) t0 = now;
+      energy += (targetEnergy - energy) * 0.05;   // smooth interpolation, no hard jumps
+      pulseE *= 0.94;                              // transient "movement" pulse decays away
+      renderFrame((now - t0) / 1000, Math.min(1.15, energy + pulseE));
+    }
+
+    function start(){
+      if(REDUCED_MOTION.matches){ drawStatic(); return; }   // never loop under reduced motion
+      if(running) return;
+      running = true; lastDraw = null;
+      resize();   // re-measure in case layout wasn't settled when this module was built
+      raf = requestAnimationFrame(tick);
+    }
+    function stop(){
+      running = false;
+      if(raf) cancelAnimationFrame(raf);
+      raf = null;
+    }
+    function setEnergy(next){
+      targetEnergy = Math.max(0, Math.min(1, next));
+      if(REDUCED_MOTION.matches) drawStatic();   // reflect the new state immediately, still no motion
+    }
+    function pulse(){
+      if(REDUCED_MOTION.matches) return;   // a transient boost IS motion — skip it entirely
+      pulseE = Math.min(0.5, pulseE + 0.32);
+    }
+    return { start: start, stop: stop, setEnergy: setEnergy, pulse: pulse };
+  })();
+
+  function renderHero(){
+    // 'casa' is the house-level identities-only pseudo-room the backend uses for BLE/network
+    // presence (never a real room; see the backend's own "house-level only, never a real
+    // room" invariant) — it still counts toward home/away (matches updateHouse()'s own
+    // definition exactly) but is never shown as a room chip or counted into N.
+    var all  = (typeof roomOcc  !== "undefined" && roomOcc)  ? roomOcc  : {};
+    var conf = (typeof roomConf !== "undefined" && roomConf) ? roomConf : {};
+    var names = Object.keys(all);
+    var homeOccupied = names.some(function(r){ return all[r]; });
+    var realOccupied = names.filter(function(r){ return r !== "casa" && all[r]; });
+
+    if(heroSrEl){
+      heroSrEl.textContent = !haveFrame ? "A carregar…"
+        : !homeOccupied ? "CASA VAZIA"
+        : realOccupied.length > 0 ? (realOccupied.length + " EM CASA")
+        : "EM CASA";
+    }
+
+    // Wave energy target: 0 (empty house, calm) .. ~1 (several confirmed rooms at high
+    // fusion confidence, alive) — roomsFactor rewards more active rooms, maxConf rewards
+    // fusion certainty; both read from roomOcc/roomConf for the exact reason the old text
+    // hero read them. 'casa'-only presence (house-level BLE/network, no specific room) get
+    // a mid-confidence default since there is no per-room confidence to read in that case.
+    var target = 0;
+    if(homeOccupied){
+      var roomsFactor = Math.min(realOccupied.length, 4) / 4;
+      var maxConf = realOccupied.length
+        ? Math.max.apply(null, realOccupied.map(function(r){ return conf[r] || 0; }))
+        : (conf.casa || 0.5);
+      target = 0.30 + 0.35 * roomsFactor + 0.30 * maxConf;
+    }
+    wave.setEnergy(target);
+
+    if(roomsEl){
+      roomsEl.textContent = "";
+      realOccupied.forEach(function(name){
+        var chip = document.createElement("span");
+        chip.className = "core-room-chip";
+        var dot = document.createElement("span");
+        dot.className = "core-dot"; dot.setAttribute("aria-hidden", "true"); dot.textContent = "●";
+        chip.appendChild(dot);
+        chip.appendChild(document.createTextNode(" " + name));   // room name is RoomState data (untrusted) — textContent only
+        roomsEl.appendChild(chip);
+      });
+    }
+  }
+  renderHero();
+  if(!document.hidden) wave.start();   // don't spin up the loop if the kiosk happened to load backgrounded
+
+  var _rsCore = window.__wavrRS;
+  window.__wavrRS = function(rs){
+    try{ if(_rsCore) _rsCore(rs); }catch(e){}
+    try{
+      haveFrame = true;
+      // "Movement" pulse: THIS frame's room just flipped from unoccupied to occupied — a
+      // fresh detection event, not steady state — gives the wave a brief lift on top of the
+      // smoothed baseline (design: "if there's movement the line gets more alive").
+      if(rs && rs.room && rs.occupied && !prevRoomOcc[rs.room]) wave.pulse();
+      if(rs && rs.room) prevRoomOcc[rs.room] = !!rs.occupied;
+      renderHero();
+    }catch(e){}
+  };
+
+  // ---------------- Core / Rede health (top-right) ----------------
+  var coreHealthCoreEl = document.getElementById("coreHealthCore");
+  var coreHealthNetEl  = document.getElementById("coreHealthNet");
+  var wsDownCore = false;        // Core: the live WS to the backend is down/reconnecting
+  var internetOkCore = null;     // Rede: null = unknown (monitor off, or no /api/status yet)
+
+  function renderCoreHealth(){
+    if(coreHealthCoreEl){
+      coreHealthCoreEl.textContent = "Core " + (wsDownCore ? "⚠" : "✓");
+      coreHealthCoreEl.className = "core-health-item" + (wsDownCore ? " core-health-warn" : "");
+    }
+    if(coreHealthNetEl){
+      var label = internetOkCore === true ? "Rede ✓" : internetOkCore === false ? "Rede ⚠" : "Rede …";
+      coreHealthNetEl.textContent = label;
+      coreHealthNetEl.className = "core-health-item" + (internetOkCore === false ? " core-health-warn" : "");
+    }
+  }
+  renderCoreHealth();
+
+  if(typeof window.setReconnecting === "function"){
+    var _srCore = window.setReconnecting;
+    window.setReconnecting = function(on){
+      try{ _srCore(on); }catch(e){}
+      wsDownCore = !!on;
+      renderCoreHealth();
+    };
+  }
+
+  var _statusCore = window.__wavrStatus;
+  window.__wavrStatus = function(s){
+    try{ if(_statusCore) _statusCore(s); }catch(e){}
+    try{
+      var inet = (s && s.internet && typeof s.internet === "object") ? s.internet : {};
+      internetOkCore = inet.ok === true ? true : inet.ok === false ? false : null;
+      renderCoreHealth();
+    }catch(e){}
+  };
+
+  // ---------------- Feature 1: wifi / bluetooth / battery (top-right, native-bridge only) ----------------
+  // window.WavrNative only exists inside the launcher build; a plain browser/dev tab never has
+  // it, so #coreSys stays [hidden] (its default HTML state) and this whole block is a no-op —
+  // no errors, no placeholder polling, per the contract. Polled every ~5s, separate from every
+  // other feed on this page (it isn't RoomState/`/api/status`), guarded end-to-end: a malformed
+  // bridge payload just leaves the last good render instead of throwing.
+  var sysEl         = document.getElementById("coreSys");
+  var sysWifiEl     = document.getElementById("coreSysWifi");
+  var sysBtEl       = document.getElementById("coreSysBt");
+  var sysBattEl     = document.getElementById("coreSysBatt");
+  var sysBattFillEl = document.getElementById("coreSysBattFill");
+  var sysBattBoltEl = document.getElementById("coreSysBattBolt");
+  var SYS_POLL_MS   = 5000;
+
+  function renderCoreSys(status){
+    if(!sysEl) return;
+    if(!status || typeof status !== "object"){ sysEl.hidden = true; return; }
+    sysEl.hidden = false;
+    var labelParts = [];
+
+    var wifi = (status.wifi && typeof status.wifi === "object") ? status.wifi : {};
+    var level = Math.max(0, Math.min(4, parseInt(wifi.level, 10) || 0));
+    var lvl = wifi.connected ? level : 0;
+    if(sysWifiEl){
+      sysWifiEl.hidden = false;
+      sysWifiEl.setAttribute("data-level", String(lvl));
+    }
+    labelParts.push(wifi.connected ? ("Wi-Fi: sinal " + lvl + "/4") : "Wi-Fi: desconectado");
+
+    var bt = (status.bluetooth && typeof status.bluetooth === "object") ? status.bluetooth : {};
+    if(sysBtEl) sysBtEl.hidden = !bt.on;
+    if(bt.on) labelParts.push("Bluetooth ligado");
+
+    var batt = (status.battery && typeof status.battery === "object") ? status.battery : null;
+    if(sysBattEl){
+      if(batt && typeof batt.level === "number"){
+        sysBattEl.hidden = false;
+        var pct = Math.max(0, Math.min(100, batt.level));
+        if(sysBattFillEl) sysBattFillEl.style.width = pct + "%";
+        sysBattEl.classList.toggle("core-batt-low", pct <= 15 && !batt.charging);
+        if(sysBattBoltEl) sysBattBoltEl.hidden = !batt.charging;
+        labelParts.push("Bateria " + Math.round(pct) + "%" + (batt.charging ? " (carregando)" : ""));
+      } else {
+        sysBattEl.hidden = true;
+      }
+    }
+    sysEl.setAttribute("aria-label", labelParts.join(" · "));
+  }
+
+  function pollCoreSys(){
+    if(!window.WavrNative || typeof window.WavrNative.getSystemStatus !== "function") return;
+    try{ renderCoreSys(JSON.parse(window.WavrNative.getSystemStatus())); }
+    catch(e){ /* malformed bridge payload: keep the last good render, never throw into the ambient loop */ }
+  }
+  if(window.WavrNative && typeof window.WavrNative.getSystemStatus === "function"){
+    pollCoreSys();
+    setInterval(pollCoreSys, SYS_POLL_MS);
+  }
+
+  // ---------------- Alert count (bottom-right): mirrors #alertList, zero new fetches ----------------
+  var alertsEl = document.getElementById("coreAlerts");
+  function renderCoreAlerts(){
+    if(!alertsEl) return;
+    var list = document.getElementById("alertList");
+    var n = list ? list.querySelectorAll(".alert-row").length : 0;
+    alertsEl.hidden = !n;
+    alertsEl.textContent = n ? (n + (n > 1 ? " alertas" : " alerta")) : "";
+  }
+  var alertListEl = document.getElementById("alertList");
+  if(alertListEl) new MutationObserver(renderCoreAlerts).observe(alertListEl, {childList: true});
+  renderCoreAlerts();
+
+  // ---------------- Feature 2: lock (glance-free ambient face, control-gated wake) ----------------
+  // The ambient face above (clock/wave/rooms/alerts/coreSys) is NEVER gated — only the reveal
+  // of the dashboard underneath is. "Configured" means either a device biometric
+  // (window.WavrNative.hasBiometric()) or a backend PIN (GET /api/core/pin/status ->
+  // {pin_set:true}). With neither configured, wake() behaves exactly as it always did: touch ->
+  // dashboard, no gate. Re-armed every time returnToAmbient() runs, so the kiosk re-locks after
+  // every ~60s idle cycle, same moment the dashboard itself hides.
+  var lockEl      = document.getElementById("coreLock");
+  var biomEl      = document.getElementById("coreLockBiom");
+  var biomTxtEl   = document.getElementById("coreLockBiomTxt");
+  var biomRetryEl = document.getElementById("coreLockBiomRetry");
+  var padEl       = document.getElementById("coreLockPad");
+  var dotsEl      = document.getElementById("coreLockDots");
+  var errEl       = document.getElementById("coreLockErr");
+  var okKeyEl     = document.getElementById("coreLockOk");
+  var backKeyEl   = document.getElementById("coreLockBack");
+  var PIN_MIN = 4, PIN_MAX = 12, PIN_CACHE_MS = 4000;   // matches the backend's PIN length contract (4-12 digits)
+
+  var authenticated    = false;  // flips true only on a verified unlock; reset by returnToAmbient()
+  var gatingInProgress = false;  // dedupes the pointerdown+touchstart+keydown triplet of one physical tap
+  var pinBuf           = "";
+  var pinBusy          = false;  // a verify POST is in flight — keys/OK ignored meanwhile
+  var biomPending      = false;  // a requestAuth() call is outstanding — a late/duplicate result no-ops otherwise
+  var pinStatusCache   = null;   // {value, at}: short cache so a rapid double-tap wake fires one loopback GET, not two
+
+  function hasBiometricLock(){
+    try{
+      return !!(window.WavrNative && typeof window.WavrNative.hasBiometric === "function"
+                && window.WavrNative.hasBiometric());
+    }catch(e){ return false; }
+  }
+  function fetchPinConfigured(){
+    var now = Date.now();
+    if(pinStatusCache && (now - pinStatusCache.at) < PIN_CACHE_MS) return Promise.resolve(pinStatusCache.value);
+    return fetch(location.origin + "/api/core/pin/status", {headers:{"X-Wavr-Local":"1"}})
+      .then(function(r){ return r.ok ? r.json() : {pin_set:false}; })
+      .then(function(j){ var v = !!(j && j.pin_set); pinStatusCache = {value:v, at:Date.now()}; return v; })
+      // Backend unreachable: fail OPEN (treat as "no PIN configured") — a transient local
+      // hiccup shouldn't lock the owner out of their own kiosk. Flagged assumption, see report.
+      .catch(function(){ return false; });
+  }
+  fetchPinConfigured();   // eager warm-up: primes pinStatusCache so the very first real wake
+                          // touch (seconds away, realistically) resolves synchronously below
+                          // instead of waiting on a loopback round-trip.
+  function lockPadOpen(){ return lockEl ? !lockEl.hidden : false; }
+
+  function renderDots(){
+    if(!dotsEl) return;
+    dotsEl.textContent = "";
+    var n = Math.max(pinBuf.length, PIN_MIN);
+    for(var i = 0; i < n; i++){
+      var d = document.createElement("i");
+      d.className = "core-lock-dot" + (i < pinBuf.length ? " core-lock-dot-filled" : "");
+      dotsEl.appendChild(d);
+    }
+    if(okKeyEl) okKeyEl.disabled = pinBuf.length < PIN_MIN || pinBusy;
+  }
+  function resetPinPad(){
+    pinBuf = ""; pinBusy = false;
+    if(errEl) errEl.textContent = "";
+    if(padEl) padEl.classList.remove("core-lock-shake");
+    renderDots();
+  }
+  function openLockPad(){
+    if(!lockEl) return;
+    if(biomEl) biomEl.hidden = true;
+    if(padEl) padEl.hidden = false;
+    resetPinPad();
+    lockEl.hidden = false;
+    lockEl.focus();
+    armIdle();
+  }
+  function closeLockPad(){
+    if(!lockEl) return;
+    lockEl.hidden = true;
+    biomPending = false;
+    if(biomEl) biomEl.hidden = true;
+    if(padEl) padEl.hidden = true;
+    resetPinPad();
+  }
+  function pinKeydown(k){
+    if(pinBusy || pinBuf.length >= PIN_MAX) return;
+    pinBuf += k;
+    if(errEl) errEl.textContent = "";
+    renderDots();
+  }
+  function pinBackspace(){
+    if(pinBusy) return;
+    pinBuf = pinBuf.slice(0, -1);
+    renderDots();
+  }
+  function pinShakeError(msg){
+    if(errEl) errEl.textContent = msg || "PIN incorreto";
+    if(padEl && !REDUCED_MOTION.matches){
+      padEl.classList.remove("core-lock-shake");
+      void padEl.offsetWidth;   // restart the shake keyframes on repeated wrong entries
+      padEl.classList.add("core-lock-shake");
+    }
+    pinBuf = "";
+    renderDots();
+  }
+  function submitPin(){
+    if(pinBusy || pinBuf.length < PIN_MIN) return;
+    pinBusy = true;
+    renderDots();
+    var pin = pinBuf;
+    fetch(location.origin + "/api/core/pin/verify", {
+      method: "POST", headers: {"Content-Type":"application/json","X-Wavr-Local":"1"},
+      body: JSON.stringify({pin: pin})
+    }).then(function(r){
+      if(!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function(j){
+      pinBusy = false;
+      if(j && j.ok === true){
+        authenticated = true;
+        closeLockPad();
+        revealDashboard();
+      } else {
+        // A wrong PIN and a rate-limited attempt both degrade to {ok:false} by backend
+        // design (wavr.pin_ratelimit: "a caller learns nothing beyond 'not unlocked'
+        // either way") — same message either way, on purpose, never distinguished client-side.
+        pinShakeError("PIN incorreto");
+      }
+    }).catch(function(){
+      pinBusy = false;
+      pinShakeError("Falha ao verificar — tente novamente");
+    });
+  }
+  if(padEl){
+    padEl.querySelectorAll(".core-lock-key[data-k]").forEach(function(btn){
+      btn.addEventListener("click", function(){ pinKeydown(btn.getAttribute("data-k")); });
+    });
+  }
+  if(backKeyEl) backKeyEl.addEventListener("click", pinBackspace);
+  if(okKeyEl) okKeyEl.addEventListener("click", submitPin);
+  if(lockEl){
+    // Kiosk hardware-keyboard fallback alongside the on-screen pad — harmless no-op on a
+    // touch-only panel, since nothing ever dispatches keydown there in the first place.
+    lockEl.addEventListener("keydown", function(e){
+      if(!padEl || padEl.hidden) return;
+      if(e.key >= "0" && e.key <= "9"){ pinKeydown(e.key); e.stopPropagation(); }
+      else if(e.key === "Backspace"){ pinBackspace(); e.stopPropagation(); }
+      else if(e.key === "Enter"){ submitPin(); e.stopPropagation(); }
+    });
+  }
+
+  function startBiometricAuth(){
+    if(!lockEl) return;
+    if(padEl) padEl.hidden = true;
+    if(biomEl){
+      biomEl.hidden = false;
+      if(biomTxtEl) biomTxtEl.textContent = "Autenticando…";
+      if(biomRetryEl) biomRetryEl.hidden = true;
+    }
+    lockEl.hidden = false;
+    lockEl.focus();
+    armIdle();
+    biomPending = true;
+    window.wavrOnAuthResult = function(ok, method){
+      if(!biomPending) return;   // stale/duplicate result after the flow already moved on (e.g. idle-timeout already closed the prompt)
+      biomPending = false;
+      if(ok){
+        authenticated = true;
+        closeLockPad();
+        revealDashboard();
+      } else {
+        // Cancel/error: fall through to the PIN pad — but only if one is actually set on the
+        // backend; a PIN pad with nothing to verify against would be a dead end, so that case
+        // instead offers a retry of the biometric prompt (flagged assumption, see report).
+        fetchPinConfigured().then(function(pinSet){
+          if(pinSet){ openLockPad(); }
+          else if(biomEl){
+            if(biomTxtEl) biomTxtEl.textContent = "Autenticação cancelada";
+            if(biomRetryEl) biomRetryEl.hidden = false;
+          }
+        });
+      }
+    };
+    try{ window.WavrNative.requestAuth("Desbloquear Wavr Core"); }
+    catch(e){
+      biomPending = false;
+      fetchPinConfigured().then(function(pinSet){ if(pinSet) openLockPad(); });
+    }
+  }
+  if(biomRetryEl) biomRetryEl.addEventListener("click", startBiometricAuth);
+
+  // ---------------- Wake / idle: touch, tap, click or keydown anywhere reveals the
+  // dashboard (through the lock gate above, when one is configured); about 60s of no
+  // interaction brings the ambient face back. One fade, no perpetual loop (respects
+  // prefers-reduced-motion via the CSS media query above). The wave field is stopped for
+  // the entire time the ambient face is covered by the DASHBOARD — no reason to keep
+  // spending frames animating a canvas nobody can see. It keeps running behind the LOCK
+  // overlay though (glance-free, not a blackout). ----------------
+  var IDLE_MS = 60000;
+  var idleTimer = null;
+  var dissolved = false;
+
+  function armIdle(){
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(returnToAmbient, IDLE_MS);
+  }
+  function returnToAmbient(){
+    dissolved = false;
+    authenticated = false;   // re-arm: the next wake needs auth again
+    closeLockPad();          // in case a pad/biometric prompt was left open mid-entry
+    panel.classList.remove("core-dissolved");
+    panel.removeAttribute("aria-hidden");
+    clearTimeout(idleTimer);
+    if(!document.hidden) wave.start();   // ambient face is back on top: resume the wave
+  }
+  function revealDashboard(){
+    if(!dissolved){
+      dissolved = true;
+      panel.classList.add("core-dissolved");
+      panel.setAttribute("aria-hidden", "true");
+      wave.stop();   // dashboard is now on top: stop spending frames on a hidden canvas
+    }
+    armIdle();
+  }
+  function wake(){
+    if(dissolved){ armIdle(); return; }             // dashboard already up: just keep it alive
+    if(lockPadOpen()){ armIdle(); return; }          // pad/biometric prompt has its own handlers
+    if(authenticated){ revealDashboard(); return; }
+    if(gatingInProgress) return;
+    if(hasBiometricLock()){ startBiometricAuth(); return; }
+    // Fast path: a warm pinStatusCache (primed above, or refreshed by an earlier wake this
+    // idle cycle) resolves the gate synchronously — the byte-for-byte-instant reveal the
+    // no-lock-configured path always had, minus one genuine edge case: a touch within the
+    // same tick as page load, before the eager warm-up above has resolved (falls to the
+    // async branch below instead).
+    if(pinStatusCache && (Date.now() - pinStatusCache.at) < PIN_CACHE_MS){
+      if(pinStatusCache.value) openLockPad(); else { authenticated = true; revealDashboard(); }
+      return;
+    }
+    gatingInProgress = true;
+    fetchPinConfigured().then(function(pinSet){
+      gatingInProgress = false;
+      if(pinSet){ openLockPad(); }
+      else { authenticated = true; revealDashboard(); }   // nothing configured: today's behavior, unchanged
+    });
+  }
+  ["pointerdown", "touchstart", "keydown"].forEach(function(evt){
+    document.addEventListener(evt, wake, true);
+  });
+
+  // Also pause while the document itself is hidden (screen off / app backgrounded) —
+  // rAF may already throttle in that state on some browsers, but this makes the stop
+  // explicit and instant rather than relying on that, and resumes on return only if the
+  // ambient face is actually the one on top (not mid-dashboard-interaction).
+  document.addEventListener("visibilitychange", function(){
+    if(document.hidden) wave.stop();
+    else if(!dissolved) wave.start();
+  });
 })();
 </script>
 </body>

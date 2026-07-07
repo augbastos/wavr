@@ -27,7 +27,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
-from wavr.sources.network import _local_ipv4, _run
+from wavr.sources.network import _local_ipv4, _run, ping_argv
 
 _LOG = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ async def _ping_once(host: str) -> bool:
     -- any failure (no route, host down, subprocess error) means False, never
     raises."""
     try:
-        out = await _run("ping", "-n", "1", "-w", "1000", host)
+        out = await _run(*ping_argv(host, 1000))
     except Exception:
         return False
     return "ttl=" in out.lower()

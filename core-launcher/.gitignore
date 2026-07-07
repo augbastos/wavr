@@ -1,0 +1,38 @@
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
+*.dex
+*.class
+
+# Generated / build output
+bin/
+gen/
+out/
+build/
+app/build/
+
+# Gradle
+.gradle/
+
+# Local configuration (SDK path etc.) — machine-specific, never commit
+local.properties
+
+# Kotlin
+.kotlin/
+
+# Signing material — never commit to this public AGPL repo
+*.jks
+*.keystore
+key.properties
+
+# IDE
+.idea/
+*.iml
+captures/
+.navigation/
+
+# OS
+.DS_Store
+Thumbs.db

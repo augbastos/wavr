@@ -35,6 +35,8 @@ _fable/
 # F4 autostart runner logs -- backend stdout/stderr may pass through here; never commit
 # to this public AGPL repo (wavr.db-wal PII-leak precedent).
 logs/
+# Root-level backend restart logs (may carry home-layout PII: camera/room names).
+be_restart*.log
 
 # local competitive research — contains real home-network PII (subnet/hostnames/VPN IPs);
 # keep OUT of this public repo until redacted (audit 2026-07-04)
