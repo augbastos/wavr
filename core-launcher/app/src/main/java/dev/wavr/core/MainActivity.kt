@@ -10,12 +10,15 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.http.SslError
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -54,9 +57,13 @@ import org.json.JSONObject
  *  - Landscape only (device lives on its side in a stand).
  *  - Self-signed loopback TLS trusted ONLY for localhost / 127.0.0.1.
  *  - Robust boot: reloads with a short backoff until the backend answers.
+ *  - Advertises itself on the LAN as `_wavr._tcp.` (mDNS/DNS-SD, port 8000) so
+ *    Wavr Mobile companions auto-discover it. Best-effort: a registration
+ *    failure is logged and swallowed, never taking down the kiosk.
  *
  * Native bridge: a minimal [WavrNativeBridge] is exposed to the panel as
- * `window.WavrNative` (system status indicators + biometric unlock). Exposing a
+ * `window.WavrNative` (system status indicators + biometric unlock + discovery
+ * state). Exposing a
  * JS interface is acceptable here because the page is the trusted local Core
  * loaded over pinned loopback TLS — the surface is deliberately tiny.
  *
@@ -80,6 +87,18 @@ class MainActivity : FragmentActivity() {
 
         /** Cheap cache window for getSystemStatus (panel polls ~every 5s). */
         const val STATUS_CACHE_MS = 2000L
+
+        // --- LAN discovery advertisement (mDNS / DNS-SD) -------------------
+        /** DNS-SD service type Wavr Mobile browses for. Fully-qualified form. */
+        const val NSD_SERVICE_TYPE = "_wavr._tcp."
+        /** Type as reported to JS / browsers (implied .local domain). */
+        const val NSD_TYPE_LABEL = "_wavr._tcp"
+        /** Requested instance name; NsdManager de-dupes with a " (n)" suffix. */
+        const val NSD_SERVICE_NAME = "Wavr Core"
+        /** The Core's HTTPS/WSS port — what the advertised SRV record points at. */
+        const val NSD_SERVICE_PORT = 8000
+        /** Logcat tag for discovery events (name-only, never sensitive data). */
+        const val NSD_TAG = "WavrNsd"
     }
 
     /** Cached status payload + timestamp (getSystemStatus is polled). */
@@ -100,6 +119,22 @@ class MainActivity : FragmentActivity() {
 
     /** Runtime CAMERA-permission dialog result -> forwarded to the streamer. */
     private lateinit var cameraPermLauncher: ActivityResultLauncher<String>
+
+    // --- LAN discovery advertisement state --------------------------------
+    /** System DNS-SD registrar; null if the platform service is unavailable. */
+    private var nsdManager: NsdManager? = null
+
+    /** The live registration listener (held so we can unregister on destroy). */
+    private var nsdRegistrationListener: NsdManager.RegistrationListener? = null
+
+    /** Held only while advertising so mDNS multicast is delivered on all devices. */
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    /** True once NsdManager confirms the service is registered on the LAN. */
+    @Volatile private var advertising: Boolean = false
+
+    /** Actual advertised name (NsdManager may append " (n)" to de-dupe). */
+    @Volatile private var advertisedName: String = NSD_SERVICE_NAME
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -139,6 +174,11 @@ class MainActivity : FragmentActivity() {
 
         applyImmersive()
         loadCore()
+
+        // Announce this Core on the LAN (mDNS / DNS-SD) so Wavr Mobile companions
+        // can auto-discover it without the user typing an IP. Best-effort: a
+        // failure here NEVER breaks the kiosk — the Core works fine undiscovered.
+        startAdvertising()
     }
 
     // ---------------------------------------------------------------------
@@ -326,10 +366,126 @@ class MainActivity : FragmentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(retryRunnable)
+        // Stop announcing on the LAN + drop the multicast lock.
+        stopAdvertising()
         // Release the camera + close the loopback MJPEG server.
         cameraStreamer.shutdown()
         webView.destroy()
         super.onDestroy()
+    }
+
+    // ---------------------------------------------------------------------
+    // LAN discovery advertisement (mDNS / DNS-SD via NsdManager)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Register a `_wavr._tcp.` service on port [NSD_SERVICE_PORT] so Wavr Mobile
+     * companions can find this Core on the local network. TXT is deliberately
+     * tiny (`v`/`role`/`path`). Fully wrapped in try/catch: a null platform
+     * service, a registration failure, or any exception is logged (name only)
+     * and swallowed — discovery is a convenience, never a kiosk dependency.
+     */
+    private fun startAdvertising() {
+        try {
+            val manager = getSystemService(Context.NSD_SERVICE) as? NsdManager
+            if (manager == null) {
+                Log.w(NSD_TAG, "NsdManager unavailable; skipping LAN advertisement")
+                return
+            }
+            nsdManager = manager
+            acquireMulticastLock()
+
+            val info = NsdServiceInfo().apply {
+                serviceName = NSD_SERVICE_NAME
+                serviceType = NSD_SERVICE_TYPE
+                port = NSD_SERVICE_PORT
+                // Small, non-sensitive TXT records for the companion to read.
+                setAttribute("v", "1")
+                setAttribute("role", "core")
+                setAttribute("path", "/?core")
+            }
+
+            val listener = object : NsdManager.RegistrationListener {
+                override fun onServiceRegistered(registered: NsdServiceInfo) {
+                    // NsdManager may have de-duped the name with a " (n)" suffix.
+                    advertisedName = registered.serviceName ?: NSD_SERVICE_NAME
+                    advertising = true
+                    Log.i(
+                        NSD_TAG,
+                        "Advertising \"$advertisedName\" $NSD_SERVICE_TYPE port $NSD_SERVICE_PORT"
+                    )
+                }
+
+                override fun onRegistrationFailed(failed: NsdServiceInfo, errorCode: Int) {
+                    advertising = false
+                    Log.w(
+                        NSD_TAG,
+                        "Registration failed (code=$errorCode); Core still works without discovery"
+                    )
+                }
+
+                override fun onServiceUnregistered(unregistered: NsdServiceInfo) {
+                    advertising = false
+                    Log.i(NSD_TAG, "LAN advertisement stopped")
+                }
+
+                override fun onUnregistrationFailed(failed: NsdServiceInfo, errorCode: Int) {
+                    Log.w(NSD_TAG, "Unregistration failed (code=$errorCode)")
+                }
+            }
+            nsdRegistrationListener = listener
+            manager.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (t: Throwable) {
+            // Never let discovery take down the kiosk.
+            advertising = false
+            Log.w(NSD_TAG, "Could not start LAN advertisement: ${t.javaClass.simpleName}")
+        }
+    }
+
+    /** Unregister the service (if any) and release the multicast lock. */
+    private fun stopAdvertising() {
+        try {
+            val manager = nsdManager
+            val listener = nsdRegistrationListener
+            if (manager != null && listener != null) {
+                manager.unregisterService(listener)
+            }
+        } catch (t: Throwable) {
+            // Already gone / never registered — tearing down, nothing to do.
+        } finally {
+            nsdRegistrationListener = null
+            advertising = false
+            releaseMulticastLock()
+        }
+    }
+
+    /**
+     * Acquire a WifiManager MulticastLock. On some devices the Wi-Fi hardware
+     * filters multicast unless a lock is held, which would stop mDNS from being
+     * announced/seen. Harmless where unnecessary; failure is swallowed.
+     */
+    private fun acquireMulticastLock() {
+        try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                ?: return
+            val lock = wifi.createMulticastLock("wavr-nsd").apply {
+                setReferenceCounted(false)
+            }
+            lock.acquire()
+            multicastLock = lock
+        } catch (t: Throwable) {
+            // mDNS still works without an explicit lock on most modern devices.
+        }
+    }
+
+    private fun releaseMulticastLock() {
+        try {
+            multicastLock?.let { if (it.isHeld) it.release() }
+        } catch (t: Throwable) {
+            // ignore
+        } finally {
+            multicastLock = null
+        }
     }
 
     // =====================================================================
@@ -410,6 +566,27 @@ class MainActivity : FragmentActivity() {
             } catch (t: Throwable) {
                 // swallow — state() reflects the real lens
             }
+        }
+
+        // -----------------------------------------------------------------
+        // LAN discovery advertisement status (read-only)
+        // -----------------------------------------------------------------
+
+        /**
+         * Current mDNS/DNS-SD advertisement state, so the panel can optionally
+         * show "discoverable on your network". Shape:
+         * `{"advertising":Boolean,"serviceName":String,"type":"_wavr._tcp"}`.
+         * Read-only; never throws into JS.
+         */
+        @JavascriptInterface
+        fun getDiscoveryState(): String = try {
+            JSONObject().apply {
+                put("advertising", advertising)
+                put("serviceName", advertisedName)
+                put("type", NSD_TYPE_LABEL)
+            }.toString()
+        } catch (t: Throwable) {
+            "{\"advertising\":false,\"serviceName\":\"$NSD_SERVICE_NAME\",\"type\":\"$NSD_TYPE_LABEL\"}"
         }
     }
 
