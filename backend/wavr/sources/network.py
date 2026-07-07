@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import socket
+import sys
 from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable
 
@@ -44,6 +45,21 @@ async def _run(*args: str) -> str:
     return out.decode(errors="replace")
 
 
+def ping_argv(host: str, timeout_ms: int = 1000) -> tuple[str, ...]:
+    """OS-appropriate 'one ping, bounded wait' argv. Windows uses ms (-n/-w);
+    Linux uses whole-second -W; macOS uses -t (total seconds). Mirrors bonded.py's
+    platform split so a Wavr Core running on Linux (a Pi / phone-in-proot appliance,
+    not just a Windows dev box) actually pings: the old hard-coded Windows flags
+    (`-n 1 -w …`) silently no-op'd on Linux, breaking the ARP sweep, the inventory
+    sweep, and the gateway health check (Core reported 'critical' while healthy)."""
+    if os.name == "nt":
+        return ("ping", "-n", "1", "-w", str(timeout_ms), host)
+    secs = max(1, (timeout_ms + 999) // 1000)  # ceil to >= 1 whole second
+    if sys.platform == "darwin":
+        return ("ping", "-c", "1", "-t", str(secs), host)
+    return ("ping", "-c", "1", "-W", str(secs), host)  # Linux / other Unix
+
+
 async def arp_scan() -> set[str]:
     """Default real scan: ping-sweep the local /24 to warm the ARP cache, then
     parse `arp -a`, returning every MAC currently on the LAN. Best-effort — a
@@ -55,7 +71,7 @@ async def arp_scan() -> set[str]:
         async def ping(addr: str) -> None:
             async with sem:
                 with contextlib.suppress(Exception):
-                    await _run("ping", "-n", "1", "-w", "200", addr)
+                    await _run(*ping_argv(addr, 200))
         await asyncio.gather(*(ping(str(h)) for h in net.hosts()))
     return parse_arp_table(await _run("arp", "-a"))
 
