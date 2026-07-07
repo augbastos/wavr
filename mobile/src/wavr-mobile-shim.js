@@ -522,15 +522,32 @@
   }
   // Only "resolved" events carry a usable address (jmdns fires "added" before resolution completes);
   // parseCoreService's own host/port validation is a second line of defence against a half-resolved
-  // record slipping through. onFailure covers the watch() promise itself rejecting (e.g. multicast
-  // lock / IOException) so a broken plugin degrades to the visible manual-entry fallback, not silence.
+  // record slipping through.
+  //
+  // FAILURE PATH -- `watch` is a CALLBACK-type Capacitor method (@PluginMethod(returnType =
+  // RETURN_CALLBACK) in ZeroConfPlugin.java): the promise it returns resolves IMMEDIATELY with a
+  // callbackId and is DECOUPLED from later native results, so a native failure (no multicast lock,
+  // Wi-Fi off, IOException in watchService) is delivered THROUGH THE CALLBACK, NOT via promise
+  // rejection. Per @capacitor/android native-bridge.js returnResult(): on error a callback-type call
+  // is invoked as `callback(null, result.error)` (success is `callback(result.data)`). So the failure
+  // is read from the callback's OWN arguments: a falsy first arg or a truthy second (error) arg means
+  // the watch failed -> surface the visible manual-entry fallback instead of hanging on "Looking…".
+  // The promise `.catch` is kept only as belt-and-suspenders for a JS-level rejection (plugin
+  // unimplemented / load failure); the synchronous try/catch covers the proxy throwing on the call.
   function startCoreWatch(onFound, onFailure){
     if(_coreWatchActive) return; _coreWatchActive = true;
+    function fail(){                       // report a native failure at most once
+      if(!_coreWatchActive) return;
+      _coreWatchActive = false;
+      if(onFailure) onFailure();
+    }
     try{
-      Zeroconf.watch({ type: "_wavr._tcp.", domain: "local." }, function(res){
-        if(res && res.action === "resolved" && res.service) onFound(res.service);
-      }).catch(function(){ _coreWatchActive = false; if(onFailure) onFailure(); });
-    }catch(_){ _coreWatchActive = false; if(onFailure) onFailure(); }
+      var p = Zeroconf.watch({ type: "_wavr._tcp.", domain: "local." }, function(res, err){
+        if(err || !res){ fail(); return; }                        // native error: callback(null, error)
+        if(res.action === "resolved" && res.service) onFound(res.service);
+      });
+      if(p && typeof p.catch === "function") p.catch(function(){ fail(); });
+    }catch(_){ fail(); }
   }
   function stopCoreWatch(){
     _coreWatchActive = false;
