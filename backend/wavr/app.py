@@ -65,7 +65,7 @@ from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
-from wavr.auth import authorize, parse_bearer, can_change_state, can_view, in_subnet
+from wavr.auth import access_for, parse_bearer, can_change_state, can_view, in_subnet, has_scope
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.local_token import resolve_local_token
 from wavr import arp_block
@@ -769,12 +769,30 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if role == "root" and request.headers.get("x-wavr-local") != "1":
             raise HTTPException(status_code=403, detail="missing X-Wavr-Local header")
 
+    def require_scope(scope: str):
+        # Wavr Pass (Phase 1): a dependency FACTORY -- `Depends(require_scope("control"))`
+        # wires one ADDITIONAL scope check onto a route. Never a substitute for an
+        # existing require_local/require_central/require_root/require_authenticated gate
+        # (design spec §3): a caller must pass BOTH, so even a mis-mapped scope can't
+        # widen access -- the original role gate still denies. Loopback root ALWAYS
+        # bypasses (root is never scope-limited, see auth.ALL_SCOPES); everyone else is
+        # 403'd when `scope` isn't in `request.state.scopes` (set by the access_for()
+        # call in loopback_or_authed below -- a NULL Device.scopes resolves to the
+        # role's DEFAULT_SCOPES there, so a pre-Wavr-Pass token's very first request
+        # after upgrade is allowed/denied IDENTICALLY to before this feature existed).
+        def _dep(request: Request):
+            if getattr(request.state, "role", None) == "root":
+                return
+            if not has_scope(getattr(request.state, "scopes", None), scope):
+                raise HTTPException(status_code=403, detail=f"missing scope: {scope}")
+        return _dep
+
     if cfg.multidevice:
         app.include_router(build_pair_router(_devices, _pairing))
         app.include_router(build_ws_ticket_router(_devices, _pairing))
         app.include_router(
             build_devices_router(_devices, delete_deps=[Depends(require_csrf_root)]),
-            dependencies=[Depends(require_central)])
+            dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     # PRIVACY: the load-bearing access control. Default (WAVR_MULTIDEVICE off) is strict
     # loopback-only, enforced in code so it holds even under --host 0.0.0.0 ("testclient"
@@ -809,6 +827,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 if not hmac.compare_digest(supplied.encode("utf-8"), _local_token.encode("utf-8")):
                     return JSONResponse({"detail": "local token required"}, status_code=401)
             request.state.role = "root"
+            # Wavr Pass: root is never scope-limited (require_scope bypasses it before
+            # ever looking at this value) -- None mirrors auth.access_for's own
+            # loopback return, so the "root has no explicit scopes to read" invariant
+            # holds everywhere, not just through access_for.
+            request.state.scopes = None
             return await call_next(request)
         if not cfg.multidevice:                      # off: strict loopback-only, as before
             return JSONResponse({"detail": "loopback only"}, status_code=403)
@@ -817,6 +840,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if request.url.path == "/api/pair":
             if in_subnet(host, _local_ip):
                 request.state.role = None
+                request.state.scopes = None
                 return await call_next(request)
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         # Static shell (index + PWA manifest/sw/icon + vendored three.js): reachable by an
@@ -830,13 +854,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if _p in ("/", "/index.html", "/measure.html", "/manifest.webmanifest", "/sw.js", "/icon.svg") or _p.startswith("/vendor/"):
             if in_subnet(host, _local_ip):
                 request.state.role = None
+                request.state.scopes = None
                 return await call_next(request)
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         token = parse_bearer(request.headers.get("authorization"))
-        role = authorize(host, _local_ip, token, _devices)
+        # Wavr Pass: access_for is authorize()'s one-verify replacement that ALSO
+        # resolves the caller's effective scopes (auth.effective_scopes) in the same
+        # pass -- a NULL Device.scopes (every pre-existing/default-paired device)
+        # resolves to its role's DEFAULT_SCOPES, so this is byte-identical to the old
+        # authorize()-only role decision for every already-paired device.
+        role, scopes = access_for(host, _local_ip, token, _devices)
         if role is None:
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         request.state.role = role
+        request.state.scopes = scopes
         return await call_next(request)
 
     _allowed_hosts = ["localhost", "127.0.0.1", "testserver"]
@@ -903,8 +934,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # happens here (after require_local is defined) rather than up near the
     # other include_router calls.
     app.include_router(build_inventory_router(
-        _inventory, device_meta=_device_meta, name_deps=[Depends(require_local)],
-        dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor))
+        _inventory, device_meta=_device_meta,
+        name_deps=[Depends(require_local), Depends(require_scope("control"))],
+        dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor),
+        dependencies=[Depends(require_scope("network:read"))])
 
     # Consent-first identity registry routes. Router-level require_central keeps the
     # person-labelled PII list off a multidevice 'user' (loopback root always passes);
@@ -915,8 +948,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         build_identity_router(
             _identity_store, bonded_reader=_bonded_reader,
             ensure_source=_ensure_ble_source,
-            write_deps=[Depends(require_local)]),
-        dependencies=[Depends(require_central)])
+            write_deps=[Depends(require_local), Depends(require_scope("control"))]),
+        dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     def _connector_catalog() -> list[dict]:
         # The built-in connectors surfaced from EXISTING gated features. available/
@@ -984,26 +1017,27 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(
         build_connectors_router(
             _connectors, _connector_catalog,
-            write_deps=[Depends(require_local)]),
-        dependencies=[Depends(require_central)])
+            write_deps=[Depends(require_local), Depends(require_scope("control"))]),
+        dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     @app.get("/api/history")
-    async def history(limit: int = 200):
+    async def history(limit: int = 200, _=Depends(require_scope("presence:read"))):
         # Clamp: a negative limit means "no limit" to SQLite's `LIMIT ?` (full-table
         # dump), and an unbounded positive value is still a resource-exhaustion risk.
         limit = max(1, min(limit, 1000))
         return await asyncio.to_thread(_storage.recent, limit)
 
     @app.get("/api/state")
-    async def state():
+    async def state(_=Depends(require_scope("presence:read"))):
         return latest
 
     @app.get("/api/house")
-    async def house():
+    async def house(_=Depends(require_scope("presence:read"))):
         return _house
 
     @app.put("/api/house")
-    async def put_house(doc: dict = Body(...), _=Depends(require_local)):
+    async def put_house(doc: dict = Body(...), _=Depends(require_local),
+                        __=Depends(require_scope("control"))):
         try:
             save_house_map(cfg.house_map, doc)
         except HouseMapError as exc:
@@ -1015,7 +1049,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return _house
 
     @app.put("/api/house/room")
-    async def put_house_room(body: dict = Body(...), _=Depends(require_local)):
+    async def put_house_room(body: dict = Body(...), _=Depends(require_local),
+                             __=Depends(require_scope("control"))):
         # F2 "medir com o celular": upsert ONE room into the existing map WITHOUT wiping
         # the hand-edited maquette. Only x/y METER coordinates arrive here -- NO camera
         # frame is ever touched or read, so ADR-0002 (frames RAM-only) stays intact.
@@ -1040,7 +1075,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return _house
 
     @app.post("/api/narrate")
-    async def narrate(_=Depends(require_local)):
+    async def narrate(_=Depends(require_local), __=Depends(require_scope("control"))):
         if _narrator is None:
             raise HTTPException(
                 status_code=503,
@@ -1062,7 +1097,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/ha/import")
     async def ha_import(dry_run: bool = Body(False, embed=True),
-                        _=Depends(require_local)):
+                        _=Depends(require_local), __=Depends(require_scope("control"))):
         # A4.1 HA -> Wavr registry import. USER-TRIGGERED ONLY (never a timer),
         # gated by require_local (CSRF), local-HA-only + SSRF-safe (wavr.ha_import
         # only ever contacts the configured ha_url). The HA token is read from
@@ -1097,7 +1132,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def wake_on_lan(mac: str = Body(..., embed=True),
                           broadcast: str = Body("255.255.255.255", embed=True),
                           port: int = Body(9, embed=True),
-                          _=Depends(require_local)):
+                          _=Depends(require_local), __=Depends(require_scope("control"))):
         # A3.1 Wake-on-LAN: a LAN-LOCAL actuator (zero external egress). Opt-in
         # (WAVR_NET_WOL, default OFF -> 503) + require_local CSRF. The MAC +
         # broadcast (LAN/private only) + port (0/7/9 only) are validated in
@@ -1114,7 +1149,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def diag(kind: str, host: str = Body("", embed=True),
                    count: int = Body(3, embed=True),
                    resolvers: list[str] | None = Body(None, embed=True),
-                   _=Depends(require_local)):
+                   _=Depends(require_local), __=Depends(require_scope("control"))):
         # A3.2 diagnostics: ping / traceroute / dns. LAN/local family, opt-in
         # (WAVR_NET_DIAGNOSTICS, default OFF -> 503) + require_local CSRF. NO
         # command injection: the target is regex-validated (rejecting every shell
@@ -1137,7 +1172,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/speedtest")
     async def run_speedtest(confirm: bool = Body(False, embed=True),
-                            _=Depends(require_local)):
+                            _=Depends(require_local), __=Depends(require_scope("control"))):
         # A3.3 speed test: THE single sanctioned external egress -- treated like
         # the narrator, with one extra gate because the M-Lab/ndt7 provider
         # PUBLISHES the caller's public IP. THREE gates: (1) WAVR_NET_SPEEDTEST
@@ -1329,7 +1364,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         }
 
     @app.get("/api/presence/report")
-    async def presence_report():
+    async def presence_report(_=Depends(require_scope("network:read"))):
         # Pure aggregation of wavr.device_meta's first/last-seen store (Feature
         # A) -- no new scanning, no I/O beyond the existing sqlite read (same
         # synchronous-call convention netinventory_service already uses for
@@ -1338,7 +1373,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/presence/register-companion")
     async def register_companion(request: Request, label: str = Body(..., embed=True),
-                                 _=Depends(require_authenticated)):
+                                 _=Depends(require_authenticated),
+                                 __=Depends(require_scope("presence:write"))):
         # Companion presence self-registration: the caller's OWN device becomes a
         # named presence signal. The MAC is NEVER client-supplied -- it is derived
         # from the REQUEST'S OWN source IP via the local ARP table (the same seam
@@ -1366,7 +1402,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"mac_registered": True, "label": who, "mac_prefix": mac_prefix(mac)}
 
     @app.delete("/api/presence/register-companion")
-    async def unregister_companion(request: Request, _=Depends(require_authenticated)):
+    async def unregister_companion(request: Request, _=Depends(require_authenticated),
+                                   __=Depends(require_scope("presence:write"))):
         # Self-service opt-out: resolve the CALLER's own source IP the same way
         # the POST does (never a client-supplied MAC/label) and remove that
         # address from the registry -- "this MAC is me, stop tracking it" is one
@@ -1380,7 +1417,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"mac_unregistered": removed, "mac_prefix": mac_prefix(mac)}
 
     @app.post("/api/core/pin")
-    async def set_core_pin(pin: str = Body(..., embed=True), _=Depends(require_local)):
+    async def set_core_pin(pin: str = Body(..., embed=True), _=Depends(require_local),
+                           __=Depends(require_scope("admin"))):
         # Admin-only (require_local: loopback root + CSRF header, or a multidevice
         # 'central'). Sets/replaces the Core Panel unlock PIN -- persisted HASHED
         # (salted pbkdf2, wavr.pin_store) -- never the plaintext, never echoed back.
@@ -1423,7 +1461,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"pin_set": _pin_store.is_set()}
 
     @app.get("/api/health")
-    async def health(_=Depends(require_local)):
+    async def health(_=Depends(require_local), __=Depends(require_scope("control"))):
         # On-demand only -- no background task, no new opt-in flag (see the
         # _health_check/_health_resolvers construction above for the
         # LOCAL-ONLY rationale). 5-tier severity ladder (defensive-inventory #12):
@@ -1441,12 +1479,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return manager.status()
 
     @app.post("/api/system/toggle")
-    async def system_toggle(on: bool = Body(..., embed=True), _=Depends(require_local)):
+    async def system_toggle(on: bool = Body(..., embed=True), _=Depends(require_local),
+                            __=Depends(require_scope("control"))):
         await manager.set_running(on)
         return manager.status()
 
     @app.post("/api/sources/{name}/toggle")
-    async def source_toggle(name: str, enabled: bool = Body(..., embed=True), _=Depends(require_local)):
+    async def source_toggle(name: str, enabled: bool = Body(..., embed=True),
+                            _=Depends(require_local), __=Depends(require_scope("control"))):
         try:
             await manager.set_enabled(name, enabled)
         except KeyError:
@@ -1454,7 +1494,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return manager.status()
 
     @app.get("/api/cameras")
-    async def cameras():
+    async def cameras(_=Depends(require_scope("camera:view"))):
         return _masked_cameras()
 
     @app.post("/api/cameras")
@@ -1462,7 +1502,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         name: str = Body(...), room: str = Body(...),
         rtsp_url: str = Body(...), confidence: float = Body(cfg.cam_confidence),
         mac: str | None = Body(None),
-        _=Depends(require_local),
+        _=Depends(require_local), __=Depends(require_scope("control")),
     ):
         name = name.strip()
         room = room.strip()
@@ -1503,7 +1543,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                           username: str | None = Body(None, embed=True),
                           password: str | None = Body(None, embed=True),
                           timeout: float = Body(3.0, embed=True),
-                          _=Depends(require_local)):
+                          _=Depends(require_local), __=Depends(require_scope("control"))):
         # A4.2 ONVIF camera probe: auto-discovers LAN cameras (WS-Discovery) and
         # fetches their RTSP URI (GetProfiles/GetStreamUri) to PRE-FILL the rung-2
         # add form. It NEVER auto-adds a camera -- the user still confirms via
@@ -1530,7 +1570,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return result
 
     @app.delete("/api/cameras/{name}")
-    async def delete_camera(name: str, _=Depends(require_local)):
+    async def delete_camera(name: str, _=Depends(require_local),
+                            __=Depends(require_scope("control"))):
         if not _cameras.delete(name):
             raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
         try:
@@ -1571,7 +1612,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                          False)
 
     @app.get("/api/cameras/{name}/calibration")
-    async def get_calibration(name: str):
+    async def get_calibration(name: str, _=Depends(require_scope("camera:view"))):
         # Read-only (loopback middleware is the gate, like GET /api/inventory). 404 for
         # an unknown camera so the UI can't probe arbitrary names.
         if not _NAME_RE.match(name):
@@ -1588,7 +1629,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         floor_points: list | None = Body(None),
         img_w: int | None = Body(None),
         img_h: int | None = Body(None),
-        _=Depends(require_local),
+        _=Depends(require_local), __=Depends(require_scope("control")),
     ):
         # Spec A. Two independent, composable calibrations, both state-changing
         # (require_local / CSRF): a MONOCULAR mount prior (approximate immediate
@@ -1647,7 +1688,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return _calib_view(name)
 
     @app.delete("/api/cameras/{name}/calibration")
-    async def delete_calibration(name: str, _=Depends(require_local)):
+    async def delete_calibration(name: str, _=Depends(require_local),
+                                 __=Depends(require_scope("control"))):
         if not _NAME_RE.match(name):
             raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
         if not _cameras.get(name):
@@ -1657,7 +1699,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"camera": name, "removed": removed}
 
     @app.get("/api/cameras/{name}/calib-spots")
-    async def get_calib_spots(name: str, _=Depends(require_central)):
+    async def get_calib_spots(name: str, _=Depends(require_central),
+                              __=Depends(require_scope("control"))):
         # Walk-to-calibrate KNOWN floor spots (FLOOR metres): room centroid + polygon
         # corners the wizard guides the person to, one at a time. Pure geometry from the
         # house map -- no frame, no credential (ADR-0002). Read-only but central+loopback
@@ -1674,7 +1717,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"camera": name, "room": cam["room"], "spots": out}
 
     @app.get("/api/cameras/{name}/calib-sample")
-    async def get_calib_sample(name: str, _=Depends(require_central)):
+    async def get_calib_sample(name: str, _=Depends(require_central),
+                               __=Depends(require_scope("control"))):
         # Walk-to-calibrate READ path. Returns ONLY the latest detected person's FEET
         # PIXEL (a coordinate) + image dims + detection confidence for this camera, or
         # nulls when there is no FRESH detection (no session, no person, or a stale
@@ -1696,7 +1740,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/cameras/{name}/calib-session")
     async def calib_session(name: str, active: bool = Body(..., embed=True),
-                            _=Depends(require_local)):
+                            _=Depends(require_local), __=Depends(require_scope("control"))):
         # Start/stop a walk-to-calibrate SAMPLING session. ACTIVE: re-register the camera
         # so its pose pass records the walker's FEET PIXEL (coordinate only, ADR-0002)
         # into the sample store, and START it running so frames flow -- the operator is
@@ -1725,7 +1769,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 "active": bool(active_now.get(name))}
 
     @app.get("/api/cameras/suggestions")
-    async def camera_suggestions():
+    async def camera_suggestions(_=Depends(require_scope("network:read"))):
         # F3 read-only IP-drift suggestions (loopback middleware is the gate, like
         # GET /api/inventory -- no CSRF). Each: {camera, mac, current_ip, suggested_ip,
         # vendor, ts}. IP+MAC+vendor only (already non-sensitive per /api/inventory);
@@ -1736,7 +1780,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/cameras/{name}/rebind")
     async def rebind_camera(name: str, ip: str = Body(..., embed=True),
-                            _=Depends(require_local)):
+                            _=Depends(require_local), __=Depends(require_scope("control"))):
         # F3 one-click IP-drift rebind. A rebind is NEVER automatic -- this is the
         # load-bearing mitigation: a MAC-spoofing LAN attacker can manufacture a drift
         # suggestion, so the change is applied ONLY on the user's explicit confirmation.
@@ -1792,7 +1836,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.post("/api/ptz/{camera_id}/move")
     async def ptz_move(camera_id: str,
                        pan: float = Body(0.0), tilt: float = Body(0.0),
-                       zoom: float = Body(0.0), _=Depends(require_local)):
+                       zoom: float = Body(0.0), _=Depends(require_local),
+                       __=Depends(require_scope("control"))):
         cam = _ptz_cam(camera_id)
         if not _camera_active(camera_id):
             # Camera off -> no ONVIF call at all (kill-switch dominates PTZ).
@@ -1801,18 +1846,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"ok": ok}
 
     @app.post("/api/ptz/{camera_id}/stop")
-    async def ptz_stop(camera_id: str, _=Depends(require_local)):
+    async def ptz_stop(camera_id: str, _=Depends(require_local),
+                       __=Depends(require_scope("control"))):
         cam = _ptz_cam(camera_id)
         # Stop is always allowed (safety): even a just-disabled camera should halt.
         return {"ok": await _ptz.stop(camera_id, cam["rtsp_url"])}
 
     @app.get("/api/ptz/{camera_id}/presets")
-    async def ptz_presets(camera_id: str):
+    async def ptz_presets(camera_id: str, _=Depends(require_scope("camera:view"))):
         cam = _ptz_cam(camera_id)
         return await _ptz.get_presets(camera_id, cam["rtsp_url"])
 
     @app.post("/api/ptz/{camera_id}/preset/{token}")
-    async def ptz_goto_preset(camera_id: str, token: str, _=Depends(require_local)):
+    async def ptz_goto_preset(camera_id: str, token: str, _=Depends(require_local),
+                              __=Depends(require_scope("control"))):
         cam = _ptz_cam(camera_id)
         if not _PRESET_RE.match(token):
             raise HTTPException(status_code=400, detail="invalid preset token")
@@ -1821,12 +1868,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"ok": await _ptz.goto_preset(camera_id, cam["rtsp_url"], token)}
 
     @app.get("/api/ptz/{camera_id}/capabilities")
-    async def ptz_capabilities(camera_id: str):
+    async def ptz_capabilities(camera_id: str, _=Depends(require_scope("camera:view"))):
         cam = _ptz_cam(camera_id)
         return await _ptz.capabilities(camera_id, cam["rtsp_url"])
 
     @app.get("/api/ptz/{camera_id}/status")
-    async def ptz_status(camera_id: str):
+    async def ptz_status(camera_id: str, _=Depends(require_scope("camera:view"))):
         # Read-only PTZ position (pan/tilt/zoom) -- the BEARING SEAM for person
         # localization on a pan/tilt camera. Same gate/pattern as capabilities:
         # WAVR_PTZ + loopback; reads ONLY ONVIF control metadata, NEVER a frame
@@ -1837,7 +1884,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     if cfg.multidevice:
         @app.post("/api/pair-code")
-        async def pair_code(role: str = Body("user", embed=True), _=Depends(require_local)):
+        async def pair_code(role: str = Body("user", embed=True), _=Depends(require_local),
+                            __=Depends(require_scope("admin"))):
             # Operator (loopback root / central) mints a one-time pairing code that a
             # companion then redeems at POST /api/pair. Gated by require_local.
             if role not in ("central", "user"):
