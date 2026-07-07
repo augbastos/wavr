@@ -63,4 +63,9 @@
          the LAN telemetry payload; rssi works without it. A viewer/admin-only install
          never triggers the prompt and never uses location. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- capacitor-zeroconf (mDNS/DNS-SD browse for _wavr._tcp Cores): the plugin acquires a
+         WifiManager.MulticastLock (ZeroConf.java) to receive multicast mDNS packets on Wi-Fi.
+         ACCESS_WIFI_STATE and INTERNET above are already present and cover its other needs. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 </manifest>
