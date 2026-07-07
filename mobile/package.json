@@ -10,7 +10,8 @@
   "scripts": {
     "sync-frontend": "node scripts/sync-frontend.mjs",
     "sync": "npm run sync-frontend && cap sync",
-    "cap": "cap"
+    "cap": "cap",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",
