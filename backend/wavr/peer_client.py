@@ -18,10 +18,17 @@ from __future__ import annotations
 import http.client
 import json
 import ssl
+import time
 import urllib.parse
 from typing import Callable
 
 from wavr.tls import format_fingerprint
+
+# §E (adversarial-sweep [11]): a peer response body is bounded. Anything larger is a
+# hung/hostile peer, not a legitimate pairing/fusion payload (the biggest real body is
+# a small JSON object) -- read at most this many bytes and reject an oversized/streaming
+# response as a PeerClientError rather than buffering it into memory unbounded.
+MAX_PEER_BODY = 1 << 20   # 1 MiB
 
 
 class PeerClientError(RuntimeError):
@@ -40,17 +47,32 @@ def _default_transport(method: str, url: str, headers: dict, body: bytes | None,
     """Real transport: opens the connection over an SSLContext that accepts
     ANY cert (self-signed peers have no CA) but, when `pinned_fingerprint` is
     given, verifies the ACTUAL presented certificate's fingerprint matches
-    before trusting the response -- the same TOFU-then-pin model the
-    pairing/Mobile flow already uses, just enforced on every call, not only
-    at pairing time.
+    BEFORE any application data (the bearer token / pairing code) is written
+    to the socket -- the same TOFU-then-pin model the pairing/Mobile flow
+    already uses, just enforced on every call, not only at pairing time.
+
+    I1 fix (2026-07-09 C1-fix design §5): the ordering is
+    `connect()` -> `getpeercert()` -> verify pin -> `request()`. `connect()`
+    forces the TLS handshake with ZERO application bytes sent, so the pin is
+    checked against the ACTUAL presented cert while the credential is still
+    only in local memory. A MitM presenting a different self-signed cert is
+    rejected here, before it ever receives the token/code -- the previous
+    order (`request()` first) leaked the credential to the MitM's socket and
+    only aborted afterwards.
+
+    §E fix (adversarial-sweep [11]): `timeout` is a TOTAL wall-clock deadline,
+    not just a per-socket idle timeout -- the remaining budget is re-armed on
+    the socket before each blocking step (handshake, request, response, read),
+    so a peer that trickles bytes forever cannot hang the call past `timeout`.
+    The response body is read capped at `MAX_PEER_BODY` and an oversized reply
+    is rejected.
 
     Implemented with `http.client.HTTPSConnection` rather than
     `urllib.request.urlopen`: urlopen only exposes the peer certificate by
     reaching into private internals (`resp.fp.raw._sock`), which is fragile
     and version-dependent. `HTTPSConnection.sock.getpeercert()` is the same
     underlying `ssl.SSLSocket`, reached through a documented public
-    attribute, and lets the fingerprint be checked BEFORE the response body
-    is read -- so a mismatched peer never gets its response trusted."""
+    attribute."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -60,20 +82,42 @@ def _default_transport(method: str, url: str, headers: dict, body: bytes | None,
     port = parts.port or 443
     path = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
 
+    deadline = time.monotonic() + timeout
+
+    def _arm() -> None:
+        # Re-arm the socket with the REMAINING total budget before every blocking
+        # step (§E total wall-clock deadline). Zero/negative remaining -> fail closed.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PeerClientError("peer call exceeded total timeout")
+        conn.sock.settimeout(remaining)
+
     conn = http.client.HTTPSConnection(host, port, context=ctx, timeout=timeout)
     try:
-        conn.request(method, path, body=body, headers=headers)
+        # 1. TLS handshake ONLY -- no request line, no headers, no body on the wire yet.
+        conn.connect()
+        # 2. Pin the presented cert BEFORE any credential leaves this process (I1).
         if pinned_fingerprint is not None:
             der = conn.sock.getpeercert(binary_form=True)
             observed = format_fingerprint(der)
             if observed != pinned_fingerprint:
-                raise PeerClientError(
-                    f"peer certificate fingerprint mismatch: expected "
-                    f"{pinned_fingerprint}, got {observed} -- possible MitM")
+                # Generic message -- never echo the observed fingerprint (§B: no exfil
+                # oracle; the caller surfaces this as a flat 502 anyway).
+                raise PeerClientError("peer certificate fingerprint mismatch -- possible MitM")
+        # 3. Only now send the request (credential rides a verified-pinned socket).
+        _arm()
+        conn.request(method, path, body=body, headers=headers)
+        _arm()
         resp = conn.getresponse()
         if resp.status >= 400:
-            raise PeerClientError(f"peer returned HTTP {resp.status}: {resp.read()!r}")
-        return resp.read()
+            # §B: do NOT echo the peer response body -- status only.
+            raise PeerClientError(f"peer returned HTTP {resp.status}")
+        # 4. Capped read: pull at most MAX_PEER_BODY+1 and reject an oversized reply.
+        _arm()
+        raw = resp.read(MAX_PEER_BODY + 1)
+        if len(raw) > MAX_PEER_BODY:
+            raise PeerClientError("peer response exceeded maximum size")
+        return raw
     finally:
         conn.close()
 
