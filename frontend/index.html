@@ -1940,113 +1940,146 @@
         </div>
       </section>
 
-      <!-- ==================== SYSTEM ==================== -->
+      <!-- ==================== SYSTEM ====================
+           Bundle-1 regroup (settings-system-connectors-spec.md "Layout spec / SYSTEM"):
+           two labeled instrument cards on the panel form factor via #sysColLeft/#sysColRight
+           (CSS grid, no DOM move for any EXISTING tile's children — only these two new
+           wrapper divs were added, so every getElementById lookup below is unaffected).
+           Desktop/tablet keep today's flat vertical stack (wrappers are plain block divs
+           outside the panel MQ). NOTE: #srcToggles (per-source toggles) lives on the
+           Devices→Active sub-tab, not here — that placement predates this dispatch and is
+           left as-is (see report); "System power" below is the master switch only. -->
       <section class="tab-panel" id="panel-sistema" data-tab="sistema" role="tabpanel" aria-labelledby="tab-sistema">
-        <!-- Stage 2: global switch moved here from Devices (it acts on the whole install,
-             not on one device). The per-source toggles (#srcToggles) moved to Devices→Active. -->
-        <div id="controls" class="controls tile" hidden>
-          <div class="tile-head"><h2>System</h2><span class="hint">global switch — pauses all sources</span></div>
-          <div class="controls-row">
-            <button id="sysToggle" class="ctl" data-tip="Master switch — pauses every presence source at once"></button>
+        <div id="sysColLeft" class="sys-col">
+          <!-- Core Panel lock (admin, live/loopback only) + Core camera: sets/changes the PIN
+               that gates the ambient touchscreen build's (?core / window.WAVR_CORE) wake-to-
+               dashboard step, and the physical Core camera. The touchscreen itself only ever
+               verifies against the PIN endpoint — it never sets it. Card A ("Panel & admin"):
+               pulled up from dead-last position; camera toggle grouped in, not mis-filed under
+               a lock-only heading (both are panel/device administration, not sensing). -->
+          <div id="coreLockPanel" class="tile" hidden aria-labelledby="corelock-h">
+            <div class="tile-head"><h2 id="corelock-h">Panel &amp; admin</h2><span class="hint">Core Panel lock + camera</span></div>
+            <p id="coreLockAdminStatus" class="panel-note">checking…</p>
+            <div id="coreLockModeChooser" class="viewToggle corelock-mode" role="group" aria-label="Core Panel lock mode">
+              <button type="button" id="lockModeNone" class="ctl small" data-mode="none" aria-pressed="false">No lock</button>
+              <button type="button" id="lockModePin" class="ctl small" data-mode="pin" aria-pressed="false">PIN</button>
+              <button type="button" id="lockModeBiometric" class="ctl small off" data-mode="biometric" aria-pressed="false" disabled hidden
+                      data-tip="This device's biometric unlock runs automatically before any PIN — nothing to configure here">Device unlock (automatic)</button>
+            </div>
+            <form id="coreLockAdminForm" class="corelock-form" aria-labelledby="corelock-h" hidden>
+              <input id="coreLockAdminPin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}"
+                     minlength="4" maxlength="12" placeholder="new PIN (4–12 digits)" aria-label="new PIN" required>
+              <button type="submit" class="ctl small">Save</button>
+              <span id="coreLockAdminFb" class="action-fb" aria-live="polite"></span>
+            </form>
+            <div class="corelock-form" style="margin-top:12px">
+              <button id="coreCamBtn" type="button" class="ctl small">Toggle Core camera</button>
+              <span id="coreCamStatus" class="action-fb" aria-live="polite">camera: unknown</span>
+            </div>
           </div>
-        </div>
-        <!-- Stage 3b P0 (§7#1/§9): Privacy & Egress dashboard — “what can leave this home”,
-             the trust receipt. Visible in EVERY mode; states fill from /api/status in live
-             (pure surfacing of the SAME 3s poll renderStatus already runs — zero new calls). -->
-        <div id="egressPanel" class="tile" aria-labelledby="egress-h">
-          <div class="tile-head"><h2 id="egress-h">What can leave this home</h2><span class="hint">trust receipt</span></div>
-          <p id="egressSummary" class="egress-summary na">—</p>
-          <!-- P6 fix 3: demo note lives here, SEPARATE from the permanent guarantee that
-               renderEgress() writes into #egressSummary — never conflated in one sentence. -->
-          <p id="egressDemoNote" class="egress-demonote" hidden>This demo has no hub connected — this page makes no backend calls, so every feature below shows as “inactive”.</p>
-          <!-- v2 egress icons: persistent legend for the badge colors (decorative — every
-               row below states the same thing in its own text) -->
-          <div class="eg-legend" aria-hidden="true">
-            <span><i class="eg-swatch local"></i>Local — stays home</span>
-            <span><i class="eg-swatch lan"></i>LAN — your network only</span>
-            <span><i class="eg-swatch egress"></i>Can leave when on</span>
-            <span><i class="eg-swatch na"></i>Inactive</span>
-          </div>
-          <div id="egressList" class="egress-list"></div>
-          <p class="panel-note" id="egressNote" hidden>Each feature is opt-in per install (hub environment variables). Without a connected hub, every feature shows as “inactive” — that's not an error.</p>
-        </div>
-        <!-- A2.1: network-sensing collectors — LOCAL listeners/probes, rendered off the
-             existing /api/status poll (zero new network calls). Own namespace (.sn-row),
-             never mixed into #egressList — these never leave the LAN either way. Sits right
-             below the egress list ON PURPOSE: the trust receipt says what CAN leave, this
-             tile says what only ever senses inside your own network. -->
-        <div id="netSensing" class="tile" aria-labelledby="netSensing-h">
-          <div class="tile-head"><h2 id="netSensing-h">Network sensing</h2><span class="hint">local sensing — nothing leaves home</span></div>
-          <p class="panel-note">These read standard network-discovery traffic already on your LAN (mDNS,
-            UPnP, DHCP, etc.) to identify your devices better. Unlike the list above, these are not egress
-            paths — they scan only your own network and nothing leaves home. Set from the hub's
-            configuration; changing one needs a hub restart (no in-app switch yet).</p>
-          <div id="sensingList" class="sensing-list"></div>
-        </div>
-        <!-- A2.3: health check — user-triggered ONLY. When the hub has public-resolver checks
-             on (or their state is still unknown), the button arms a two-step confirm identical
-             in shape to the AI Narrator's, because GET /api/health then pings public DNS hosts
-             (same egress class). When the hub confirms resolvers OFF, the check is gateway-only
-             (local) and runs directly. NEVER wire this into a timer/poll — see the load-bearing
-             comment at the click handler below. -->
-        <div id="healthCheck" class="tile" hidden aria-labelledby="health-h">
-          <div class="tile-head"><h2 id="health-h">Health check</h2>
-            <span id="healthChecking" class="egress-live" role="status" hidden><i aria-hidden="true"></i>checking…</span>
-          </div>
-          <div class="narrate-row">
-            <button id="healthBtn" type="button" class="ctl" data-tip="Checks your gateway and, if enabled on the hub, 3 public DNS resolvers — the only way to see if the internet itself is down">Check now</button>
-            <p id="healthOut" class="narrate-out muted">Runs an on-demand check of your gateway plus, if enabled on the hub, three public DNS resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9) to tell LAN problems from internet problems.</p>
-          </div>
-          <div id="healthConfirm" class="narrate-confirm" hidden role="group" aria-label="confirm health check">
-            <p class="narrate-confirm-txt">This checks your gateway<span id="healthConfirmResolvers"> plus 3 public DNS servers <b>outside your home</b> (1.1.1.1, 8.8.8.8, 9.9.9.9)</span> — confirm?</p>
+          <!-- Card B: "System power" — the global switch only (per-source toggles live on
+               Devices→Active, see the section-level note above). -->
+          <div id="controls" class="controls tile" hidden>
+            <div class="tile-head"><h2>System power</h2><span class="hint">global switch — pauses all sources</span></div>
             <div class="controls-row">
-              <button id="healthYes" type="button" class="ctl small narrate-yes">Confirm and check</button>
-              <button id="healthNo" type="button" class="ctl small off">Cancel</button>
+              <button id="sysToggle" class="ctl" data-tip="Master switch — pauses every presence source at once"></button>
             </div>
           </div>
-          <div id="healthResult" class="health-result" hidden aria-live="polite"></div>
-          <p class="egress-note" id="healthNote">This check contacts your gateway and 3 public DNS servers outside your home — only when you click “Check now”, and only once per click.</p>
         </div>
-        <div id="statusPanel" class="statuspanel tile" hidden aria-labelledby="status-h">
-          <div class="tile-head"><h2 id="status-h">Status</h2></div>
-          <div id="statusVersion" class="status-version"></div>
-          <div id="statusInternet" class="status-internet" hidden></div>
-          <div class="status-cols">
-            <div class="status-col">
-              <h4>Sensors</h4>
-              <div id="statusSources"></div>
-              <div id="statusSourcesSummary" class="status-src-summary" aria-live="polite"></div>
+        <div id="sysColRight" class="sys-col">
+          <!-- Stage 3b P0 (§7#1/§9): Privacy & Egress dashboard — “what can leave this home”,
+               the trust receipt. Visible in EVERY mode; states fill from /api/status in live
+               (pure surfacing of the SAME 3s poll renderStatus already runs — zero new calls).
+               Card C also carries the persistent passive Health line + the always-visible
+               5-tier legend — same canonical ok/minor/degraded/major/critical vocabulary as
+               the user-triggered Health check tile below, fed from the SAME passive poll
+               (zero new calls, never touches GET /api/health). -->
+          <div id="egressPanel" class="tile" aria-labelledby="egress-h">
+            <div class="tile-head"><h2 id="egress-h">What can leave this home</h2><span class="hint">trust receipt</span></div>
+            <p id="egressSummary" class="egress-summary na">—</p>
+            <!-- P6 fix 3: demo note lives here, SEPARATE from the permanent guarantee that
+                 renderEgress() writes into #egressSummary — never conflated in one sentence. -->
+            <p id="egressDemoNote" class="egress-demonote" hidden>This demo has no hub connected — this page makes no backend calls, so every feature below shows as “inactive”.</p>
+            <!-- v2 egress icons: persistent legend for the badge colors (decorative — every
+                 row below states the same thing in its own text) -->
+            <div class="eg-legend" aria-hidden="true">
+              <span><i class="eg-swatch local"></i>Local — stays home</span>
+              <span><i class="eg-swatch lan"></i>LAN — your network only</span>
+              <span><i class="eg-swatch egress"></i>Can leave when on</span>
+              <span><i class="eg-swatch na"></i>Inactive</span>
             </div>
-            <!-- Stage 3b: CSS-hidden — the egress dashboard above supersedes these chips;
-                 renderStatus() keeps writing here unchanged (same trick as #statusSources). -->
-            <div class="status-col" id="statusFeaturesCol">
-              <h4>Features</h4>
-              <div id="statusFeatures" class="status-chips"></div>
-            </div>
+            <div id="egressList" class="egress-list"></div>
+            <p class="panel-note" id="egressNote" hidden>Each feature is opt-in per install (hub environment variables). Without a connected hub, every feature shows as “inactive” — that's not an error.</p>
+            <p id="healthStatusLine" class="egress-summary health-sev na" hidden></p>
+            <ul class="health-legend" aria-label="Health severity legend">
+              <li class="ok"><b>ok</b> <span class="dim">everything reachable</span></li>
+              <li class="warn"><b>minor</b> <span class="dim">one check failed</span></li>
+              <li class="warn"><b>degraded</b> <span class="dim">several checks failing</span></li>
+              <li class="danger"><b>major</b> <span class="dim">gateway OK, internet looks down</span></li>
+              <li class="danger"><b>critical</b> <span class="dim">gateway unreachable</span></li>
+            </ul>
           </div>
-          <div id="statusHouse" class="status-house"></div>
-        </div>
-        <!-- Stage 3b (§7#10): diagnostics composed from client WS state + the frames already
-             flowing — session-side truth, labeled honestly; works in every MODE. -->
-        <div id="diagPanel" class="tile" aria-labelledby="diag-h">
-          <div class="tile-head"><h2 id="diag-h">Diagnostics</h2><span class="hint">connection · sensors · this session</span></div>
-          <div id="diagList" class="diag-list"></div>
-        </div>
-        <!-- Core Panel lock (admin, live/loopback only): sets/changes the PIN that gates the
-             ambient touchscreen build's (?core / window.WAVR_CORE) wake-to-dashboard step. The
-             touchscreen itself only ever verifies against this endpoint — it never sets it. -->
-        <div id="coreLockPanel" class="tile" hidden aria-labelledby="corelock-h">
-          <div class="tile-head"><h2 id="corelock-h">Core Panel lock</h2><span class="hint">PIN for the ambient touchscreen</span></div>
-          <p id="coreLockAdminStatus" class="panel-note">checking…</p>
-          <form id="coreLockAdminForm" class="corelock-form" aria-labelledby="corelock-h">
-            <input id="coreLockAdminPin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}"
-                   minlength="4" maxlength="12" placeholder="new PIN (4–12 digits)" aria-label="new PIN" required>
-            <button type="submit" class="ctl small">Save</button>
-            <span id="coreLockAdminFb" class="action-fb" aria-live="polite"></span>
-          </form>
-          <div class="corelock-form" style="margin-top:12px">
-            <button id="coreCamBtn" type="button" class="ctl small">Toggle Core camera</button>
-            <span id="coreCamStatus" class="action-fb" aria-live="polite">camera: unknown</span>
+          <!-- A2.3: health check — user-triggered ONLY. When the hub has public-resolver checks
+               on (or their state is still unknown), the button arms a two-step confirm identical
+               in shape to the AI Narrator's, because GET /api/health then pings public DNS hosts
+               (same egress class). When the hub confirms resolvers OFF, the check is gateway-only
+               (local) and runs directly. NEVER wire this into a timer/poll — see the load-bearing
+               comment at the click handler below. -->
+          <div id="healthCheck" class="tile" hidden aria-labelledby="health-h">
+            <div class="tile-head"><h2 id="health-h">Health check</h2>
+              <span id="healthChecking" class="egress-live" role="status" hidden><i aria-hidden="true"></i>checking…</span>
+            </div>
+            <div class="narrate-row">
+              <button id="healthBtn" type="button" class="ctl" data-tip="Checks your gateway and, if enabled on the hub, 3 public DNS resolvers — the only way to see if the internet itself is down">Check now</button>
+              <p id="healthOut" class="narrate-out muted">Runs an on-demand check of your gateway plus, if enabled on the hub, three public DNS resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9) to tell LAN problems from internet problems.</p>
+            </div>
+            <div id="healthConfirm" class="narrate-confirm" hidden role="group" aria-label="confirm health check">
+              <p class="narrate-confirm-txt">This checks your gateway<span id="healthConfirmResolvers"> plus 3 public DNS servers <b>outside your home</b> (1.1.1.1, 8.8.8.8, 9.9.9.9)</span> — confirm?</p>
+              <div class="controls-row">
+                <button id="healthYes" type="button" class="ctl small narrate-yes">Confirm and check</button>
+                <button id="healthNo" type="button" class="ctl small off">Cancel</button>
+              </div>
+            </div>
+            <div id="healthResult" class="health-result" hidden aria-live="polite"></div>
+            <p class="egress-note" id="healthNote">This check contacts your gateway and 3 public DNS servers outside your home — only when you click “Check now”, and only once per click.</p>
+          </div>
+          <!-- A2.1: network-sensing collectors — LOCAL listeners/probes, rendered off the
+               existing /api/status poll (zero new network calls). Own namespace (.sn-row),
+               never mixed into #egressList — these never leave the LAN either way. -->
+          <div id="netSensing" class="tile" aria-labelledby="netSensing-h">
+            <div class="tile-head"><h2 id="netSensing-h">Network sensing</h2><span class="hint">local sensing — nothing leaves home</span></div>
+            <p class="panel-note">These read standard network-discovery traffic already on your LAN (mDNS,
+              UPnP, DHCP, etc.) to identify your devices better. Unlike the list above, these are not egress
+              paths — they scan only your own network and nothing leaves home. Set from the hub's
+              configuration; changing one needs a hub restart (no in-app switch yet).</p>
+            <div id="sensingList" class="sensing-list"></div>
+          </div>
+          <!-- Demoted per the layout spec: session/status detail, not glance-priority. -->
+          <div id="statusPanel" class="statuspanel tile" hidden aria-labelledby="status-h">
+            <div class="tile-head"><h2 id="status-h">Status</h2></div>
+            <div id="statusVersion" class="status-version"></div>
+            <div id="statusInternet" class="status-internet" hidden></div>
+            <div class="status-cols">
+              <div class="status-col">
+                <h4>Sensors</h4>
+                <div id="statusSources"></div>
+                <div id="statusSourcesSummary" class="status-src-summary" aria-live="polite"></div>
+              </div>
+              <!-- Stage 3b: CSS-hidden — the egress dashboard above supersedes these chips;
+                   renderStatus() keeps writing here unchanged (same trick as #statusSources). -->
+              <div class="status-col" id="statusFeaturesCol">
+                <h4>Features</h4>
+                <div id="statusFeatures" class="status-chips"></div>
+              </div>
+            </div>
+            <div id="statusHouse" class="status-house"></div>
+          </div>
+          <!-- Stage 3b (§7#10): diagnostics composed from client WS state + the frames already
+               flowing — session-side truth, labeled honestly; works in every MODE. Demoted per
+               the layout spec, same reasoning as #statusPanel above. -->
+          <div id="diagPanel" class="tile" aria-labelledby="diag-h">
+            <div class="tile-head"><h2 id="diag-h">Diagnostics</h2><span class="hint">connection · sensors · this session</span></div>
+            <div id="diagList" class="diag-list"></div>
           </div>
         </div>
         <p class="panel-note" id="sisNote" hidden>Detailed system status is available on the hub's panel (local access).</p>
@@ -3378,14 +3411,47 @@ async function renderCoreLockAdmin(){
   const form = document.getElementById("coreLockAdminForm");
   const pinInput = document.getElementById("coreLockAdminPin");
   const fb = document.getElementById("coreLockAdminFb");
+  // Fix #3 (lock-mode chooser): [No lock] / [PIN] / [Device unlock]. "Device unlock" is
+  // shown (never fabricated) only when the native bridge reports biometric hardware, and
+  // is intentionally NON-interactive here: the ambient wake() gate already tries biometric
+  // BEFORE any PIN whenever WavrNative.hasBiometric() is true (see the lock module near the
+  // end of this file), so it isn't a third exclusive admin-settable mode competing with
+  // PIN — presenting it as one would overclaim a choice that doesn't exist in the wake
+  // path. [No lock]/[PIN] are the two real, mutually-exclusive backend-controlled states.
+  const modeNoneBtn = document.getElementById("lockModeNone");
+  const modePinBtn  = document.getElementById("lockModePin");
+  const modeBiomBtn = document.getElementById("lockModeBiometric");
+  const hasBiometric = !!(window.WavrNative && typeof window.WavrNative.hasBiometric === "function"
+                          && window.WavrNative.hasBiometric());
+  if(modeBiomBtn) modeBiomBtn.hidden = !hasBiometric;
+  function setMode(mode){
+    [modeNoneBtn, modePinBtn].forEach(b=>{
+      if(!b) return;
+      const active = b.getAttribute("data-mode") === mode;
+      b.classList.toggle("on", active);
+      b.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    if(form) form.hidden = (mode !== "pin");
+  }
   async function refresh(){
     let s;
     try{ s = await (await fetch(location.origin+"/api/core/pin/status", {headers:{"X-Wavr-Local":"1"}})).json(); }
     catch{ if(statusEl) statusEl.textContent = "couldn't reach the hub — try again"; return; }
-    if(statusEl) statusEl.textContent = (s && s.pin_set)
+    const pinSet = !!(s && s.pin_set);
+    if(statusEl) statusEl.textContent = pinSet
       ? "A PIN is set for the Core Panel touchscreen."
       : "No PIN set — the Core Panel touchscreen wakes straight to the dashboard.";
+    setMode(pinSet ? "pin" : "none");   // default-selected from GET /api/core/pin/status
   }
+  if(modeNoneBtn) modeNoneBtn.onclick = async ()=>{
+    modeNoneBtn.disabled = true;
+    let r;
+    try{ r = await fetch(location.origin+"/api/core/pin", {method:"DELETE", headers:{"X-Wavr-Local":"1"}}); }catch{}
+    modeNoneBtn.disabled = false;
+    if(r && r.ok){ actionFeedback(fb, true, null, "✓ lock removed"); refresh(); }
+    else actionFeedback(fb, false, "couldn't remove the lock — try again");
+  };
+  if(modePinBtn) modePinBtn.onclick = ()=>{ setMode("pin"); pinInput?.focus(); };
   form.onsubmit = async (e)=>{
     e.preventDefault();
     const pin = pinInput.value;
@@ -10231,7 +10297,7 @@ try {
     renderDots();
   }
   function pinShakeError(msg){
-    if(errEl) errEl.textContent = msg || "PIN incorreto";
+    if(errEl) errEl.textContent = msg || "Incorrect PIN";
     if(padEl && !REDUCED_MOTION.matches){
       padEl.classList.remove("core-lock-shake");
       void padEl.offsetWidth;   // restart the shake keyframes on repeated wrong entries
@@ -10261,11 +10327,11 @@ try {
         // A wrong PIN and a rate-limited attempt both degrade to {ok:false} by backend
         // design (wavr.pin_ratelimit: "a caller learns nothing beyond 'not unlocked'
         // either way") — same message either way, on purpose, never distinguished client-side.
-        pinShakeError("PIN incorreto");
+        pinShakeError("Incorrect PIN");
       }
     }).catch(function(){
       pinBusy = false;
-      pinShakeError("Falha ao verificar — tente novamente");
+      pinShakeError("Couldn't verify — try again");
     });
   }
   if(padEl){
