@@ -130,3 +130,96 @@ def test_pop_just_before_ttl_still_works():
     exchange_id = mgr.stash("Desktop", "https://x:8000", "code", "fp")
     clock.advance(119)
     assert mgr.pop(exchange_id) is not None
+
+
+# --------------------------------------------------------------------------
+# api_peers.py router-level tests (Task 6). TWO router factories -- the public
+# (unauthenticated, in-subnet) exchange/redeem entry points and the local-admin
+# discovered/confirm/finish/list/unpair surface -- mirroring api_devices.py's
+# split so app.py (Task 7) can attach different auth gates per group. The
+# confirm/finish two-instance handshake belongs in Task 7 (needs two wired
+# _app() instances); here every endpoint is exercised directly with no gates.
+# --------------------------------------------------------------------------
+import types
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from wavr.api_peers import build_peers_public_router, build_peers_admin_router
+from wavr.devices import DeviceStore
+from wavr.pairing import PairingManager
+
+
+def _app(tmp_path, self_base_url="https://desktop.local:8000", self_name="Desktop"):
+    devices = DeviceStore(str(tmp_path / "devices.db"))
+    peers = PeerStore(str(tmp_path / "peers.db"))
+    pairing = PairingManager(devices)
+    exchange = PeerExchangeManager()
+    cfg = types.SimpleNamespace(tls_cert="")  # resolved_cert_path("") -> default; absent -> ""
+    app = FastAPI()
+    app.include_router(build_peers_public_router(peers, exchange, pairing, cfg, self_name))
+    app.include_router(build_peers_admin_router(peers, exchange, pairing, devices,
+                                                cfg, self_name, self_base_url))
+    return app, devices, peers, pairing, exchange
+
+
+def test_discovered_lists_mdns_results(tmp_path, monkeypatch):
+    app, *_ = _app(tmp_path)
+    from wavr import mdns_peers
+    monkeypatch.setattr(mdns_peers, "browse_wavr_peers",
+                        lambda **k: [mdns_peers.DiscoveredPeer("Core", "1.2.3.4", 8000, "core")])
+    client = TestClient(app)
+    r = client.get("/api/peers/discovered")
+    assert r.status_code == 200
+    assert r.json() == [{"name": "Core", "host": "1.2.3.4", "port": 8000, "role": "core"}]
+
+
+def test_exchange_stashes_and_returns_own_code(tmp_path):
+    app, devices, peers, pairing, exchange = _app(tmp_path, self_name="Core")
+    client = TestClient(app)
+    r = client.post("/api/peers/exchange", json={
+        "requester_name": "Desktop", "requester_base_url": "https://desktop:8000",
+        "requester_code": "11112222", "requester_fingerprint": "AA:AA",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert "code" in body and len(body["code"]) == 8
+    assert "fingerprint" in body
+
+
+def test_redeem_creates_central_device(tmp_path):
+    app, devices, peers, pairing, exchange = _app(tmp_path)
+    code = pairing.mint_code("central")
+    client = TestClient(app)
+    r = client.post("/api/peers/redeem", json={"code": code, "requester_name": "Desktop"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "device_id" in body and "token" in body
+    dev = devices.get(body["device_id"])
+    assert dev.role == "central"
+
+
+def test_redeem_rejects_bad_code(tmp_path):
+    app, *_ = _app(tmp_path)
+    client = TestClient(app)
+    r = client.post("/api/peers/redeem", json={"code": "00000000", "requester_name": "X"})
+    assert r.status_code == 403
+
+
+def test_list_peers_empty_initially(tmp_path):
+    app, *_ = _app(tmp_path)
+    client = TestClient(app)
+    r = client.get("/api/peers")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_unpair_revokes_peer_and_device(tmp_path):
+    app, devices, peers, pairing, exchange = _app(tmp_path)
+    device_id, token = devices.add("Core", "central")
+    peer_id = peers.add("Core", "https://core:8000", "FP", device_id, "their-token")
+    client = TestClient(app)
+    r = client.delete(f"/api/peers/{peer_id}")
+    assert r.status_code == 200
+    assert peers.get(peer_id).revoked is True
+    assert devices.get(device_id).revoked is True
