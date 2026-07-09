@@ -67,6 +67,41 @@ def test_set_pin_requires_csrf_header(tmp_path):
         assert store.is_set() is False
 
 
+# --------------------------------------------------------------------------- #
+# DELETE /api/core/pin (clear -- the "no lock" option). Same gate as the setter.
+# --------------------------------------------------------------------------- #
+def test_delete_pin_clears_lock(tmp_path):
+    c, store = _client(tmp_path)
+    c.post("/api/core/pin", json={"pin": "4321"})
+    assert store.is_set() is True
+    r = c.delete("/api/core/pin")
+    assert r.status_code == 200
+    assert r.json() == {"set": False}
+    assert store.is_set() is False
+    assert c.get("/api/core/pin/status").json() == {"pin_set": False}
+
+
+def test_delete_pin_idempotent_when_unset(tmp_path):
+    c, store = _client(tmp_path)
+    r = c.delete("/api/core/pin")   # never set -> still a clean no-op
+    assert r.status_code == 200
+    assert r.json() == {"set": False}
+    assert store.is_set() is False
+
+
+def test_delete_pin_requires_csrf_header(tmp_path):
+    store = PinStore(":memory:")
+    store.set_pin("1234")
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
+        pin_store=store)
+    with TestClient(app) as c:   # no X-Wavr-Local -> gate must reject
+        r = c.delete("/api/core/pin")
+        assert r.status_code == 403
+        assert store.is_set() is True   # lock survives a rejected clear
+
+
 def test_set_pin_rejects_non_digits(tmp_path):
     c, store = _client(tmp_path)
     r = c.post("/api/core/pin", json={"pin": "abcd"})

@@ -1428,6 +1428,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _pin_store.set_pin(pin)
         return {"set": True}
 
+    @app.delete("/api/core/pin")
+    async def clear_core_pin(_=Depends(require_local), __=Depends(require_scope("admin"))):
+        # Remove the Core Panel unlock PIN entirely -- the "no lock" option. Same
+        # gate as the setter (loopback root + CSRF header, or a multidevice
+        # 'central'): only a local admin can drop the lock. Idempotent.
+        _pin_store.clear()
+        return {"set": False}
+
     @app.post("/api/core/pin/verify")
     async def verify_core_pin(pin: str = Body(..., embed=True),
                               _=Depends(require_authenticated)):
