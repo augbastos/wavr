@@ -90,6 +90,10 @@
   // hub-side consent gate (RED telemetry is dropped server-side; the column is the enforcement). Read
   // SYNCHRONOUSLY at boot like the token so the toggle paints the correct colour with no flash. Never logged.
   var K_CONSENT = "wavr.consent";
+  // Task 6: this device's presence label (shown at home) + the friendly name of the paired Core. Both
+  // are user-facing display strings, never security-relevant (the pinned fingerprint is), never logged.
+  // Read at boot so the status chip paints without a flash.
+  var K_PRESENCE_LABEL = "wavr.presenceLabel", K_CORE_NAME = "wavr.coreName";
 
   // FIX-E3(b): durable-write helper for the PAIR / RE-PIN paths. Resolves only once every write of the
   // pairing state has committed; rejects if ANY write fails, so the caller surfaces a save error and
@@ -117,6 +121,10 @@
   // Friendly name of the Core the user picked in showChooseCore() (mDNS `name` field). Informational
   // only -- never persisted, never used for anything security-relevant (the pinned fingerprint is).
   var _pendingCoreName = null;
+  // Task 6 caches: this device's presence label + the paired Core's friendly name, loaded from Keystore
+  // at boot. Display-only; never logged. Empty until set (label captured at pair time; coreName from the
+  // mDNS pick or the base URL fallback).
+  var _presenceLabel = "", _coreName = "";
 
   // caps helpers. A sensor-ONLY device must never boot the index.html viewer: its sensor-role token
   // 403s every read, so CompanionProvider would self-wipe the token in a reload loop (companionAuthFailed
@@ -220,7 +228,8 @@
         return;
       }
       sock.__id = r.socketId; _socks[r.socketId] = sock;
-      detectRole();   // socket (re)connect -> re-check role (fire-and-forget; self-guards + coalesces)
+      detectRole();        // socket (re)connect -> re-check role (fire-and-forget; self-guards + coalesces)
+      reassertPresence();  // Task 5: socket (re)connect -> re-assert presence (self-guards on level/token)
     }).catch(function(err){
       // FIX-M1: Capacitor surfaces call.reject(msg, code, data) as err.code + err.data.<field>
       // (WavrNetPlugin.kt:271,274,363,364; d.ts:24-27), so presentedFp lives at err.data.presentedFp,
@@ -360,7 +369,7 @@
   // resume): add @capacitor/app's appStateChange. Do NOT add that dependency pre-emptively.
   try{
     document.addEventListener("visibilitychange", function(){
-      if(document.visibilityState === "visible") detectRole();
+      if(document.visibilityState === "visible"){ detectRole(); reassertPresence(); }   // Task 5: re-assert presence on resume
     });
   }catch(_){}
 
@@ -460,6 +469,10 @@
       // consent toggle: the control's OWN border+dot = the consent level colour (green/yellow/red).
       // border !important overrides .tpill's default so the level colour is unmistakable on the control.
       ".wavrm-consent{cursor:pointer;position:relative;overflow:hidden;touch-action:none;" +
+      // FIX-B2: block the native Android WebView text-selection/callout that fired on a long-press and
+      // stole the pointer BEFORE the 2s GDPR-withdrawal hold timer could complete (label highlighted +
+      // Copy/Share menu appeared). Without this the hold gesture was unreachable on-device.
+      "user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;" +
       "border:1px solid var(--consent-color,rgba(255,255,255,.14))!important;}" +
       ".wavrm-consent.pending{opacity:.8;}" +
       // 2s hold progress fill (withdrawal affordance): danger-tinted, animates 0->100% while held.
@@ -640,6 +653,14 @@
     codeIn.spellcheck = false; codeIn.autocapitalize = "characters"; codeIn.maxLength = 12;
     codeIn.placeholder = "3F9A2C"; codeIn.setAttribute("aria-label", "last 6 fingerprint characters");
     f.appendChild(codeIn); card.appendChild(f);
+    // Task 6: capture this device's presence label at pair time (shown as "home" presence). Optional;
+    // display-only, never a credential, never logged. Persisted with the pairing on a successful pin.
+    var lf = el("label", "wavrm-field");
+    lf.appendChild(el("span", "wavrm-lab", "Your name on this device (shown as your presence at home)"));
+    var labelIn = el("input", "wavrm-input"); labelIn.type = "text"; labelIn.autocomplete = "off";
+    labelIn.maxLength = 48;   // FIX-C3: cap the display label (textContent + JSON.stringify already injection-safe)
+    labelIn.placeholder = "e.g., Augusto"; labelIn.setAttribute("aria-label", "your name on this device");
+    lf.appendChild(labelIn); card.appendChild(lf);
     var pinBtn = el("button", "wavrm-btn", "Pin & continue"); pinBtn.type = "button"; pinBtn.disabled = true;
     var backBtn = el("button", "wavrm-btn ghost", "Back"); backBtn.type = "button";
     var msg = el("p", "wavrm-msg", "");
@@ -650,8 +671,12 @@
       if(pinBtn.disabled) return;
       if(!fp || expect.length !== 6 || normHex(codeIn.value) !== expect) return;   // defence in depth
       _pinnedFp = fp;
+      _presenceLabel = (labelIn.value || "").trim();          // Task 6: label captured at pair
+      _coreName = _pendingCoreName || _base;                  // Task 6: friendly Core name (mDNS pick or base)
       pinBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Saving…";
-      persistPairing(_base, fp, null).then(function(){
+      Promise.all([ persistPairing(_base, fp, null),
+                    secureSet(K_PRESENCE_LABEL, _presenceLabel),
+                    secureSet(K_CORE_NAME, _coreName) ]).then(function(){
         revealCodeEntry(); hideOverlay();
       }, function(){
         _pinnedFp = null;                                    // durable write failed: do NOT pretend paired
@@ -1127,10 +1152,67 @@
   function applyConsentLocal(level){
     _consent = level;
     applyAttachment(level);                                 // Task 4: drive the connect/disconnect lever
+    applyPresence(level);                                   // Task 5: register on green/yellow, DELETE on red
     if(level === "red"){ try{ stopSensor(); }catch(_){} }   // guarded no-op on a viewer with no sensor
     renderConsent();
     return secureSet(K_CONSENT, level).catch(function(){});
   }
+
+  // ----- Task 5: network presence register / DELETE + re-assert -----
+  // On ENTER (green/yellow) we POST our label; the Core resolves our SOURCE IP -> MAC (Android 10+ can't
+  // read its own MAC) and lights us up "home". On EXIT (red) we DELETE. Fail-closed: mac_registered===false
+  // means the Core CANNOT do network presence -> surface it (_presenceError) and never CLAIM presence. A
+  // non-ok / 404 / network error is TRANSIENT: keep last state, do NOT throw, do NOT wipe the token, do NOT
+  // falsely claim presence -- a later re-assert retries (respects FINDING F2: the running Core may 404 this
+  // endpoint). Never logs the token or the label.
+  var _presenceError = false;      // true only when the Core explicitly returned mac_registered:false
+  // FIX-C2: presence is TRI-STATE, never fail-open. _presenceConfirmed is true ONLY after the Core returns
+  // mac_registered:true; the presence-CLAIMING chip copy fires only on that. A non-ok / 404 / transient
+  // (body===null) leaves BOTH flags at their last value, so an unconfirmed state renders the neutral
+  // "Connected" that makes NO presence claim (honours "never claim presence the Core didn't confirm").
+  var _presenceConfirmed = false;
+  var _presenceInFlight = false;   // coalesce overlapping register calls (boot / reconnect / resume / timer)
+  function registerPresence(){
+    if(!_token || !_base || !_attached || _presenceInFlight) return;
+    _presenceInFlight = true;
+    netFetch(_base + "/api/presence/register-companion", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + _token, "Content-Type": "application/json" },
+      body: JSON.stringify({ label: _presenceLabel || "" })
+    }).then(function(r){
+      return (r && r.ok) ? r.json() : null;   // non-ok / 404 -> null -> keep last state (transient)
+    }).then(function(body){
+      if(body && body.mac_registered === true){ _presenceConfirmed = true; _presenceError = false; }        // Core CONFIRMED network presence
+      else if(body && body.mac_registered === false){ _presenceError = true; _presenceConfirmed = false; }  // Core can't do network presence
+      // null / non-ok / 404 / transient -> leave BOTH as-is (keep last state; a later re-assert retries)
+      renderStatusChip();                                                   // Task 6 chip reflects the state
+    }).catch(function(){ /* transient (network / PIN_MISMATCH already raised): keep last state, retry later */ })
+      .then(function(){ _presenceInFlight = false; });
+  }
+  function unregisterPresence(){
+    if(!_token || !_base) return;
+    netFetch(_base + "/api/presence/register-companion", {
+      method: "DELETE",
+      headers: { "Authorization": "Bearer " + _token }
+    }).catch(function(){ /* best-effort; leaving LOCALLY (detach + token hidden) is what actually matters */ });
+  }
+  // Enact the presence side of a level (paired with applyAttachment). green/yellow register; red DELETEs
+  // and clears the fail-closed flag (we are deliberately not present now, that is not an error).
+  function applyPresence(level){
+    var act = WavrLib.consentToActions(level);
+    if(act.presence === "register"){ registerPresence(); }
+    else { _presenceError = false; _presenceConfirmed = false; unregisterPresence(); renderStatusChip(); }
+  }
+  // Re-assert on the events that can silently drop a MAC/IP mapping (network change, Core restart, DHCP
+  // renew): foreground resume, socket (re)connect, and a low-frequency safety timer. Only when entered.
+  function reassertPresence(){
+    if(WavrLib.consentToActions(_consent).presence === "register") registerPresence();
+  }
+  try{
+    setInterval(function(){
+      if(document.visibilityState === "visible") reassertPresence();
+    }, 30 * 60 * 1000);
+  }catch(_){}
 
   function scheduleConsentRetry(gen){
     clearConsentRetry();
@@ -1240,6 +1322,75 @@
     renderConsent();
   }
 
+  // ----- Task 6: status chip (attachment + presence) + details overlay (edit label / unpair) -----
+  // A tappable chip stating what this device is doing right now. Fail-closed copy: only claims presence
+  // the Core confirmed; on mac_registered:false it says so plainly. textContent only (never innerHTML with
+  // the user's label). Injected into index.html's header .status-pills exactly like the consent pill --
+  // NOT an index.html edit -- and idempotent.
+  var _statusChip = null;
+  function statusText(){
+    if(!_attached) return "Out";
+    if(_presenceError) return "Connected · no network presence";
+    // FIX-C2: the presence CLAIM copy fires ONLY on a confirmed mac_registered:true. The default/transient/
+    // 404 state says a neutral "Connected" that makes NO presence claim the Core hasn't confirmed.
+    if(_presenceConfirmed) return "Connected to " + (_coreName || "your Core") + " as " + (_presenceLabel || "this device");
+    return "Connected";
+  }
+  function renderStatusChip(){ if(_statusChip){ _statusChip.textContent = statusText(); } }
+  function injectStatusChip(){
+    if(!_token) return;
+    var row = document.querySelector(".status-pills"); if(!row) return;
+    if(document.getElementById("wavrm-status")) return;        // idempotent
+    var b = el("button", "tpill"); b.id = "wavrm-status"; b.type = "button";
+    b.onclick = function(){ showDetails(); };
+    _statusChip = el("span", "p-txt", statusText());           // textContent set by el(); never logged
+    b.appendChild(_statusChip);
+    row.appendChild(b);
+  }
+  // Details overlay: edit the presence label (re-asserts on save) and a deliberate Unpair (DELETE presence,
+  // then wipe token/url/fp + reload back to setup). Unpair is NOT a security downgrade -- it removes the
+  // pairing entirely; re-pairing requires the full out-of-band fingerprint verify again.
+  function showDetails(){
+    var card = ensureOverlay("details");
+    card.appendChild(el("h2", "wavrm-h", "This device"));
+    var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", "Your name on this device"));
+    var input = el("input", "wavrm-input"); input.type = "text"; input.autocomplete = "off";
+    input.maxLength = 48;   // FIX-C3: cap the display label (textContent + JSON.stringify already injection-safe)
+    input.value = _presenceLabel || ""; input.placeholder = "e.g., Augusto";
+    input.setAttribute("aria-label", "your name on this device");
+    f.appendChild(input); card.appendChild(f);
+    var msg = el("p", "wavrm-msg", "");
+    var save = el("button", "wavrm-btn", "Save name"); save.type = "button";
+    save.onclick = function(){
+      _presenceLabel = (input.value || "").trim();
+      save.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Saving…";
+      secureSet(K_PRESENCE_LABEL, _presenceLabel).then(function(){
+        renderStatusChip(); reassertPresence(); hideOverlay();
+      }, function(){ save.disabled = false; msg.className = "wavrm-msg err"; msg.textContent = "Couldn't save. Try again."; });
+    };
+    card.appendChild(save);
+    card.appendChild(el("p", "wavrm-sub", "Core: " + (_coreName || "—")));
+    var unpair = el("button", "wavrm-btn ghost", "Unpair this device"); unpair.type = "button";
+    unpair.onclick = function(){
+      unpair.disabled = true;
+      unregisterPresence();   // best-effort DELETE FIRST -- builds the Bearer from the still-valid _token synchronously
+      // FIX-C1 (mirror tokenSet(null)'s synchronous-invalidate): the secureDel writes below are ASYNC, so
+      // without wiping the in-memory caches NOW a still-wired Task-5 trigger (socket-open reassert,
+      // visibilitychange, or the 30-min timer) could fire a fully-authenticated register-companion POST in
+      // the window before reload -- a fail-open in an explicit "stop participation" action. Invalidate
+      // synchronously so registerPresence()'s guard (!_token || !_base || !_attached || _presenceInFlight)
+      // early-returns for every post-click trigger, and any coalesced consent retry sees the wiped gen.
+      _token = null; _base = ""; _pinnedFp = null; _attached = false; _presenceInFlight = false; _consentGen++;
+      Promise.all([ secureDel(K_TOKEN), secureDel(K_URL), secureDel(K_FP) ]).then(function(){
+        try{ location.reload(); }catch(_){}
+      }, function(){ try{ location.reload(); }catch(_){} });
+    };
+    card.appendChild(unpair);
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ hideOverlay(); };
+    card.appendChild(back); card.appendChild(msg);
+  }
+
   // ----- Boot: load caches, resolve the gate, then decide which screen to show -----
   function decideScreen(){
     whenDom(function(){
@@ -1248,6 +1399,10 @@
         // Already paired -> never show the chooser. Clear the pairing chrome class index.html sets at
         // parse time (token cache was empty then) and mask the boot flash.
         try{ document.body.classList.remove("pairing-mode"); }catch(_){}
+        // Task 7 Step 3: a RED-at-boot device is DETACHED -> show "You've left Wavr" with the in-card
+        // re-enter control and do NOT connect. tokenGet() already hides the token and netWebSocket refuses,
+        // so index.html's provider stays inert; this makes the state unmistakable and offers the way back.
+        if(!_attached){ showOut(); injectConsentPill(); return; }
         if(capsSensorOnly()){
           // Dedicated sensor node: no dashboard (its token is hidden from index.html -> NullProvider).
           // Show the permission wizard once before the first Start, then the node screen.
@@ -1260,6 +1415,7 @@
           setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
           injectSensorPill();
           injectConsentPill();   // consent toggle in the header chrome (combo device)
+          injectStatusChip();    // Task 6: attachment + presence chip in the header chrome
         } else {
           // viewer / admin / migrated (token, no caps): EXACTLY today's boot, byte-for-byte UNCHANGED,
           // plus the consent toggle injected into the header chrome (participation != permission -- a
@@ -1267,6 +1423,7 @@
           showConnecting("Connecting to your home…");
           setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
           injectConsentPill();
+          injectStatusChip();   // Task 6: attachment + presence chip in the header chrome
         }
       } else if(!_caps && !_base){
         // True first launch (nothing chosen AND nothing entered) -> capability chooser before setup.
@@ -1285,17 +1442,22 @@
 
   Promise.all([secureGet(K_URL), secureGet(K_FP), secureGet(K_TOKEN),
                secureGet(K_DEVICE_ID), secureGet(K_ROLE),
-               secureGet(K_CAPS), secureGet(K_ONBOARDED), secureGet(K_CONSENT)]).then(function(v){
+               secureGet(K_CAPS), secureGet(K_ONBOARDED), secureGet(K_CONSENT),
+               secureGet(K_PRESENCE_LABEL), secureGet(K_CORE_NAME)]).then(function(v){
     _base = v[0] || ""; _pinnedFp = v[1] || null; _token = v[2] || null;
     _deviceId = v[3] || null; _role = v[4] || null;   // role read synchronously at boot, like the token
     _caps = parseCaps(v[5]); _onboarded = (v[6] === "1");   // caps + onboarded read synchronously too
     _consent = normConsent(v[7]);   // consent level read synchronously -> the toggle's boot colour is correct
+    _presenceLabel = v[8] || ""; _coreName = v[9] || "";   // Task 6: label + Core name for the status chip
     _attached = WavrLib.consentToActions(_consent).attached;   // Task 4: stored RED => boot DETACHED (fail-closed: tokenGet hides the token, netWebSocket refuses). Task 7 completes the boot-detached UX (showOut).
   }).catch(function(){}).then(function(){
     _resolveReady();   // caches populated: index.html's deferred boot may run now
     // detectRole drives the DASHBOARD admin surface only; a sensor-ONLY node has no dashboard and its
     // token 403s /api/devices, so skip it there. Viewer/admin/combo/migrated behave exactly as before.
-    if(_token && !capsSensorOnly()) detectRole();
+    if(_token && !capsSensorOnly()){
+      detectRole();
+      if(_attached) registerPresence();   // Task 7 Step 2: entered boot -> re-assert network presence
+    }
     decideScreen();
   });
 })();
