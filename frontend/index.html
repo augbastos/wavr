@@ -166,6 +166,21 @@
   .map-home{order:-1;min-width:0;}
   .gear-map-host{min-width:0;}
   .gear-map-host:empty{display:none;}
+  /* Core-panel map affordance: a "View house map" bar shown ONLY at the panel form factor
+     (unhidden in the landscape/short media query below). On desktop it stays display:none, so
+     the map is always visible exactly as before. Collapsed by default on the panel so the
+     touch-heavy 3D canvas can't trap a page-scroll and the room measurements stay the hero. */
+  .map-panel-toggle{display:none;align-items:center;gap:10px;width:100%;min-height:48px;
+                    padding:12px 16px;background:var(--surface);color:var(--text);
+                    border:1px solid var(--line);border-radius:var(--radius);
+                    font-size:.92rem;font-weight:560;cursor:pointer;text-align:left;
+                    transition:border-color .15s ease-out,background-color .15s ease-out;}
+  .map-panel-toggle:hover{border-color:var(--line-strong);}
+  .map-panel-toggle svg{width:18px;height:18px;color:var(--dim);flex:none;}
+  .map-panel-toggle .mpt-open-label,.map-panel-toggle .mpt-close-label{flex:1;}
+  .map-panel-toggle .mpt-close-label{display:none;}
+  .map-panel-toggle .mpt-chevron{color:var(--dim);font-size:1.3rem;line-height:1;flex:none;
+                    transition:transform .2s ease-out;}
 
   /* room cards (created by upsert() with these exact class names) — Stage 3a signature
      component (MASTER-SPEC §6): confidence ring + 3-state sensor-consensus rows. */
@@ -1129,6 +1144,65 @@
   }
 
   /* ============================================================================
+     Core panel form factor: landscape phone kiosk (~1640x720, glance display).
+     Gated purely by form factor — wide + short + landscape. min-aspect-ratio:2/1
+     excludes every common laptop (16:9 = 1.78, 16:10 = 1.60) and max-height:820
+     excludes tall ?core monitors, so the desktop layout is untouched. The real Wavr
+     Core (loopback dashboard opened with ?core at 1640x720) satisfies this. Goal:
+     the per-room live measurement is the glanceable hero above the fold; the touch-
+     heavy map is collapsed by default (tap to view; editing stays a separate explicit
+     mode); the sensing tile is demoted, not removed (privacy stays on screen). Reuses
+     the existing tokens + the live .card render path — no forked data, no new palette.
+     ============================================================================ */
+  @media (orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1){
+    /* full panel width; stack hero -> rooms(hero) -> sensing (demoted) */
+    #panel-inicio.tab-panel.active{max-width:none;padding:8px 16px 14px;gap:10px;}
+    #panel-inicio > #homeHero{order:1;}
+    #panel-inicio > .inicio-grid{order:2;}
+    #panel-inicio > #precisionTile{order:3;}
+
+    /* compact hero: one tight strip, not a big headline */
+    #homeHero{padding:0;}
+    #panel-inicio .hero-line1{font-size:1.15rem;}
+    #panel-inicio .hero-line2{font-size:.86rem;margin-top:1px;}
+    #panel-inicio .hero-who{margin-top:4px;}
+
+    /* HERO = room measurement tiles: full width, dense, large glance numerals. Same
+       live .card DOM upsert() builds and updates — only the presentation is denser. */
+    #panel-inicio .inicio-grid{grid-template-columns:minmax(0,1fr);gap:10px;}
+    #panel-inicio .rooms-col{order:1;}
+    #panel-inicio .map-home{order:2;}
+    #panel-inicio .rooms-col.tile{padding:10px 12px;}
+    #panel-inicio .rooms-col .tile-head{margin-bottom:6px;}
+    #panel-inicio .rooms{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;}
+    #panel-inicio .rooms .card{padding:12px 14px;}
+    #panel-inicio .ring{width:76px;height:76px;}
+    #panel-inicio .ring-pct b{font-size:1.5rem;}   /* readable from across a room */
+    #panel-inicio .ring-pct small{font-size:.62rem;}
+    #panel-inicio .card h2{font-size:1.05rem;}
+    #panel-inicio .pill{font-size:.74rem;margin:5px 0;}
+    #panel-inicio .src{font-size:.75rem;padding:3px 0;}
+    #panel-inicio .src .m{min-width:60px;}
+
+    /* MAP: collapsed by default (a "View house map" bar). Collapsed = the map tile is
+       display:none, so the 3D canvas/OrbitControls can't capture touch and the page
+       scrolls freely to the measurements. Tap the bar to expand for viewing (orbit/pan);
+       the floor-plan/zone editors stay a separate explicit action, unchanged. */
+    .map-panel-toggle{display:flex;}
+    #mapHome:not(.map-open) #radarWrap{display:none;}
+    #mapHome.map-open .mpt-open-label{display:none;}
+    #mapHome.map-open .mpt-close-label{display:block;}
+    #mapHome.map-open .mpt-chevron{transform:rotate(90deg);}
+    #panel-inicio #radar,#panel-inicio #radar3d{max-height:56vh;}
+
+    /* sensing mode: demoted + compact, still fully on screen (privacy visible) */
+    #precisionTile.precision-tile{padding:9px 12px;}
+    #panel-inicio .precision-tile .tile-head{margin-bottom:4px;}
+    #panel-inicio .precision-posture{margin-top:5px;}
+    #panel-inicio .precision-actions{margin-top:6px;}
+  }
+
+  /* ============================================================================
      Wavr Core Panel (?core / window.WAVR_CORE): ambient home-status face.
      Additive and self-contained: every rule below is scoped under #corePanel,
      so it has zero visual effect in the three existing modes (live/companion/
@@ -1254,7 +1328,8 @@
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
     .bar>i,.ctl,.rm,.radar-target,.radar-zone,.pill,.house,.hero-line1,.radar-room,
-    .nav-item,.viewToggle .ctl,.tpill,.ring .ring-fg,.card{transition:none;}
+    .nav-item,.viewToggle .ctl,.tpill,.ring .ring-fg,.card,
+    .map-panel-toggle,.map-panel-toggle .mpt-chevron{transition:none;}
     .ctl:active{transform:none;}
     .ctl.switch::after{transition:background .15s ease-out;}
     .live-badge i{animation:none;}   /* heartbeat dot goes static, never removed */
@@ -1478,6 +1553,16 @@
             <div class="rooms" id="rooms" aria-label="Status by room"><div class="empty">waiting for room data…</div></div>
           </div>
           <div id="mapHome" class="map-home">
+            <!-- Core-panel only (shown by the landscape/short media query): the map starts
+                 collapsed so the room measurements are the glanceable hero and the touch-heavy
+                 3D canvas can't trap page-scroll. Tap to expand for viewing; editing is separate. -->
+            <button id="mapPanelToggle" class="map-panel-toggle" type="button"
+                    aria-expanded="false" aria-controls="radarWrap">
+              <svg aria-hidden="true"><use href="#ic-cube"/></svg>
+              <span class="mpt-open-label">View house map</span>
+              <span class="mpt-close-label">Hide house map</span>
+              <span class="mpt-chevron" aria-hidden="true">&rsaquo;</span>
+            </button>
             <div id="radarWrap" class="radar tile">
               <div class="tile-head">
                 <h2 id="radar-h">House map</h2>
@@ -5031,6 +5116,7 @@ async function renderRadar(){
     if(!c) return;
     c.classList.toggle("hed3d-arm",
       MODE === "live" && viewMode === "3d" && (TOOL !== "select" || !!SELECTED));
+    updateEditingLabel();   // the "Editing" chip tracks the same tool/selection state
   }
 
   // Short English confirmation per committed edit — same aria-live channel (hedFb) sighted
@@ -5041,11 +5127,27 @@ async function renderRadar(){
   // floor is currently opaque/active, so an edit's destination is never ambiguous.
   function syncFloorEditing(){
     buildHedRoomSelect();   // audit L1: the keyboard room picker follows the active floor
+    updateEditingLabel();
+  }
+  // The "Editing: <floor>" chip must appear ONLY during an actual edit interaction. The
+  // floor-plan editor toolbar (#houseEditor) stays permanently mounted in live mode
+  // (initHouseEditor unhides it once), so its presence is NOT "editing" — showing the chip
+  // whenever a floor existed made every live VIEW read as "stuck in edit mode" (core-panel
+  // UX bug). Real edit signals: a house-editor drawing tool is armed or a plan element is
+  // selected, OR the zone editor is toggled on. Plain viewing shows no chip — the floor
+  // <select> beside it already names the active floor. The zone flag is read from the DOM
+  // (#zoneEdit.on), never the `editMode` binding, which is still in its TDZ at the first
+  // call site (buildFloorSelect() runs before `let editMode` is reached during init).
+  function updateEditingLabel(){
     const el = document.getElementById("floorEditing");
     if(!el) return;
     const f = floorFor(currentFloor);
-    el.hidden = (MODE !== "live") || !f;
-    el.textContent = f ? "Editing: " + (f.name || ("level " + f.level)) : "";
+    const zoneEl = document.getElementById("zoneEdit");
+    const zoneOn = !!(zoneEl && zoneEl.classList.contains("on"));
+    const houseEditing = (TOOL !== "select") || !!SELECTED;
+    const editing = zoneOn || houseEditing;
+    el.hidden = (MODE !== "live") || !f || !editing;
+    el.textContent = (f && editing) ? "Editing: " + (f.name || ("level " + f.level)) : "";
   }
 
   async function renderCurrentView(){
@@ -5231,6 +5333,7 @@ async function renderRadar(){
     svg.classList.toggle("editing", editMode);
     if(!editMode) cancelPending();
     refreshZones();
+    updateEditingLabel();   // zone edit on/off flips the "Editing" chip too
   };
   refreshZones();
 
@@ -5879,6 +5982,43 @@ async function renderRadar(){
   }
   document.getElementById("viewTop").onclick = ()=> setViewMode("top");
   document.getElementById("view3d").onclick  = ()=> setViewMode("3d");
+
+  // ---- Core-panel map collapse (three states: collapsed -> tap to view -> explicit edit) ----
+  // On the landscape/short panel the map is collapsed by default (CSS), presenting only the
+  // "View house map" bar so the room measurements are the glanceable hero and no touch-capturing
+  // canvas sits in the scroll path. Tapping expands it for VIEWING (orbit/pan) — a deliberate,
+  // opt-in action; editing (zone / floor-plan tools) stays a separate explicit mode, untouched.
+  // Guarded by matchMedia so the (display:none-on-desktop) button is inert everywhere but the
+  // panel: a stray click never pauses the always-on desktop map loop.
+  (function(){
+    const mapHome = document.getElementById("mapHome");
+    const toggle  = document.getElementById("mapPanelToggle");
+    if(!mapHome || !toggle) return;
+    const PANEL_MQ = window.matchMedia("(orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1)");
+    // display:none -> visible sizes the WebGL canvas via its ResizeObserver (resize3D fixes the
+    // camera aspect); we only nudge the render loop so a collapsed panel isn't spending frames.
+    function afterExpand(){
+      if(viewMode === "3d"){ try{ resize3D(); startLoop3D(); }catch(e){} }
+    }
+    toggle.onclick = function(){
+      if(!PANEL_MQ.matches) return;                 // desktop: button is hidden; do nothing
+      const open = mapHome.classList.toggle("map-open");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      if(open){ requestAnimationFrame(afterExpand); }
+      else { try{ stopLoop3D(); }catch(e){} }        // collapsed: stop burning frames on a hidden canvas
+    };
+    // Leaving the panel form factor (rotate / resize to desktop): the map becomes permanently
+    // visible again, so drop the collapse state and make sure the loop is live (never frozen).
+    const onMq = function(e){
+      if(!e.matches){
+        mapHome.classList.remove("map-open");
+        toggle.setAttribute("aria-expanded", "false");
+        if(viewMode === "3d"){ try{ resize3D(); startLoop3D(); }catch(err){} }
+      }
+    };
+    if(PANEL_MQ.addEventListener) PANEL_MQ.addEventListener("change", onMq);
+    else if(PANEL_MQ.addListener) PANEL_MQ.addListener(onMq);   // older engines
+  })();
 
   radarUpdate = (rs)=>{
     const e = roomIdx[rs.room]; if(!e) return;
