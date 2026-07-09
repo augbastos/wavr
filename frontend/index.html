@@ -2025,19 +2025,42 @@
       <h4 class="pair-sub">Discovered</h4>
       <div id="peerDiscList" class="pair-dev-list" aria-live="polite"></div>
 
-      <!-- Out-of-band MitM defense: /api/peers/exchange returns the peer's live cert
-           fingerprint; the admin compares it against the fingerprint on the PEER's own screen
-           before confirming. Revealed by the pairing flow; it never auto-continues. -->
+      <!-- Out-of-band MitM defense (C1-fix ceremony): the fingerprint shown is the one
+           POST /api/peers/observe SEES on the peer's live cert (server-observed, not a
+           value self-reported in a JSON body — closes M1). The admin compares it against
+           the fingerprint on the PEER's own screen AND types the code the peer displays,
+           before confirming. It never auto-continues. -->
       <div id="peerFpBox" class="pair-fp-box" hidden>
         <span class="pair-fp-label">Confirm the peer's certificate</span>
         <p class="pair-fp-hint">Pairing with <b id="peerFpName"></b>. On the <b>peer's</b> own screen,
-          confirm its certificate SHA-256 matches the one below before you continue:</p>
+          confirm its certificate SHA-256 matches the one below:</p>
         <code id="peerFpValue" class="pair-fp" aria-live="polite"></code>
         <p class="pair-fp-warn">If it does <b>not</b> match, stop. Someone may be intercepting your
           network; do not confirm.</p>
+        <p class="pair-fp-hint" style="margin-top:10px">Then enter the 8-digit pairing code shown
+          on the <b>peer's</b> screen (use “Show this hub's pairing code” over there):</p>
+        <input id="peerCodeInput" class="cpair-input" inputmode="numeric" autocomplete="one-time-code"
+               pattern="[0-9]*" maxlength="8" placeholder="00000000" aria-label="peer pairing code"
+               style="max-width:220px">
         <div class="controls-row" style="margin-top:10px">
-          <button type="button" id="peerFpConfirm" class="ctl small primary">Fingerprints match, pair</button>
+          <button type="button" id="peerFpConfirm" class="ctl small primary" disabled>Fingerprint matches — pair</button>
           <button type="button" id="peerFpCancel" class="ctl small off">Cancel</button>
+        </div>
+      </div>
+
+      <!-- This hub acting as TARGET (B): show OUR own screen-minted code + cert fingerprint
+           so the OTHER hub's operator can read them off and type the code into their pairing
+           box. Reuses POST /api/pair-code {role:central} — the same trusted-loopback mint the
+           Mobile flow uses; no code is ever vended over the network. -->
+      <div class="pair-owncode">
+        <button type="button" id="peerShowOwnCode" class="ctl small">Show this hub's pairing code</button>
+        <div id="peerOwnCodeBox" class="pair-fp-box" hidden style="margin-top:8px">
+          <span class="pair-fp-label">This hub's pairing code</span>
+          <p class="pair-fp-hint">Read these to the operator pairing <b>with</b> this hub. The code
+            rotates — it is valid for a couple of minutes.</p>
+          <code id="peerOwnCode" class="pair-fp" aria-live="polite"></code>
+          <p class="pair-fp-hint" style="margin-top:6px">This hub's certificate SHA-256:</p>
+          <code id="peerOwnFp" class="pair-fp" aria-live="polite"></code>
         </div>
       </div>
 
@@ -3894,16 +3917,22 @@ async function renderPeers(){
   const fpBox      = document.getElementById("peerFpBox");
   const fpName     = document.getElementById("peerFpName");
   const fpValue    = document.getElementById("peerFpValue");
+  const codeInput  = document.getElementById("peerCodeInput");
   const fpConfirm  = document.getElementById("peerFpConfirm");
   const fpCancel   = document.getElementById("peerFpCancel");
+  const showOwnBtn = document.getElementById("peerShowOwnCode");
+  const ownCodeBox = document.getElementById("peerOwnCodeBox");
+  const ownCodeEl  = document.getElementById("peerOwnCode");
+  const ownFpEl    = document.getElementById("peerOwnFp");
   const peersTile  = document.getElementById("peers");
 
-  // Mint THIS hub's own pairing credential from its OWN loopback /api/pair-code — the SAME
-  // endpoint + headers the device pair-code flow uses (role "central": a peer link is
-  // admin-to-admin). mintOwnPeerCode() caches the full response so ownCertFingerprint()
-  // returns the fingerprint from the SAME mint (no second request, no code churn). The
-  // object-literal in startPeerPairing awaits mintOwnPeerCode() first, so the cache is set
-  // before ownCertFingerprint() reads it.
+  // Mint THIS hub's own pairing code from its OWN loopback /api/pair-code — the SAME endpoint
+  // + headers the device pair-code flow uses (role "central": a peer link is admin-to-admin).
+  // Used by the "Show this hub's pairing code" button so this hub can act as TARGET B: the
+  // OTHER hub's operator reads the code + fingerprint off THIS screen and types the code into
+  // their pairing box. The code is minted on a trusted loopback screen, NEVER vended over the
+  // network (that was /api/peers/exchange = C1, now deleted). mintOwnPeerCode() caches the full
+  // response so ownCertFingerprint() returns the fingerprint from the SAME mint.
   let _lastMint = null;
   async function mintOwnPeerCode(){
     const r = await fetch(location.origin+"/api/pair-code",{method:"POST",
@@ -3915,6 +3944,21 @@ async function renderPeers(){
   }
   function ownCertFingerprint(){
     return (_lastMint && typeof _lastMint.cert_fingerprint==="string") ? _lastMint.cert_fingerprint : "";
+  }
+  // "Show this hub's pairing code" — mint + reveal our code and cert fingerprint for the other
+  // hub's operator to read off-screen. Toggles the box; each show re-mints a fresh code.
+  if(showOwnBtn){
+    showOwnBtn.onclick = async ()=>{
+      if(!ownCodeBox.hidden){ ownCodeBox.hidden = true; return; }   // toggle off
+      showOwnBtn.disabled = true;
+      try{
+        const code = await mintOwnPeerCode();
+        ownCodeEl.textContent = code || "—";                       // textContent — server data
+        ownFpEl.textContent = ownCertFingerprint() || "—";         // textContent — our own cert
+        ownCodeBox.hidden = false;
+      }catch{ actionFeedback(peerFb, false, "couldn't mint this hub's code"); }
+      showOwnBtn.disabled = false;
+    };
   }
 
   // --- Discovered peers (mDNS) — untrusted until the admin pairs with a fingerprint check.
@@ -4013,67 +4057,77 @@ async function renderPeers(){
     renderPaired(j);
   }
 
-  // --- Pairing handshake. Leg 1: POST the peer's OWN /api/peers/exchange (REMOTE — no
-  // loopback X-Wavr-Local guard, this is a cross-instance call) with our name, origin, a
-  // fresh central code and our cert fingerprint; it returns {exchange_id, code, fingerprint,
-  // name}. We then STOP and surface the peer's fingerprint for out-of-band confirmation —
-  // never auto-continuing (the MitM defense). ---
+  // --- Pairing handshake (C1-fix ceremony). Leg 1: ask OUR OWN backend to OBSERVE the
+  // peer's live cert fingerprint — POST /api/peers/observe {peer_base_url} over loopback
+  // (X-Wavr-Local). The backend opens the pinned TLS socket and returns the fingerprint the
+  // peer's cert ACTUALLY presents (never a self-reported JSON value — closes M1). We do NOT
+  // mint or send any code here; the operator will TYPE the peer's on-screen code at confirm.
+  // We STOP and surface the observed fingerprint for out-of-band confirmation — never
+  // auto-continuing (the MitM defense). ---
   async function startPeerPairing(discovered, pairBtn){
     const base_url = discovered.base_url ||
       ("https://" + (discovered.host || "") + ":" + (discovered.port || ""));
     if(pairBtn) pairBtn.disabled = true;
-    let code, fp;
-    try{ code = await mintOwnPeerCode(); fp = ownCertFingerprint(); }
-    catch{ actionFeedback(peerFb, false, "couldn't prepare a pairing code"); if(pairBtn) pairBtn.disabled = false; return; }
     let r;
     try{
-      r = await fetch(base_url+"/api/peers/exchange",{method:"POST",
-        headers:{"Content-Type":"application/json"},       // REMOTE peer call — deliberately no X-Wavr-Local
-        body:JSON.stringify({
-          requester_name: (window.WAVR_INSTANCE_NAME || "Wavr"),
-          requester_base_url: window.location.origin,
-          requester_code: code,
-          requester_fingerprint: fp,
-        })});
+      r = await fetch(location.origin+"/api/peers/observe",{method:"POST",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},   // our own backend — loopback CSRF guard
+        body:JSON.stringify({peer_base_url: base_url})});
     }catch{ actionFeedback(peerFb, false, "could not reach " + (discovered.name || "peer")); if(pairBtn) pairBtn.disabled = false; return; }
     if(!r.ok){ actionFeedback(peerFb, false, "could not reach " + (discovered.name || "peer")); if(pairBtn) pairBtn.disabled = false; return; }
-    let exch; try{ exch = await r.json(); }catch{ exch = {}; }
-    showFingerprintConfirmDialog(discovered, base_url, exch, pairBtn);
+    let obs; try{ obs = await r.json(); }catch{ obs = {}; }
+    const fingerprint = (obs && typeof obs.fingerprint==="string") ? obs.fingerprint : "";
+    if(!fingerprint){ actionFeedback(peerFb, false, "could not read the peer's certificate"); if(pairBtn) pairBtn.disabled = false; return; }
+    showFingerprintConfirmDialog(discovered, base_url, fingerprint, pairBtn);
   }
 
-  // --- Out-of-band fingerprint confirm — the human-in-the-loop MitM defense. Shows the
-  // fingerprint /exchange returned; the admin compares it against the peer's own on-screen
-  // fingerprint and only then confirms. On confirm, leg 2: POST our OWN /api/peers/confirm
-  // (loopback, X-Wavr-Local) with the exchange result; the backend runs the redeem+finish
-  // legs. It may return 200 with reverse_leg_ok:false (peer stored, reverse leg to retry). ---
-  function showFingerprintConfirmDialog(discovered, base_url, exch, pairBtn){
-    fpName.textContent = discovered.name || exch.name || "peer";                          // textContent — network data
-    fpValue.textContent = (typeof exch.fingerprint==="string") ? exch.fingerprint : "";   // textContent — peer data
+  // --- Out-of-band confirm — the human-in-the-loop MitM defense (C1-fix ceremony). Shows the
+  // SERVER-OBSERVED fingerprint (from /observe, never a self-reported body — M1). The admin
+  // (a) compares it to the peer's own on-screen fingerprint AND (b) types the 8-digit code the
+  // peer displays. Confirm stays disabled until 8 digits are entered. On confirm, leg 2: POST
+  // our OWN /api/peers/confirm {peer_base_url, peer_name, peer_code, peer_fingerprint} over
+  // loopback; the backend redeems the typed code on the peer over the PINNED channel (I1: the
+  // observed fingerprint is pinned before any credential is sent) then auto-bootstraps the
+  // reverse credential. May return 200 with reverse_leg_ok:false (peer stored, reverse to retry). ---
+  function showFingerprintConfirmDialog(discovered, base_url, fingerprint, pairBtn){
+    const peer_name = discovered.name || "peer";
+    fpName.textContent = peer_name;                        // textContent — network data
+    fpValue.textContent = fingerprint;                     // textContent — the OBSERVED fingerprint
+    codeInput.value = "";
     fpBox.hidden = false;
-    fpConfirm.disabled = false; fpCancel.disabled = false;
-    fpCancel.onclick = ()=>{ fpBox.hidden = true; if(pairBtn) pairBtn.disabled = false; };
+    fpConfirm.disabled = true;                             // enabled only once 8 digits typed
+    fpCancel.disabled = false;
+    const onCode = ()=>{
+      codeInput.value = codeInput.value.replace(/\D/g,"").slice(0,8);   // digits only, cap 8
+      fpConfirm.disabled = codeInput.value.length !== 8;
+    };
+    codeInput.oninput = onCode;
+    try{ codeInput.focus(); }catch{}
+    fpCancel.onclick = ()=>{ fpBox.hidden = true; codeInput.value = ""; if(pairBtn) pairBtn.disabled = false; };
     fpConfirm.onclick = async ()=>{
+      const peer_code = codeInput.value;
+      if(peer_code.length !== 8) return;                   // guard: never send a partial code
       fpConfirm.disabled = true; fpCancel.disabled = true;
       let r;
       try{
         r = await fetch(location.origin+"/api/peers/confirm",{method:"POST",
           headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},                 // our own backend — loopback CSRF guard
           body:JSON.stringify({
-            exchange_id: exch.exchange_id,
-            peer_code: exch.code,
-            peer_fingerprint: exch.fingerprint,
             peer_base_url: base_url,
-            peer_name: exch.name || discovered.name || "",
+            peer_name: peer_name,
+            peer_code: peer_code,           // the code the operator READ off the peer's screen
+            peer_fingerprint: fingerprint,  // the OBSERVED fingerprint — pinned by the backend (I1)
           })});
       }catch{}
       fpBox.hidden = true;
+      codeInput.value = "";
       if(pairBtn) pairBtn.disabled = false;
       if(r && r.ok){
         let j; try{ j = await r.json(); }catch{ j = {}; }
         if(j && j.reverse_leg_ok === false) actionFeedback(peerFb, true, null, "✓ paired (reverse leg pending)");
         else actionFeedback(peerFb, true, null, "✓ paired");
         refreshPairedPeers();
-      } else actionFeedback(peerFb, false, "pairing failed");
+      } else actionFeedback(peerFb, false, "pairing failed — check the code and try again");
     };
   }
 
