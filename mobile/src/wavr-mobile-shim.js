@@ -653,8 +653,10 @@
     codeIn.spellcheck = false; codeIn.autocapitalize = "characters"; codeIn.maxLength = 12;
     codeIn.placeholder = "3F9A2C"; codeIn.setAttribute("aria-label", "last 6 fingerprint characters");
     f.appendChild(codeIn); card.appendChild(f);
-    // Task 6: capture this device's presence label at pair time (shown as "home" presence). Optional;
-    // display-only, never a credential, never logged. Persisted with the pairing on a successful pin.
+    // Task 6: capture this device's presence label at pair time (shown as "home" presence). REQUIRED
+    // per F-EMPTYLABEL: the Core 400s an empty register-companion, so pairing with a blank label leaves
+    // auto-presence permanently inert. Display-only, never a credential, never logged. Persisted with
+    // the pairing on a successful pin.
     var lf = el("label", "wavrm-field");
     lf.appendChild(el("span", "wavrm-lab", "Your name on this device (shown as your presence at home)"));
     var labelIn = el("input", "wavrm-input"); labelIn.type = "text"; labelIn.autocomplete = "off";
@@ -665,11 +667,13 @@
     var backBtn = el("button", "wavrm-btn ghost", "Back"); backBtn.type = "button";
     var msg = el("p", "wavrm-msg", "");
     var fp = null, expect = "";
-    function recompute(){ pinBtn.disabled = !(fp && expect.length === 6 && normHex(codeIn.value) === expect); }
+    function labelOk(){ return (labelIn.value || "").trim().length > 0; }   // F-EMPTYLABEL: name required
+    function recompute(){ pinBtn.disabled = !(fp && expect.length === 6 && normHex(codeIn.value) === expect && labelOk()); }
     codeIn.oninput = recompute;
+    labelIn.oninput = recompute;
     pinBtn.onclick = function(){
       if(pinBtn.disabled) return;
-      if(!fp || expect.length !== 6 || normHex(codeIn.value) !== expect) return;   // defence in depth
+      if(!fp || expect.length !== 6 || normHex(codeIn.value) !== expect || !labelOk()) return;   // defence in depth
       _pinnedFp = fp;
       _presenceLabel = (labelIn.value || "").trim();          // Task 6: label captured at pair
       _coreName = _pendingCoreName || _base;                  // Task 6: friendly Core name (mDNS pick or base)
@@ -1370,9 +1374,8 @@
     };
     card.appendChild(save);
     card.appendChild(el("p", "wavrm-sub", "Core: " + (_coreName || "—")));
-    var unpair = el("button", "wavrm-btn ghost", "Unpair this device"); unpair.type = "button";
-    unpair.onclick = function(){
-      unpair.disabled = true;
+    // The actual wipe -- security-critical, unchanged. Only reached via the explicit "Yes, unpair" confirm.
+    function doUnpair(){
       unregisterPresence();   // best-effort DELETE FIRST -- builds the Bearer from the still-valid _token synchronously
       // FIX-C1 (mirror tokenSet(null)'s synchronous-invalidate): the secureDel writes below are ASYNC, so
       // without wiping the in-memory caches NOW a still-wired Task-5 trigger (socket-open reassert,
@@ -1384,8 +1387,30 @@
       Promise.all([ secureDel(K_TOKEN), secureDel(K_URL), secureDel(K_FP) ]).then(function(){
         try{ location.reload(); }catch(_){}
       }, function(){ try{ location.reload(); }catch(_){} });
+    }
+    // F-UNPAIRCONFIRM: the soft keyboard can shift the overlay so a Save-aimed tap lands on Unpair and
+    // instantly wipes the pairing. Require a distinct, on-demand confirm before the wipe ever fires.
+    var unpair = el("button", "wavrm-btn ghost", "Unpair this device"); unpair.type = "button";
+    var confirmPanel = el("div", "wavrm-field");   // hidden until Unpair is tapped; appears below, distinct from Save
+    confirmPanel.style.display = "none";
+    confirmPanel.appendChild(el("p", "wavrm-warn",
+      "Unpairing removes this device. You'll need to verify the hub's certificate again to re-pair."));
+    var yesUnpair = el("button", "wavrm-btn", "Yes, unpair"); yesUnpair.type = "button";
+    var keepPaired = el("button", "wavrm-btn ghost", "Keep paired"); keepPaired.type = "button";
+    unpair.onclick = function(){
+      unpair.style.display = "none";        // hide the trigger so the confirm sits where nothing was
+      confirmPanel.style.display = "";
     };
-    card.appendChild(unpair);
+    keepPaired.onclick = function(){
+      confirmPanel.style.display = "none";
+      unpair.style.display = "";            // back to the normal details view
+    };
+    yesUnpair.onclick = function(){
+      yesUnpair.disabled = true;
+      doUnpair();
+    };
+    confirmPanel.appendChild(yesUnpair); confirmPanel.appendChild(keepPaired);
+    card.appendChild(unpair); card.appendChild(confirmPanel);
     var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
     back.onclick = function(){ hideOverlay(); };
     card.appendChild(back); card.appendChild(msg);
