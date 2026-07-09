@@ -186,12 +186,20 @@ class PendingExchange:
 class PeerExchangeManager:
     """In-memory, ephemeral (never persisted -- same reasoning as
     PairingManager's codes/tickets: this is a short-lived handshake artifact,
-    not a durable record). Bound to ONE pending exchange PER CALLER at a time
-    by design: `stash` always returns a FRESH id and simply adds another
-    entry -- the api_peers.py layer is responsible for keying which exchange
-    belongs to which authenticated caller in Task 4 (finish) by looking the
-    caller's device up via `DeviceStore` after they authenticate, not by
-    trusting any exchange_id the caller presents post-auth."""
+    not a durable record).
+
+    Trust model (Task 6 carry-forward #1, resolved design): the `exchange_id`
+    returned by `stash` is treated as a CAPABILITY, not merely an index. It is a
+    128-bit, single-use `secrets.token_urlsafe(16)` handed back ONLY to the
+    legitimate requester by POST /api/peers/exchange, it self-expires after
+    `EXCHANGE_TTL_SECONDS` (120s), and the /exchange endpoint that mints it is
+    in-subnet-bounded -- so possession of the id IS proof the caller is the peer
+    that started this exchange. /api/peers/finish accepts the caller-presented
+    exchange_id on that basis and is ADDITIONALLY gated to an authenticated
+    `central` peer. Binding the exchange to a device identity at stash time is
+    not cleanly possible (the exchange is stashed BEFORE the requester is an
+    authenticated device), so the capability model is the correct shape rather
+    than an awkward after-the-fact DeviceStore lookup."""
 
     def __init__(self, now_fn=_utcnow, ttl: float = EXCHANGE_TTL_SECONDS):
         self._now = now_fn
