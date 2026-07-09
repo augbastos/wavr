@@ -781,19 +781,34 @@
              display:flex;flex-direction:column;gap:7px;max-width:60ch;}
   .conn-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
   .conn-name{margin:0;font-size:.92rem;font-weight:600;color:var(--text);overflow-wrap:anywhere;}
-  .conn-dir{font-size:.64rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
-            color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;
-            white-space:nowrap;flex-shrink:0;}
   .conn-desc{margin:0;font-size:.82rem;color:var(--dim);line-height:1.5;}
+  /* Must | Connectors | 7: explicit words+icon egress badge — legible without color vision,
+     replacing the old color-only .conn-scope.egress tint. */
+  .conn-egress-badge{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;
+      font-size:.76rem;font-weight:600;border-radius:999px;padding:3px 10px;
+      border:1px solid var(--line);}
+  .conn-egress-badge svg{width:13px;height:13px;flex:none;}
+  .conn-egress-badge.leaves{color:var(--warn);border-color:rgba(232,161,58,.45);}
+  .conn-egress-badge.stays{color:var(--accent);border-color:rgba(61,181,74,.4);}
   .conn-scope{margin:0;font-size:.78rem;color:var(--dim);overflow-wrap:anywhere;}
   .conn-scope b{color:var(--text);font-weight:600;}
-  .conn-scope.egress b{color:var(--warn);}
   .conn-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:3px;}
   .conn-state{font-size:.74rem;font-weight:600;color:var(--dim);font-variant-numeric:tabular-nums;
               overflow-wrap:anywhere;}
   .conn-state.active{color:var(--accent);}
   .conn-state.revoked{color:var(--danger);}
   .conn-state.setup{color:var(--warn);}
+  /* Must | Connectors | 3: calm neutral "managed elsewhere" chip (expected, not a fault) +
+     the exact env var/restart instruction demoted behind a native <details> disclosure. */
+  .conn-managed-chip{font-size:.74rem;color:var(--dim);}
+  .conn-env-details{font-size:.76rem;color:var(--dim);}
+  .conn-env-details summary{cursor:pointer;color:var(--accent);}
+  .conn-env-details p{margin:4px 0 0;}
+  /* Must | Connectors | 7: full-width group headers ("Can reach outside your home" /
+     "Stays on your local network") inside the same #connList grid as the cards. */
+  .conn-group-h{margin:6px 0 0;font-size:.78rem;font-weight:600;text-transform:uppercase;
+                letter-spacing:.04em;color:var(--dim);}
+  .conn-group-h:first-child{margin-top:0;}
 
   /* ---------------- House editor (gear) ---------------- */
   .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
@@ -4184,6 +4199,7 @@ const CONN_DESC = {
   "ha-import":  "Imports device and area names from Home Assistant on your LAN.",
   "ha-control": "Lets Wavr send control commands to your Home Assistant devices.",
   "mcp-read":   "Exposes a read-only view of the house (RoomState) to AI agents over MCP.",
+  "mcp-http":   "Exposes a read-only view of the house (RoomState) and Home Assistant entity names to AI agents over HTTPS — paired and cert-pinned, LAN only.",
 };
 async function renderConnectors(){
   if(MODE!=="live") return;                  // live/central only; never companion/demo
@@ -4203,6 +4219,19 @@ async function renderConnectors(){
   // Egress honesty: an outbound connector whose scope does NOT start with "local" leaves the box.
   function isEgress(c){ return c.direction === "outbound" && !/^local/i.test(c.scope || ""); }
 
+  // Fix #4 (bare connector cards): never render a card with no "what this does" line.
+  // Prefers a server-provided plain-language `description` field if the descriptor ever
+  // carries one (it doesn't today, per the shape comment above — this is forward-compatible,
+  // not an assumed backend change), falls back to the known-id map, and as a last resort
+  // builds an honest generic sentence from the label + direction so an id outside CONN_DESC
+  // (e.g. a future generic connector) is never left unexplained.
+  function connDescription(c){
+    if(typeof c.description === "string" && c.description.trim()) return c.description.trim();
+    if(CONN_DESC[c.id]) return CONN_DESC[c.id];
+    return (c.label || c.id) + (c.direction === "inbound"
+      ? " reads data into Wavr from your network." : " can send data out from Wavr.");
+  }
+
   function stateFor(c){                       // honest per-enforcement status chip
     if(c.suppressed) return {word:"revoked", cls:"revoked"};
     if(c.active)     return {word:"active",  cls:"active"};
@@ -4211,78 +4240,123 @@ async function renderConnectors(){
     return {word:"ready", cls:""};            // configured, but its enable flag is still off
   }
 
+  function buildCard(connectors, c){
+    const NS = "http://www.w3.org/2000/svg";
+    const card = document.createElement("div"); card.className = "conn-card";
+
+    const top = document.createElement("div"); top.className = "conn-top";
+    const nm = document.createElement("h4"); nm.className = "conn-name";
+    nm.textContent = c.label || c.id;        // textContent — server/registry data (never innerHTML)
+    top.appendChild(nm);
+    // (should | Connectors | 7): the raw inbound/outbound jargon pill is dropped here —
+    // directionWord() below is the single plain-language direction indicator.
+    card.appendChild(top);
+
+    const descP = document.createElement("p"); descP.className = "conn-desc";
+    descP.textContent = connDescription(c);   // Fix #4 — guaranteed, never skipped
+    card.appendChild(descP);
+
+    // Must | Connectors | 7: explicit words+icon egress badge — replaces the color-only
+    // .conn-scope.egress tint so privacy is legible without relying on color vision.
+    const egress = isEgress(c);
+    const badge = document.createElement("span");
+    badge.className = "conn-egress-badge " + (egress ? "leaves" : "stays");
+    const bsvg = document.createElementNS(NS, "svg"); bsvg.setAttribute("aria-hidden", "true");
+    const buse = document.createElementNS(NS, "use"); buse.setAttribute("href", egress ? "#ic-net" : "#ic-lock");
+    bsvg.appendChild(buse); badge.appendChild(bsvg);
+    badge.appendChild(document.createTextNode(egress ? "Leaves your home" : "Stays on your network"));
+    card.appendChild(badge);
+
+    if(c.scope){
+      const sc = document.createElement("p"); sc.className = "conn-scope";
+      const b = document.createElement("b"); b.textContent = directionWord(c.direction) + ": ";
+      sc.appendChild(b); sc.appendChild(document.createTextNode(c.scope)); // textContent path — hostile scope is data
+      card.appendChild(sc);
+    }
+
+    const foot = document.createElement("div"); foot.className = "conn-foot";
+    const st = stateFor(c);
+    if(c.enforcement === "env"){
+      // No live toggle: the gate lives in a separate process/flag. State chip stays honest
+      // about the current value; must | Connectors | 3: a calm "managed elsewhere" chip
+      // (expected behavior, not a fault) with the exact env var + restart instruction
+      // demoted behind a Details disclosure instead of primary card text.
+      const stateChip = document.createElement("span"); stateChip.className = "conn-state " + st.cls;
+      stateChip.textContent = st.word;
+      foot.appendChild(stateChip);
+      const managed = document.createElement("span"); managed.className = "conn-managed-chip";
+      managed.textContent = "Managed by the hub — not switchable here";
+      foot.appendChild(managed);
+      if(c.env_flag){
+        const det = document.createElement("details"); det.className = "conn-env-details";
+        const sum = document.createElement("summary"); sum.textContent = "Details";
+        det.appendChild(sum);
+        const p = document.createElement("p");
+        p.textContent = "Set " + c.env_flag + " and restart the hub to change this.";
+        det.appendChild(p);
+        foot.appendChild(det);
+      }
+    } else {
+      // registry (generic full gate) OR registry-overlay (built-in kill-switch): a live toggle.
+      const isGeneric = c.enforcement === "registry";
+      const on = isGeneric ? c.active : !c.suppressed;   // overlay: on = permitted (not suppressed)
+      const tog = document.createElement("button"); tog.type = "button";
+      tog.className = "ctl switch" + (on ? " on" : "");
+      tog.setAttribute("aria-pressed", on ? "true" : "false");
+      tog.setAttribute("aria-label",
+        (isGeneric ? (on ? "turn off " : "turn on ") : (on ? "revoke " : "allow ")) + (c.label || c.id));
+      tog.textContent = isGeneric ? (on ? "On" : "Off") : (on ? "Allowed" : "Revoked");
+      tog.onclick = async ()=>{
+        tog.disabled = true;
+        let r;
+        try{ r = await fetch(location.origin+"/api/connectors/"+encodeURIComponent(c.id)+"/enable",
+          {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+           body:JSON.stringify({enabled: !on})}); }catch{}
+        if(r && r.ok){
+          let j; try{ j = await r.json(); }catch{ j = {}; }
+          const updated = j.connector;
+          if(updated){
+            const idx = connectors.findIndex(x => x.id === updated.id);
+            if(idx >= 0) connectors[idx] = updated;
+          }
+          actionFeedback(fb, true, null, on ? "✓ revoked" : "✓ enabled");
+          render(connectors);               // re-render from the authoritative descriptor
+        } else {
+          tog.disabled = false;
+          actionFeedback(fb, false,
+            (r && r.status === 409) ? "controlled by an environment flag" : "couldn't change");
+        }
+      };
+      foot.appendChild(tog);
+      const stch = document.createElement("span"); stch.className = "conn-state " + st.cls;
+      stch.textContent = (st.word === "ready" && c.env_flag) ? ("ready · set " + c.env_flag) : st.word;
+      foot.appendChild(stch);
+    }
+    card.appendChild(foot);
+    return card;
+  }
+
   function render(connectors){
     connectors = Array.isArray(connectors) ? connectors : [];
     host.textContent = "";
     let activeN = 0;
+    // Must | Connectors | 7: partition into two plainly-labeled groups via the existing
+    // isEgress() helper — an empty group never renders a header (no dangling "0 items").
+    const groups = [
+      {title: "Can reach outside your home", items: []},
+      {title: "Stays on your local network", items: []},
+    ];
     connectors.forEach(c => {
       if(c.active) activeN++;
-      const card = document.createElement("div"); card.className = "conn-card";
-
-      const top = document.createElement("div"); top.className = "conn-top";
-      const nm = document.createElement("h4"); nm.className = "conn-name";
-      nm.textContent = c.label || c.id;        // textContent — server/registry data (never innerHTML)
-      const dir = document.createElement("span"); dir.className = "conn-dir";
-      dir.textContent = c.direction || "outbound";
-      top.appendChild(nm); top.appendChild(dir);
-      card.appendChild(top);
-
-      const desc = CONN_DESC[c.id];
-      if(desc){ const p = document.createElement("p"); p.className = "conn-desc"; p.textContent = desc; card.appendChild(p); }
-
-      if(c.scope){
-        const sc = document.createElement("p"); sc.className = "conn-scope" + (isEgress(c) ? " egress" : "");
-        const b = document.createElement("b"); b.textContent = directionWord(c.direction) + ": ";
-        sc.appendChild(b); sc.appendChild(document.createTextNode(c.scope)); // textContent path — hostile scope is data
-        card.appendChild(sc);
-      }
-
-      const foot = document.createElement("div"); foot.className = "conn-foot";
-      const st = stateFor(c);
-      if(c.enforcement === "env"){
-        // No live toggle: the gate lives in a separate process/flag. Reflect it honestly.
-        const note = document.createElement("span"); note.className = "conn-state " + st.cls;
-        note.textContent = st.word + (c.env_flag ? (" · set " + c.env_flag + " and restart") : "");
-        foot.appendChild(note);
-      } else {
-        // registry (generic full gate) OR registry-overlay (built-in kill-switch): a live toggle.
-        const isGeneric = c.enforcement === "registry";
-        const on = isGeneric ? c.active : !c.suppressed;   // overlay: on = permitted (not suppressed)
-        const tog = document.createElement("button"); tog.type = "button";
-        tog.className = "ctl switch" + (on ? " on" : "");
-        tog.setAttribute("aria-pressed", on ? "true" : "false");
-        tog.setAttribute("aria-label",
-          (isGeneric ? (on ? "turn off " : "turn on ") : (on ? "revoke " : "allow ")) + (c.label || c.id));
-        tog.textContent = isGeneric ? (on ? "On" : "Off") : (on ? "Allowed" : "Revoked");
-        tog.onclick = async ()=>{
-          tog.disabled = true;
-          let r;
-          try{ r = await fetch(location.origin+"/api/connectors/"+encodeURIComponent(c.id)+"/enable",
-            {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
-             body:JSON.stringify({enabled: !on})}); }catch{}
-          if(r && r.ok){
-            let j; try{ j = await r.json(); }catch{ j = {}; }
-            const updated = j.connector;
-            if(updated){
-              const idx = connectors.findIndex(x => x.id === updated.id);
-              if(idx >= 0) connectors[idx] = updated;
-            }
-            actionFeedback(fb, true, null, on ? "✓ revoked" : "✓ enabled");
-            render(connectors);               // re-render from the authoritative descriptor
-          } else {
-            tog.disabled = false;
-            actionFeedback(fb, false,
-              (r && r.status === 409) ? "controlled by an environment flag" : "couldn't change");
-          }
-        };
-        foot.appendChild(tog);
-        const stch = document.createElement("span"); stch.className = "conn-state " + st.cls;
-        stch.textContent = (st.word === "ready" && c.env_flag) ? ("ready · set " + c.env_flag) : st.word;
-        foot.appendChild(stch);
-      }
-      card.appendChild(foot);
-      host.appendChild(card);
+      (isEgress(c) ? groups[0] : groups[1]).items.push(c);
     });
+    groups.forEach(g => {
+      if(!g.items.length) return;
+      const h = document.createElement("h3"); h.className = "conn-group-h"; h.textContent = g.title;
+      host.appendChild(h);
+      g.items.forEach(c => host.appendChild(buildCard(connectors, c)));
+    });
+    // "Nothing is reaching outward" stays pinned in the static #connSummary above #connList.
     summary.textContent = activeN === 0
       ? "Nothing is reaching outward right now — every connector is off."
       : (activeN + (activeN === 1 ? " connector is active." : " connectors are active."));
