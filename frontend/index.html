@@ -357,6 +357,13 @@
   .ctl:disabled{opacity:.6;cursor:default;}
   a.ctl{display:inline-flex;align-items:center;gap:6px;text-decoration:none;}
   .src-toggles{display:flex;gap:8px;flex-wrap:wrap;}
+  /* Fix #1/#3 (source toggles): each row is a real switch + its own failure/az explainer line,
+     never a bare pill — kept as an inline unit so .src-toggles' existing flex-wrap still packs
+     rows tightly when nothing needs to say more than on/off. */
+  .src-toggle-row{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .ctl.src-unavail{color:var(--dim);cursor:default;background:var(--elevated);}
+  .ctl.src-unavail:hover{border-color:var(--line);}
+  .src-unavail-note{font-size:.72rem;color:var(--dim);max-width:34ch;line-height:1.3;}
   .controls-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
   .ctl.switch{position:relative;padding-left:46px;}
   .ctl.switch::before{content:"";position:absolute;left:12px;top:50%;transform:translateY(-50%);
@@ -2767,9 +2774,23 @@ renderStatus();
 async function renderControls(){
   if(MODE!=="live") return;               // the control plane is a backend feature
   document.getElementById("controls").hidden = false;
+  // Fix #1 (source toggles look dead): no longer swallows a failed POST into a silent
+  // "success" — a network error or a 403 (missing local-admin scope) resolves to null so
+  // every caller below can tell a real write from a no-op and surface it instead of lying.
   const post = (url,body)=> fetch(location.origin+url,{method:"POST",
     headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)})
-    .catch(()=>{});  // the local network may fail momentarily; the next refresh() re-syncs
+    .catch(()=>null);
+  // Fix #3 (honest unavailable state): /api/system already returns {enabled,active} per
+  // source (sourcemanager.py) — active=false while enabled=true means the source's task
+  // isn't actually running (e.g. a privileged bind failed under a non-root proot). A
+  // source only paints as the calm "unavailable" chip once that reading has been STABLE
+  // for 2 consecutive 3s polls (never on a source merely mid-restart), or immediately for
+  // a source name known to be privilege-gated on the current build (PROOT_BLOCKED) — never
+  // hardcoded to always-unavailable, since the same name legitimately binds and runs
+  // enabled&&active on a host with real network capabilities (e.g. the G9 Core's proot
+  // under Magisk su).
+  const unavailStreak = {};
+  const PROOT_BLOCKED = {dhcp_fp: 1, rogue_dhcp: 1};
   async function refresh(){
     let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
     window.__wavrSystem?.(s);   // Stage-2 hook: Dispositivos→Ativos badge/rows share this payload
@@ -2781,17 +2802,52 @@ async function renderControls(){
     sys.setAttribute("role", "switch");
     sys.setAttribute("aria-checked", s.running ? "true" : "false");
     sys.setAttribute("aria-label", "System: " + (s.running ? "on" : "off"));
-    sys.onclick = async ()=>{ await post("/api/system/toggle",{on:!s.running}); refresh(); };
+    sys.onclick = async ()=>{ const r = await post("/api/system/toggle",{on:!s.running}); if(r && r.ok) refresh(); };
     const wrap = document.getElementById("srcToggles"); wrap.innerHTML = "";
     s.sources.forEach(src=>{
-      const b = document.createElement("button");
-      b.className = "ctl small " + (src.enabled ? "on" : "off");
-      b.textContent = `${MODALITY_LABEL[src.name] || src.name}: ${src.enabled ? "on" : "off"}`;
-      // v2 tooltips: per-source explainer (SOURCE_TIP map lives in the tooltip block;
-      // its fallback string guarantees an unmapped name is never tooltip-less)
-      b.setAttribute("data-tip", typeof window.__wavrSourceTip==="function" ? window.__wavrSourceTip(src.name) : "");
-      b.onclick = async ()=>{ await post(`/api/sources/${src.name}/toggle`,{enabled:!src.enabled}); refresh(); };
-      wrap.appendChild(b);
+      const label = MODALITY_LABEL[src.name] || src.name;
+      const row = document.createElement("div"); row.className = "src-toggle-row";
+      const stuck = src.enabled && !src.active;
+      const streak = stuck ? (unavailStreak[src.name] || 0) + 1 : 0;
+      unavailStreak[src.name] = streak;
+      const unavailable = stuck && (streak >= 2 || (src.name in PROOT_BLOCKED));
+      if(unavailable){
+        // Non-interactive by design — this is NOT a dead toggle, it's an honest status
+        // chip. Distinct from both the live switch above and a plain read-only pill.
+        const chip = document.createElement("span");
+        chip.className = "ctl small src-unavail";
+        chip.setAttribute("role", "status");
+        chip.textContent = label + ": unavailable";
+        chip.setAttribute("data-tip", "Unavailable on this device — needs privileged mode (not an error)");
+        row.appendChild(chip);
+        const note = document.createElement("span"); note.className = "src-unavail-note";
+        note.textContent = "Unavailable on this device — needs privileged mode (not an error)";
+        row.appendChild(note);
+      } else {
+        const b = document.createElement("button"); b.type = "button";
+        // Item 2 (Changes list): the same .ctl.switch track/knob grammar as #sysToggle —
+        // visually distinct from a read-only status chip — instead of a weak "ctl small" pill.
+        b.className = "ctl switch " + (src.enabled ? "on" : "off");
+        b.textContent = label;
+        b.setAttribute("role", "switch");
+        b.setAttribute("aria-checked", src.enabled ? "true" : "false");
+        b.setAttribute("aria-label", label + ": " + (src.enabled ? "on" : "off"));
+        // v2 tooltips: per-source explainer (SOURCE_TIP map lives in the tooltip block;
+        // its fallback string guarantees an unmapped name is never tooltip-less)
+        b.setAttribute("data-tip", typeof window.__wavrSourceTip==="function" ? window.__wavrSourceTip(src.name) : "");
+        const fb = document.createElement("span"); fb.className = "action-fb"; fb.setAttribute("aria-live", "polite");
+        b.onclick = async ()=>{
+          b.disabled = true;
+          const r = await post(`/api/sources/${src.name}/toggle`, {enabled: !src.enabled});
+          if(r && r.ok){ refresh(); }
+          else {
+            b.disabled = false;
+            actionFeedback(fb, false, "Couldn't change — this control needs local admin access");
+          }
+        };
+        row.appendChild(b); row.appendChild(fb);
+      }
+      wrap.appendChild(row);
     });
   }
   // Status panel mirrors the same backend state — refresh it on the same cadence/trigger
@@ -8429,12 +8485,21 @@ try {
     { k:"snmp", label:"SNMP", icon:"ic-chip", active:true,
       on:  "sends one read-only query to each device already on your network to identify make/model — local only, never leaves your LAN",
       off: "off — enable with WAVR_NET_SNMP=1 on the hub (restart required)" },
+    // dhcp_fp/rogue_dhcp bind a raw socket on UDP/68, which a non-root proot/container
+    // build can't do even after the env flag is set + restarted (works fine on a host
+    // with real network capabilities, e.g. the G9 Core's proot under Magisk su). The
+    // backend has no per-collector bind-success signal today (features.* is a config
+    // flag only, not a runtime "did it actually bind" state — see sourcemanager.py vs.
+    // netinventory_service.py: these two are NOT SourceManager sources and carry no
+    // {enabled,active} pair) so the frontend can't render a verified "unavailable"
+    // chip here the way it can for real sources below. Being honest with what IS
+    // knowable: the off-copy states the real caveat instead of a bare restart promise.
     { k:"dhcp_fp", label:"DHCP fingerprint", icon:"ic-radar", active:false,
       on:  "reads the DHCP requests devices already broadcast on your network to guess OS/hostname — passive, local only",
-      off: "off — enable with WAVR_NET_DHCP_FP=1 on the hub (restart required)" },
+      off: "off — enable with WAVR_NET_DHCP_FP=1 on the hub (restart required; needs a raw-socket network capability some restricted environments, like a non-root container, can't grant)" },
     { k:"rogue_dhcp", label:"Rogue DHCP-server detection", icon:"ic-alert", active:false,
       on:  "watches for a second/unexpected DHCP server on your network (a common attack) — passive, local only; alerts appear in the Network tab",
-      off: "off — enable with WAVR_NET_DHCP_MONITOR=1 on the hub (restart required)" },
+      off: "off — enable with WAVR_NET_DHCP_MONITOR=1 on the hub (restart required; needs a raw-socket network capability some restricted environments, like a non-root container, can't grant)" },
   ];
   function snBadge(sym, on, tip){
     var b = elc("span", "sn-icon" + (on ? " on" : " na"));
