@@ -67,7 +67,7 @@ from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
 from wavr.auth import access_for, parse_bearer, can_change_state, can_view, in_subnet, has_scope
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
-from wavr.peers import PeerStore, PeerExchangeManager
+from wavr.peers import PeerStore
 from wavr.api_peers import build_peers_public_router, build_peers_admin_router
 from wavr.local_token import resolve_local_token
 from wavr import arp_block
@@ -476,7 +476,6 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # the check above guarantees implies multidevice). PeerStore shares cfg.db_path but
     # owns its own `peers` table; closed in the lifespan finally alongside _devices.
     _peer_store = PeerStore(cfg.db_path) if cfg.peers_enabled else None
-    _exchange_mgr = PeerExchangeManager() if cfg.peers_enabled else None
 
     async def _publish(rs, *, persist=True):
         # Shared publish path for both the event-driven ingest and the periodic
@@ -874,12 +873,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             return JSONResponse({"detail": "loopback only"}, status_code=403)
         # Onboarding: /api/pair is reachable by an in-subnet peer WITHOUT a token
         # (that is the point of pairing; bounded by the one-time, rate-limited code).
-        # The two peer entry points (/api/peers/exchange, /api/peers/redeem) get the
-        # IDENTICAL in-subnet-bounded exemption: a remote peer must reach them before it
-        # holds any token, exactly like /api/pair, and each is bounded by the same
-        # one-time ~2-min pairing-code window. When peers are disabled these routes
-        # simply don't exist (-> 404), so widening the check is inert unless mounted.
-        if request.url.path in ("/api/pair", "/api/peers/exchange", "/api/peers/redeem"):
+        # The ONE peer entry point (/api/peers/redeem) gets the IDENTICAL in-subnet-
+        # bounded exemption: a remote peer must reach it before it holds any token,
+        # exactly like /api/pair, and it is bounded by the same one-time ~2-min pairing-
+        # code window (now minted ONLY on a trusted loopback screen -- /api/peers/exchange,
+        # which network-vended a code, is DELETED, closing C1). /api/peers/link-back is
+        # AUTHENTICATED (require_central) so it is NOT exempt here. When peers are disabled
+        # these routes simply don't exist (-> 404), so the check is inert unless mounted.
+        if request.url.path in ("/api/pair", "/api/peers/redeem"):
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 request.state.scopes = None
@@ -981,26 +982,29 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor),
         dependencies=[Depends(require_scope("network:read"))])
 
-    # Peer pairing (Phase 1). Mounted here -- AFTER require_local/require_central/
-    # require_scope are all in scope (not up by the multidevice pair-router mount, where
-    # require_local isn't defined yet). Two routers with DIFFERENT gates:
-    #  * public (exchange/redeem): NO deps -- the middleware exempts them in-subnet, the
-    #    same deliberately-unauthenticated onboarding surface as /api/pair.
-    #  * admin (discovered/confirm/list/unpair): require_local (loopback root + CSRF, or a
-    #    token-authed central peer) + require_scope("admin"), mirroring the device router.
-    #  * /finish: gated INSTEAD by require_central -- it's called by a REMOTE peer that
-    #    JUST authenticated as central with the token this instance issued it, so it must
-    #    NOT demand the X-Wavr-Local CSRF header a remote peer can't send (require_local
-    #    would). require_central admits root-or-central header-independently, which is
-    #    exactly the reverse-leg caller.
+    # Peer pairing (Phase 1, C1-fix reshape). Mounted here -- AFTER require_local/
+    # require_root/require_central are all in scope. Two routers with DIFFERENT gates:
+    #  * public (redeem): NO deps -- the middleware exempts it in-subnet, the same
+    #    deliberately-unauthenticated onboarding surface as /api/pair.
+    #  * admin (discovered/observe/confirm/list/unpair): LOOPBACK-ROOT ONLY --
+    #    require_local (root's X-Wavr-Local CSRF header) + require_root (rejects any
+    #    non-root, incl. an authenticated central PEER). This mirrors the ARP-block
+    #    route (§B): only the LOCAL operator initiates/administers pairing. Plain
+    #    require_local would admit a remote central peer (its DEFAULT_SCOPES include
+    #    admin), letting it force outbound dials / enumerate / sever mesh links --
+    #    exactly the primitive require_root exists to deny.
+    #  * /link-back: the ONLY peer-reachable route -- require_central. Called by a
+    #    REMOTE peer that JUST authenticated as central with the token this instance
+    #    issued it; it needs no X-Wavr-Local header (require_central admits root-or-
+    #    central header-independently), which is exactly the reverse-leg caller.
     if cfg.peers_enabled:
         app.include_router(build_peers_public_router(
-            _peer_store, _exchange_mgr, _pairing, cfg, cfg.instance_name))
+            _peer_store, _pairing, cfg))
         app.include_router(build_peers_admin_router(
-            _peer_store, _exchange_mgr, _pairing, _devices, cfg, cfg.instance_name,
-            self_base_url=f"https://{_local_ip}:{cfg.port}",
-            admin_deps=[Depends(require_local), Depends(require_scope("admin"))],
-            finish_deps=[Depends(require_central)]))
+            _peer_store, _pairing, _devices, cfg, cfg.instance_name,
+            self_base_url=f"https://{_local_ip}:{cfg.port}", local_ip=_local_ip,
+            admin_deps=[Depends(require_local), Depends(require_root)],
+            linkback_deps=[Depends(require_central)]))
 
     # Consent-first identity registry routes. Router-level require_central keeps the
     # person-labelled PII list off a multidevice 'user' (loopback root always passes);

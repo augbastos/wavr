@@ -1,7 +1,8 @@
 """Peer-instance relationships for cross-instance fusion + portable admin
 identity (2026-07-09 design spec, Phase 1). A "peer" is another Wavr instance
 (Desktop, Core, a future second Core) this instance has mutually pointed at
-via the exchange protocol in `api_peers.py` -- NOT a plain companion device
+via the manual-code pairing handshake in `api_peers.py` (see the C1-fix design
+`2026-07-09-wavr-peer-pairing-c1-fix-design.md`) -- NOT a plain companion device
 (phone/tablet), even though both end up as a `role=central` row in the SAME
 `DeviceStore` (Wavr Pass draws no new role; see the design spec).
 
@@ -14,9 +15,14 @@ redeem; `PeerStore` is the CLIENT-perspective row this instance needs to
 actively call them back (for fusion's `RemoteSource` in Phase 2, and for
 remote config in Phase 4).
 
-`local_device_id` links back to the `Device.device_id` `DeviceStore` assigned
-this peer when they redeemed a code from us -- follow it to check their role/
-revoked state via `DeviceStore.get()` rather than duplicating that here.
+`local_device_id` is OUR-id-for-them: the `Device.device_id` in THIS instance's
+own `DeviceStore` that the peer presents a token for when it calls US (C2). On
+the side that displayed the code it is the device minted when the peer redeemed
+that code; on the initiator side it is the device this instance minted locally
+in `/confirm`'s reverse-bootstrap step. Either way it is the exact id
+`DeviceStore.revoke` must hit on unpair to kill the peer's INBOUND token -- never
+the peer's self-reported echo of its own device id. Follow it to check their
+role/revoked state via `DeviceStore.get()` rather than duplicating that here.
 
 Token is stored PLAINTEXT (not hashed like `DeviceStore`'s tokens): unlike a
 companion's token (which only ever needs to be VERIFIED, never re-sent), this
@@ -31,7 +37,7 @@ import secrets
 import sqlite3
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS peers (
@@ -160,73 +166,3 @@ class PeerStore:
 
     def close(self) -> None:
         self._conn.close()
-
-
-EXCHANGE_TTL_SECONDS = 120  # matches pairing.CODE_TTL_SECONDS -- same window discipline
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-@dataclass(frozen=True)
-class PendingExchange:
-    """The requester's half of a peer-pairing exchange, stashed by the side
-    that receives POST /api/peers/exchange (see api_peers.py) until the
-    requester comes back authenticated (via /api/peers/finish) to complete
-    the reverse leg -- see the protocol walkthrough at the top of this
-    plan/the design spec §2."""
-
-    requester_name: str
-    requester_base_url: str
-    requester_code: str
-    requester_fingerprint: str
-
-
-class PeerExchangeManager:
-    """In-memory, ephemeral (never persisted -- same reasoning as
-    PairingManager's codes/tickets: this is a short-lived handshake artifact,
-    not a durable record).
-
-    Trust model (Task 6 carry-forward #1, resolved design): the `exchange_id`
-    returned by `stash` is treated as a CAPABILITY, not merely an index. It is a
-    128-bit, single-use `secrets.token_urlsafe(16)` handed back ONLY to the
-    legitimate requester by POST /api/peers/exchange, it self-expires after
-    `EXCHANGE_TTL_SECONDS` (120s), and the /exchange endpoint that mints it is
-    in-subnet-bounded -- so possession of the id IS proof the caller is the peer
-    that started this exchange. /api/peers/finish accepts the caller-presented
-    exchange_id on that basis and is ADDITIONALLY gated to an authenticated
-    `central` peer. Binding the exchange to a device identity at stash time is
-    not cleanly possible (the exchange is stashed BEFORE the requester is an
-    authenticated device), so the capability model is the correct shape rather
-    than an awkward after-the-fact DeviceStore lookup."""
-
-    def __init__(self, now_fn=_utcnow, ttl: float = EXCHANGE_TTL_SECONDS):
-        self._now = now_fn
-        self._ttl = ttl
-        self._pending: dict[str, tuple[PendingExchange, datetime]] = {}
-
-    def stash(self, requester_name: str, requester_base_url: str,
-              requester_code: str, requester_fingerprint: str) -> str:
-        self._purge_expired()
-        exchange_id = secrets.token_urlsafe(16)
-        expires = self._now() + timedelta(seconds=self._ttl)
-        self._pending[exchange_id] = (
-            PendingExchange(requester_name, requester_base_url, requester_code,
-                             requester_fingerprint),
-            expires,
-        )
-        return exchange_id
-
-    def pop(self, exchange_id: str) -> PendingExchange | None:
-        entry = self._pending.pop(exchange_id, None)
-        if entry is None:
-            return None
-        pending, expires = entry
-        if self._now() >= expires:
-            return None
-        return pending
-
-    def _purge_expired(self) -> None:
-        now = self._now()
-        self._pending = {k: v for k, v in self._pending.items() if now < v[1]}
