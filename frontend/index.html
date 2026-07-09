@@ -1471,6 +1471,28 @@
   .core-lock-biom-icon{width:40px;height:40px;color:var(--text);}
   .core-lock-biom-txt{margin:0;font-size:15px;color:var(--dim);}
 
+  /* ---------------- What's New takeover (over the lock, z-index 20 > lock's 10) ---------------- */
+  .core-whatsnew{position:absolute;inset:0;z-index:20;display:flex;align-items:center;
+                 justify-content:center;padding:clamp(12px,3vh,28px);
+                 background:rgba(11,14,18,.78);backdrop-filter:blur(8px);
+                 -webkit-backdrop-filter:blur(8px);animation:coreLockIn .35s ease;}
+  .core-whatsnew-card{width:auto;max-width:min(560px,92vw);max-height:94vh;overflow:auto;
+                      padding:clamp(16px,3vh,30px) clamp(18px,3.4vh,34px);border-radius:20px;
+                      background:var(--elevated);border:1px solid var(--line);
+                      box-shadow:0 20px 60px rgba(0,0,0,.45);}
+  .core-whatsnew-kicker{margin:0 0 4px;font-size:clamp(11px,1.4vh,13px);font-weight:600;
+                        letter-spacing:.08em;text-transform:uppercase;color:var(--accent);}
+  .core-whatsnew-title{margin:0 0 clamp(4px,1vh,8px);font-size:clamp(18px,2.8vh,24px);
+                       font-weight:600;color:var(--text);}
+  .core-whatsnew-ver{margin:0 0 clamp(10px,1.6vh,16px);font-size:clamp(12px,1.6vh,14px);color:var(--dim);}
+  .core-whatsnew-list{margin:0 0 clamp(14px,2vh,20px);padding-left:1.2em;display:flex;
+                      flex-direction:column;gap:clamp(6px,1vh,10px);}
+  .core-whatsnew-list li{font-size:clamp(13px,1.9vh,16px);line-height:1.4;color:var(--text);}
+  .core-whatsnew-ok{min-width:120px;}
+  /* Settings > System re-readable list */
+  .whatsnew-set-list{margin:6px 0 0;padding-left:1.2em;display:flex;flex-direction:column;gap:7px;}
+  .whatsnew-set-list li{font-size:.9rem;line-height:1.4;color:var(--text);}
+
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
     .bar>i,.ctl,.rm,.radar-target,.radar-zone,.pill,.house,.hero-line1,.radar-room,
@@ -1483,7 +1505,7 @@
     .tip-pop{transition:none;}       /* v2 tooltips: no fade — popover just appears */
     #corePanel{transition:none;}     /* Core Panel: wake/sleep jump-cuts instead of fading */
     .core-batt-fill{transition:none;}
-    .core-lock,.core-lock-shake{animation:none;}
+    .core-lock,.core-lock-shake,.core-whatsnew{animation:none;}
     .core-lock-dot,.core-lock-key{transition:none;}
   }
 </style>
@@ -2320,6 +2342,12 @@
       </div>
       <p class="panel-note">Exports, right here on this device, what this panel has already loaded: presence history, house floor plan, and zones. Deleting data on the hub (“right to be forgotten”) needs a backend route — not in this version yet.</p>
     </div>
+    <!-- What's New: the release notes shown once as a takeover on the Core panel are kept
+         permanently re-readable here (filled by initWhatsNewSettings() from WAVR_WHATS_NEW). -->
+    <div class="tile" id="gearWhatsNew" aria-labelledby="whatsnew-h">
+      <div class="tile-head"><h2 id="whatsnew-h">What's New</h2><span id="whatsNewSetVer" class="hint"></span></div>
+      <ul id="whatsNewSetList" class="whatsnew-set-list"></ul>
+    </div>
     <div class="tile" id="gearSobre" aria-labelledby="sobre-h">
       <div class="tile-head"><h2 id="sobre-h">About</h2></div>
       <p class="panel-note">Wavr — multi-modal home presence sensing, local-first · AGPL-3.0 license<span id="sobreVersion"></span><span id="sobreMode"></span></p>
@@ -2415,6 +2443,18 @@
           </button>
         </div>
       </div>
+    </div>
+  </div>
+  <!-- What's New takeover: layered OVER the lock (z-index 20 > core-lock's 10) on the first
+       run after an update. Read-only release notes; OK acknowledges + reveals the still-locked
+       panel underneath (never an unlock). Populated + gated by whatsNewTakeover() in the script. -->
+  <div id="coreWhatsNew" class="core-whatsnew" hidden role="dialog" aria-modal="true" aria-labelledby="cwnTitle">
+    <div class="core-whatsnew-card">
+      <p class="core-whatsnew-kicker">Novidades</p>
+      <h2 id="cwnTitle" class="core-whatsnew-title">O que há de novo no Wavr</h2>
+      <p id="cwnVersion" class="core-whatsnew-ver"></p>
+      <ul id="cwnList" class="core-whatsnew-list"></ul>
+      <button type="button" id="cwnOk" class="ctl primary core-whatsnew-ok">OK</button>
     </div>
   </div>
 </div>
@@ -10044,6 +10084,56 @@ try {
 // counting occupied rooms is the honest reading available from this feed.
 // See docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md.
 // ============================================================================
+
+// ============================================================================
+// What's New (release notes). One ordered list of UI releases. The FIRST time
+// the app opens on a newer WAVR_APP_VERSION than the one last acknowledged
+// (localStorage), the Core panel shows a takeover card OVER the lock screen;
+// OK acknowledges it (never reappears for that version) and reveals the still-
+// locked panel underneath. It stays permanently re-readable in Settings > System.
+// WAVR_APP_VERSION is a UI-release marker for this changelog, independent of the
+// backend semver shown in About. Newest entry FIRST.
+// ============================================================================
+window.WAVR_APP_VERSION = "0.2.0";
+window.WAVR_WHATS_NEW = [
+  { version: "0.2.0", date: "10/07/2026", items: [
+    "🏠 Tela inicial mais fácil de ler: os cômodos com gente aparecem do lado direito, e o mapa da casa abre quando você toca nele.",
+    "🔒 Agora dá pra deixar o painel sem senha, se você preferir.",
+    "🔌 A parte de conexões ficou mais organizada, e mostra bem o que sai ou não da sua casa.",
+    "🤝 Juntar dois aparelhos Wavr ficou mais seguro: é só digitar o código que aparece na tela do outro.",
+  ] },
+];
+window.__wavrWhatsNewFor = function(v){
+  var list = window.WAVR_WHATS_NEW || [];
+  for(var i = 0; i < list.length; i++){ if(list[i].version === v) return list[i]; }
+  return null;
+};
+// Fill a <ul> with an entry's items via textContent only (never HTML — these are
+// static local strings, but the discipline matches every other list in this file).
+window.__wavrRenderWhatsNewItems = function(ul, entry){
+  if(!ul) return;
+  ul.textContent = "";
+  var items = (entry && entry.items) || [];
+  for(var i = 0; i < items.length; i++){
+    var li = document.createElement("li");
+    li.textContent = String(items[i]);
+    ul.appendChild(li);
+  }
+};
+// Settings > System "What's New" tile: always shows the current version's notes,
+// regardless of the seen-state. Runs in every mode (dashboard + panel).
+(function initWhatsNewSettings(){
+  function fill(){
+    var ver = document.getElementById("whatsNewSetVer");
+    var ul  = document.getElementById("whatsNewSetList");
+    var entry = window.__wavrWhatsNewFor(window.WAVR_APP_VERSION);
+    if(ver) ver.textContent = entry ? ("Versão " + entry.version + " · " + entry.date) : "";
+    window.__wavrRenderWhatsNewItems(ul, entry);
+  }
+  if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", fill);
+  else fill();
+})();
+
 (function(){
   "use strict";
   var CORE_MODE = false;
@@ -10054,6 +10144,34 @@ try {
   if(!panel) return;
   document.body.classList.add("core-mode");
   panel.hidden = false;   // shown by default (ambient face); dissolves on the first interaction
+
+  // ---------------- What's New takeover (first run after an update) ----------------
+  // Layered OVER the lock (z-index 20 > core-lock's 10). Shown once per version; OK
+  // persists the acknowledgement and reveals the still-locked panel underneath. Never
+  // bypasses the lock — it is read-only release notes, not an unlock.
+  (function whatsNewTakeover(){
+    var box = document.getElementById("coreWhatsNew");
+    if(!box) return;
+    var SEEN_KEY = "wavr_whatsnew_seen";
+    var cur = window.WAVR_APP_VERSION;
+    var seen = null;
+    try{ seen = localStorage.getItem(SEEN_KEY); }catch(e){}
+    var entry = window.__wavrWhatsNewFor(cur);
+    if(!entry || seen === cur) return;   // nothing new, or already acknowledged this version
+    var verEl = document.getElementById("cwnVersion");
+    var ul    = document.getElementById("cwnList");
+    if(verEl) verEl.textContent = "Versão " + entry.version + " · " + entry.date;
+    window.__wavrRenderWhatsNewItems(ul, entry);
+    box.hidden = false;
+    var ok = document.getElementById("cwnOk");
+    function dismiss(){
+      box.hidden = true;
+      try{ localStorage.setItem(SEEN_KEY, cur); }catch(e){}
+      // Do NOT reveal the dashboard — hand control back to the normal wake/lock gate.
+      try{ if(ok) ok.removeEventListener("click", dismiss); }catch(e){}
+    }
+    if(ok) ok.addEventListener("click", dismiss);
+  })();
 
   // ---------------- Clock (top-left): local time, ticks once a second ----------------
   var timeEl = document.getElementById("coreClockTime");
@@ -10578,6 +10696,10 @@ try {
   }
   function wake(){
     if(dissolved){ armIdle(); return; }             // dashboard already up: just keep it alive
+    // What's New takeover is up: a stray touch must NOT dissolve the panel (which would skip
+    // the OK-acknowledge AND bypass the lock underneath). Only its OK button dismisses it.
+    var _wn = document.getElementById("coreWhatsNew");
+    if(_wn && !_wn.hidden){ armIdle(); return; }
     if(lockPadOpen()){ armIdle(); return; }          // pad/biometric prompt has its own handlers
     if(authenticated){ revealDashboard(); return; }
     if(gatingInProgress) return;
