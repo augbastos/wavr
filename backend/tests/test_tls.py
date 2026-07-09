@@ -7,6 +7,7 @@ tests both drive generation and parse the result back to assert its shape.
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtensionOID, NameOID
 
@@ -15,6 +16,7 @@ from wavr.tls import (
     cert_fingerprint,
     ensure_cert,
     fingerprint_from_pem,
+    format_fingerprint,
     remote_cert_fingerprint,
     resolved_cert_path,
 )
@@ -162,6 +164,17 @@ def test_cert_fingerprint_matches_cryptography_sha256(tmp_path):
     assert all(len(p) == 2 and p == p.upper() for p in parts)
     expected = _load_cert(cert_path).fingerprint(hashes.SHA256()).hex().upper()
     assert got.replace(":", "") == expected                 # same bytes browsers show
+
+
+def test_format_fingerprint_matches_fingerprint_from_pem(tmp_path):
+    # format_fingerprint (DER bytes -> str) is the shared formatting authority
+    # peer_client's live-socket check calls directly; it must agree byte-for-byte
+    # with fingerprint_from_pem's PEM-path output for the same certificate.
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    pem = open(cert_path, encoding="ascii").read()
+    der = _load_cert(cert_path).public_bytes(serialization.Encoding.DER)
+    assert format_fingerprint(der) == fingerprint_from_pem(pem)
 
 
 def test_cert_fingerprint_none_for_missing_file(tmp_path):
