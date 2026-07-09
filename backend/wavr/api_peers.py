@@ -38,6 +38,8 @@ body does not consume them.
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Body, HTTPException
 
 from wavr import mdns_peers
@@ -104,7 +106,9 @@ def build_peers_admin_router(peer_store, exchange_mgr, pairing, device_store,
     async def discovered():
         # Module-qualified call (not a bare imported name) so a test can
         # monkeypatch wavr.mdns_peers.browse_wavr_peers and have THIS see it.
-        found = mdns_peers.browse_wavr_peers()
+        # Off-loop via to_thread: the real browse blocks ~3s (time.sleep) waiting for
+        # mDNS responses, which would otherwise stall the whole event loop.
+        found = await asyncio.to_thread(mdns_peers.browse_wavr_peers)
         return [{"name": p.name, "host": p.host, "port": p.port, "role": p.role}
                 for p in found]
 
@@ -123,9 +127,15 @@ def build_peers_admin_router(peer_store, exchange_mgr, pairing, device_store,
                                  pinned_fingerprint=peer_fingerprint)
         except PeerClientError as exc:
             raise HTTPException(status_code=502, detail=f"could not reach peer: {exc}") from exc
-        our_token_for_them = redeemed["token"]
+        # A reachable-but-malformed 200 body (missing token/device_id) must fail as a
+        # clean 502, not a KeyError -> 500 (the peer is trusted-by-fingerprint, not
+        # trusted to be well-formed).
+        our_token_for_them = redeemed.get("token")
+        their_device_id = redeemed.get("device_id")
+        if not our_token_for_them or not their_device_id:
+            raise HTTPException(status_code=502, detail="peer returned malformed pairing response")
         peer_id = peer_store.add(peer_name, peer_base_url, peer_fingerprint,
-                                 redeemed["device_id"], our_token_for_them)
+                                 their_device_id, our_token_for_them)
         # Leg (b): tell them to /finish, authenticated with the token we JUST
         # received so THEIR /finish sees us as an already-central peer. Leg (a)
         # is durably stored; if leg (b) fails it is REPORTED, not rolled back
@@ -141,12 +151,23 @@ def build_peers_admin_router(peer_store, exchange_mgr, pairing, device_store,
 
     @router.post("/api/peers/finish", dependencies=finish_deps)
     async def finish(exchange_id: str = Body(..., embed=True)):
-        # AUTHENTICATED by the peer-token gate (finish_deps) -- the caller is
-        # already a recognized central device by the time this fires. Complete
+        # AUTHENTICATED by the peer-token gate (finish_deps -> require_central) -- the
+        # caller is already a recognized central device by the time this fires. Complete
         # the reverse leg: pop the exchange WE stashed in /exchange, then redeem
         # THEIR code against THEM (we become a Device in their store, just as
         # they became one in ours via /confirm's leg (a)). `embed=True` because
         # this single body param is sent as {"exchange_id": ...} by /confirm.
+        #
+        # exchange_id trust model (Task 6 carry-forward #1, resolved): we accept the
+        # caller-presented exchange_id as a CAPABILITY rather than binding it to the
+        # caller's device. That is deliberate and safe here: the id is a 128-bit,
+        # single-use `secrets.token_urlsafe(16)` returned ONLY to the legitimate
+        # requester by /exchange, it lives at most 120s (EXCHANGE_TTL_SECONDS), and
+        # /exchange itself is in-subnet-bounded -- so possession IS proof. Binding to a
+        # device isn't cleanly possible anyway: the exchange is stashed BEFORE the
+        # requester is an authenticated device, so there's no device identity to key on
+        # at stash time. /finish being additionally gated to an authenticated central
+        # peer (finish_deps) closes the loop.
         pending = exchange_mgr.pop(exchange_id)
         if pending is None:
             raise HTTPException(status_code=404, detail="unknown or expired exchange")
@@ -157,9 +178,14 @@ def build_peers_admin_router(peer_store, exchange_mgr, pairing, device_store,
         except PeerClientError as exc:
             raise HTTPException(status_code=502,
                                 detail=f"could not complete reverse pairing: {exc}") from exc
+        # Same malformed-body guard as /confirm: a trusted peer that returns a 200 with
+        # missing keys fails as 502, not a KeyError -> 500.
+        their_token = redeemed.get("token")
+        their_device_id = redeemed.get("device_id")
+        if not their_token or not their_device_id:
+            raise HTTPException(status_code=502, detail="peer returned malformed pairing response")
         peer_id = peer_store.add(pending.requester_name, pending.requester_base_url,
-                                 pending.requester_fingerprint, redeemed["device_id"],
-                                 redeemed["token"])
+                                 pending.requester_fingerprint, their_device_id, their_token)
         return {"peer_id": peer_id}
 
     @router.get("/api/peers", dependencies=admin_deps)

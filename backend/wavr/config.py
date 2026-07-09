@@ -91,6 +91,16 @@ class Config:
     identity_enabled: bool
     # Multi-device client auth (ADR-0006) — opt-in, all default to loopback-only.
     multidevice: bool
+    # Cross-instance peer pairing (2026-07-09 design spec, Phase 1) — opt-in, default
+    # OFF, and REQUIRES multidevice (a peer identity IS a multidevice central identity;
+    # app.py refuses to start if this is on without multidevice). When on, app.py mounts
+    # the public (exchange/redeem) + admin (discovered/confirm/finish/list/unpair) peer
+    # routers and starts this instance's own mDNS `_wavr._tcp` self-advertise.
+    peers_enabled: bool
+    # Human-readable name this instance presents to peers: the mDNS TXT display name and
+    # the `name` returned by POST /api/peers/exchange. Default "Wavr"; set
+    # WAVR_INSTANCE_NAME to distinguish e.g. "Desktop" from "Core" on the same LAN.
+    instance_name: str
     bind_host: str
     tls_cert: str
     tls_key: str
@@ -324,6 +334,10 @@ def load_config() -> Config:
         # exactly as today. `bind_host` is only honoured when multidevice is on; the
         # TLS paths are empty until Phase 2 (self-signed cert generation).
         multidevice=os.getenv("WAVR_MULTIDEVICE", "").lower() in ("1", "true", "yes"),
+        # Peer pairing (Phase 1): default OFF. create_app additionally refuses to start
+        # if this is on without multidevice (peer identity IS a central identity).
+        peers_enabled=os.getenv("WAVR_PEERS_ENABLED", "").lower() in ("1", "true", "yes"),
+        instance_name=os.getenv("WAVR_INSTANCE_NAME", "Wavr"),
         bind_host=os.getenv("WAVR_BIND", "127.0.0.1"),
         tls_cert=os.getenv("WAVR_TLS_CERT", ""),
         tls_key=os.getenv("WAVR_TLS_KEY", ""),
