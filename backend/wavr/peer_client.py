@@ -15,12 +15,13 @@ pairing is exactly the "someone is intercepting your network" case the
 existing Mobile pairing flow's MitM screen already treats as a hard stop)."""
 from __future__ import annotations
 
-import hashlib
 import http.client
 import json
 import ssl
 import urllib.parse
 from typing import Callable
+
+from wavr.tls import format_fingerprint
 
 
 class PeerClientError(RuntimeError):
@@ -64,12 +65,14 @@ def _default_transport(method: str, url: str, headers: dict, body: bytes | None,
         conn.request(method, path, body=body, headers=headers)
         if pinned_fingerprint is not None:
             der = conn.sock.getpeercert(binary_form=True)
-            observed = ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
+            observed = format_fingerprint(der)
             if observed != pinned_fingerprint:
                 raise PeerClientError(
                     f"peer certificate fingerprint mismatch: expected "
                     f"{pinned_fingerprint}, got {observed} -- possible MitM")
         resp = conn.getresponse()
+        if resp.status >= 400:
+            raise PeerClientError(f"peer returned HTTP {resp.status}: {resp.read()!r}")
         return resp.read()
     finally:
         conn.close()

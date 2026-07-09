@@ -111,6 +111,15 @@ def cert_fingerprint(cert_path: str) -> str | None:
     return fingerprint_from_pem(pem)
 
 
+def format_fingerprint(der: bytes) -> str:
+    """SHA-256 of DER cert bytes as uppercase colon-separated hex (browser
+    cert-viewer style). The single formatting authority shared by
+    fingerprint_from_pem (disk/PEM path) and peer_client's per-call TLS pin
+    check (live-socket DER path) so the two can never silently desync."""
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
 def fingerprint_from_pem(pem: str) -> str | None:
     """SHA-256 fingerprint of the first `CERTIFICATE` block in `pem`, formatted
     uppercase colon-separated hex (browser-style). None if no parseable block.
@@ -119,10 +128,7 @@ def fingerprint_from_pem(pem: str) -> str | None:
     fingerprinted the same way as one read from disk -- one formatting rule,
     two sources."""
     der = _first_cert_der(pem)
-    if der is None:
-        return None
-    digest = hashlib.sha256(der).hexdigest().upper()
-    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+    return None if der is None else format_fingerprint(der)
 
 
 def _default_remote_fetch(host: str, port: int, timeout: float) -> str:
