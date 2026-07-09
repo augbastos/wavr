@@ -84,6 +84,17 @@ class PinStore:
             row = self._conn.execute("SELECT 1 FROM core_pin WHERE id = 1").fetchone()
         return row is not None
 
+    def clear(self) -> None:
+        """Remove the Core Panel PIN entirely -- the 'no lock' state. Idempotent
+        (a no-op when no PIN is set). After this, is_set() is False and verify()
+        returns False for any input, so the panel wakes straight to the dashboard
+        with no unlock gate. The DELETE /api/core/pin route is gated identically
+        to the setter (require_local + admin scope), so only a local admin can
+        remove the lock."""
+        with self._lock:
+            self._conn.execute("DELETE FROM core_pin WHERE id = 1")
+            self._conn.commit()
+
     def verify(self, pin: str) -> bool:
         """Constant-time compare against the stored salted hash. False (never
         raises) when no PIN has been set yet, or the row is malformed."""
