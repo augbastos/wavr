@@ -1,191 +1,200 @@
-"""FastAPI routers for cross-instance peer pairing (2026-07-09 design spec,
-Phase 1). See the protocol walkthrough at the top of
-docs/superpowers/plans/2026-07-09-wavr-peer-discovery-pairing.md for the full
-two-leg handshake this implements.
+"""FastAPI routers for cross-instance peer pairing (2026-07-09 C1-fix design:
+`docs/superpowers/specs/2026-07-09-wavr-peer-pairing-c1-fix-design.md`).
 
-Access model (mirrors api_devices.py's existing split -- TWO router factories,
-so app.py can attach a DIFFERENT auth gate to each group; this module wires the
-gates as per-route `dependencies=`, it does NOT reimplement them):
+Reshaped pairing (closes C1/C2/M1/I1 + the adversarial-sweep §B/§D/§E hardenings).
+The old unauthenticated `/exchange` (which network-VENDED a live central code) and
+`PeerExchangeManager` are DELETED; pairing now mirrors the Mobile-to-Core ceremony:
+the operator reads the target's 8-digit code off its trusted screen and types it
+into the initiator, and the reverse credential bootstraps over the now-authenticated,
+fingerprint-pinned channel.
 
-  * build_peers_public_router -- the deliberately-UNAUTHENTICATED, in-subnet-
-    bounded entry points a REMOTE peer calls (same bound as POST /api/pair):
-      - POST /api/peers/exchange  stash the requester's half + hand back OUR
-        OWN fresh central code and OUR live serving-cert fingerprint.
-      - POST /api/peers/redeem    consume a code -> create a role=central
-        Device. This IS /api/pair with the role hardcoded, kept as its own
-        endpoint for peer-specific auditability (see design spec).
-    No deps baked in -- app.py bounds these the same in-subnet way it bounds
-    /api/pair; the pairing code's ~2-min one-time window is the real limit.
+Two router factories (mirrors api_devices.py's split so app.py attaches a DIFFERENT
+auth gate to each group; the gates are wired as per-route `dependencies=`, defined
+in app.py, NOT here):
 
-  * build_peers_admin_router -- the local-admin + peer-authenticated surface:
-      - GET  /api/peers/discovered  (admin gate) this instance's mDNS browse,
-        no network write.
-      - POST /api/peers/confirm     (admin gate) the human-in-the-loop step
-        after the admin visually confirms the fingerprint /exchange returned;
-        orchestrates BOTH legs (calls the peer's /redeem, then its /finish).
-      - POST /api/peers/finish      (PEER-token gate -- a DIFFERENT gate than
-        the loopback-admin ones) the reverse-leg completion, callable only by
-        a peer that JUST authenticated as central from the SAME exchange.
-      - GET  /api/peers             (admin gate) list.
-      - DELETE /api/peers/{id}      (admin gate) unpair (revoke peer + device).
+  * build_peers_public_router -- the ONE deliberately-UNAUTHENTICATED, in-subnet-
+    bounded entry point a REMOTE peer calls (same bound as POST /api/pair):
+      - POST /api/peers/redeem  consume a screen-displayed code -> create a
+        role=central Device. Safe for the SAME reason /api/pair is: it only ever
+        consumes a code minted on a trusted loopback screen (POST /api/pair-code),
+        never one vended over the network. Failed attempts are rate-limited PER
+        SOURCE IP (§C).
 
-`admin_deps` guard discovered/confirm/list/unpair; `finish_deps` guard /finish
-ONLY (its gate is authenticated-by-a-peer-token, not loopback-admin). Both
-default None -> [] so the Task-6 router tests hit every endpoint directly with
-no gates. `cfg`, `self_base_url`, `pairing` and `peer_store` are threaded into
-both factories for symmetry and Task-7 wiring even where an individual endpoint
-body does not consume them.
+  * build_peers_admin_router -- the LOOPBACK-ROOT control plane + the ONE peer-
+    reachable reverse-leg endpoint:
+      - GET  /api/peers/discovered  (root) mDNS browse, no network write.
+      - POST /api/peers/observe     (root) observe the peer's LIVE cert fingerprint
+        (wires the previously-dead `remote_cert_fingerprint`) so the UI shows the
+        OBSERVED value, not a self-reported one (M1).
+      - POST /api/peers/confirm     (root) orchestrates the forward leg (redeem the
+        peer's code over a pinned channel) + the auto reverse bootstrap.
+      - POST /api/peers/link-back   (require_central) the reverse-leg completion,
+        the ONLY peer-reachable route: an already-authenticated central peer hands
+        this instance the credential it will use to call back.
+      - GET  /api/peers             (root) list.
+      - DELETE /api/peers/{id}      (root) unpair (revoke peer + our device for them).
+
+`admin_deps` (loopback-root-only in app.py: require_local + require_root) guard
+discovered/observe/confirm/list/unpair; `linkback_deps` (require_central) guard
+link-back only. Both default None -> [] so the router unit tests hit every endpoint
+directly with no gates. `local_ip` bounds the §D SSRF guard on the operator-supplied
+`peer_base_url`.
 """
 from __future__ import annotations
 
 import asyncio
+import urllib.parse
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 
 from wavr import mdns_peers
+from wavr.auth import in_subnet, parse_bearer
+from wavr.netaddr import is_lan_ip
 from wavr.peer_client import PeerClientError, post_json
-from wavr.tls import cert_fingerprint, resolved_cert_path
+from wavr.tls import cert_fingerprint, remote_cert_fingerprint, resolved_cert_path
 
 
-def build_peers_public_router(peer_store, exchange_mgr, pairing, cfg, self_name) -> APIRouter:
-    """UNAUTHENTICATED, in-subnet-bounded entry points a remote peer calls.
-    No deps baked in (app.py bounds these like /api/pair). `peer_store` is
-    accepted for symmetry with the admin factory; the two legs here go through
-    `exchange_mgr` + `pairing`."""
+def _validate_peer_url(peer_base_url: str, local_ip: str) -> tuple[str, int]:
+    """§D SSRF guard. `peer_base_url` (operator-supplied) must be an `https://` URL
+    whose host is an IN-SUBNET private-LAN IP LITERAL -- reusing the existing
+    `is_lan_ip` (literal-only, cloud-metadata denylist, IPv4-mapped normalization)
+    AND `in_subnet` (same /24 as this node). That combination rejects loopback,
+    link-local, multicast, the cloud-metadata endpoint, DNS hostnames, and any
+    off-subnet host, BEFORE any socket is opened. Returns (host, port); raises 400.
+
+    Even though `/confirm`/`/observe` are loopback-root-only (a remote peer can never
+    reach them), the local operator's own input must not be able to coerce the server
+    into dialing an arbitrary internal host."""
+    parts = urllib.parse.urlsplit(peer_base_url or "")
+    if parts.scheme != "https":
+        raise HTTPException(status_code=400, detail="peer_base_url must use https")
+    host = parts.hostname
+    if not host or not is_lan_ip(host) or not in_subnet(host, local_ip):
+        raise HTTPException(status_code=400,
+                            detail="peer_base_url must be an in-subnet LAN address")
+    return host, parts.port or 443
+
+
+def build_peers_public_router(peer_store, pairing, cfg) -> APIRouter:
+    """The ONE deliberately-UNAUTHENTICATED, in-subnet-bounded entry point a remote
+    peer calls. No deps baked in (app.py bounds it like /api/pair). `peer_store`/`cfg`
+    are accepted for symmetry; the redeem goes through `pairing`."""
     router = APIRouter()
 
-    @router.post("/api/peers/exchange")
-    async def exchange(requester_name: str = Body(...),
-                       requester_base_url: str = Body(...),
-                       requester_code: str = Body(...),
-                       requester_fingerprint: str = Body(...)):
-        # Stash the requester's half (their code, so WE can redeem it once they
-        # come back authenticated at /finish) and hand back OUR OWN fresh
-        # central code + OUR live serving-cert fingerprint in one response --
-        # protocol step 3. The fingerprint is read the SAME way POST
-        # /api/pair-code reads it (resolved_cert_path -> cert_fingerprint): a
-        # missing/unreadable cert yields None -> "" (never a crash).
-        exchange_id = exchange_mgr.stash(requester_name, requester_base_url,
-                                         requester_code, requester_fingerprint)
-        own_code = pairing.mint_code("central")
-        return {
-            "exchange_id": exchange_id,
-            "code": own_code,
-            "fingerprint": cert_fingerprint(resolved_cert_path(cfg.tls_cert)) or "",
-            "name": self_name,
-        }
-
     @router.post("/api/peers/redeem")
-    async def redeem(code: str = Body(...), requester_name: str = Body(...)):
-        result = pairing.redeem(code, requester_name)
+    async def redeem(request: Request, code: str = Body(...), requester_name: str = Body(...)):
+        # Safe post-reshape: this only ever consumes a code DISPLAYED on the peer's
+        # trusted loopback screen (POST /api/pair-code), never one vended over the
+        # network -- /api/peers/exchange, the endpoint that did that (C1), is deleted.
+        # Per-IP rate-limiting (§C) means one host's junk guesses can't lock out others.
+        source_ip = request.client.host if request.client else None
+        result = pairing.redeem(code, requester_name, source_ip=source_ip)
         if result is None:
             raise HTTPException(status_code=403, detail="invalid or expired pairing code")
         device_id, token = result
-        # Peer pairing is ALWAYS central: PairingManager.redeem honors the role
-        # the code was minted with, and every peer code is minted "central"
-        # (in /exchange here and in the operator's own local mint), so no extra
-        # role assignment is needed.
+        # Peer pairing is ALWAYS central: every peer code is minted "central" by the
+        # operator's loopback /api/pair-code, and redeem honors the code's role.
         return {"device_id": device_id, "token": token}
 
     return router
 
 
-def build_peers_admin_router(peer_store, exchange_mgr, pairing, device_store,
-                             cfg, self_name, self_base_url,
-                             admin_deps=None, finish_deps=None) -> APIRouter:
-    """Local-admin + peer-authenticated surface. `admin_deps` (loopback-admin
-    gate) wrap discovered/confirm/list/unpair; `finish_deps` (the DIFFERENT
-    peer-token gate) wrap /finish only. Both default None -> [] so the Task-6
-    tests call every route ungated. `cfg`/`self_base_url`/`pairing` are carried
-    for symmetry + Task-7 wiring."""
+def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
+                             self_base_url, local_ip,
+                             admin_deps=None, linkback_deps=None) -> APIRouter:
+    """Loopback-root control plane + the single peer-reachable reverse-leg route.
+    `admin_deps` (loopback-root-only) wrap discovered/observe/confirm/list/unpair;
+    `linkback_deps` (require_central) wrap link-back only. Both default None -> []
+    so the router unit tests call every route ungated."""
     router = APIRouter()
     admin_deps = list(admin_deps or [])
-    finish_deps = list(finish_deps or [])
+    linkback_deps = list(linkback_deps or [])
 
     @router.get("/api/peers/discovered", dependencies=admin_deps)
     async def discovered():
-        # Module-qualified call (not a bare imported name) so a test can
-        # monkeypatch wavr.mdns_peers.browse_wavr_peers and have THIS see it.
-        # Off-loop via to_thread: the real browse blocks ~3s (time.sleep) waiting for
-        # mDNS responses, which would otherwise stall the whole event loop.
+        # Module-qualified call (not a bare imported name) so a test can monkeypatch
+        # wavr.mdns_peers.browse_wavr_peers and have THIS see it. Off-loop via
+        # to_thread: the real browse blocks ~3s (time.sleep) waiting for mDNS.
         found = await asyncio.to_thread(mdns_peers.browse_wavr_peers)
         return [{"name": p.name, "host": p.host, "port": p.port, "role": p.role}
                 for p in found]
 
+    @router.post("/api/peers/observe", dependencies=admin_deps)
+    async def observe(peer_base_url: str = Body(..., embed=True)):
+        # M1: return the OBSERVED live cert fingerprint of the peer (wires the
+        # previously-dead remote_cert_fingerprint) so the operator confirms the cert
+        # the pinned TLS socket really presents, never a self-reported JSON value.
+        host, port = _validate_peer_url(peer_base_url, local_ip)   # §D
+        fp = await asyncio.to_thread(remote_cert_fingerprint, host, port)   # §E off-loop
+        if fp is None:
+            # §B: generic -- never leak whether/why the dial failed, no exfil oracle.
+            raise HTTPException(status_code=502, detail="could not reach peer")
+        return {"fingerprint": fp}
+
     @router.post("/api/peers/confirm", dependencies=admin_deps)
-    async def confirm(exchange_id: str = Body(...), peer_code: str = Body(...),
-                      peer_fingerprint: str = Body(...), peer_base_url: str = Body(...),
-                      peer_name: str = Body(...)):
-        # The admin has visually confirmed peer_fingerprint (surfaced by the
-        # /exchange call the frontend already made) matches the peer's own
-        # on-screen display. Leg (a): redeem the peer's code -> get OUR
-        # credential (the token THEY issue us) to reach them, and persist the
-        # peer relationship in PeerStore.
+    async def confirm(peer_base_url: str = Body(...), peer_name: str = Body(...),
+                      peer_code: str = Body(...), peer_fingerprint: str = Body(...)):
+        # The operator has (via /observe) confirmed peer_fingerprint matches the value
+        # on B's screen and typed B's on-screen code. peer_fingerprint is PINNED on
+        # every outbound call below -- I1 verifies it before any credential is sent.
+        _validate_peer_url(peer_base_url, local_ip)   # §D SSRF guard before any dial
+
+        # -- Forward leg: A redeems B's code over the pinned channel, receiving OUR
+        #    credential to call B (the token B issues us). --
         try:
-            redeemed = post_json(peer_base_url, "/api/peers/redeem",
-                                 {"code": peer_code, "requester_name": self_name},
-                                 pinned_fingerprint=peer_fingerprint)
-        except PeerClientError as exc:
-            raise HTTPException(status_code=502, detail=f"could not reach peer: {exc}") from exc
-        # A reachable-but-malformed 200 body (missing token/device_id) must fail as a
-        # clean 502, not a KeyError -> 500 (the peer is trusted-by-fingerprint, not
-        # trusted to be well-formed).
-        our_token_for_them = redeemed.get("token")
-        their_device_id = redeemed.get("device_id")
-        if not our_token_for_them or not their_device_id:
-            raise HTTPException(status_code=502, detail="peer returned malformed pairing response")
+            redeemed = await asyncio.to_thread(   # §E: never block the event loop
+                post_json, peer_base_url, "/api/peers/redeem",
+                {"code": peer_code, "requester_name": self_name},
+                None, peer_fingerprint)           # token=None, pinned=peer_fingerprint
+        except PeerClientError:
+            # §B: flat 502 -- never echo the observed fingerprint or the peer's body.
+            raise HTTPException(status_code=502, detail="could not reach peer")
+        our_token_for_them = redeemed.get("token") if isinstance(redeemed, dict) else None
+        if not our_token_for_them:
+            raise HTTPException(status_code=502,
+                                detail="peer returned malformed pairing response")
+        # C2: we DELIBERATELY IGNORE redeemed["device_id"] -- the peer's self-reported
+        # echo of its own store id. Persisting it would make our unpair revoke a row
+        # that does not exist in OUR store (a no-op that leaves their token alive).
+
+        # -- Reverse bootstrap: A mints B's INBOUND credential in A's OWN store and
+        #    pushes it to B over the authenticated + pinned channel. --
+        a_did_for_b, b_token_for_a = device_store.add(peer_name, "central")
+        # local_device_id = a_did_for_b == OUR id for them: the exact device our unpair
+        # must revoke to kill B's inbound token (C2). Derived locally, never forgeable.
         peer_id = peer_store.add(peer_name, peer_base_url, peer_fingerprint,
-                                 their_device_id, our_token_for_them)
-        # Leg (b): tell them to /finish, authenticated with the token we JUST
-        # received so THEIR /finish sees us as an already-central peer. Leg (a)
-        # is durably stored; if leg (b) fails it is REPORTED, not rolled back
-        # (this instance CAN reach the peer -- the admin retries /finish or
-        # re-pairs from the other side; same "no silent rollback" rule as the
-        # bulk config push in the design spec).
+                                 a_did_for_b, our_token_for_them)
+        fp_self = cert_fingerprint(resolved_cert_path(cfg.tls_cert)) or ""
         try:
-            post_json(peer_base_url, "/api/peers/finish", {"exchange_id": exchange_id},
-                      token=our_token_for_them, pinned_fingerprint=peer_fingerprint)
-        except PeerClientError as exc:
-            return {"peer_id": peer_id, "reverse_leg_ok": False, "error": str(exc)}
+            await asyncio.to_thread(
+                post_json, peer_base_url, "/api/peers/link-back",
+                {"token": b_token_for_a, "base_url": self_base_url,
+                 "fingerprint": fp_self, "name": self_name},
+                our_token_for_them, peer_fingerprint)   # auth A->B as central + pinned
+        except PeerClientError:
+            # Reverse leg failed (B unreachable at link-back): revoke the just-minted
+            # device -- B never received the matching token, so it is dead weight
+            # (hygiene). NO silent rollback of the forward leg: A CAN reach B, the
+            # operator retries. Honest half-state, surfaced as reverse_leg_ok:false.
+            device_store.revoke(a_did_for_b)
+            return {"peer_id": peer_id, "reverse_leg_ok": False}
         return {"peer_id": peer_id, "reverse_leg_ok": True}
 
-    @router.post("/api/peers/finish", dependencies=finish_deps)
-    async def finish(exchange_id: str = Body(..., embed=True)):
-        # AUTHENTICATED by the peer-token gate (finish_deps -> require_central) -- the
-        # caller is already a recognized central device by the time this fires. Complete
-        # the reverse leg: pop the exchange WE stashed in /exchange, then redeem
-        # THEIR code against THEM (we become a Device in their store, just as
-        # they became one in ours via /confirm's leg (a)). `embed=True` because
-        # this single body param is sent as {"exchange_id": ...} by /confirm.
-        #
-        # exchange_id trust model (Task 6 carry-forward #1, resolved): we accept the
-        # caller-presented exchange_id as a CAPABILITY rather than binding it to the
-        # caller's device. That is deliberate and safe here: the id is a 128-bit,
-        # single-use `secrets.token_urlsafe(16)` returned ONLY to the legitimate
-        # requester by /exchange, it lives at most 120s (EXCHANGE_TTL_SECONDS), and
-        # /exchange itself is in-subnet-bounded -- so possession IS proof. Binding to a
-        # device isn't cleanly possible anyway: the exchange is stashed BEFORE the
-        # requester is an authenticated device, so there's no device identity to key on
-        # at stash time. /finish being additionally gated to an authenticated central
-        # peer (finish_deps) closes the loop.
-        pending = exchange_mgr.pop(exchange_id)
-        if pending is None:
-            raise HTTPException(status_code=404, detail="unknown or expired exchange")
-        try:
-            redeemed = post_json(pending.requester_base_url, "/api/peers/redeem",
-                                 {"code": pending.requester_code, "requester_name": self_name},
-                                 pinned_fingerprint=pending.requester_fingerprint)
-        except PeerClientError as exc:
-            raise HTTPException(status_code=502,
-                                detail=f"could not complete reverse pairing: {exc}") from exc
-        # Same malformed-body guard as /confirm: a trusted peer that returns a 200 with
-        # missing keys fails as 502, not a KeyError -> 500.
-        their_token = redeemed.get("token")
-        their_device_id = redeemed.get("device_id")
-        if not their_token or not their_device_id:
-            raise HTTPException(status_code=502, detail="peer returned malformed pairing response")
-        peer_id = peer_store.add(pending.requester_name, pending.requester_base_url,
-                                 pending.requester_fingerprint, their_device_id, their_token)
+    @router.post("/api/peers/link-back", dependencies=linkback_deps)
+    async def link_back(request: Request, token: str = Body(...), base_url: str = Body(...),
+                        fingerprint: str = Body(...), name: str = Body(...)):
+        # The reverse-leg completion + the ONLY peer-reachable route (gated
+        # require_central by linkback_deps). The caller (A) already authenticated as
+        # central with the token THIS instance issued it. Derive OUR-id-for-them from
+        # that AUTHENTICATED bearer token via device_store.verify -- the
+        # cryptographically-proven id of the caller's device in OUR store, NOT a value
+        # A self-reports (C2). `token` is the credential WE will present when WE call A.
+        bearer = parse_bearer(request.headers.get("authorization"))
+        caller = device_store.verify(bearer) if bearer else None
+        if caller is None:
+            raise HTTPException(status_code=401,
+                                detail="link-back requires an authenticated central peer")
+        peer_id = peer_store.add(name, base_url, fingerprint, caller.device_id, token)
         return {"peer_id": peer_id}
 
     @router.get("/api/peers", dependencies=admin_deps)
@@ -197,9 +206,10 @@ def build_peers_admin_router(peer_store, exchange_mgr, pairing, device_store,
         peer = peer_store.get(peer_id)
         if peer is None:
             raise HTTPException(status_code=404, detail="unknown peer")
-        # Revoke BOTH directions: PeerStore (how WE reach THEM -- clears our
-        # outbound token) and the DeviceStore row (how THEY reach US -- kills
-        # the token they present). Either alone would leave a half-open link.
+        # Revoke BOTH directions: PeerStore (how WE reach THEM -- clears our outbound
+        # token) and the DeviceStore row named by local_device_id (how THEY reach US).
+        # Post-C2, local_device_id is OUR id for them, so this revoke actually kills the
+        # peer's INBOUND token (their next call 401s). Either alone leaves a half-open link.
         peer_store.revoke(peer_id)
         device_store.revoke(peer.local_device_id)
         return {"ok": True}

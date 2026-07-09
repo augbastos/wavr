@@ -94,12 +94,13 @@ class Config:
     # Cross-instance peer pairing (2026-07-09 design spec, Phase 1) — opt-in, default
     # OFF, and REQUIRES multidevice (a peer identity IS a multidevice central identity;
     # app.py refuses to start if this is on without multidevice). When on, app.py mounts
-    # the public (exchange/redeem) + admin (discovered/confirm/finish/list/unpair) peer
-    # routers and starts this instance's own mDNS `_wavr._tcp` self-advertise.
+    # the public (redeem) + loopback-root admin (discovered/observe/confirm/list/unpair)
+    # + peer-reachable reverse-leg (link-back) peer routers and starts this instance's
+    # own mDNS `_wavr._tcp` self-advertise (C1-fix reshape).
     peers_enabled: bool
     # Human-readable name this instance presents to peers: the mDNS TXT display name and
-    # the `name` returned by POST /api/peers/exchange. Default "Wavr"; set
-    # WAVR_INSTANCE_NAME to distinguish e.g. "Desktop" from "Core" on the same LAN.
+    # the `name` this instance sends as `requester_name`/`peer_name` during pairing.
+    # Default "Wavr"; set WAVR_INSTANCE_NAME to distinguish e.g. "Desktop" from "Core".
     instance_name: str
     bind_host: str
     tls_cert: str
