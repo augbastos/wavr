@@ -153,6 +153,15 @@
     if(!/^https?:\/\//i.test(String(url))){
       return Promise.reject(new Error("wavr: refusing non-absolute URL (base not set)"));
     }
+    // Task 4: while detached (RED / "left Wavr"), REFUSE the ws-ticket streaming path. index.html's
+    // CompanionProvider caches the bearer in its own closure, so even though tokenGet() returns null it
+    // keeps POSTing /api/ws-ticket (Bearer) every ~2s -- the token would keep leaving the device and the
+    // Core would keep seeing liveness. Reject as a NETWORK error (not 401/403), so its reconnect loop just
+    // retries on its 2s pace and NEVER wipes the token. Does NOT touch /api/consent (re-enter/withdraw) or
+    // /api/presence/register-companion (Task 5 withdrawal DELETE) -- only the ws-ticket streaming path.
+    if(!_attached && /\/api\/ws-ticket(\?|$)/.test(String(url))){
+      return Promise.reject(new Error("wavr: detached"));   // RED/out: no ws-ticket, no token leaves the device
+    }
     if(!WavrNet || typeof WavrNet.request !== "function"){
       return Promise.reject(new Error("wavr: WavrNet unavailable"));
     }
@@ -184,6 +193,15 @@
   // Pinned WSS -> a WebSocket-shaped bridge wired to the plugin's message/close/error events.
   var _socks = {};
   function netWebSocket(url){
+    // Task 4 connect lever: while detached (RED / "left Wavr") REFUSE to open a socket. Return a dead
+    // WebSocket-shaped stub (mirrors the "no bridge" dead-sock pattern below) whose onclose fires async
+    // with a clean 1000 so index.html's reconnect loop keeps receiving dead sockets and stays DOWN --
+    // no live socket exists while the user has left. Re-enter (green/yellow) flips _attached and reloads.
+    if(!_attached){
+      var dead = { onmessage: null, onclose: null, onerror: null, __id: null, send: function(){}, close: function(){} };
+      setTimeout(function(){ if(typeof dead.onclose === "function") dead.onclose({ code: 1000, reason: "detached" }); }, 0);
+      return dead;
+    }
     var sock = {
       onmessage: null, onclose: null, onerror: null, __id: null,
       send: function(data){ if(this.__id != null && WavrNet) WavrNet.sendSocket({ socketId: this.__id, data: data }); },
@@ -194,6 +212,13 @@
       return sock;
     }
     WavrNet.openSocket({ url: url, pinnedFp: _pinnedFp }).then(function(r){
+      // Task 4 RACE guard: the user may have gone RED during this async open window. closeLiveSockets()
+      // already ran on an EMPTY _socks, so registering this now-LIVE socket would leave a live orphan
+      // streaming while "You've left Wavr" is shown. Fail-closed: close it natively and never register.
+      if(!_attached){
+        try{ if(WavrNet && typeof WavrNet.closeSocket === "function") WavrNet.closeSocket({ socketId: r.socketId }); }catch(_){}
+        return;
+      }
       sock.__id = r.socketId; _socks[r.socketId] = sock;
       detectRole();   // socket (re)connect -> re-check role (fire-and-forget; self-guards + coalesces)
     }).catch(function(err){
@@ -233,6 +258,9 @@
       // reads that would 403 under sensor-role confinement and trigger a token-wiping reload loop). The
       // native sensor loop still reads its own Keystore token. Viewer/admin/combo/migrated are unaffected.
       if(capsSensorOnly()) return null;
+      // Task 4: RED/out -> hide the token so a detached reload lands on index.html's inert NullProvider
+      // (no authed reads, no WS). The native sensor loop still reads its own Keystore token independently.
+      if(!_attached) return null;
       return _token;
     }catch(_){ return null; }
   }
@@ -1042,10 +1070,63 @@
     }).then(function(r){ return !!(r && r.ok); });   // 200 {device_id, level} -> true; else -> false (retry, NEVER wipe)
   }
 
+  // ----- Task 4: consent level as the connect/disconnect lever -----
+  // The connection lever is driven by the consent level (green/yellow = attached, red = out). We never
+  // edit index.html: to DISCONNECT we close live sockets and make netWebSocket refuse to open, so
+  // index.html's reconnect loop keeps getting dead sockets and stays down; to RE-ENTER we re-allow
+  // opening and reload so the provider reconstructs. Token is KEPT throughout (re-enter is one tap).
+  var _attached = true;   // default; boot sets it from the stored level (Task 7)
+  function closeLiveSockets(){
+    for(var id in _socks){ if(Object.prototype.hasOwnProperty.call(_socks, id)){
+      try{ if(WavrNet && typeof WavrNet.closeSocket === "function") WavrNet.closeSocket({ socketId: id }); }catch(_){}
+    }}
+    _socks = {};
+  }
+  // "Out" overlay: shown while RED/detached. FIX-A: the overlay is position:fixed;inset:0 and COVERS
+  // index.html's .status-pills header, so the consent pill injected there is untappable while this card
+  // is up. We therefore mount a REAL registered consent control INSIDE the card (makeConsentControl, so
+  // it lives in _consentUis, paints the right colour, and its tap wraps red->green via changeConsent) --
+  // that is the only guaranteed-tappable way back in. renderConsent() paints it red immediately.
+  function showOut(){
+    var card = ensureOverlay("out");
+    card.appendChild(el("h2", "wavrm-h", "You've left Wavr"));
+    card.appendChild(el("p", "wavrm-sub",
+      "This device isn't connected and isn't sharing presence. Tap the control below to re-enter."));
+    // Consent-control row, laid out like the sensor-node screen's consent row (a wavrm-node-stat row
+    // with a label + makeConsentControl().btn). Tap = re-enter (red wraps to green); hold = stay out.
+    card.appendChild(el("span", "wavrm-lab", "Your consent on this device"));
+    var crow = el("div", "wavrm-node-stat");
+    crow.appendChild(el("span", "wavrm-node-counts", "Tap to re-enter"));
+    crow.appendChild(makeConsentControl().btn);
+    card.appendChild(crow);
+    renderConsent();   // paint the control red immediately (matches the current detached level)
+  }
+  // Enact the connection side of a consent level via WavrLib.consentToActions. Presence (register/DELETE)
+  // is Task 5's job, called right after this. Returns nothing; never throws. green<->yellow (both attached)
+  // is a NO-OP here -- no socket churn -- so only the contribution level changes on that transition.
+  function applyAttachment(level){
+    var act = WavrLib.consentToActions(level);
+    if(act.attached){
+      if(!_attached){
+        _attached = true; hideOverlay();
+        // ORDERING DEPENDENCY (do NOT reorder): on green/yellow re-enter this reload runs from inside
+        // applyConsentLocal(level), which changeConsent calls BEFORE its own postConsent(level) on the
+        // NEXT line. The re-enter consent POST only reaches the hub because Capacitor dispatches the
+        // WavrNet.request native-bridge message SYNCHRONOUSLY, before this reload navigation commits.
+        // Reordering (reloading before that POST is issued) would silently drop the re-enter consent POST.
+        try{ location.reload(); }catch(_){}
+      }
+      // already attached (green<->yellow): NO socket churn -- only the contribution level changes.
+    } else {
+      _attached = false; closeLiveSockets(); showOut();
+    }
+  }
+
   // In-memory + UI + durable Keystore; on RED best-effort stop the native sensor loop. Returns the
   // Keystore write promise (a durable-write failure is non-fatal here -- the hub column is the enforcement).
   function applyConsentLocal(level){
     _consent = level;
+    applyAttachment(level);                                 // Task 4: drive the connect/disconnect lever
     if(level === "red"){ try{ stopSensor(); }catch(_){} }   // guarded no-op on a viewer with no sensor
     renderConsent();
     return secureSet(K_CONSENT, level).catch(function(){});
@@ -1209,6 +1290,7 @@
     _deviceId = v[3] || null; _role = v[4] || null;   // role read synchronously at boot, like the token
     _caps = parseCaps(v[5]); _onboarded = (v[6] === "1");   // caps + onboarded read synchronously too
     _consent = normConsent(v[7]);   // consent level read synchronously -> the toggle's boot colour is correct
+    _attached = WavrLib.consentToActions(_consent).attached;   // Task 4: stored RED => boot DETACHED (fail-closed: tokenGet hides the token, netWebSocket refuses). Task 7 completes the boot-detached UX (showOut).
   }).catch(function(){}).then(function(){
     _resolveReady();   // caches populated: index.html's deferred boot may run now
     // detectRole drives the DASHBOARD admin surface only; a sensor-ONLY node has no dashboard and its
