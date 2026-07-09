@@ -911,39 +911,43 @@
   .eg-kill-wrap{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px;}
   .killswitch:disabled{opacity:.6;cursor:not-allowed;}
   .eg-kill-note{font-size:.76rem;max-width:60ch;}
-  /* Home: global Sensing-mode meter (Off | Presence | Precise) — a segmented control
+  /* Home: global Sensing-level meter (Off | Presence | Precise) — a segmented control
      DERIVED from system.running + whether any camera source is enabled, wired only to the
      existing /api/system + /api/sources toggle seams. The selected pill stays neutral
      (green is reserved for live/presence); the posture dot is the color signal — green for
      the privacy-first Presence tier, amber to flag Precise's honest GPU/VRAM cost. */
-  .precision-seg{display:flex;gap:3px;background:var(--elevated);border:1px solid var(--line-strong);
+  .sensing-level-seg{display:flex;gap:3px;background:var(--elevated);border:1px solid var(--line-strong);
                  border-radius:12px;padding:3px;max-width:440px;}
-  .precision-seg .seg-btn{flex:1;padding:10px 8px;border:none;border-radius:9px;background:transparent;
+  .sensing-level-seg .seg-btn{flex:1;padding:10px 8px;border:none;border-radius:9px;background:transparent;
                  color:var(--dim);font:inherit;font-size:.9rem;font-weight:600;cursor:pointer;
                  text-align:center;transition:background .15s,color .15s;}
-  .precision-seg .seg-btn:not([aria-pressed="true"]):hover{background:var(--elevated-2);color:var(--text);}
-  .precision-seg .seg-btn[aria-pressed="true"]{background:var(--elevated-2);color:var(--text);
+  .sensing-level-seg .seg-btn:not([aria-pressed="true"]):hover{background:var(--elevated-2);color:var(--text);}
+  .sensing-level-seg .seg-btn[aria-pressed="true"]{background:var(--elevated-2);color:var(--text);
                  box-shadow:inset 0 0 0 1px var(--line-strong);}
-  .precision-seg .seg-btn:disabled{cursor:not-allowed;}
-  .precision-seg.locked{opacity:.75;}
-  .precision-posture{display:flex;gap:8px;align-items:flex-start;margin:12px 0 0;
+  .sensing-level-seg .seg-btn:disabled{cursor:not-allowed;}
+  .sensing-level-seg.locked{opacity:.75;}
+  /* Plain-language sub-line under each segment: hidden by default so the desktop control keeps
+     its bare Off/Presence/Precise word; revealed ONLY in the Core-panel MQ (a touch kiosk where
+     hover/title tooltips never fire). .seg-title is the always-present segment word. */
+  .sensing-level-seg .seg-sub{display:none;}
+  .sensing-level-posture{display:flex;gap:8px;align-items:flex-start;margin:12px 0 0;
                  font-size:.86rem;line-height:1.5;color:var(--dim);max-width:62ch;}
-  .precision-posture::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;
+  .sensing-level-posture::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;
                  background:var(--dim);margin-top:6px;}
-  .precision-posture.t-presence::before{background:var(--accent);}
-  /* Compact by default (2026-07-06): shrink the sensing-mode meter so the room cards
+  .sensing-level-posture.t-presence::before{background:var(--accent);}
+  /* Compact by default (2026-07-06): shrink the sensing-level meter so the room cards
      sit closer / fit on screen together — less padding, slimmer segments, tighter copy. */
-  .precision-tile{padding:12px 14px;}
-  .precision-tile .tile-head{margin-bottom:8px;}
-  .precision-tile .tile-head h2{font-size:1rem;}
-  .precision-seg{max-width:360px;}
-  .precision-seg .seg-btn{padding:6px 8px;font-size:.82rem;}
-  .precision-posture{margin-top:8px;font-size:.8rem;line-height:1.35;}
-  .precision-actions{margin-top:8px;}
-  .precision-posture.t-precise::before{background:var(--warn);}
-  .precision-posture b{color:var(--text);font-weight:600;}
-  .precision-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px;}
-  .precision-note{font-size:.8rem;color:var(--dim);max-width:54ch;line-height:1.45;}
+  .sensing-level-tile{padding:12px 14px;}
+  .sensing-level-tile .tile-head{margin-bottom:8px;}
+  .sensing-level-tile .tile-head h2{font-size:1rem;}
+  .sensing-level-seg{max-width:360px;}
+  .sensing-level-seg .seg-btn{padding:6px 8px;font-size:.82rem;}
+  .sensing-level-posture{margin-top:8px;font-size:.8rem;line-height:1.35;}
+  .sensing-level-actions{margin-top:8px;}
+  .sensing-level-posture.t-precise::before{background:var(--warn);}
+  .sensing-level-posture b{color:var(--text);font-weight:600;}
+  .sensing-level-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px;}
+  .sensing-level-note{font-size:.8rem;color:var(--dim);max-width:54ch;line-height:1.45;}
   /* System: privacy & egress dashboard (the trust receipt) + diagnostics */
   .egress-summary{margin:0 0 4px;font-size:.9rem;font-weight:600;}
   .egress-summary.ok{color:var(--accent);}
@@ -1155,51 +1159,125 @@
      the existing tokens + the live .card render path — no forked data, no new palette.
      ============================================================================ */
   @media (orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1){
-    /* full panel width; stack hero -> rooms(hero) -> sensing (demoted) */
-    #panel-inicio.tab-panel.active{max-width:none;padding:8px 16px 14px;gap:10px;}
-    #panel-inicio > #homeHero{order:1;}
-    #panel-inicio > .inicio-grid{order:2;}
-    #panel-inicio > #precisionTile{order:3;}
 
-    /* compact hero: one tight strip, not a big headline */
-    #homeHero{padding:0;}
-    #panel-inicio .hero-line1{font-size:1.15rem;}
-    #panel-inicio .hero-line2{font-size:.86rem;margin-top:1px;}
-    #panel-inicio .hero-who{margin-top:4px;}
+    /* -------- NAV: compact labeled rail (~84px), deterministic at the panel form factor
+       regardless of the width band (the 232px ≥1200 sidebar is too wide for a glance panel;
+       the 760–1199 rail drops labels — "the 4th icon" problem). Icon-over-label stack, calm
+       instrument tone; the "Command Center" sub-brand is dropped ON THE RAIL only. -------- */
+    .sidenav{width:84px;}
+    .nav-brand{flex-direction:column;justify-content:center;gap:5px;padding:12px 4px;text-align:center;}
+    .nav-brand .brand-name{font-size:.72rem;letter-spacing:.4px;}
+    .nav-brand .brand-name small{display:none;}
+    .nav-tabs{padding:8px 5px;gap:5px;}
+    .nav-item{flex-direction:column;gap:3px;justify-content:center;padding:8px 2px;min-height:54px;
+              text-align:center;border-radius:9px;touch-action:manipulation;}
+    .nav-item svg{width:22px;height:22px;}
+    .nav-label{display:block;font-size:.62rem;letter-spacing:.02em;line-height:1.1;}
+    .nav-item.active::before{left:12px;right:12px;top:0;bottom:auto;width:auto;height:2px;}
+    .nav-foot{padding:8px 5px;}
 
-    /* HERO = room measurement tiles: full width, dense, large glance numerals. Same
-       live .card DOM upsert() builds and updates — only the presentation is denser. */
-    #panel-inicio .inicio-grid{grid-template-columns:minmax(0,1fr);gap:10px;}
-    #panel-inicio .rooms-col{order:1;}
-    #panel-inicio .map-home{order:2;}
-    #panel-inicio .rooms-col.tile{padding:10px 12px;}
+    /* -------- HOME GRID: deterministic two-column instrument that fills the content height
+       with NO page scroll. .inicio-grid becomes display:contents so its rooms-col + mapHome
+       children join THIS grid directly (no DOM move → the desktop layout is untouched).
+       Rows: hero strip / (sensing-level LEFT + rooms RIGHT) / map (full width, collapsed). -------- */
+    #panel-inicio.tab-panel.active{max-width:none;height:100%;min-height:0;padding:8px 16px 12px;
+        gap:10px 16px;display:grid;grid-template-columns:380px minmax(0,1fr);
+        grid-template-rows:auto minmax(0,1fr) auto;
+        grid-template-areas:"hero hero" "sense rooms" "map map";align-items:stretch;}
+    #panel-inicio > #homeHero{grid-area:hero;}
+    #panel-inicio > #sensingLevelTile{grid-area:sense;}
+    #panel-inicio > .inicio-grid{display:contents;}
+    #panel-inicio .rooms-col{grid-area:rooms;}
+    #panel-inicio .map-home{grid-area:map;min-height:0;}
+
+    /* HERO: one tight inline strip (~44px), not a big headline */
+    #homeHero{padding:0;display:flex;align-items:baseline;gap:12px;flex-wrap:nowrap;overflow:hidden;min-height:0;}
+    #panel-inicio .hero-row{flex:none;gap:8px;flex-wrap:nowrap;}
+    #panel-inicio .hero-line1{font-size:1.2rem;}
+    #panel-inicio .hero-line2{font-size:.9rem;margin:0;min-width:0;flex:1 1 auto;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    #panel-inicio .hero-who{margin:0;}
+
+    /* LEFT COLUMN — SENSING LEVEL: stacked full-width segments, each with an always-visible
+       plain sub-line stating the camera on/off meaning (tooltips never fire on a touch kiosk).
+       Active segment = strong fill + weight bump + a 3px accent selection bar (not a faint
+       background delta). Left column may scroll internally if the map is expanded — never the
+       page, and never over the map canvas. */
+    #sensingLevelTile.sensing-level-tile{padding:12px 14px;display:flex;flex-direction:column;
+        min-height:0;overflow-y:auto;}
+    #panel-inicio .sensing-level-tile .tile-head{margin-bottom:8px;}
+    #panel-inicio .sensing-level-tile .tile-head h2{font-size:1rem;}
+    #panel-inicio .sensing-level-seg{flex-direction:column;max-width:none;gap:6px;background:transparent;
+        border:none;padding:0;}
+    #panel-inicio .sensing-level-seg .seg-btn{display:flex;flex-direction:column;align-items:flex-start;
+        gap:1px;position:relative;text-align:left;padding:7px 12px 7px 15px;min-height:46px;border-radius:10px;
+        background:var(--elevated);border:1px solid var(--line);color:var(--dim);}
+    #panel-inicio .sensing-level-seg .seg-title{font-size:1rem;font-weight:600;}
+    #panel-inicio .sensing-level-seg .seg-sub{display:block;font-size:.75rem;font-weight:400;
+        color:var(--dim);line-height:1.25;}
+    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"]{background:var(--elevated-2);
+        color:var(--text);border-color:var(--line-strong);box-shadow:none;}
+    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"] .seg-title{font-weight:700;}
+    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"] .seg-sub{color:var(--text);}
+    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"]::before{content:"";position:absolute;
+        left:0;top:8px;bottom:8px;width:3px;border-radius:0 3px 3px 0;background:var(--accent);}
+    #panel-inicio .sensing-level-posture{margin-top:9px;font-size:.9rem;line-height:1.35;}
+    #panel-inicio .sensing-level-actions{margin-top:auto;padding-top:9px;}
+
+    /* RIGHT COLUMN — ROOMS: a single-column vertical list of slim rows that scrolls WITHIN its
+       own column (10+ rooms never push the sensing tile off-screen). Replaces the auto-fit grid. */
+    #panel-inicio .rooms-col.tile{padding:10px 12px;display:flex;flex-direction:column;
+        min-height:0;overflow:hidden;}
     #panel-inicio .rooms-col .tile-head{margin-bottom:6px;}
-    #panel-inicio .rooms{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;}
-    #panel-inicio .rooms .card{padding:12px 14px;}
-    #panel-inicio .ring{width:76px;height:76px;}
-    #panel-inicio .ring-pct b{font-size:1.5rem;}   /* readable from across a room */
-    #panel-inicio .ring-pct small{font-size:.62rem;}
-    #panel-inicio .card h2{font-size:1.05rem;}
-    #panel-inicio .pill{font-size:.74rem;margin:5px 0;}
-    #panel-inicio .src{font-size:.75rem;padding:3px 0;}
-    #panel-inicio .src .m{min-width:60px;}
+    #panel-inicio .rooms{display:flex;flex-direction:column;gap:6px;overflow-y:auto;min-height:0;flex:1;
+        grid-template-columns:none;}
 
-    /* MAP: collapsed by default (a "View house map" bar). Collapsed = the map tile is
-       display:none, so the 3D canvas/OrbitControls can't capture touch and the page
-       scrolls freely to the measurements. Tap the bar to expand for viewing (orbit/pan);
-       the floor-plan/zone editors stay a separate explicit action, unchanged. */
+    /* ROOM ROW: one compact line — room NAME (left) · big OCCUPIED/EMPTY state (the primary
+       glance signal) · a small %+precision chip (secondary "how sure"). The card is flattened via
+       display:contents so name, state pill and chip are direct flex children; the ring circle, the
+       per-sensor rows, the "Why?" details and the mini bar are hidden (they belong to the tap→map
+       detail view). The live upsert() write path is untouched — presentation only. */
+    #panel-inicio .rooms .card{padding:9px 12px;display:flex;align-items:center;gap:12px;min-height:52px;}
+    #panel-inicio .rooms .card-top{display:contents;}
+    #panel-inicio .rooms .card-info{display:contents;}
+    #panel-inicio .rooms .card h2{order:1;flex:1 1 auto;min-width:0;font-size:1.1rem;margin:0;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    #panel-inicio .rooms .pill{order:2;margin:0;font-size:1.02rem;font-weight:700;padding:5px 13px;
+        text-transform:capitalize;letter-spacing:.01em;flex:none;}
+    #panel-inicio .rooms .ring{order:3;width:auto;height:auto;flex:none;}
+    #panel-inicio .rooms .ring svg{display:none;}
+    #panel-inicio .rooms .card.quiet .ring{opacity:1;}
+    #panel-inicio .rooms .ring-pct{position:static;flex-direction:row;align-items:center;gap:7px;
+        padding:3px 10px;border-radius:999px;background:var(--elevated);border:1px solid var(--line);}
+    #panel-inicio .rooms .ring-pct b{font-size:.95rem;font-weight:650;color:var(--text);}
+    #panel-inicio .rooms .ring-pct small{font-size:.8rem;color:var(--dim);position:relative;padding-left:16px;
+        letter-spacing:0;}
+    /* precision indicator = word + a shape dot (filled/half/hollow), legible without relying on
+       color. data-conf mirrors confWord(): Confident / Likely / Uncertain (+ "empty" unoccupied). */
+    #panel-inicio .rooms .ring-pct small::before{content:"";position:absolute;left:0;top:50%;
+        transform:translateY(-50%);width:10px;height:10px;border-radius:50%;box-sizing:border-box;
+        border:1.5px solid var(--dim);background:transparent;}
+    #panel-inicio .rooms .ring-pct small[data-conf="Confident"]::before{background:var(--text);border-color:var(--text);}
+    #panel-inicio .rooms .ring-pct small[data-conf="Likely"]::before{background:linear-gradient(90deg,var(--text) 0 50%,transparent 50% 100%);border-color:var(--text);}
+    #panel-inicio .rooms .ring-pct small[data-conf="Uncertain"]::before{background:transparent;border-color:var(--dim);}
+    #panel-inicio .rooms .ring-pct small[data-conf="empty"]::before{background:transparent;border-color:var(--line-strong);}
+    #panel-inicio .rooms .card .bar,
+    #panel-inicio .rooms .card .srcs,
+    #panel-inicio .rooms .card .why{display:none;}
+
+    /* MAP: full-width region beneath the columns. Collapsed by default = only the "View house map"
+       bar (radar hidden, so the OrbitControls canvas never sits in a scroll path). Tapping the bar
+       OR a room row expands it, capped so the columns + map coexist within 720 (no page scroll);
+       the always-visible "Hide house map" bar is the escape. */
     .map-panel-toggle{display:flex;}
+    #panel-inicio .map-panel-toggle .mpt-open-label,
+    #panel-inicio .map-panel-toggle .mpt-close-label{color:var(--text);font-weight:600;font-size:.95rem;}
     #mapHome:not(.map-open) #radarWrap{display:none;}
     #mapHome.map-open .mpt-open-label{display:none;}
     #mapHome.map-open .mpt-close-label{display:block;}
     #mapHome.map-open .mpt-chevron{transform:rotate(90deg);}
-    #panel-inicio #radar,#panel-inicio #radar3d{max-height:56vh;}
-
-    /* sensing mode: demoted + compact, still fully on screen (privacy visible) */
-    #precisionTile.precision-tile{padding:9px 12px;}
-    #panel-inicio .precision-tile .tile-head{margin-bottom:4px;}
-    #panel-inicio .precision-posture{margin-top:5px;}
-    #panel-inicio .precision-actions{margin-top:6px;}
+    #panel-inicio #radarWrap{margin-top:8px;}
+    #panel-inicio #radar,#panel-inicio #radar3d{max-height:30vh;}
   }
 
   /* ============================================================================
@@ -1529,22 +1607,26 @@
                Stays hidden with no content when identity is off/empty, so nothing new renders. -->
           <p id="heroWhoHome" class="hero-who" aria-live="polite" hidden></p>
         </section>
-        <!-- Global sensing-mode meter (precision slice): Off | Presence | Precise, DERIVED
+        <!-- Global sensing-level meter (Off | Presence | Precise), DERIVED
              from system.running + whether any camera source is enabled. Wired ONLY to the
              existing /api/system + /api/sources toggle seams (no new backend state). Default
              tier is Presence — privacy-first, consistent with cameras booting off. The switch
-             mutates only in live; in demo/companion it is shown as an illustrative example. -->
-        <div id="precisionTile" class="tile precision-tile">
-          <div class="tile-head"><h2 id="precision-h">Sensing mode</h2><span class="hint">how much of your home Wavr senses right now</span></div>
-          <div id="precisionSeg" class="precision-seg" role="group" aria-label="sensing mode">
-            <button type="button" class="seg-btn" data-tier="off" aria-pressed="false" data-tip="Pauses every source — no network, no Bluetooth, no cameras. Zero compute.">Off</button>
-            <button type="button" class="seg-btn" data-tier="presence" aria-pressed="false" data-tip="Network and Bluetooth presence only — house-level, no cameras, zero video, zero VRAM.">Presence</button>
-            <button type="button" class="seg-btn" data-tier="precise" aria-pressed="false" data-tip="Adds camera person-detection — per-room precision. Video is processed in memory and never leaves home; uses the GPU/VRAM.">Precise</button>
+             mutates only in live; in demo/companion it is shown as an illustrative example.
+             The .seg-sub plain-language sub-line under each segment is display:none by default
+             (desktop keeps the bare word) and revealed ONLY in the Core-panel media query, where
+             hover/title tooltips never fire on the touch kiosk — so the camera on/off meaning
+             must live on the control itself (privacy visible / explain-don't-just-display). -->
+        <div id="sensingLevelTile" class="tile sensing-level-tile">
+          <div class="tile-head"><h2 id="sensing-level-h">Sensing level</h2><span class="hint">how much of your home Wavr senses right now</span></div>
+          <div id="sensingLevelSeg" class="sensing-level-seg" role="group" aria-label="sensing level">
+            <button type="button" class="seg-btn" data-tier="off" aria-pressed="false" data-tip="Pauses every source — no network, no Bluetooth, no cameras. Zero compute."><span class="seg-title">Off</span><span class="seg-sub">Nothing is sensing</span></button>
+            <button type="button" class="seg-btn" data-tier="presence" aria-pressed="false" data-tip="Network and Bluetooth presence only — house-level, no cameras, zero video, zero VRAM."><span class="seg-title">Presence</span><span class="seg-sub">Knows if someone's home · no cameras</span></button>
+            <button type="button" class="seg-btn" data-tier="precise" aria-pressed="false" data-tip="Adds camera person-detection — per-room precision. Video is processed in memory and never leaves home; uses the GPU/VRAM."><span class="seg-title">Precise</span><span class="seg-sub">Knows which room · cameras on</span></button>
           </div>
-          <p id="precisionPosture" class="precision-posture" aria-live="polite"></p>
-          <div class="precision-actions">
+          <p id="sensingLevelPosture" class="sensing-level-posture" aria-live="polite"></p>
+          <div class="sensing-level-actions">
             <button id="privacyPauseBtn" type="button" class="ctl small off" data-tip="Drops to the next lower level right now — instantly turns off the heavier sensing">Privacy pause</button>
-            <span id="precisionNote" class="precision-note" aria-live="polite"></span>
+            <span id="sensingLevelNote" class="sensing-level-note" aria-live="polite"></span>
           </div>
         </div>
         <div class="inicio-grid">
@@ -6007,6 +6089,14 @@ async function renderRadar(){
       if(open){ requestAnimationFrame(afterExpand); }
       else { try{ stopLoop3D(); }catch(e){} }        // collapsed: stop burning frames on a hidden canvas
     };
+    // Fix 2: tapping a room row opens (never toggles closed) the collapsed map, then focuses
+    // that room on it. Idempotent — a no-op when already open or off the panel form factor.
+    window.__wavrPanelOpenMap = function(){
+      if(!PANEL_MQ.matches || mapHome.classList.contains("map-open")) return;
+      mapHome.classList.add("map-open");
+      toggle.setAttribute("aria-expanded", "true");
+      requestAnimationFrame(afterExpand);
+    };
     // Leaving the panel form factor (rotate / resize to desktop): the map becomes permanently
     // visible again, so drop the collapse state and make sure the loop is live (never frozen).
     const onMq = function(e){
@@ -6137,7 +6227,7 @@ function upsert(rs){
   // empty rooms just read "empty"). textContent only — XSS-safe by construction.
   const ringWord = rs.occupied ? confWord(rs.confidence) : "empty";
   const ringWordEl = c.querySelector(".ring-pct small");
-  if(ringWordEl.textContent !== ringWord) ringWordEl.textContent = ringWord;
+  if(ringWordEl.textContent !== ringWord){ ringWordEl.textContent = ringWord; ringWordEl.dataset.conf = ringWord; }
   c.querySelector(".ring").setAttribute("aria-label", `${ringWord} — ${pct}% confidence in ${rs.room}`);
   const pill = c.querySelector(".pill");
   pill.textContent = rs.occupied ? "occupied" : "empty";
@@ -6315,17 +6405,29 @@ document.addEventListener("focusout", (e) => {
 });
 // Room-rail card click/Enter -> sticky select + cross-highlight + focus its detail (§6).
 // Clicks inside the "Why?" drill keep their native toggle behavior.
+// Fix 2 (Core panel): on the panel form factor a room tap OPENS the collapsed map first, then
+// focuses that room on it — otherwise the tap would select a display:none canvas (reads broken).
+// Desktop keeps the plain sticky-select (the map is always visible there).
+const HOME_PANEL_MQ = window.matchMedia("(orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1)");
+function selectRoomFromRail(room){
+  if(HOME_PANEL_MQ.matches){
+    window.__wavrPanelOpenMap?.();      // expand the collapsed map (no-op if already open)
+    window.__wavrSelectRoom?.(room);    // select + cross-highlight on the map + scroll/focus the card
+    return;
+  }
+  setSelectedRoom(room);
+}
 roomsEl.addEventListener("click", (e) => {
   const card = e.target.closest ? e.target.closest(".card") : null;
   if(!card || e.target.closest("details")) return;
-  setSelectedRoom(card.dataset.room);
+  selectRoomFromRail(card.dataset.room);
 });
 roomsEl.addEventListener("keydown", (e) => {
   if(e.key !== "Enter" && e.key !== " ") return;
   const card = e.target.closest ? e.target.closest(".card") : null;
   if(!card || e.target !== card) return;   // Enter inside <summary> keeps its own behavior
   e.preventDefault();
-  setSelectedRoom(card.dataset.room);
+  selectRoomFromRail(card.dataset.room);
 });
 // 3D canvas -> DOM: the raycaster in ensure3D() calls this on a room-floor click/tap.
 // Also scroll+focus the room's detail card so the selection lands somewhere actionable.
@@ -8443,7 +8545,7 @@ try {
     else say("Off for privacy.", true);
   }
   async function killToggle(){
-    if(M !== "live" || killBusy || tierBusy) return;   // tierBusy: a Sensing-mode change is mid-fan-out
+    if(M !== "live" || killBusy || tierBusy) return;   // tierBusy: a Sensing-level change is mid-fan-out
     var cs = cameraSourceList();
     if(!cs.length) return;
     var target = !cs.some(function(s){ return s.enabled; });   // any on -> all off; all off -> all on
@@ -8468,7 +8570,7 @@ try {
   });
 
   // =====================================================================
-  // Global Sensing-mode meter (Off | Presence | Precise) — a segmented control
+  // Global Sensing-level meter (Off | Presence | Precise) — a segmented control
   // DERIVED from the SAME sysInfo/camsList this closure already holds:
   //   Off      = system stopped (manager.running === false)
   //   Presence = system running, NO camera source enabled (network/BLE only, zero VRAM)
@@ -8545,8 +8647,8 @@ try {
     setTier(TIER_ORDER[idx - 1]);
   }
   function renderTier(){
-    var seg = $("precisionSeg"), posture = $("precisionPosture");
-    var pause = $("privacyPauseBtn"), note = $("precisionNote");
+    var seg = $("sensingLevelSeg"), posture = $("sensingLevelPosture");
+    var pause = $("privacyPauseBtn"), note = $("sensingLevelNote");
     if(!seg || !posture) return;
     var live = (M === "live");
     // demo/companion: illustrative only — highlight the privacy-first default (Presence),
@@ -8561,7 +8663,7 @@ try {
     });
     seg.classList.toggle("locked", !live);
     var meta = TIER_META[cur] || TIER_META.presence;
-    posture.className = "precision-posture t-" + cur;
+    posture.className = "sensing-level-posture t-" + cur;
     posture.textContent = "";
     posture.appendChild(elc("b", null, meta.label + " — "));
     posture.appendChild(document.createTextNode(meta.posture));
@@ -8580,7 +8682,7 @@ try {
     }
   }
   (function(){
-    var seg = $("precisionSeg"), pause = $("privacyPauseBtn");
+    var seg = $("sensingLevelSeg"), pause = $("privacyPauseBtn");
     if(seg) seg.addEventListener("click", function(e){
       var b = (e.target && e.target.closest) ? e.target.closest(".seg-btn") : null;
       if(b && b.getAttribute("data-tier")) setTier(b.getAttribute("data-tier"));
@@ -9316,7 +9418,7 @@ try {
   renderSensing();     // A2.1 — paints the honest "no hub connected" state in demo/companion
   renderHealthTile();  // A2.3 — hidden outside live; never fetches on its own
   renderKill();
-  renderTier();        // global Sensing-mode meter — illustrative in demo, live in live
+  renderTier();        // global Sensing-level meter — illustrative in demo, live in live
   renderDiag();
   applyTlFilter();
   renderPresence();    // A2.2 — live-only poller; no-ops (shows the note) elsewhere
@@ -9377,8 +9479,10 @@ try {
 
   // ---------- show / hide (position above by default, flip below when clipped,
   // clamp horizontally so it can never overflow the viewport) ----------
-  function showTip(el, mode){
-    var text = tipText(el);
+  function showTip(el, mode, overrideText){
+    // overrideText: show a caller-supplied string (the nav double-tap pops the short NAME)
+    // instead of the element's verbose data-tip sentence.
+    var text = overrideText || tipText(el);
     if(!text) return;
     clearTimeout(hoverTimer); clearTimeout(hideTimer); clearTimeout(autoHideTimer);
     pendingEl = null;
@@ -9407,7 +9511,18 @@ try {
     tipEl = el;
     pinned = (mode === "press" || mode === "help");
     if(mode === "press") autoHideTimer = setTimeout(hideTip, 7000);  // touch has no hover-out
+    else if(mode === "name") autoHideTimer = setTimeout(hideTip, 1600);  // brief name pop-out
   }
+  // Fix 4: double-tap (dblclick / second tap) a nav item pops just its short NAME — a
+  // discoverable touch reveal that complements the always-visible rail labels, distinct from
+  // the long-press that shows the full data-tip sentence. Idempotent/harmless on desktop.
+  document.addEventListener("dblclick", function(e){
+    var nav = (e.target && e.target.closest) ? e.target.closest(".nav-item") : null;
+    if(!nav) return;
+    var lbl = nav.querySelector(".nav-label");
+    var name = (lbl && lbl.textContent.trim()) || nav.getAttribute("aria-label") || "";
+    if(name) showTip(nav, "name", name);
+  });
   function hideTip(){
     // NOTE: deliberately does NOT touch the pending-hover state — the 100ms leave-grace
     // hide of an OLD tip must never cancel the 350ms timer of the control the pointer
