@@ -1032,6 +1032,17 @@
   .diag-row .dv.ok{color:var(--accent);}
   .diag-row .dv.warn{color:var(--warn);}
   .diag-row .dv.danger{color:var(--danger);}
+  /* System regroup: persistent passive Health status line reuses .egress-summary/.health-sev
+     verbatim (see above); the always-visible 5-tier legend is its own small static list —
+     same ok/minor/degraded/major/critical vocabulary, same ok/warn/danger palette. */
+  .health-legend{display:flex;flex-wrap:wrap;gap:6px 16px;list-style:none;margin:10px 0 0;
+                 padding:8px 0 0;border-top:1px dashed var(--line);font-size:.76rem;color:var(--dim);}
+  .health-legend li{display:flex;gap:5px;align-items:baseline;}
+  .health-legend b{font-weight:650;}
+  .health-legend.ok b,.health-legend li.ok b{color:var(--accent);}
+  .health-legend li.warn b{color:var(--warn);}
+  .health-legend li.danger b{color:var(--danger);}
+  .health-legend .dim{color:var(--dim);}
   /* System tab: Core Panel lock admin (sets/changes the ambient-touchscreen PIN; see the
      #corePanel lock module further down for what actually gates the wake with it). Same
      input/feedback look as the rest of this section, own class since it isn't camera-shaped. */
@@ -1040,6 +1051,13 @@
                        border-radius:8px;padding:8px 11px;font-size:.82rem;width:190px;
                        font-variant-numeric:tabular-nums;letter-spacing:.15em;}
   .corelock-form input::placeholder{color:var(--dim);opacity:1;letter-spacing:normal;}
+  /* Fix #3: lock-mode chooser — reuses .viewToggle's segmented-control look; margin only. */
+  .corelock-mode{margin:8px 0 12px;}
+  /* Two new wrapper divs (#sysColLeft/#sysColRight) around the EXISTING System-tab tiles —
+     display:contents by default so their children stay direct flex items of
+     .tab-panel.active (byte-identical desktop stacking); real column behavior is scoped to
+     the panel MQ below. */
+  .sys-col{display:contents;}
   /* gear → Privacy & security: the 4 invariants (trust screen, ALL modes) */
   .inv-list{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;}
   .inv-list li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;
@@ -1285,6 +1303,34 @@
     #mapHome.map-open .mpt-chevron{transform:rotate(90deg);}
     #panel-inicio #radarWrap{margin-top:8px;}
     #panel-inicio #radar,#panel-inicio #radar3d{max-height:30vh;}
+
+    /* -------- SYSTEM: two labeled instrument cards (380px + 1fr), no page scroll —
+       each column scrolls internally. #sysColLeft/#sysColRight are display:contents
+       by default (see the base .sys-col rule); this MQ gives them real box + scroll
+       behavior only at the panel form factor. -------- */
+    #panel-sistema.tab-panel.active{max-width:none;height:100%;min-height:0;
+        padding:8px 16px 12px;gap:10px 16px;display:grid;
+        grid-template-columns:380px minmax(0,1fr);grid-template-rows:minmax(0,1fr);
+        align-items:stretch;}
+    #panel-sistema .sys-col{display:flex;flex-direction:column;gap:10px;
+        min-height:0;overflow-y:auto;}
+    #panel-sistema #sysColLeft{grid-column:1;}
+    #panel-sistema #sysColRight{grid-column:2;}
+    #panel-sistema .sys-col .tile{flex:none;}
+    #panel-sistema #sisNote{grid-column:1/-1;}
+
+    /* -------- CONNECTORS: card grid instead of a capped single column; the group
+       headers renderConnectors() inserts (.conn-group-h) span the full grid width. -------- */
+    #connList{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;}
+    #connList .conn-group-h{grid-column:1/-1;}
+    .conn-card{max-width:none;}
+    .conn-desc,.conn-scope,.conn-state{font-size:.9rem;}
+    .conn-group-h{font-size:1rem;}
+
+    /* -------- Touch-target floor, asserted directly in this form-factor MQ — NOT gated
+       on @media(pointer:coarse) (a kiosk WebView may not report it). Covers every source
+       and connector toggle too (both are rendered with the .ctl.switch class). -------- */
+    .ctl,.ctl.small,.ctl.switch{min-height:44px;}
   }
 
   /* ============================================================================
@@ -9355,6 +9401,36 @@ try {
     major: "gateway OK — the internet looks down",
     critical: "gateway unreachable — no LAN routing",
   };
+  // =====================================================================
+  // System regroup — persistent, PASSIVE Health status line (card C): fed
+  // ONLY from signals already polled elsewhere (sysInfo from /api/system,
+  // wsDown from the live WebSocket) — zero new calls, and NEVER touches
+  // GET /api/health (that stays user-triggered only, see the load-bearing
+  // comment above renderHealthTile). Reuses the SAME canonical HEALTH_SEV_*
+  // vocabulary as the interactive check above as the one shared severity
+  // ladder. major/critical require the gateway/resolver reachability data
+  // only the interactive (egress) check has, so the passive line never
+  // asserts them — it only ever reports what it can actually verify.
+  // =====================================================================
+  function computePassiveHealthSeverity(){
+    if(M !== "live") return null;   // no hub connected — the line stays hidden, not "ok"
+    var unavailN = 0;
+    if(sysInfo && Array.isArray(sysInfo.sources)){
+      sysInfo.sources.forEach(function(s){ if(s && s.enabled && !s.active) unavailN++; });
+    }
+    if(unavailN >= 2) return "degraded";
+    if(unavailN === 1 || wsDown) return "minor";
+    return "ok";
+  }
+  function renderHealthStatusLine(){
+    var el = $("healthStatusLine");
+    if(!el) return;
+    var sev = computePassiveHealthSeverity();
+    if(sev == null){ el.hidden = true; return; }
+    el.hidden = false;
+    el.className = "egress-summary health-sev " + (HEALTH_SEV_CLASS[sev] || "na");
+    el.textContent = "Health: " + sev + (HEALTH_SEV_TEXT[sev] ? " — " + HEALTH_SEV_TEXT[sev] : "");
+  }
   function renderHealthResult(d){
     var box = $("healthResult");
     if(!box) return;
@@ -9496,7 +9572,7 @@ try {
   window.__wavrSystem = function(s){
     try{ if(_sys) _sys(s); }catch(e){}
     sysInfo = (s && typeof s === "object") ? s : null;
-    renderKill(); renderEgress(); renderTier();
+    renderKill(); renderEgress(); renderTier(); renderHealthStatusLine();
   };
   var _cams = window.__wavrCameras;
   window.__wavrCameras = function(c){
@@ -9530,6 +9606,7 @@ try {
     renderEgress();
     renderSensing();     // A2.1 — same payload, zero new fetches
     renderHealthTile();  // A2.3 — only (re)paints visibility/copy; never fetches
+    renderHealthStatusLine();   // System regroup — same passive poll, zero new fetches
     var sv = $("sobreVersion");
     if(sv && statusInfo && statusInfo.version != null) sv.textContent = " · version " + statusInfo.version;
   };
