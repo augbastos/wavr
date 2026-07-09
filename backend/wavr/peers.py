@@ -31,7 +31,7 @@ import secrets
 import sqlite3
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS peers (
@@ -160,3 +160,65 @@ class PeerStore:
 
     def close(self) -> None:
         self._conn.close()
+
+
+EXCHANGE_TTL_SECONDS = 120  # matches pairing.CODE_TTL_SECONDS -- same window discipline
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class PendingExchange:
+    """The requester's half of a peer-pairing exchange, stashed by the side
+    that receives POST /api/peers/exchange (see api_peers.py) until the
+    requester comes back authenticated (via /api/peers/finish) to complete
+    the reverse leg -- see the protocol walkthrough at the top of this
+    plan/the design spec §2."""
+
+    requester_name: str
+    requester_base_url: str
+    requester_code: str
+    requester_fingerprint: str
+
+
+class PeerExchangeManager:
+    """In-memory, ephemeral (never persisted -- same reasoning as
+    PairingManager's codes/tickets: this is a short-lived handshake artifact,
+    not a durable record). Bound to ONE pending exchange PER CALLER at a time
+    by design: `stash` always returns a FRESH id and simply adds another
+    entry -- the api_peers.py layer is responsible for keying which exchange
+    belongs to which authenticated caller in Task 4 (finish) by looking the
+    caller's device up via `DeviceStore` after they authenticate, not by
+    trusting any exchange_id the caller presents post-auth."""
+
+    def __init__(self, now_fn=_utcnow, ttl: float = EXCHANGE_TTL_SECONDS):
+        self._now = now_fn
+        self._ttl = ttl
+        self._pending: dict[str, tuple[PendingExchange, datetime]] = {}
+
+    def stash(self, requester_name: str, requester_base_url: str,
+              requester_code: str, requester_fingerprint: str) -> str:
+        self._purge_expired()
+        exchange_id = secrets.token_urlsafe(16)
+        expires = self._now() + timedelta(seconds=self._ttl)
+        self._pending[exchange_id] = (
+            PendingExchange(requester_name, requester_base_url, requester_code,
+                             requester_fingerprint),
+            expires,
+        )
+        return exchange_id
+
+    def pop(self, exchange_id: str) -> PendingExchange | None:
+        entry = self._pending.pop(exchange_id, None)
+        if entry is None:
+            return None
+        pending, expires = entry
+        if self._now() >= expires:
+            return None
+        return pending
+
+    def _purge_expired(self) -> None:
+        now = self._now()
+        self._pending = {k: v for k, v in self._pending.items() if now < v[1]}

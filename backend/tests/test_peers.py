@@ -77,3 +77,56 @@ def test_revoke_is_idempotent(tmp_path):
     peer_id = store.add("Core-G9", "https://x:8000", "FP", "dev1", "tok")
     assert store.revoke(peer_id) is True
     assert store.revoke(peer_id) is True  # second revoke still True, not an error
+
+
+from datetime import datetime, timedelta, timezone
+from wavr.peers import PeerExchangeManager
+
+
+class _Clock:
+    def __init__(self, start=None):
+        self.t = start or datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += timedelta(seconds=seconds)
+
+
+def test_stash_and_pop_roundtrip():
+    mgr = PeerExchangeManager()
+    exchange_id = mgr.stash("Desktop", "https://192.168.1.10:8000", "12345678", "AA:BB")
+    pending = mgr.pop(exchange_id)
+    assert pending.requester_name == "Desktop"
+    assert pending.requester_base_url == "https://192.168.1.10:8000"
+    assert pending.requester_code == "12345678"
+    assert pending.requester_fingerprint == "AA:BB"
+
+
+def test_pop_is_single_use():
+    mgr = PeerExchangeManager()
+    exchange_id = mgr.stash("Desktop", "https://x:8000", "code", "fp")
+    assert mgr.pop(exchange_id) is not None
+    assert mgr.pop(exchange_id) is None  # consumed
+
+
+def test_pop_unknown_id_returns_none():
+    mgr = PeerExchangeManager()
+    assert mgr.pop("nope") is None
+
+
+def test_pop_expired_returns_none():
+    clock = _Clock()
+    mgr = PeerExchangeManager(now_fn=clock, ttl=120)
+    exchange_id = mgr.stash("Desktop", "https://x:8000", "code", "fp")
+    clock.advance(121)
+    assert mgr.pop(exchange_id) is None
+
+
+def test_pop_just_before_ttl_still_works():
+    clock = _Clock()
+    mgr = PeerExchangeManager(now_fn=clock, ttl=120)
+    exchange_id = mgr.stash("Desktop", "https://x:8000", "code", "fp")
+    clock.advance(119)
+    assert mgr.pop(exchange_id) is not None
