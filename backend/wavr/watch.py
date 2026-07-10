@@ -9,13 +9,18 @@ WITHOUT surveilling the family. While active:
     from every egress (dashboard/WS, /api/state, MQTT, narrator); and
   * only COUNTS + the intrusion ROOM + entry/exit edges are allowed to leave.
 
-Intrusion is inferred purely from counts: a room whose honest person_count (A1,
-from a counting-capable source camera/mmwave) exceeds the number of KNOWN people
-present (the consent identity layer) MUST contain at least one unaccounted person
--- surfaced room-level only, never WHO or WHERE-in-the-room.
+Intrusion is inferred purely from counts at TWO scopes: (1) a ROOM whose honest
+person_count (A1, from a counting-capable source camera/mmwave) exceeds the number
+of KNOWN people present (the consent identity layer) MUST contain an unaccounted
+person; and (2) the HOUSE as a whole -- when the honest SUM of per-room counts
+exceeds the known-present count even though NO single room's count does (a spread-out
+intrusion the per-room test alone would miss). Both are surfaced count-only: the room
+signal room-level (never WHO or WHERE-in-the-room), the house signal room-AGNOSTIC
+(never even which room, only THAT someone unaccounted-for is present).
 
-SUPPRESSED_FIELDS, project_state, room_unrecognized and known_present_persons live
-here ONCE so the suppression can never drift between egress points. HONESTY GATE:
+SUPPRESSED_FIELDS, project_state, room_unrecognized, house_unrecognized and
+known_present_persons live here ONCE so the suppression can never drift between egress
+points. HONESTY GATE:
 intrusion detection needs the identity layer to know who is known; with identity
 disabled the KNOWN set is empty, so the caller gates on identity_enabled -- Watch
 still suppresses geometry (fail-safe toward MORE privacy) but reports it cannot flag
@@ -85,6 +90,27 @@ def room_unrecognized(state, known_count: int) -> bool:
     return int(pc) > max(0, int(known_count))
 
 
+def house_unrecognized(house_count, known_count: int) -> bool:
+    """True when the HOUSE AS A WHOLE definitely holds an unrecognized person: the
+    honest sum of per-room person_count (wavr.fusion.house_person_count -- counting-
+    capable rooms only, None when NO room can count) exceeds the house-wide count of
+    KNOWN-present people. The AGGREGATE backstop to room_unrecognized: it catches a
+    SPREAD-OUT intrusion that no single room reveals -- several unaccounted people
+    split across rooms so no one room's own count exceeds the known-count, yet the
+    TOTAL surplus betrays them.
+
+    ROOM-AGNOSTIC + count-only: asserts only THAT someone unaccounted-for is in the
+    house, never WHO and never WHERE (no room, no geometry, no identity used or
+    revealed -- only two integers, the honest total and the known count). A None
+    house_count (a fully-UNCOUNTED house, no counting source anywhere) NEVER fires:
+    an honest "unknown", never asserted as "safe". known_count below 0 clamps to 0.
+    Gate on identity_enabled at the caller exactly as room_unrecognized needs -- with
+    identity off the known set is empty and the whole house would read unaccounted."""
+    if house_count is None:
+        return False
+    return int(house_count) > max(0, int(known_count))
+
+
 def project_state(state: dict, watch_on: bool, unrecognized: bool = False) -> dict:
     """The privacy INVERSION, applied at every egress. When Watch is OFF this is the
     identity map -- the input dict is returned UNCHANGED, so Off/Presence/Precise
@@ -104,11 +130,14 @@ def project_state(state: dict, watch_on: bool, unrecognized: bool = False) -> di
 
 
 class IntrusionAlert:
-    """One edge-triggered unrecognized-person-in-room event. Count-only and room-
-    level: carries the room, the person_count that tripped it and the known-present
-    count compared against -- NEVER a target position, identity, or geometry.
-    Severity fixed at alert (serious, on the shared ladder) -- high, but NOT critical
-    (the ladder reserves critical for a sustained/confirmed gateway change)."""
+    """One edge-triggered unrecognized-person event. Count-only: carries the
+    person_count that tripped it and the known-present count compared against --
+    NEVER a target position, identity, or geometry. `room` is the room name for a
+    per-room signal, or None for the ROOM-AGNOSTIC house-level aggregate (someone
+    unaccounted-for is in the house, spread so no single room reveals them -- never
+    even which room). Severity fixed at alert (serious, on the shared ladder) -- high,
+    but NOT critical (the ladder reserves critical for a sustained/confirmed gateway
+    change)."""
 
     __slots__ = ("room", "person_count", "known_present", "severity", "ts")
 
