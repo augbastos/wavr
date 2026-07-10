@@ -5,13 +5,15 @@ Unlike sources.snmp/sources.netbios (targeted unicast probes), this is a pure
 PASSIVE listener, same ethos as sources.mdns/sources.ssdp: Wavr sends nothing,
 it only reads the BOOTP/DHCP (RFC 2131) broadcast frames every DHCP client
 already sends to 255.255.255.255:67 when it joins the network or renews its
-lease. This module binds a UDP socket to port 67 (the DHCP *server* port --
-that is where client broadcasts land) with SO_REUSEADDR/SO_REUSEPORT so it can
-coexist with a real DHCP server already listening there; if the real DHCP
-server binds exclusively first (OS/permission dependent), binding here will
-fail and the collector simply never starts -- a known, honestly-documented
-limitation of passive UDP snooping without a raw/promiscuous socket (which
-would need elevated privileges this module deliberately does not request).
+lease. The transport (see `_default_listen`) is a raw AF_PACKET Ethernet
+sniff when available (needs CAP_NET_RAW, Linux only, no bind to port 67 at
+all -- see `wavr.sources._dhcp_raw` module docstring), falling back to a UDP
+socket bound to port 67 (the DHCP *server* port -- that is where client
+broadcasts land) with SO_REUSEADDR/SO_REUSEPORT so it can coexist with a real
+DHCP server already listening there. If neither transport can start (e.g. a
+real DHCP server binds exclusively first and this environment also lacks
+CAP_NET_RAW for the raw fallback), the collector simply never starts and
+reports `available=False` -- a known, honestly-documented limitation.
 
 Only DISCOVER (option 53 = 1) and REQUEST (option 53 = 3) messages are kept --
 these are the CLIENT's own self-description; OFFER/ACK/NAK/etc. are the
@@ -56,10 +58,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import socket
 from typing import AsyncIterator, Callable
 
 from wavr.data.deviceclass import hostname_type
+from wavr.sources._dhcp_raw import open_with_timeout, raw_af_packet_supported, raw_dhcp_listen
+
+_LOG = logging.getLogger(__name__)
 
 DHCP_SERVER_PORT = 67
 
@@ -156,7 +162,11 @@ def _open_broadcast_socket(port: int) -> socket.socket:
     """Bind UDP `port` for RECEIVE only. SO_BROADCAST is deliberately NOT set
     here -- that option only governs permission to SEND to a broadcast
     address, which this read-only listener never does; the OS delivers
-    inbound broadcast datagrams to a bound socket without it."""
+    inbound broadcast datagrams to a bound socket without it. Synchronous --
+    callers MUST run this via `_dhcp_raw.open_with_timeout`, never directly
+    on the event loop (see that module's docstring for why: this class of
+    bind has been observed to STALL, not just fail fast, against a conflicting
+    DHCP client already holding the port)."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     if hasattr(socket, "SO_REUSEPORT"):
@@ -166,12 +176,18 @@ def _open_broadcast_socket(port: int) -> socket.socket:
     return sock
 
 
-async def _default_listen() -> AsyncIterator[tuple[bytes, str]]:
-    """Default real transport: bind UDP port 67 and yield every datagram
-    received (READ-ONLY -- never transmits). See sources.mdns._default_listen
-    for the identical executor-thread rationale."""
+def _open_server_port_socket() -> socket.socket:
+    return _open_broadcast_socket(DHCP_SERVER_PORT)
+
+
+async def _udp_listen() -> AsyncIterator[tuple[bytes, str]]:
+    """Classic UDP/67-bind transport -- the fallback used by
+    `_default_listen` when raw AF_PACKET capture is unavailable. READ-ONLY
+    (never transmits); the open+bind itself runs off the event loop with a
+    bounded wait via `open_with_timeout`. See sources.mdns._default_listen
+    for the identical executor-thread rationale on the recv loop."""
     loop = asyncio.get_event_loop()
-    sock = _open_broadcast_socket(DHCP_SERVER_PORT)
+    sock = await open_with_timeout(_open_server_port_socket, f"UDP/{DHCP_SERVER_PORT} bind")
     sock.settimeout(1.0)
     try:
         while True:
@@ -182,6 +198,31 @@ async def _default_listen() -> AsyncIterator[tuple[bytes, str]]:
             yield data, ip
     finally:
         sock.close()
+
+
+async def _default_listen() -> AsyncIterator[tuple[bytes, str]]:
+    """Default real transport. Tries the raw AF_PACKET sniff FIRST -- no
+    UDP/67 bind at all, so it cannot conflict with a DHCP server the host OS
+    already runs (see `wavr.sources._dhcp_raw` module docstring) -- falling
+    back to the classic UDP/67-bind listener (`_udp_listen`) when raw
+    capture is unavailable (non-Linux, or CAP_NET_RAW missing) or its open
+    times out."""
+    if raw_af_packet_supported():
+        agen = raw_dhcp_listen()
+        try:
+            first = await agen.__anext__()
+        except StopAsyncIteration:
+            return
+        except (AttributeError, PermissionError, OSError):
+            _LOG.info("raw AF_PACKET DHCP sniff unavailable, falling back to UDP/%d bind",
+                      DHCP_SERVER_PORT, exc_info=True)
+        else:
+            yield first
+            async for item in agen:
+                yield item
+            return
+    async for item in _udp_listen():
+        yield item
 
 
 class DHCPFingerprintCollector:

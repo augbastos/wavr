@@ -1,6 +1,9 @@
 """wavr.sources.dhcp_fp -- passive DHCP-fingerprint collector."""
 from __future__ import annotations
 
+import pytest
+
+from wavr.sources import _dhcp_raw, dhcp_fp
 from wavr.sources.dhcp_fp import (
     DHCPFingerprintCollector,
     _infer_os,
@@ -227,3 +230,96 @@ async def test_collector_reflects_most_recent_attempt_across_repeated_collect():
     await collector.collect(duration=0.2)
     assert collector.available is True
     assert collector.unavailable_reason is None
+
+
+# ---- _default_listen raw-first / UDP-fallback orchestration (G9 Core fix) ---
+# `listen=` injection (used above) bypasses `_default_listen` entirely, so
+# these exercise the real transport-selection function directly, with the
+# underlying socket layer monkeypatched (never a real socket in CI).
+
+async def test_default_listen_uses_raw_when_supported(monkeypatch):
+    async def fake_raw():
+        yield b"raw-payload", "192.168.1.9"
+
+    async def _udp_must_not_be_called():
+        raise AssertionError("UDP fallback must not run when raw succeeds")
+        yield  # pragma: no cover -- makes this an async generator
+
+    monkeypatch.setattr(dhcp_fp, "raw_af_packet_supported", lambda: True)
+    monkeypatch.setattr(dhcp_fp, "raw_dhcp_listen", fake_raw)
+    monkeypatch.setattr(dhcp_fp, "_udp_listen", _udp_must_not_be_called)
+
+    items = [item async for item in dhcp_fp._default_listen()]
+    assert items == [(b"raw-payload", "192.168.1.9")]
+
+
+async def test_default_listen_falls_back_to_udp_on_raw_permission_error(monkeypatch):
+    async def fake_raw_denied():
+        raise PermissionError("no CAP_NET_RAW")
+        yield  # pragma: no cover
+
+    async def fake_udp():
+        yield b"udp-payload", "10.0.0.1"
+
+    monkeypatch.setattr(dhcp_fp, "raw_af_packet_supported", lambda: True)
+    monkeypatch.setattr(dhcp_fp, "raw_dhcp_listen", fake_raw_denied)
+    monkeypatch.setattr(dhcp_fp, "_udp_listen", fake_udp)
+
+    items = [item async for item in dhcp_fp._default_listen()]
+    assert items == [(b"udp-payload", "10.0.0.1")]
+
+
+async def test_default_listen_skips_raw_entirely_when_unsupported(monkeypatch):
+    async def _raw_must_not_be_called():
+        raise AssertionError("raw path must not be attempted when unsupported")
+        yield  # pragma: no cover
+
+    async def fake_udp():
+        yield b"udp-only", "10.0.0.2"
+
+    monkeypatch.setattr(dhcp_fp, "raw_af_packet_supported", lambda: False)
+    monkeypatch.setattr(dhcp_fp, "raw_dhcp_listen", _raw_must_not_be_called)
+    monkeypatch.setattr(dhcp_fp, "_udp_listen", fake_udp)
+
+    items = [item async for item in dhcp_fp._default_listen()]
+    assert items == [(b"udp-only", "10.0.0.2")]
+
+
+async def test_udp_listen_bind_stall_surfaces_as_oserror_not_a_hang(monkeypatch):
+    # Simulates the G9 field bug directly at the UDP-fallback layer: a
+    # bind() that never returns must not hang collect() -- it must resolve
+    # (bounded by _dhcp_raw.OPEN_TIMEOUT) to a plain OSError.
+    import time as _time
+
+    monkeypatch.setattr(_dhcp_raw, "OPEN_TIMEOUT", 0.05)
+
+    def _hanging_bind():
+        _time.sleep(0.4)
+
+    monkeypatch.setattr(dhcp_fp, "_open_server_port_socket", _hanging_bind)
+
+    agen = dhcp_fp._udp_listen()
+    with pytest.raises(OSError):
+        await agen.__anext__()
+
+
+async def test_collector_never_hangs_when_default_transport_bind_stalls(monkeypatch):
+    # End-to-end through DHCPFingerprintCollector.collect() (no `listen=`
+    # injection) -- both raw and UDP paths fail/stall, collect() must still
+    # return promptly and record available=False instead of hanging the
+    # caller (the actual production bug on the G9 Core).
+    import time as _time
+
+    monkeypatch.setattr(dhcp_fp, "raw_af_packet_supported", lambda: False)
+    monkeypatch.setattr(_dhcp_raw, "OPEN_TIMEOUT", 0.05)
+
+    def _hanging_bind():
+        _time.sleep(0.4)
+
+    monkeypatch.setattr(dhcp_fp, "_open_server_port_socket", _hanging_bind)
+
+    collector = DHCPFingerprintCollector()
+    out = await collector.collect(duration=1.0)
+    assert out == {}
+    assert collector.available is False
+    assert "bind" in collector.unavailable_reason.lower() or "OSError" in collector.unavailable_reason

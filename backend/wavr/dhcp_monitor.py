@@ -91,10 +91,12 @@ class DhcpRogueAlert:
 
 def make_collector(collect_duration: float = 3.0, probe: bool = False) -> CollectFn:
     """Build the default real collect() -- lazily imports
-    `wavr.sources.dhcp.DHCPCollector` so the UDP/68 socket (and the one-shot
-    DISCOVER broadcast when `probe` is on) is only ever opened once this
-    monitor is actually enabled/used (tests inject their own `collect`
-    instead)."""
+    `wavr.sources.dhcp.DHCPCollector` so its transport (a raw AF_PACKET
+    Ethernet sniff when available, else a UDP/68 bind -- see
+    `wavr.sources._dhcp_raw`'s module docstring for why the raw path is
+    preferred; the one-shot DISCOVER broadcast when `probe` is on always
+    uses the UDP/68 socket) is only ever opened once this monitor is
+    actually enabled/used (tests inject their own `collect` instead)."""
     async def collect() -> dict:
         from wavr.sources.dhcp import DHCPCollector
         return await DHCPCollector(probe=probe).collect(duration=collect_duration)
