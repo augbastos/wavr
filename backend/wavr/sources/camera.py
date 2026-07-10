@@ -18,6 +18,33 @@ class Detection:
     confidence: float
 
 
+class CameraPrivacySignal(Exception):
+    """Raised by a frame source when the RTSP session opened cleanly (the TCP/RTSP
+    handshake succeeded -- the camera is reachable and the stored credentials were
+    accepted) but ZERO frames were ever produced before the stream ended. Per TP-Link's
+    own docs, Tapo "Privacy Mode... disables all video and audio streaming and
+    recording" while the camera itself stays powered and on the network -- so a
+    deliberately-covered camera is expected to look exactly like this: reachable, but
+    producing no media. A genuine fault (wrong IP/creds/dead device/DHCP drift) instead
+    fails to open the capture at all, so it does NOT raise this.
+
+    CameraSource.events() catches this SEPARATELY from a generic connection error so a
+    covered camera is reported as a distinct 'privacy' state, never as 'offline'/
+    unhealthy -- ADR-0002 holds (never a frame in the signal), and the point of this
+    signal is exactly to stop a covered camera from crying wolf.
+
+    HONESTY NOTE (NOT VERIFIED against real hardware): TP-Link does not document the
+    RTSP wire-level behaviour of Privacy Mode, and no public source conclusively
+    describes it either. This is the best available signal obtainable from the RTSP
+    protocol alone without guessing at Tapo's undocumented local control-plane protocol
+    (see camera_privacy.py). Validate against a real Tapo camera before fully trusting
+    it: enter Privacy Mode in the Tapo app and confirm Wavr reports 'privacy', not
+    'offline'. If it turns out privacy mode also fails to open the RTSP session at all
+    (isOpened() False), this heuristic will misclassify it as a generic fault --
+    functionally identical to today's (pre-this-feature) behaviour, so it never makes
+    things worse, only sometimes fails to make them better."""
+
+
 def classify_posture(keypoints) -> str | None:
     """COCO-17 pixel keypoints -> coarse posture. Pure heuristic, no ML."""
     def mid(a, b):
@@ -57,7 +84,8 @@ class CameraSource:
                  pose_detect: Callable[[object, float], list[Target]] | None = None,
                  name: str = "",
                  on_health: Callable[[str, bool], None] | None = None,
-                 unhealthy_secs: float = 30.0):
+                 unhealthy_secs: float = 30.0,
+                 on_privacy: Callable[[str, bool], None] | None = None):
         self.room = room
         self._url = rtsp_url
         self._frames = frames or rtsp_frames
@@ -84,6 +112,10 @@ class CameraSource:
         self._unhealthy_secs = unhealthy_secs
         self._last_ok = 0.0
         self._down_reported = False
+        # Privacy-mode state (see CameraPrivacySignal): a separate edge latch from the
+        # down-latch above -- a covered camera is intentional, never counted as unhealthy.
+        self._on_privacy = on_privacy
+        self._privacy_reported = False
 
     def _emit_health(self, healthy: bool) -> None:
         """Fire the health callback with ONLY (name, healthy) -- never a frame
@@ -95,6 +127,18 @@ class CameraSource:
             self._on_health(self._name, healthy)
         except Exception:
             logging.warning("CameraSource(%s) health callback failed",
+                            self._name or self.room, exc_info=True)
+
+    def _emit_privacy(self, active: bool) -> None:
+        """Fire the privacy callback with ONLY (name, active) -- never a frame
+        (ADR-0002). Tolerant: a broken monitor never breaks the source loop (same
+        rule as the source's other injected callbacks)."""
+        if self._on_privacy is None:
+            return
+        try:
+            self._on_privacy(self._name, active)
+        except Exception:
+            logging.warning("CameraSource(%s) privacy callback failed",
                             self._name or self.room, exc_info=True)
 
     async def events(self) -> AsyncIterator[SensingEvent]:
@@ -111,6 +155,11 @@ class CameraSource:
                                 # Recovery edge: first frame after a down report.
                                 self._emit_health(True)
                                 self._down_reported = False
+                            if self._privacy_reported:
+                                # Recovery edge: a real frame means the camera left
+                                # privacy mode (the lens was uncovered again).
+                                self._emit_privacy(False)
+                                self._privacy_reported = False
                             det = await asyncio.to_thread(self._detect, frame)
                             present = det.count > 0
                             targets: tuple[Target, ...] = ()
@@ -128,8 +177,30 @@ class CameraSource:
                                 await asyncio.sleep(self._interval)
                 except asyncio.CancelledError:
                     raise
+                except CameraPrivacySignal:
+                    # Honest privacy state (see CameraPrivacySignal). This is NOT a
+                    # fault: clear any stale down-latch and edge-report privacy=True.
+                    # Deliberately `continue`s straight past the down-latch check below
+                    # -- an indefinitely-covered camera must never cry-wolf as an error,
+                    # no matter how long it stays covered.
+                    if self._down_reported:
+                        self._emit_health(True)
+                        self._down_reported = False
+                    if not self._privacy_reported:
+                        self._emit_privacy(True)
+                        self._privacy_reported = True
+                    if self._reconnect:
+                        await asyncio.sleep(self._reconnect)
+                    continue
                 except Exception:
                     logging.warning("CameraSource(%s) error; reconnecting", self.room, exc_info=True)
+                # This cycle did NOT reproduce the privacy signature (a genuine error,
+                # or a clean end that never opened at all) -- drop any stale privacy
+                # claim so a real fault can surface via the ordinary down latch below
+                # instead of hiding behind a privacy label that no longer applies.
+                if self._privacy_reported:
+                    self._emit_privacy(False)
+                    self._privacy_reported = False
                 # F3 down edge: fire a single (name, False) once we've gone
                 # `unhealthy_secs` without a frame. Runs on both the error path AND a
                 # clean stream-end (empty/closed capture, e.g. a dead/drifted host).
@@ -165,6 +236,17 @@ def _read(cap):
 def _release(cap) -> None:
     with contextlib.suppress(Exception):
         cap.release()
+
+
+def _is_opened(cap) -> bool:
+    """True only if the capture reports its session as open (the RTSP handshake
+    succeeded). Never raises -- an odd/fake capture object (e.g. a test double without
+    isOpened()) is treated as 'not opened', which is the safe/conservative side (no
+    privacy signal fabricated from an object we can't confidently ask)."""
+    try:
+        return bool(cap.isOpened())
+    except Exception:
+        return False
 
 
 def _model():
@@ -214,14 +296,28 @@ async def rtsp_frames(url: str) -> "AsyncIterator[object]":
     never block the loop; the capture is released in the finally, so aclose()
     on disable is a hard RTSP kill. Opening the capture is offloaded too — a
     hung/unreachable camera would otherwise freeze the whole backend for the
-    OS TCP timeout on every (re)connect."""
+    OS TCP timeout on every (re)connect.
+
+    Privacy-mode signature (see CameraPrivacySignal): if the capture opened
+    (isOpened() True -- the RTSP session negotiated) but not a single frame was ever
+    read before the stream ended, this raises CameraPrivacySignal instead of ending
+    silently, so CameraSource can report a distinct 'privacy' state. A capture that
+    never opens at all (isOpened() False -- wrong IP/creds/camera off the network) is
+    unaffected: it still just ends the generator normally, same as before this feature
+    (F3's existing down-latch path)."""
     cap = await asyncio.to_thread(_open_capture, url)
     try:
+        opened = await asyncio.to_thread(_is_opened, cap)
+        got_frame = False
         while True:
             ok, frame = await asyncio.to_thread(_read, cap)
             if not ok:
                 break
+            got_frame = True
             yield frame
+        if opened and not got_frame:
+            raise CameraPrivacySignal(
+                "RTSP session opened but produced no frames (privacy-mode candidate)")
     finally:
         _release(cap)
 

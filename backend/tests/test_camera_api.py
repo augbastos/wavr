@@ -191,3 +191,30 @@ def test_rebind_clears_matching_suggestion(tmp_path):
     with _client(tmp_path, seed=_SEED) as c:
         assert c.post("/api/cameras/cam_q/rebind", json={"ip": "10.0.0.9"}).status_code == 200
         assert c.get("/api/cameras/suggestions").json() == {"suggestions": []}
+
+
+# ---- Tapo privacy-mode CONTROL: a deliberate, honest 501 stub (feature 2) --------
+# See wavr.camera_privacy for why: no documented ONVIF/local Tapo path exists, and
+# implementing TP-Link's undocumented encrypted control API without real hardware to
+# validate against would be guessing a security-sensitive protocol. Detection (feature
+# 1, /api/cameras liveness='privacy') is fully implemented; this route only proves the
+# gap is honest, gated, and discoverable -- never that it silently pretends to work.
+
+def test_privacy_mode_route_is_a_flagged_501_stub(tmp_path):
+    with _client(tmp_path, seed=_SEED) as c:
+        r = c.post("/api/cameras/cam_q/privacy-mode", json={"enabled": True})
+        assert r.status_code == 501
+        # never echoes the stored credential back, even in a stub's error body
+        assert "secret" not in r.text and "user:secret" not in r.text
+
+def test_privacy_mode_route_unknown_camera_404(tmp_path):
+    with _client(tmp_path) as c:
+        assert c.post("/api/cameras/nope/privacy-mode",
+                      json={"enabled": True}).status_code == 404
+
+def test_privacy_mode_route_requires_csrf(tmp_path):
+    store = CameraStore(str(tmp_path / "p.db"))
+    store.add(**_SEED[0])
+    with TestClient(create_app(sources=[], camera_store=store)) as c:   # no X-Wavr-Local
+        r = c.post("/api/cameras/cam_q/privacy-mode", json={"enabled": True})
+        assert r.status_code == 403

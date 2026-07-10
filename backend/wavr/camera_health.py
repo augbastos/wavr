@@ -15,7 +15,11 @@ actionable, user-confirmed rebind:
     latest inventory and folds any drift suggestion into a small bounded ring;
     `suggestions()` reads them; `clear(name)` drops one after a rebind. Every
     store/inventory access is wrapped -- a failure is logged, never raised, so a
-    bad scan can never break the source loop.
+    bad scan can never break the source loop. It ALSO tracks Tapo privacy-mode state
+    via the separate `report_privacy`/`privacy()` pair (fed by CameraSource's
+    on_privacy hook, wavr.sources.camera.CameraPrivacySignal) -- a privacy report is
+    NOT a down report: it never folds an IP-drift suggestion and never latches
+    unhealthy, so a deliberately-covered camera can never cry-wolf.
 
 SECURITY NOTES (load-bearing):
   * A rebind is NEVER automatic -- a MAC-spoofing LAN attacker can manufacture a
@@ -116,6 +120,13 @@ class CameraHealthMonitor:
         self._max = max_suggestions
         self._down: set[str] = set()
         self._suggestions: dict[str, dict] = {}
+        # Privacy-mode state (Tapo privacy-mode feature): names CameraSource's
+        # on_privacy hook has latched as currently in a 'privacy' state (RTSP session
+        # opened but produced no frames -- see wavr.sources.camera.CameraPrivacySignal).
+        # Kept separate from `_down`/`_suggestions` -- a privacy report NEVER folds an
+        # IP-drift suggestion (a deliberately-covered camera hasn't moved) and NEVER
+        # counts as down.
+        self._privacy: set[str] = set()
 
     def report(self, name: str, healthy: bool) -> None:
         """The health sink CameraSource calls (name, healthy). On recovery, drop the
@@ -151,10 +162,33 @@ class CameraHealthMonitor:
         'unconfirmed' instead of a stale, confident presence."""
         return list(self._down)
 
+    def report_privacy(self, name: str, active: bool) -> None:
+        """The privacy sink CameraSource's on_privacy hook calls (name, active).
+        Edge-triggered upstream (CameraSource only calls this on a state change), but
+        kept idempotent here too. Tolerant: a bad name/store error is logged, never
+        raised -- same rule as `report()`."""
+        try:
+            if active:
+                self._privacy.add(name)
+            else:
+                self._privacy.discard(name)
+        except Exception:
+            _LOG.warning("camera health monitor report_privacy failed", exc_info=True)
+
+    def privacy(self) -> list[str]:
+        """Names of cameras currently believed to be in Tapo privacy mode (RTSP
+        session reachable, zero frames -- see CameraPrivacySignal). Carries camera
+        NAMES only — never a frame, rtsp_url or credential (ADR-0002). Feeds the
+        liveness tri-state so a covered camera's room reads honestly ('privacy'),
+        never as an error/offline."""
+        return list(self._privacy)
+
     def clear(self, name: str) -> None:
-        """Drop a camera's suggestion + down-state -- called after a rebind."""
+        """Drop a camera's suggestion + down-state + privacy-state -- called after a
+        rebind or delete."""
         self._down.discard(name)
         self._suggestions.pop(name, None)
+        self._privacy.discard(name)
 
     def _trim(self) -> None:
         # dict preserves insertion order -> evict oldest first when over the cap.

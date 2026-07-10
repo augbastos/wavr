@@ -122,3 +122,52 @@ def test_down_getter_tracks_latch():
     m.report("cam_q", False)
     m.clear("cam_q")                                       # rebound
     assert m.down() == []
+
+
+# ---- privacy(): Tapo privacy-mode tracking (never a down report / suggestion) ----
+
+def test_privacy_getter_tracks_latch():
+    # report_privacy latches/releases a name, independent of down()/suggestions().
+    m = CameraHealthMonitor(get_camera=lambda n: None, latest_inventory=lambda: [])
+    assert m.privacy() == []
+    m.report_privacy("cam_q", True)
+    assert m.privacy() == ["cam_q"]
+    assert all(isinstance(n, str) for n in m.privacy())    # names only
+    m.report_privacy("cam_q", False)
+    assert m.privacy() == []
+
+
+def test_privacy_report_never_touches_down_or_suggestions():
+    # A privacy report must NEVER be folded into down()/suggestions() -- a
+    # deliberately-covered camera is not a fault and its MAC hasn't drifted.
+    cam = _cam(url="rtsp://u:p@10.0.0.5/s1")
+    inv = [_dev("aa:bb:cc:dd:ee:ff", "10.0.0.9")]     # would drift if this were report()
+    m = CameraHealthMonitor(get_camera=lambda n: cam, latest_inventory=lambda: inv)
+    m.report_privacy("cam_q", True)
+    assert m.privacy() == ["cam_q"]
+    assert m.down() == []
+    assert m.suggestions() == []
+
+
+def test_privacy_clear_drops_privacy_state():
+    m = CameraHealthMonitor(get_camera=lambda n: None, latest_inventory=lambda: [])
+    m.report_privacy("cam_q", True)
+    m.clear("cam_q")
+    assert m.privacy() == []
+
+
+def test_privacy_and_down_can_be_independently_latched():
+    # A distinct camera can be down while another is in privacy mode -- independent sets.
+    m = CameraHealthMonitor(get_camera=lambda n: None, latest_inventory=lambda: [])
+    m.report("cam_a", False)
+    m.report_privacy("cam_b", True)
+    assert m.down() == ["cam_a"]
+    assert m.privacy() == ["cam_b"]
+
+
+def test_privacy_tolerates_bad_name_type():
+    # report_privacy must never raise, even given a set-unhashable name (defence in
+    # depth, mirrors report()'s tolerance of a store error).
+    m = CameraHealthMonitor(get_camera=lambda n: None, latest_inventory=lambda: [])
+    m.report_privacy(["not", "hashable"], True)             # must not raise
+    assert m.privacy() == []
