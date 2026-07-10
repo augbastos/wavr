@@ -303,6 +303,8 @@ def test_status_shape_and_no_secrets():
             # zero egress); surfaced so the Privacy & Egress view honestly shows a
             # local occupancy history is being kept.
             "occupancy_log",
+            # Watch/Guard ("Vigia") -- in-memory toggle, default OFF.
+            "watch",
         }
         assert set(body["features"]) == expected_features
         # Every feature is a bool flag EXCEPT connectors_active, an int count.
@@ -368,6 +370,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "mcp_http": False,
             # A4 house memory -- the other default-ON feature (derived-only, zero egress).
             "occupancy_log": True,
+            # Watch/Guard ("Vigia") -- in-memory toggle, default OFF.
+            "watch": False,
         }
 
 

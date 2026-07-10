@@ -106,7 +106,8 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
 def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
                             name_deps=None, dhcp_monitor=None,
-                            gateway_monitor=None, known_store=None) -> APIRouter:
+                            gateway_monitor=None, known_store=None,
+                            intrusion_log=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
@@ -128,6 +129,11 @@ def build_inventory_router(service: NetworkInventoryService,
         # wired in (unchanged shape), same rule as the dhcp merge above.
         if gateway_monitor is not None:
             merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
+        # Watch/Guard intrusion alerts (kind: "intrusion", severity "alert"), room-level
+        # + count-only (never a target position or identity); omitted entirely (unchanged
+        # shape) when Watch has never fired, same rule as the dhcp/gateway merges above.
+        if intrusion_log is not None:
+            merged += [a.to_dict() for a in intrusion_log.recent_alerts()]
         merged.sort(key=lambda a: a["ts"])
         return {"alerts": merged}
 
