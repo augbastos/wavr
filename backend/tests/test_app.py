@@ -73,7 +73,8 @@ def test_state_returns_latest_per_room():
         assert state  # at least one room
         any_room = next(iter(state.values()))
         assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals",
-                                        "sources", "targets", "identities", "explanation", "ts"}
+                                        "sources", "targets", "identities", "person_count",
+                                        "explanation", "ts"}
 
 
 def test_state_exposes_identities_only_when_flag_on():
@@ -305,7 +306,7 @@ def test_status_shape_and_no_secrets():
                    if k != "connectors_active")
         assert isinstance(body["features"]["connectors_active"], int)
 
-        assert set(body["house"]) == {"floors", "rooms"}
+        assert set(body["house"]) == {"floors", "rooms", "people"}
         assert body["house"]["floors"] >= 1
         assert body["house"]["rooms"] >= 1
 
@@ -371,7 +372,9 @@ def test_status_house_counts_match_default_map(tmp_path, monkeypatch):
     # deterministically falls back to DEFAULT_MAP (1 floor, 3 rooms).
     monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nonexistent.json"))
     with build_client() as client:
-        assert client.get("/api/status").json()["house"] == {"floors": 1, "rooms": 3}
+        # `people` is the additive live house count; None here because the demo/sim
+        # camera does not emit a per-source count (only real camera/mmwave do).
+        assert client.get("/api/status").json()["house"] == {"floors": 1, "rooms": 3, "people": None}
 
 
 def test_status_source_list_matches_system_endpoint():

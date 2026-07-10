@@ -24,6 +24,7 @@ def test_to_dict_has_exact_canonical_keys():
     assert set(ev.to_dict().keys()) == {
         "room", "modality", "presence", "motion",
         "breathing_bpm", "heart_bpm", "confidence", "ts", "targets", "identities",
+        "count",
     }
 
 def test_missing_vitals_and_confidence_default():

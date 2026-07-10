@@ -15,6 +15,10 @@ class RoomState:
     # explicitly enabled AND a known device is present. Never per-room identity —
     # it only ever populates on the house-level 'casa' pseudo-room.
     identities: list = field(default_factory=list)
+    # Per-room person COUNT (additive, honest). int when a counting-capable source
+    # (camera/mmwave) present in this room vouches for a number; None = unknown (never
+    # a fabricated 0). Absent/None behaves exactly as before this field existed.
+    person_count: int | None = None
     explanation: str = ""
     ts: str = ""
 

@@ -94,6 +94,7 @@ class MmWaveSource:
                             confidence=0.9 if targets else 0.0,
                             ts=datetime.now(timezone.utc).isoformat(),
                             targets=targets,
+                            count=len(targets),   # discrete radar targets = person count
                         )
                         if self._interval:
                             await asyncio.sleep(self._interval)

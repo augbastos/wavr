@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from wavr.events import Identity, SensingEvent
-from wavr.fusion import FusionEngine
+from wavr.events import Identity, SensingEvent, Target
+from wavr.fusion import FusionEngine, house_person_count
 from wavr.rules import RulesEngine
 
 
@@ -86,7 +86,8 @@ def test_malformed_timestamp_does_not_cascade_and_kill_later_good_events():
     rs = f.update(ev("sala", "camera", True, 0.9))  # later good event, another modality
     assert rs.occupied is True
     assert rs.sources == [{"modality": "camera", "presence": True,
-                           "confidence": 0.9, "age_s": 0, "health": "fresh"}]
+                           "confidence": 0.9, "age_s": 0, "health": "fresh",
+                           "count": None}]
 
 
 def test_none_timestamp_does_not_cascade_and_kill_later_good_events():
@@ -318,3 +319,108 @@ def test_confidence_byte_identical_with_and_without_identities():
     assert w.confidence == p.confidence
     assert w.occupied == p.occupied
     assert w.sources == p.sources
+
+
+# ---- A1: first-class person_count -----------------------------------------------
+
+def _camc(room, present, conf, count, ts="2026-07-01T10:00:00+00:00"):
+    return SensingEvent(room=room, modality="camera", presence=present, motion=0.0,
+                        breathing_bpm=None, heart_bpm=None, confidence=conf, ts=ts,
+                        count=count)
+
+
+def _mmc(room, targets, ts="2026-07-01T10:00:00+00:00"):
+    tg = tuple(Target(id=i + 1, x=float(i), y=0.0) for i in range(targets))
+    return SensingEvent(room=room, modality="mmwave", presence=bool(tg), motion=0.0,
+                        breathing_bpm=None, heart_bpm=None,
+                        confidence=0.9 if tg else 0.0, ts=ts, targets=tg,
+                        count=len(tg))
+
+
+def test_camera_count_flows_to_person_count():
+    f = FusionEngine()
+    rs = f.update(_camc("sala", True, 0.9, 3))
+    assert rs.person_count == 3
+    src = [s for s in rs.sources if s["modality"] == "camera"][0]
+    assert src["count"] == 3
+
+
+def test_mmwave_count_is_target_len():
+    f = FusionEngine()
+    rs = f.update(_mmc("sala", 2))
+    assert rs.person_count == 2
+    src = [s for s in rs.sources if s["modality"] == "mmwave"][0]
+    assert src["count"] == 2
+
+
+def test_count_disagreement_prefers_highest_weight_source():
+    # camera (weight 1.0) says 2, mmwave (0.9) says 1 -> deterministic precedence: camera.
+    f = FusionEngine()
+    f.update(_mmc("sala", 1))
+    rs = f.update(_camc("sala", True, 0.9, 2))
+    assert rs.person_count == 2
+    counts = {s["modality"]: s["count"] for s in rs.sources}
+    assert counts["camera"] == 2 and counts["mmwave"] == 1   # both surfaced, conflict visible
+
+
+def test_presence_only_source_leaves_count_unknown():
+    # network is presence-only: it must never assert a number.
+    f = FusionEngine()
+    rs = f.update(ev("casa", "network", True, 0.6))
+    assert rs.person_count is None
+    assert rs.sources[0]["count"] is None
+
+
+def test_wifi_csi_with_targets_is_not_counted():
+    # wifi_csi is NOT counting-capable even if it carries targets/count -- honesty gate.
+    f = FusionEngine()
+    e = SensingEvent(room="sala", modality="wifi_csi", presence=True, motion=1.0,
+                     breathing_bpm=None, heart_bpm=None, confidence=0.9,
+                     ts="2026-07-01T10:00:00+00:00",
+                     targets=(Target(id=1, x=1.0, y=1.0),), count=1)
+    rs = f.update(e)
+    assert rs.person_count is None
+    assert rs.sources[0]["count"] is None
+
+
+def test_stale_counting_source_drops_person_count():
+    # A dead (decayed-to-zero) camera must not keep vouching for a count.
+    later = lambda: datetime(2026, 7, 1, 10, 2, 0, tzinfo=timezone.utc)  # +120s > stale 90s
+    f = FusionEngine(now_fn=later)
+    rs = f.update(_camc("sala", True, 0.9, 2))
+    assert rs.sources[0]["health"] == "dead"
+    assert rs.person_count is None
+
+
+def test_vacant_counting_source_yields_no_count():
+    f = FusionEngine()
+    rs = f.update(_camc("sala", False, 0.0, 0))   # camera present=False
+    assert rs.occupied is False
+    assert rs.person_count is None
+
+
+def test_person_count_does_not_move_confidence():
+    with_count = FusionEngine().update(_camc("x", True, 0.9, 4)).confidence
+    e = SensingEvent(room="x", modality="camera", presence=True, motion=0.0,
+                     breathing_bpm=None, heart_bpm=None, confidence=0.9,
+                     ts="2026-07-01T10:00:00+00:00")   # count defaults None
+    no_count = FusionEngine().update(e).confidence
+    assert with_count == no_count
+
+
+def test_person_count_in_to_dict():
+    rs = FusionEngine().update(_camc("sala", True, 0.9, 1))
+    assert rs.to_dict()["person_count"] == 1
+
+
+def test_house_person_count_sums_known_rooms():
+    a = FusionEngine().update(_camc("sala", True, 0.9, 2)).to_dict()
+    b = FusionEngine().update(_mmc("quarto", 1)).to_dict()
+    c = FusionEngine().update(ev("casa", "network", True, 0.6)).to_dict()   # unknown
+    assert house_person_count([a, b, c]) == 3
+
+
+def test_house_person_count_none_when_all_unknown():
+    c = FusionEngine().update(ev("casa", "network", True, 0.6)).to_dict()
+    assert house_person_count([c]) is None
+    assert house_person_count([]) is None
