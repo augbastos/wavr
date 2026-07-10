@@ -3,6 +3,7 @@ import json
 from wavr.data.oui import is_locally_administered, lookup_vendor, oui_prefix
 from wavr.netinventory import (
     Device,
+    apply_recognition,
     build_inventory,
     guess_device_type,
     parse_arp_inventory,
@@ -140,6 +141,76 @@ def test_build_inventory_user_pin_wins_recognition():
     assert pinned.device_type == "camera"
     assert pinned.type_confidence == "high"
     assert pinned.sources[0]["signal"] == "user_pin"
+
+
+# ---- self-report hostname wiring (mDNS/SSDP/SNMP/NetBIOS -> Device.hostname) --
+# Confirmed gap: mDNS/SSDP/SNMP/NetBIOS each capture the device's OWN
+# advertised name, but before this fix none of it ever reached
+# Device.hostname -- only the opt-in reverse-DNS PTR resolver did -- so it
+# never drove recog's hostname_type() classifier or showed up as the
+# device's name.
+
+def _bare_device(mac: str = "de:ad:be:ef:00:01", vendor: str = "unknown",
+                 hostname: str | None = None) -> Device:
+    return Device(mac=mac, ip="192.168.0.42", vendor=vendor,
+                  device_type="unknown", known=False, hostname=hostname)
+
+
+def test_apply_recognition_fills_hostname_from_bonjour_when_ptr_absent():
+    dev = apply_recognition(_bare_device(), bonjour={"hostname": "Living-Room-HomePod"})
+    assert dev.hostname == "Living-Room-HomePod"
+    assert dev.device_type == "speaker"
+    assert dev.type_confidence == "high"
+    assert dev.sources[0]["signal"] == "hostname"
+
+
+def test_apply_recognition_upnp_friendly_name_beats_bonjour_hostname():
+    # Same UPnP > Bonjour precedence recog.py's protocol self-description
+    # signals already use.
+    dev = apply_recognition(
+        _bare_device(),
+        bonjour={"hostname": "unrelated-name"},
+        upnp={"friendly_name": "office-printer"},
+    )
+    assert dev.hostname == "office-printer"
+    assert dev.device_type == "printer"
+
+
+def test_apply_recognition_snmp_sys_name_fills_hostname():
+    dev = apply_recognition(_bare_device(), snmp={"sys_name": "core-router"})
+    assert dev.hostname == "core-router"
+    assert dev.device_type == "router"
+
+
+def test_apply_recognition_netbios_name_fills_hostname():
+    dev = apply_recognition(_bare_device(), netbios={"name": "office-printer"})
+    assert dev.hostname == "office-printer"
+    assert dev.device_type == "printer"
+
+
+def test_apply_recognition_never_overrides_a_dhcp_or_ptr_resolved_hostname():
+    dev = apply_recognition(_bare_device(hostname="dhcp-resolved-name"),
+                            bonjour={"hostname": "self-reported-name"})
+    assert dev.hostname == "dhcp-resolved-name"
+
+
+def test_apply_recognition_no_self_report_signal_leaves_hostname_none():
+    dev = apply_recognition(_bare_device())
+    assert dev.hostname is None
+
+
+def test_apply_recognition_randomized_mac_with_self_report_hostname_beats_phone_guess():
+    # Before this fix, a randomized (locally-administered) MAC with no active
+    # PTR resolver running fell through to the low-confidence "phone"
+    # heuristic (see test_build_inventory_shape_and_fields above). Once its
+    # OWN mDNS-announced name is wired into Device.hostname, recog's
+    # hostname_type() candidate (weight 0.65) outranks random_mac (weight
+    # 0.2) and classifies at high confidence instead.
+    dev = apply_recognition(_bare_device(mac="02:11:22:33:44:55"),
+                            bonjour={"hostname": "esp32-kitchen-sensor"})
+    assert dev.hostname == "esp32-kitchen-sensor"
+    assert dev.device_type == "esp_dev"
+    assert dev.type_confidence == "high"
 
 
 async def test_scan_inventory_uses_injected_transport_no_network():

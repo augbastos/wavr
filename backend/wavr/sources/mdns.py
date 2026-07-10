@@ -10,10 +10,15 @@ Parses PTR/SRV/TXT records with a minimal stdlib DNS-message parser (no
 with plain bytes, so tests need zero real sockets) into a per-host dict
 shaped for wavr.recog's `bonjour` self-description hook:
     {"device_type": taxonomy?, "make": str?, "model": str?, "os": str?}
-(recog.py only ever reads those four keys; everything else in the dict --
-hostname/services/txt/ip -- is extra evidence carried along for a future
-richer inventory/explain view, ignored today but free to add later with no
-recog change needed, same as every other signal key.)
+(recog.py itself only ever reads those four keys off this dict; the `hostname`
+field -- the mDNS SRV-target/PTR-instance name the device announces for
+itself, e.g. "Living-Room-HomePod" -- is instead consumed one layer up, by
+wavr.netinventory.apply_recognition, to fill Device.hostname when no DHCP-fp/
+PTR-resolved name is already known, which is what lets recog's own
+hostname_type() classifier + the device's real name fire for an mDNS-only
+device. `services`/`txt`/`ip` remain extra evidence for a future richer
+inventory/explain view, free to add later with no recog change needed, same
+as every other signal key.)
 
 OPT-IN, default OFF -- this module does not read the environment itself
 (same injectable-everything seam as every other Wavr source); the
