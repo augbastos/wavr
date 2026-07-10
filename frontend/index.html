@@ -1002,6 +1002,28 @@
   .watch-state{font-size:.8rem;color:var(--dim);}
   .watch-note{margin:8px 0 0;font-size:.8rem;color:var(--dim);max-width:60ch;line-height:1.45;}
   .watch-note.alarm{color:var(--warn);font-weight:600;}
+  /* Build A10: House status — one honest "is everything OK?" line fusing the network
+     (rogue-device/rogue-DHCP/gateway-identity) and physical (Watch intrusion + occupancy
+     routine anomaly) layers, GET /api/house-status. Same ok/warn color convention as
+     .egress-summary above (green reserved for a genuinely clean read); reasons stay
+     collapsed by default -- the evidence trail is a <details> disclosure, not a wall
+     of text on the home tab. */
+  .house-status-tile{padding:12px 14px;}
+  .house-status-tile .tile-head{margin-bottom:6px;}
+  .house-status-tile .tile-head h2{font-size:1rem;}
+  .house-status-line{margin:0;font-size:.9rem;font-weight:600;display:flex;gap:8px;align-items:center;}
+  .house-status-line::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;background:var(--dim);}
+  .house-status-line.ok{color:var(--accent);}
+  .house-status-line.ok::before{background:var(--accent);}
+  .house-status-line.notice{color:var(--warn);}
+  .house-status-line.notice::before{background:var(--warn);}
+  .house-status-line.alert{color:var(--danger);}
+  .house-status-line.alert::before{background:var(--danger);}
+  .house-status-details{margin-top:8px;}
+  .house-status-details summary{cursor:pointer;font-size:.8rem;color:var(--dim);}
+  .house-status-reasons{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;}
+  .hsr-row{font-size:.8rem;padding:6px 0;border-top:1px dashed var(--line);display:flex;gap:8px;align-items:baseline;}
+  .hsr-row .hsr-layer{font-size:.66rem;text-transform:uppercase;color:var(--dim);flex:none;min-width:4.5em;}
   /* System: privacy & egress dashboard (the trust receipt) + diagnostics */
   .egress-summary{margin:0 0 4px;font-size:.9rem;font-weight:600;}
   .egress-summary.ok{color:var(--accent);}
@@ -1792,6 +1814,19 @@
                Stays hidden with no content when identity is off/empty, so nothing new renders. -->
           <p id="heroWhoHome" class="hero-who" aria-live="polite" hidden></p>
         </section>
+        <!-- Build A10: House status -- the unified "is everything OK at home?" answer,
+             fusing the network layer (rogue-device/rogue-DHCP/gateway-identity) with the
+             physical layer (Watch intrusion + occupancy routine anomaly). GET /api/house-status
+             (read-only, derived-only, live/companion only -- same MODE gate as renderNetwork).
+             One honest line; the evidence trail is an on-demand <details> disclosure. -->
+        <div id="houseStatusTile" class="tile house-status-tile" hidden>
+          <div class="tile-head"><h2 id="house-status-h">House status</h2></div>
+          <p id="houseStatusLine" class="house-status-line" aria-live="polite"></p>
+          <details id="houseStatusDetails" class="house-status-details" hidden>
+            <summary id="houseStatusSummary"></summary>
+            <ul id="houseStatusReasons" class="house-status-reasons" aria-live="polite"></ul>
+          </details>
+        </div>
         <!-- Global sensing-level meter (Off | Presence | Precise), DERIVED
              from system.running + whether any camera source is enabled. Wired ONLY to the
              existing /api/system + /api/sources toggle seams (no new backend state). Default
@@ -4209,6 +4244,63 @@ function renderNetwork(){
   refresh(); setInterval(refresh, 15000);
 }
 renderNetwork();
+
+// ---- Build A10: House status (unified network+physical "is everything OK?" signal) ----
+// GET /api/house-status: derived-only composition of signals already rendered elsewhere
+// (Rede's rogue-device/rogue-DHCP/gateway-identity alerts + Watch's intrusion room +
+// occupancy routine anomaly) -- this tile never introduces a new raw field, only a ranked
+// summary + evidence trail of what already exists. Same MODE gate/poll shape as renderNetwork.
+function renderHouseStatus(){
+  if(MODE!=="live" && MODE!=="companion") return;     // never in Plano B (demo)
+  if(MODE==="companion" && !companionToken()) return; // companion pairing state: no token yet
+  const auth = MODE==="companion" ? {"Authorization":"Bearer "+companionToken()} : null;
+  const tile = document.getElementById("houseStatusTile");
+  const line = document.getElementById("houseStatusLine");
+  const details = document.getElementById("houseStatusDetails");
+  const summary = document.getElementById("houseStatusSummary");
+  const list = document.getElementById("houseStatusReasons");
+  if(!tile || !line) return;
+  const LAYER_LABEL = {network:"Network", physical:"Home"};
+  async function refresh(){
+    let hs;
+    try{
+      const r = await fetch(location.origin+"/api/house-status", auth?{headers:auth}:undefined);
+      if(auth && (r.status===401||r.status===403)){ companionAuthFailed(); return; }
+      if(!r.ok) return;                       // route absent/blocked -- keep the tile hidden, no guess
+      hs = await r.json();
+    }catch{ return; }                         // backend momentarily unreachable -- keep last view
+    tile.hidden = false;
+    const reasons = Array.isArray(hs.reasons) ? hs.reasons : [];
+    const status = (typeof hs.status === "string" && hs.status) ? hs.status : "ok";
+    line.className = "house-status-line " + status;
+    line.textContent = status === "ok" ? "Everything looks normal."
+      : (status === "alert" ? "Needs attention" : "Worth a glance") + " — " +
+        reasons.length + (reasons.length === 1 ? " thing" : " things");
+    details.hidden = reasons.length === 0;
+    summary.textContent = "show details";
+    list.textContent = "";
+    reasons.forEach(rs => {
+      const sev = (typeof rs.severity === "string" && rs.severity) ? rs.severity : "note";
+      const li = document.createElement("li"); li.className = "hsr-row sev-" + sev;
+      const layerEl = document.createElement("span"); layerEl.className = "hsr-layer";
+      layerEl.textContent = LAYER_LABEL[rs.layer] || rs.layer || "";
+      const badge = document.createElement("span"); badge.className = "sev-badge sev-" + sev;
+      badge.textContent = sev;                 // textContent — untrusted
+      const what = document.createElement("span"); what.className = "hsr-what";
+      what.textContent = rs.what || "";         // textContent — untrusted
+      li.appendChild(layerEl); li.appendChild(badge); li.appendChild(what);
+      const rel = fmtRelative(rs.ts);
+      if(rel){
+        const at = document.createElement("span"); at.className = "hsr-at";
+        at.textContent = " · " + rel;
+        li.appendChild(at);
+      }
+      list.appendChild(li);
+    });
+  }
+  refresh(); setInterval(refresh, 20000);
+}
+renderHouseStatus();
 
 // ---- Pairing panel (Plano A / live only, multidevice-gated) ----
 // Mints one-time multi-device pairing codes and lists/revokes paired devices.

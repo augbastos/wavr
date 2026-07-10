@@ -175,3 +175,23 @@ class IntrusionAlertLog:
 
     def active_rooms(self) -> set:
         return set(self._active)
+
+    def active_alerts(self) -> list:
+        """The latest IntrusionAlert for each CURRENTLY-flagged room (Build A10:
+        `wavr.house_status`'s physical-layer input) -- unlike `recent_alerts()`'s
+        full historical ring, a room whose unrecognized verdict already cleared
+        (dropped out of `_active`) is NEVER included here, so a resolved
+        intrusion cannot pin a downstream "is everything OK?" composite at
+        alert forever. Walks the ring newest-first so a room re-flagged after a
+        prior clear-and-reflag cycle surfaces its MOST RECENT alert, not a
+        stale one."""
+        active = self._active
+        if not active:
+            return []
+        found: dict = {}
+        for alert in reversed(self._alerts):
+            if alert.room in active and alert.room not in found:
+                found[alert.room] = alert
+                if len(found) == len(active):
+                    break
+        return list(found.values())
