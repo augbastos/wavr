@@ -1408,7 +1408,7 @@
   .core-health-item.core-health-warn{color:var(--warn);}
   .core-hero{flex:1;display:flex;align-items:center;justify-content:center;position:relative;
              min-height:0;}
-  /* Signature ambient wave field (replaces the old big-text "CASA VAZIA"/"N EM CASA" hero,
+  /* Signature ambient wave field (replaces the old big-text "HOME EMPTY"/"N HOME" hero,
      see docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md): a canvas filling the
      hero area, drawn by the gated Core Panel script below as layered green sine ribbons.
      Decorative only (aria-hidden) — #coreHeroSr carries the equivalent text for screen
@@ -2488,7 +2488,7 @@
   </div>
   <div class="core-hero">
     <canvas id="coreWave" class="core-wave" aria-hidden="true"></canvas>
-    <span id="coreHeroSr" class="sr-only" aria-live="polite">A carregar…</span>
+    <span id="coreHeroSr" class="sr-only" aria-live="polite">Loading…</span>
   </div>
   <div class="core-bottom">
     <div id="coreRooms" class="core-rooms"></div>
@@ -2499,15 +2499,15 @@
        GET /api/core/pin/status -> {pin_set:true}. Stays [hidden] otherwise: the no-lock path
        is today's instant touch-to-dashboard reveal. See the lock module in the gated script
        block near the end of <body>. -->
-  <div id="coreLock" class="core-lock" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Wavr Core bloqueado">
+  <div id="coreLock" class="core-lock" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Wavr Core locked">
     <div class="core-lock-card">
       <div id="coreLockBiom" class="core-lock-biom" hidden>
         <svg class="core-lock-biom-icon" aria-hidden="true"><use href="#ic-shield"/></svg>
-        <p id="coreLockBiomTxt" class="core-lock-biom-txt" aria-live="polite">Autenticando…</p>
-        <button id="coreLockBiomRetry" type="button" class="ctl small" hidden>Tentar novamente</button>
+        <p id="coreLockBiomTxt" class="core-lock-biom-txt" aria-live="polite">Authenticating…</p>
+        <button id="coreLockBiomRetry" type="button" class="ctl small" hidden>Try again</button>
       </div>
       <div id="coreLockPad" class="core-lock-pin" hidden>
-        <p id="coreLockTitle" class="core-lock-title">Desbloquear Wavr Core</p>
+        <p id="coreLockTitle" class="core-lock-title">Unlock Wavr Core</p>
         <div id="coreLockDots" class="core-lock-dots" aria-hidden="true"></div>
         <p id="coreLockErr" class="core-lock-err" role="alert" aria-live="assertive"></p>
         <div class="core-lock-keys">
@@ -2534,8 +2534,8 @@
        panel underneath (never an unlock). Populated + gated by whatsNewTakeover() in the script. -->
   <div id="coreWhatsNew" class="core-whatsnew" hidden role="dialog" aria-modal="true" aria-labelledby="cwnTitle">
     <div class="core-whatsnew-card">
-      <p class="core-whatsnew-kicker">Novidades</p>
-      <h2 id="cwnTitle" class="core-whatsnew-title">O que há de novo no Wavr</h2>
+      <p class="core-whatsnew-kicker">What's New</p>
+      <h2 id="cwnTitle" class="core-whatsnew-title">What's new in Wavr</h2>
       <p id="cwnVersion" class="core-whatsnew-ver"></p>
       <ul id="cwnList" class="core-whatsnew-list"></ul>
       <button type="button" id="cwnOk" class="ctl primary core-whatsnew-ok">OK</button>
@@ -2797,7 +2797,7 @@ function fmtShortDate(iso){
   if(typeof iso!=="string" || !iso) return null;
   const d = new Date(iso);
   if(isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"2-digit"});
+  return d.toLocaleDateString("en-GB",{day:"2-digit",month:"2-digit",year:"2-digit"});
 }
 function fmtRelative(iso){
   if(typeof iso!=="string" || !iso) return null;
@@ -2813,7 +2813,7 @@ function fmtDateTime(iso){
   if(typeof iso!=="string" || !iso) return null;
   const d = new Date(iso);
   if(isNaN(d.getTime())) return null;
-  return d.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+  return d.toLocaleString("en-GB",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
 }
 
 // ---- P4 (progressive disclosure, layer 1): plain-language word for a confidence value.
@@ -9681,7 +9681,7 @@ try {
     if(M === "simulated"){
       box.appendChild(diagRow("connection", "demo — local generator, no network", "ok"));
     } else if(wsDown){
-      var since = wsSince ? new Date(wsSince).toLocaleTimeString("pt-BR") : "?";
+      var since = wsSince ? new Date(wsSince).toLocaleTimeString("en-GB") : "?";
       box.appendChild(diagRow("connection", "reconnecting… since " + since + " · " + wsDrops + " drop(s)", "warn"));
     } else {
       box.appendChild(diagRow("connection",
@@ -10325,7 +10325,7 @@ try {
 //     renderNetwork()'s own poll) via MutationObserver, the same zero-new-
 //     fetch technique the header's #pillRede badge already uses above.
 //
-// Assumption flagged for review: "N EM CASA" counts ROOMS with confirmed
+// Assumption flagged for review: "N HOME" counts ROOMS with confirmed
 // presence, not a literal person headcount. RoomState never carries a people
 // count (fusion is per-room occupied/confidence, never a headcount), so
 // counting occupied rooms is the honest reading available from this feed.
@@ -10343,11 +10343,11 @@ try {
 // ============================================================================
 window.WAVR_APP_VERSION = "0.2.0";
 window.WAVR_WHATS_NEW = [
-  { version: "0.2.0", date: "10/07/2026", items: [
-    "🏠 Tela inicial mais fácil de ler: os cômodos com gente aparecem do lado direito, e o mapa da casa abre quando você toca nele.",
-    "🔒 Agora dá pra deixar o painel sem senha, se você preferir.",
-    "🔌 A parte de conexões ficou mais organizada, e mostra bem o que sai ou não da sua casa.",
-    "🤝 Juntar dois aparelhos Wavr ficou mais seguro: é só digitar o código que aparece na tela do outro.",
+  { version: "0.2.0", date: "2026-07-10", items: [
+    "🏠 An easier-to-read home screen: rooms with people show on the right, and the house map opens when you tap it.",
+    "🔒 You can now leave the panel with no passcode, if you prefer.",
+    "🔌 The connections screen is tidier, and clearly shows what does and doesn't leave your home.",
+    "🤝 Pairing two Wavr devices is safer now: just type the code shown on the other one's screen.",
   ] },
 ];
 window.__wavrWhatsNewFor = function(v){
@@ -10374,7 +10374,7 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     var ver = document.getElementById("whatsNewSetVer");
     var ul  = document.getElementById("whatsNewSetList");
     var entry = window.__wavrWhatsNewFor(window.WAVR_APP_VERSION);
-    if(ver) ver.textContent = entry ? ("Versão " + entry.version + " · " + entry.date) : "";
+    if(ver) ver.textContent = entry ? ("Version " + entry.version + " · " + entry.date) : "";
     window.__wavrRenderWhatsNewItems(ul, entry);
   }
   if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", fill);
@@ -10407,7 +10407,7 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     if(!entry || seen === cur) return;   // nothing new, or already acknowledged this version
     var verEl = document.getElementById("cwnVersion");
     var ul    = document.getElementById("cwnList");
-    if(verEl) verEl.textContent = "Versão " + entry.version + " · " + entry.date;
+    if(verEl) verEl.textContent = "Version " + entry.version + " · " + entry.date;
     window.__wavrRenderWhatsNewItems(ul, entry);
     box.hidden = false;
     var ok = document.getElementById("cwnOk");
@@ -10425,15 +10425,15 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
   var dateEl = document.getElementById("coreClockDate");
   function tickClock(){
     var d = new Date();
-    if(timeEl) timeEl.textContent = d.toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
-    if(dateEl) dateEl.textContent = d.toLocaleDateString("pt-BR", {weekday:"short", day:"2-digit", month:"2-digit"});
+    if(timeEl) timeEl.textContent = d.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+    if(dateEl) dateEl.textContent = d.toLocaleDateString("en-GB", {weekday:"short", day:"2-digit", month:"2-digit"});
   }
   tickClock();
   setInterval(tickClock, 1000);
 
   // ---------------- Ambient wave field (the hero) + active rooms: fed by RoomState
   // (__wavrRS chain). The center hero is now a canvas wave, not text — the "signature
-  // animated green wave/radar" the owner asked for in place of the big "CASA VAZIA" word
+  // animated green wave/radar" the owner asked for in place of the big "HOME EMPTY" word
   // (see docs/superpowers/specs/2026-07-06-wavr-core-panel-design.md; that doc's §"ambient
   // face" text description of the hero predates this change). #coreHeroSr carries the exact
   // same information the old text hero rendered, off-screen, so occupancy is still announced
@@ -10461,6 +10461,22 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     var W = 0, H = 0, dpr = 1;
     var energy = 0, targetEnergy = 0, pulseE = 0;
     var t0 = null, lastDraw = null, raf = null, running = false;
+    // ---- Colour-by-state (green is ALWAYS the default). Each mood = [darkRGB, lightRGB];
+    // the wave interpolates its live colour toward the target mood every frame (never a hard
+    // cut). Priority is decided by updateWaveMood() below: critical > alert > paused > watch >
+    // calm. A separate "speak" level (voice) surges motion + brightness ON TOP of any colour,
+    // so Wavr visibly comes to life when its voice talks, whatever the current state. ----
+    var MOODS = {
+      calm:     [[61,181,74],  [130,235,150]],  // green  (--accent) — default/normal
+      alert:    [[232,161,58], [245,205,140]],  // amber  (--warn)   — unresolved alerts
+      critical: [[232,114,106],[245,170,165]],  // red    (--danger) — critical / security
+      watch:    [[58,150,232], [150,205,245]],  // blue              — watch/guard mode active
+      paused:   [[120,132,140],[175,185,195]]   // grey              — sensing paused / off
+    };
+    var colDark  = MOODS.calm[0].slice();   // live colour, smoothly chased toward the target
+    var colLight = MOODS.calm[1].slice();
+    var tgtDark  = MOODS.calm[0], tgtLight = MOODS.calm[1];
+    var speakE = 0, speakTarget = 0;        // voice "life": 0 = silent .. 1 = talking
     // amplitude/alpha/speed weights per layer — index 0 calmest/back, 2 liveliest/front
     var LAYERS = [
       { freq: 1.5,  speed: 0.05,   ampBase: 0.045, ampGain: 0.22, width: 1.3, alphaBase: 0.16, alphaGain: 0.24, phase: 0.0 },
@@ -10491,6 +10507,15 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
       ctx.clearRect(0, 0, W, H);
       ctx.globalCompositeOperation = "lighter";
       var midY = H / 2, steps = 48;   // cheap: ~48 sin() samples per layer per frame
+      // Live colour (chased toward the mood target in tick) + a voice-brightening toward white
+      // so the wave lights up while Wavr talks. Computed ONCE per frame (constant across layers).
+      var wl = 0.55 * speakE;
+      var dR = (colDark[0]  + (255 - colDark[0])  * wl) | 0,
+          dG = (colDark[1]  + (255 - colDark[1])  * wl) | 0,
+          dB = (colDark[2]  + (255 - colDark[2])  * wl) | 0,
+          lR = (colLight[0] + (255 - colLight[0]) * wl) | 0,
+          lG = (colLight[1] + (255 - colLight[1]) * wl) | 0,
+          lB = (colLight[2] + (255 - colLight[2]) * wl) | 0;
       LAYERS.forEach(function(layer){
         var amp   = (layer.ampBase + layer.ampGain * e) * H * 0.5;
         var alpha = Math.min(1, layer.alphaBase + layer.alphaGain * e);
@@ -10503,8 +10528,8 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
         }
         // Cheap glow: a wide faint stroke under a thin bright one, both additive —
         // instead of shadowBlur, which is too costly per-frame at three layers, 24/7.
-        ctx.lineWidth = layer.width * 3.2; ctx.strokeStyle = "rgba(61,181,74,"  + (alpha * 0.35) + ")"; ctx.stroke();
-        ctx.lineWidth = layer.width;       ctx.strokeStyle = "rgba(130,235,150," + alpha + ")";         ctx.stroke();
+        ctx.lineWidth = layer.width * 3.2; ctx.strokeStyle = "rgba(" + dR + "," + dG + "," + dB + "," + (alpha * 0.35) + ")"; ctx.stroke();
+        ctx.lineWidth = layer.width;       ctx.strokeStyle = "rgba(" + lR + "," + lG + "," + lB + "," + alpha + ")";         ctx.stroke();
       });
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
@@ -10522,7 +10547,14 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
       if(t0 === null) t0 = now;
       energy += (targetEnergy - energy) * 0.05;   // smooth interpolation, no hard jumps
       pulseE *= 0.94;                              // transient "movement" pulse decays away
-      renderFrame((now - t0) / 1000, Math.min(1.15, energy + pulseE));
+      speakE += (speakTarget - speakE) * 0.20;     // voice level chases its target (responsive)
+      speakTarget *= 0.90;                         // eases back to silent unless setSpeaking() refreshes it
+      for(var ci = 0; ci < 3; ci++){               // chase the mood colour — never a hard cut
+        colDark[ci]  += (tgtDark[ci]  - colDark[ci])  * 0.05;
+        colLight[ci] += (tgtLight[ci] - colLight[ci]) * 0.05;
+      }
+      // Voice adds motion (energy) too, so the wave visibly surges to life when Wavr talks.
+      renderFrame((now - t0) / 1000, Math.min(1.25, energy + pulseE + speakE * 0.6));
     }
 
     function start(){
@@ -10545,7 +10577,17 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
       if(REDUCED_MOTION.matches) return;   // a transient boost IS motion — skip it entirely
       pulseE = Math.min(0.5, pulseE + 0.32);
     }
-    return { start: start, stop: stop, setEnergy: setEnergy, pulse: pulse };
+    function setMood(name){
+      var m = MOODS[name] || MOODS.calm;
+      tgtDark = m[0]; tgtLight = m[1];
+      if(REDUCED_MOTION.matches){ colDark = tgtDark.slice(); colLight = tgtLight.slice(); drawStatic(); }
+    }
+    function setSpeaking(level){
+      // 0..1 — the voice module calls this (repeatedly, with live amplitude) while Wavr talks;
+      // it surges wave motion + brightness. Between calls it eases back to silent (tick decay).
+      speakTarget = Math.max(0, Math.min(1, level || 0));
+    }
+    return { start: start, stop: stop, setEnergy: setEnergy, pulse: pulse, setMood: setMood, setSpeaking: setSpeaking };
   })();
 
   function renderHero(){
@@ -10560,10 +10602,10 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     var realOccupied = names.filter(function(r){ return r !== "casa" && all[r]; });
 
     if(heroSrEl){
-      heroSrEl.textContent = !haveFrame ? "A carregar…"
-        : !homeOccupied ? "CASA VAZIA"
-        : realOccupied.length > 0 ? (realOccupied.length + " EM CASA")
-        : "EM CASA";
+      heroSrEl.textContent = !haveFrame ? "Loading…"
+        : !homeOccupied ? "Nobody home"
+        : realOccupied.length > 0 ? (realOccupied.length + (realOccupied.length > 1 ? " rooms active" : " room active"))
+        : "Someone home";
     }
 
     // Wave energy target: 0 (empty house, calm) .. ~1 (several confirmed rooms at high
@@ -10710,16 +10752,41 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
 
   // ---------------- Alert count (bottom-right): mirrors #alertList, zero new fetches ----------------
   var alertsEl = document.getElementById("coreAlerts");
+  // Wave colour-by-state. Green is the default; the wave shifts to amber (unresolved alerts),
+  // red (a critical/security alert), grey (sensing paused) or blue (watch/guard mode). Priority:
+  // critical > alert > paused > watch > calm. Read from the SAME #alertList the count mirrors +
+  // two global flags the (future) System/watch features set — no new fetches.
+  function updateWaveMood(){
+    if(typeof wave === "undefined" || !wave.setMood) return;
+    var list = document.getElementById("alertList");
+    var rows = list ? list.querySelectorAll(".alert-row") : [];
+    var hasCritical = false;
+    for(var i = 0; i < rows.length; i++){
+      if(rows[i].classList.contains("sev-critical") || rows[i].classList.contains("sev-alert")){ hasCritical = true; break; }
+    }
+    var mood = hasCritical ? "critical"
+      : rows.length ? "alert"
+      : window.__wavrSensingPaused ? "paused"
+      : window.__wavrWatchMode ? "watch"
+      : "calm";
+    wave.setMood(mood);
+  }
   function renderCoreAlerts(){
     if(!alertsEl) return;
     var list = document.getElementById("alertList");
     var n = list ? list.querySelectorAll(".alert-row").length : 0;
     alertsEl.hidden = !n;
-    alertsEl.textContent = n ? (n + (n > 1 ? " alertas" : " alerta")) : "";
+    alertsEl.textContent = n ? (n + (n > 1 ? " alerts" : " alert")) : "";
+    updateWaveMood();
   }
   var alertListEl = document.getElementById("alertList");
   if(alertListEl) new MutationObserver(renderCoreAlerts).observe(alertListEl, {childList: true});
   renderCoreAlerts();
+  // Let other modules retrigger the mood after flipping a flag (System pause, watch mode).
+  window.__wavrRefreshWaveMood = updateWaveMood;
+  // Voice "life": the AI-voice module calls this (0..1, live amplitude) so the wave surges to
+  // life while Wavr talks — see [[project-wavr-voice-agent]]. Safe no-op until voice ships.
+  window.__wavrWaveSpeak = function(level){ if(wave && wave.setSpeaking) wave.setSpeaking(level); };
 
   // ---------------- Feature 2: lock (glance-free ambient face, control-gated wake) ----------------
   // The ambient face above (clock/wave/rooms/alerts/coreSys) is NEVER gated — only the reveal
@@ -10873,7 +10940,7 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     if(padEl) padEl.hidden = true;
     if(biomEl){
       biomEl.hidden = false;
-      if(biomTxtEl) biomTxtEl.textContent = "Autenticando…";
+      if(biomTxtEl) biomTxtEl.textContent = "Authenticating…";
       if(biomRetryEl) biomRetryEl.hidden = true;
     }
     lockEl.hidden = false;
@@ -10900,7 +10967,7 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
         });
       }
     };
-    try{ window.WavrNative.requestAuth("Desbloquear Wavr Core"); }
+    try{ window.WavrNative.requestAuth("Unlock Wavr Core"); }
     catch(e){
       biomPending = false;
       fetchPinConfigured().then(function(pinSet){ if(pinSet) openLockPad(); });
