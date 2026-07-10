@@ -37,7 +37,7 @@ Wavr is a small family of surfaces around one local fusion engine — pick the o
 
 *The Core ambient panel: a calm green-wave presence face with glance-free status — time, Core & network health, Wi-Fi and battery — running on a dedicated phone in a stand.*
 
-![The Wavr Core lock — a landscape numeric PIN pad titled "Desbloquear Wavr Core" over the blurred ambient panel](docs/img/core-lock.png)
+![The Wavr Core lock — a landscape numeric PIN pad titled "Unlock Wavr Core" over the blurred ambient panel](docs/img/core-lock.png)
 
 *Glance-free, control-gated: the ambient face is always readable; waking the full dashboard takes the admin PIN or biometric.*
 
@@ -70,9 +70,14 @@ isn't required).
 - **Wavr Core (early, experimental)** — the appliance form-factor: a dedicated always-on phone or Pi
   that *is* the household hub. Ships in [`core-launcher/`](core-launcher/) as a native Android kiosk
   launcher (fullscreen WebView, boots-into-Wavr, becomes HOME), an ambient on-screen **Core Panel** — a
-  calm green-wave presence face with a glance-free / control-gated **PIN + biometric lock** — plus
-  **mDNS/DNS-SD discovery** so companions find the Core with zero config, and an on-device loopback
-  camera. It is early: treat one as a project appliance, not yet a hardened product (see the roadmap).
+  calm presence wave that **shifts colour by state** (green = calm, amber = unresolved alerts, red =
+  a critical/security alert) and comes to life when the assistant voice speaks — with a glance-free,
+  control-gated lock (**PIN, biometric, or no lock**). Tap the alert count for a glance-box that
+  explains each alert and jumps you straight to it. A landscape-first **Settings rail** (Layout,
+  Devices, Connectors, Privacy, Panel lock, About) keeps the panel navigable on a phone screen, and a
+  first-run **What's New** card surfaces each update. Plus **mDNS/DNS-SD discovery** so companions find
+  the Core with zero config, and an on-device loopback camera. It is early: treat one as a project
+  appliance, not yet a hardened product (see the roadmap).
 - **Wavr Pass — scoped local authorization** — a small, fully backward-compatible capability layer over
   the pairing tokens. Each device carries a set of *scopes* (presence read, network read, camera config,
   control, admin) derived from its role, enforced per-route on the box, so "read-only user" and "full
