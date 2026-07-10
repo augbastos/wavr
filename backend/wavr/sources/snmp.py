@@ -34,13 +34,17 @@ than raising (a rogue/misbehaving SNMP agent must never crash the collector).
 
 Produces a per-host dict shaped for wavr.recog's `snmp` self-description hook:
     {"device_type": taxonomy?, "make": str?, "model": str?, "os": str?}
-(recog.py only ever reads those four keys -- capped at "medium" confidence
-ALONE, same spoofability threat model as every protocol self-description
-signal, see recog.py's module docstring). `sys_descr`/`sys_name`/
-`sys_object_id`/`sys_services` ride along as extra evidence for a future
-richer inventory/explain view. `model` is deliberately left unset: sysDescr is
-a free-form string with no reliable separate model field, and inventing one
-would violate the "never invented" rule recog.py documents for model/os.
+(recog.py itself only ever reads those four keys off this dict -- capped at
+"medium" confidence ALONE, same spoofability threat model as every protocol
+self-description signal, see recog.py's module docstring). `sys_name` --
+sysName, the device's own advertised system name -- is instead consumed one
+layer up, by wavr.netinventory.apply_recognition, to fill Device.hostname
+when no DHCP-fp/PTR-resolved name is already known, the same convention as
+sources.mdns/sources.ssdp/sources.netbios. `sys_descr`/`sys_object_id`/
+`sys_services` remain extra evidence for a future richer inventory/explain
+view. `model` is deliberately left unset: sysDescr is a free-form string with
+no reliable separate model field, and inventing one would violate the "never
+invented" rule recog.py documents for model/os.
 
 The sysObjectID -> vendor table below is a SMALL, individually-verified
 subset of the PUBLIC IANA Private Enterprise Numbers registry

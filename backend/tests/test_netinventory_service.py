@@ -307,6 +307,31 @@ def test_mdns_signal_folds_into_recognized_device():
     assert dev.sources[0]["signal"] == "bonjour"   # highest-weight winner
 
 
+def test_mdns_hostname_alone_fills_device_hostname_and_drives_recognition():
+    # Confirmed gap (2026-07-10 identity-data pass): a device that ONLY
+    # announces its own name over mDNS -- no TXT model string, so
+    # sources.mdns's own _infer_device_type finds nothing and the signal
+    # carries no `device_type` key at all -- used to contribute NOTHING:
+    # Device.hostname stayed None (no PTR resolver running) and this
+    # randomized-MAC host (de:ad:be:ef:00:01, locally-administered) fell
+    # through to the low-confidence "phone" heuristic (see
+    # test_netinventory.test_build_inventory_shape_and_fields). Now the
+    # self-announced hostname fills Device.hostname and drives recog's own
+    # hostname_type() candidate.
+    fake = _FakeCollector({"192.168.0.42": {"hostname": "esp32-kitchen-sensor"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake)
+    asyncio.run(svc.scan_once())
+    dev = next(d for d in svc.latest_inventory() if d.mac == "de:ad:be:ef:00:01")
+    assert dev.hostname == "esp32-kitchen-sensor"
+    assert dev.device_type == "esp_dev"
+    # hostname_type() candidates are NOT capped -- unlike a lone self-report
+    # (device_type key) or a lone OUI verdict, an unspoofed hostname match
+    # is already "high" alone (recog.py's existing, unchanged rule).
+    assert dev.type_confidence == "high"
+    assert dev.sources[0]["signal"] == "hostname"
+
+
 def test_ssdp_signal_folds_into_recognized_device():
     fake = _FakeCollector({"192.168.0.42": {"device_type": "router"}})
     svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
@@ -315,6 +340,21 @@ def test_ssdp_signal_folds_into_recognized_device():
     dev = next(d for d in svc.latest_inventory() if d.mac == "de:ad:be:ef:00:01")
     assert dev.device_type == "router"
     assert dev.type_confidence == "medium"
+
+
+def test_ssdp_friendly_name_alone_fills_device_hostname_and_drives_recognition():
+    # Same confirmed-gap fix, SSDP side: a bare NOTIFY with no matching URN/
+    # SERVER-header hint (so sources.ssdp's own device-type inference finds
+    # nothing) still carries the device's own advertised `friendly_name` --
+    # now wired into Device.hostname the same way as mDNS's `hostname`.
+    fake = _FakeCollector({"192.168.0.42": {"friendly_name": "Living Room Sonos"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   ssdp_enabled=True, ssdp=fake)
+    asyncio.run(svc.scan_once())
+    dev = next(d for d in svc.latest_inventory() if d.mac == "de:ad:be:ef:00:01")
+    assert dev.hostname == "Living Room Sonos"
+    assert dev.device_type == "speaker"
+    assert dev.type_confidence == "high"
 
 
 def test_collector_signal_for_unmapped_ip_is_dropped_not_invented():
@@ -437,6 +477,9 @@ async def test_netbios_signal_folds_into_recognized_device():
     # M1-style cap: a lone self-description signal is "medium", never "high".
     assert dev.type_confidence == "medium"
     assert dev.sources[0]["signal"] == "netbios"
+    # Confirmed-gap fix: NetBIOS's own computer name now also fills
+    # Device.hostname (previously only the opt-in PTR resolver did).
+    assert dev.hostname == "DESKTOP-A1B2C3"
 
 
 async def test_netbios_scope_known_only_restricts_targets():
@@ -478,6 +521,9 @@ async def test_snmp_signal_folds_into_recognized_device():
     assert dev.os == "RouterOS"
     assert dev.type_confidence == "medium"
     assert dev.sources[0]["signal"] == "snmp"
+    # Confirmed-gap fix: SNMP's own sysName now also fills Device.hostname
+    # (previously only the opt-in PTR resolver did).
+    assert dev.hostname == "core-router"
 
 
 async def test_snmp_scope_known_only_restricts_targets():

@@ -13,9 +13,12 @@ internet.
 
 Produces a per-host dict shaped for wavr.recog's `upnp` self-description hook:
     {"device_type": taxonomy?, "make": str?, "model": str?, "os": str?}
-(recog.py only ever reads those four keys; `location`/`server`/`usn`/`target`/
-`friendly_name`/`serial` ride along as extra evidence for a future richer
-inventory/explain view.)
+(recog.py itself only ever reads those four keys off this dict; `friendly_name`
+-- the device's own advertised UPnP name -- is instead consumed one layer up,
+by wavr.netinventory.apply_recognition, to fill Device.hostname when no
+DHCP-fp/PTR-resolved name is already known, same convention as sources.mdns's
+`hostname` field. `location`/`server`/`usn`/`target`/`serial` remain extra
+evidence for a future richer inventory/explain view.)
 
 OPT-IN, default OFF -- this module does not read the environment itself (same
 seam as every Wavr source); the integration step wires a `WAVR_NET_SSDP` flag

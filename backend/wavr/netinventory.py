@@ -21,7 +21,7 @@ import ipaddress
 import logging
 import re
 from dataclasses import asdict, dataclass, replace
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Mapping
 
 from wavr.data.oui import lookup_vendor
 from wavr.recog import recognize
@@ -112,6 +112,36 @@ def guess_device_type(vendor: str, hostname: str | None = None,
     ).device_type
 
 
+# Defensive bound on a self-announced name pulled from bonjour/upnp/snmp/
+# netbios below -- mirrors hostname_resolver._MAX_HOSTNAME_LEN (a DNS name is
+# <=255 octets by spec; these protocols carry free-form text with no such
+# limit, so truncate hostile/oversized input rather than reject it).
+_MAX_HOSTNAME_LEN = 255
+
+
+def _self_report_hostname(bonjour: dict | None = None, upnp: dict | None = None,
+                          snmp: dict | None = None, netbios: dict | None = None) -> str | None:
+    """The best self-ANNOUNCED device name available this cycle, in the same
+    UPnP > Bonjour > SNMP > NetBIOS precedence recog.py's protocol self-
+    description signals already use (recog.py module docstring).
+
+    Confirmed-gap fix: mDNS captures the device's own advertised name
+    (wavr.sources.mdns's `hostname` -- the SRV-target / PTR-instance name,
+    e.g. "Living-Room-HomePod") and SSDP/SNMP/NetBIOS their own friendly/
+    system/computer name, but none of it ever reached Device.hostname before
+    (only the opt-in reverse-DNS PTR resolver did) -- so it never drove
+    wavr.recog's hostname_type() classifier or showed up as the device's
+    name. Called ONLY to fill a still-empty Device.hostname -- NEVER
+    overrides an existing DHCP/PTR-resolved one (see `apply_recognition`)."""
+    for info, key in ((upnp, "friendly_name"), (bonjour, "hostname"),
+                      (snmp, "sys_name"), (netbios, "name")):
+        if isinstance(info, Mapping):
+            value = info.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:_MAX_HOSTNAME_LEN]
+    return None
+
+
 def apply_recognition(device: Device, pin: str | None = None,
                       bonjour: dict | None = None, upnp: dict | None = None,
                       snmp: dict | None = None, netbios: dict | None = None,
@@ -126,11 +156,19 @@ def apply_recognition(device: Device, pin: str | None = None,
     registry via wavr.ha_import -- all optional, all keyed per-device by the
     caller, e.g. wavr.netinventory_service). Pure/offline -- call again after
     the opt-in port pass fills `open_ports` (or fresh collector signals arrive)
-    to fold new hints in."""
+    to fold new hints in.
+
+    When `device.hostname` is still empty (no DHCP-fp/PTR-resolved name), it
+    is filled from whichever protocol self-description carries one
+    (`_self_report_hostname`) BEFORE the recog fuse -- this is what lets a
+    device that only ever announces itself over mDNS/SSDP/SNMP/NetBIOS (no
+    active PTR resolution running) still classify via recog's hostname_type()
+    path and show its own real name instead of staying hostname-less."""
+    hostname = device.hostname or _self_report_hostname(bonjour, upnp, snmp, netbios)
     ident = recognize({
         "mac": device.mac,
         "vendor": device.vendor,
-        "hostname": device.hostname,
+        "hostname": hostname,
         "open_ports": device.open_ports or None,
         "user_pin": pin,
         "bonjour": bonjour,
@@ -142,6 +180,7 @@ def apply_recognition(device: Device, pin: str | None = None,
     })
     return replace(
         device,
+        hostname=hostname,
         device_type=ident.device_type,
         type_confidence=ident.confidence,
         make=ident.make,

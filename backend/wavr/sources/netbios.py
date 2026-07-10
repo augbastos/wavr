@@ -53,13 +53,14 @@ to a device_type: file sharing is commonly enabled on plain Windows PCs, not
 just NAS/server appliances, and guessing "nas" from that flag alone would be
 exactly the kind of overclaim recog.py's docstring warns against.
 
-recog.py has no dedicated `netbios` precedence key yet (only
-upnp/bonjour/snmp/dhcp per its current docstring) -- this module's fields are
-new evidence for the integration/fusion layer to wire in, e.g. by feeding
-`name` into the existing top-level `hostname` signal (NetBIOS's computer name
-is an authoritative Windows hostname, the same tier as a DHCP-option-12 name)
-and/or by extending recog._candidates with a `netbios` key at a chosen weight
--- this module intentionally does not decide that policy.
+recog.py DOES have a dedicated `netbios` precedence key (weight 0.75, between
+snmp and hostname) that reads this dict's `device_type`/`make`/`model`/`os`
+directly. `name` -- NetBIOS's own authoritative computer name -- is instead
+consumed one layer up, by wavr.netinventory.apply_recognition, to fill
+Device.hostname when no DHCP-fp/PTR-resolved name is already known, the same
+convention as sources.mdns's `hostname` and sources.ssdp's `friendly_name`
+fields, feeding recog's separate top-level `hostname` signal (weight 0.65)
+rather than the `netbios` signal itself.
 """
 from __future__ import annotations
 
