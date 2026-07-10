@@ -10,9 +10,9 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  is given -- all three are None otherwise.
                                  ADDITIVE identity fields from the local recog
                                  fusion: `type_confidence` always; `make`,
-                                 `model`, `os`, `open_ports`, `sources` only
-                                 when populated. Every pre-existing field is
-                                 unchanged.
+                                 `model`, `os`, `hostname`, `open_ports`,
+                                 `sources` only when populated. Every
+                                 pre-existing field is unchanged.
   * GET /api/alerts          -- rogue-device alerts (+ `type_confidence` +
                                  `kind: "rogue_device"`), merged chronologically
                                  with `dhcp_monitor`'s rogue/multiple-DHCP-server
@@ -55,12 +55,15 @@ from wavr.netinventory_service import NetworkInventoryService
 
 def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     """Trim a Device to the fields the dashboard needs, merged with persisted
-    metadata. `risks`/`open_ports`/`make`/`model`/`os`/`sources` are included
-    only when populated -- i.e. only when the opt-in port pass or a richer
-    recog signal produced them. A persisted user type-pin overrides
-    device_type immediately (even between scans). `is_gateway` is included
-    only when True and `latency_ms` only when the opt-in ping pass measured
-    one (both additive -- every existing field unchanged)."""
+    metadata. `risks`/`open_ports`/`make`/`model`/`os`/`hostname`/`sources`
+    are included only when populated -- i.e. only when the opt-in port pass
+    or a richer recog signal produced them. `hostname` is the device's own
+    DHCP-fingerprint/PTR-resolved/self-announced (mDNS/SSDP/SNMP/NetBIOS)
+    name (wavr.netinventory.apply_recognition) -- additive, was captured on
+    Device but never reached this view before. A persisted user type-pin
+    overrides device_type immediately (even between scans). `is_gateway` is
+    included only when True and `latency_ms` only when the opt-in ping pass
+    measured one (both additive -- every existing field unchanged)."""
     view = {
         "mac": d.mac,
         "ip": d.ip,
@@ -79,6 +82,8 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
         view["model"] = d.model
     if d.os:
         view["os"] = d.os
+    if d.hostname:
+        view["hostname"] = d.hostname
     if d.sources:
         view["sources"] = [dict(s) for s in d.sources]
     if d.is_gateway:
