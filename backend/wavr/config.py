@@ -234,6 +234,15 @@ class Config:
     # attack primitive. DEFAULT-OFF. Triple-gated at the route (flag + require_local +
     # per-call confirm), inventory-only target denylist, auto-expiry, MCP-excluded.
     net_blocking: bool
+    # A4 house memory (wavr.occupancy_log): an append-only, EDGE-TRIGGERED per-room
+    # occupancy log feeding routine baselines + "unusual for this hour" (B2/A10 later).
+    # DEFAULT ON -- unlike the active-egress/active-probe flags above, this writes
+    # nothing but what Storage.insert_state already persists (occupied/confidence, per
+    # ADR-0002) plus the honest `person_count` (A1); identity is never logged. Set
+    # WAVR_OCCUPANCY_LOG=0 to disable. `occupancy_retention_days` bounds how long a row
+    # lives (a bulk DELETE runs after every insert); <= 0 disables pruning.
+    occupancy_log_enabled: bool
+    occupancy_retention_days: float
 
 
 def load_config() -> Config:
@@ -421,4 +430,9 @@ def load_config() -> Config:
         api_v1=os.getenv("WAVR_API_V1", "").lower() in ("1", "true", "yes", "on"),
         # A5.2 ARP blocking -- default OFF (active-LAN-attack primitive, triple-gated).
         net_blocking=os.getenv("WAVR_NET_BLOCKING", "").lower() in ("1", "true", "yes", "on"),
+        # A4 house memory -- default ON (derived-only, same disclosure class as
+        # Storage.insert_state's existing room_states table); 60-day default retention.
+        occupancy_log_enabled=os.getenv("WAVR_OCCUPANCY_LOG", "1").strip().lower()
+            in ("1", "true", "yes", "on"),
+        occupancy_retention_days=float(os.getenv("WAVR_OCCUPANCY_RETENTION_DAYS", "60")),
     )

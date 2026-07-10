@@ -299,6 +299,10 @@ def test_status_shape_and_no_secrets():
             # ADR-0008 Slice 1: in-app READ-ONLY MCP-over-HTTP inbound listener (bool;
             # true only when wired + enabled). Default install -> False.
             "mcp_http",
+            # A4 house memory (wavr.occupancy_log) -- ON by default (derived-only,
+            # zero egress); surfaced so the Privacy & Egress view honestly shows a
+            # local occupancy history is being kept.
+            "occupancy_log",
         }
         assert set(body["features"]) == expected_features
         # Every feature is a bool flag EXCEPT connectors_active, an int count.
@@ -362,6 +366,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "connectors_active": 0,
             # ADR-0008 Slice 1: MCP-over-HTTP listener off by default.
             "mcp_http": False,
+            # A4 house memory -- the other default-ON feature (derived-only, zero egress).
+            "occupancy_log": True,
         }
 
 
