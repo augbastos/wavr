@@ -4,9 +4,13 @@ Builds representative BOOTP/DHCP packets by hand (mirrors the parser's own
 wire format) so every test runs with zero real sockets."""
 from __future__ import annotations
 
+import asyncio
 import socket
 import struct
 
+import pytest
+
+from wavr.sources import _dhcp_raw, dhcp
 from wavr.sources.dhcp import (
     MAGIC_COOKIE,
     DHCPCollector,
@@ -141,3 +145,116 @@ async def test_collect_repeated_offers_from_same_server_increment_count():
     c = DHCPCollector(listen=_fake_source(packets))
     result = await c.collect(duration=0.01)
     assert result["192.168.1.1"]["offers"] == 2
+
+
+# ---- _default_listen raw-first / UDP-fallback orchestration (G9 Core fix) ---
+# `listen=` injection (used above) bypasses `_default_listen` entirely, so
+# these exercise the real transport-selection function directly, with the
+# underlying socket layer monkeypatched (never a real socket in CI).
+
+async def test_default_listen_uses_raw_when_supported(monkeypatch):
+    async def fake_raw():
+        yield b"raw-payload", "192.168.1.9"
+
+    async def _udp_must_not_be_called(probe=False):
+        raise AssertionError("UDP fallback must not run when raw succeeds")
+        yield  # pragma: no cover -- makes this an async generator
+
+    monkeypatch.setattr(dhcp, "raw_af_packet_supported", lambda: True)
+    monkeypatch.setattr(dhcp, "raw_dhcp_listen", fake_raw)
+    monkeypatch.setattr(dhcp, "_udp_listen", _udp_must_not_be_called)
+
+    items = [item async for item in dhcp._default_listen(probe=False)]
+    assert items == [(b"raw-payload", "192.168.1.9")]
+
+
+async def test_default_listen_falls_back_to_udp_on_raw_permission_error(monkeypatch):
+    async def fake_raw_denied():
+        raise PermissionError("no CAP_NET_RAW")
+        yield  # pragma: no cover
+
+    async def fake_udp(probe=False):
+        yield b"udp-payload", "10.0.0.1"
+
+    monkeypatch.setattr(dhcp, "raw_af_packet_supported", lambda: True)
+    monkeypatch.setattr(dhcp, "raw_dhcp_listen", fake_raw_denied)
+    monkeypatch.setattr(dhcp, "_udp_listen", fake_udp)
+
+    items = [item async for item in dhcp._default_listen(probe=False)]
+    assert items == [(b"udp-payload", "10.0.0.1")]
+
+
+async def test_default_listen_skips_raw_entirely_when_unsupported(monkeypatch):
+    async def _raw_must_not_be_called():
+        raise AssertionError("raw path must not be attempted when unsupported")
+        yield  # pragma: no cover
+
+    async def fake_udp(probe=False):
+        yield b"udp-only", "10.0.0.2"
+
+    monkeypatch.setattr(dhcp, "raw_af_packet_supported", lambda: False)
+    monkeypatch.setattr(dhcp, "raw_dhcp_listen", _raw_must_not_be_called)
+    monkeypatch.setattr(dhcp, "_udp_listen", fake_udp)
+
+    items = [item async for item in dhcp._default_listen(probe=False)]
+    assert items == [(b"udp-only", "10.0.0.2")]
+
+
+async def test_default_listen_probe_mode_always_uses_udp_path(monkeypatch):
+    # Active probing needs to broadcast on the same socket it reads replies
+    # from -- the read-only raw sniff can't do that, so probe=True must
+    # never even attempt the raw path, regardless of platform support.
+    async def _raw_must_not_be_called():
+        raise AssertionError("probe mode must not try the raw path")
+        yield  # pragma: no cover
+
+    calls = []
+
+    async def fake_udp(probe=False):
+        calls.append(probe)
+        yield b"probed", "10.0.0.3"
+
+    monkeypatch.setattr(dhcp, "raw_af_packet_supported", lambda: True)
+    monkeypatch.setattr(dhcp, "raw_dhcp_listen", _raw_must_not_be_called)
+    monkeypatch.setattr(dhcp, "_udp_listen", fake_udp)
+
+    items = [item async for item in dhcp._default_listen(probe=True)]
+    assert items == [(b"probed", "10.0.0.3")]
+    assert calls == [True]
+
+
+async def test_udp_listen_bind_stall_surfaces_as_oserror_not_a_hang(monkeypatch):
+    # Simulates the G9 field bug directly at the UDP-fallback layer: a
+    # bind() that never returns must not hang collect() -- it must resolve
+    # (bounded by _dhcp_raw.OPEN_TIMEOUT) to a plain OSError.
+    import time as _time
+
+    monkeypatch.setattr(_dhcp_raw, "OPEN_TIMEOUT", 0.05)
+
+    def _hanging_bind():
+        _time.sleep(0.4)
+
+    monkeypatch.setattr(dhcp, "_open_client_socket", _hanging_bind)
+
+    agen = dhcp._udp_listen(probe=False)
+    with pytest.raises(OSError):
+        await agen.__anext__()
+
+
+async def test_collector_never_hangs_when_default_transport_bind_stalls(monkeypatch):
+    # End-to-end through DHCPCollector.collect() (no `listen=` injection) --
+    # both raw and UDP paths fail/stall, collect() must still return
+    # promptly instead of hanging the caller (the actual production bug).
+    import time as _time
+
+    monkeypatch.setattr(dhcp, "raw_af_packet_supported", lambda: False)
+    monkeypatch.setattr(_dhcp_raw, "OPEN_TIMEOUT", 0.05)
+
+    def _hanging_bind():
+        _time.sleep(0.4)
+
+    monkeypatch.setattr(dhcp, "_open_client_socket", _hanging_bind)
+
+    c = DHCPCollector()
+    with pytest.raises(OSError):
+        await asyncio.wait_for(c.collect(duration=1.0), timeout=2.0)

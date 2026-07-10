@@ -5,11 +5,16 @@ Standard BOOTP/DHCP wire format (RFC 2131/2132) only, stdlib sockets, no
 third-party dependency. Two modes, both OPT-IN at the integration layer
 (`WAVR_NET_DHCP_MONITOR` gates whether this is ever constructed at all):
 
-  * PASSIVE (default): bind UDP/68 (the DHCP CLIENT port) and just listen.
-    This hears every DHCPOFFER/ACK a real client's own broadcast exchange
-    already produces on the LAN -- Wavr sends nothing. Weakness: if no real
-    client happens to renew a lease during the listen window, zero servers
-    are observed that cycle (silently under-counts, never over-counts).
+  * PASSIVE (default): sniff for DHCPOFFER/ACK a real client's own broadcast
+    exchange already produces on the LAN -- Wavr sends nothing. Weakness: if
+    no real client happens to renew a lease during the listen window, zero
+    servers are observed that cycle (silently under-counts, never
+    over-counts). The transport is a raw AF_PACKET Ethernet sniff when
+    available, UDP/68-bind otherwise -- see `_default_listen` and
+    `wavr.sources._dhcp_raw`'s module docstring for why (an appliance that
+    already runs its own DHCP client, e.g. the G9 Core on Android, can make a
+    UDP/68 bind conflict/stall; raw capture needs no bind to that port at
+    all).
   * ACTIVE PROBE (`probe=True`, its own opt-in on top -- same "active probing
     is opt-in on top of opt-in" rule as sources.ssdp's LOC-XML fetch): before
     listening, broadcast ONE DHCPDISCOVER (with the broadcast flag set so
@@ -18,7 +23,9 @@ third-party dependency. Two modes, both OPT-IN at the integration layer
     on the broadcast domain in one window, which is what makes "count distinct
     servers" actually trustworthy. The crafted DISCOVER uses a throwaway
     locally-administered MAC (never the host's real MAC) so no real lease is
-    ever claimed for this host's actual hardware address.
+    ever claimed for this host's actual hardware address. Probing always uses
+    the UDP/68 socket (it needs to send on the same socket it reads replies
+    from) -- see `_default_listen`.
 
 Only DHCPOFFER packets (option 53 = 2) are counted as "a server is offering
 here" -- DHCPACK/other message types are ignored (an ACK is a reply to a
@@ -33,10 +40,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import socket
 import struct
 from typing import AsyncIterator, Callable
+
+from wavr.sources._dhcp_raw import open_with_timeout, raw_af_packet_supported, raw_dhcp_listen
+
+_LOG = logging.getLogger(__name__)
 
 DHCP_SERVER_PORT = 67
 DHCP_CLIENT_PORT = 68
@@ -136,6 +148,11 @@ def build_discover_packet(xid: int | None = None) -> bytes:
 
 
 def _open_client_socket() -> socket.socket:
+    """Synchronous UDP/68 bind -- callers MUST run this through
+    `_dhcp_raw.open_with_timeout`, never directly on the event loop (this
+    exact bind has been observed to STALL, not just fail fast, against
+    Android's own DHCP client on the G9 Core -- see
+    `wavr.sources._dhcp_raw` module docstring)."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     if hasattr(socket, "SO_REUSEPORT"):
@@ -146,13 +163,18 @@ def _open_client_socket() -> socket.socket:
     return sock
 
 
-async def _default_listen(probe: bool = False) -> AsyncIterator[tuple[bytes, str]]:
-    """Default real transport: bind UDP/68 and listen. When `probe` is True,
-    ONE DHCPDISCOVER is broadcast right after binding (same socket, so the
-    replies land on the very socket we're reading from) -- see module
-    docstring. READ-ONLY otherwise: passive mode never transmits anything."""
+async def _udp_listen(probe: bool = False) -> AsyncIterator[tuple[bytes, str]]:
+    """Classic UDP/68-bind transport (SO_REUSEADDR/SO_REUSEPORT so it can
+    coexist with another well-behaved listener that also sets them) -- the
+    fallback used by `_default_listen` when raw AF_PACKET capture is
+    unavailable, and unconditionally used for `probe=True` (needs to
+    broadcast the DISCOVER on the same socket it listens for replies on).
+    The open+bind itself runs off the event loop with a bounded wait via
+    `open_with_timeout` -- see `wavr.sources._dhcp_raw` module docstring for
+    why that matters. READ-ONLY when `probe` is False: passive mode never
+    transmits anything."""
     loop = asyncio.get_event_loop()
-    sock = _open_client_socket()
+    sock = await open_with_timeout(_open_client_socket, f"UDP/{DHCP_CLIENT_PORT} bind")
     sock.settimeout(1.0)
     try:
         if probe:
@@ -166,6 +188,34 @@ async def _default_listen(probe: bool = False) -> AsyncIterator[tuple[bytes, str
             yield data, ip
     finally:
         sock.close()
+
+
+async def _default_listen(probe: bool = False) -> AsyncIterator[tuple[bytes, str]]:
+    """Default real transport. PASSIVE mode (`probe=False`) tries the raw
+    AF_PACKET sniff FIRST -- no UDP/68 bind at all, so it cannot conflict
+    with a DHCP client the host OS already runs (see
+    `wavr.sources._dhcp_raw` module docstring) -- falling back to the
+    classic UDP/68-bind listener (`_udp_listen`) when raw capture is
+    unavailable (non-Linux, or CAP_NET_RAW missing) or its open times out.
+    `probe=True` always uses the UDP path: it needs to broadcast the
+    DISCOVER on the very socket it reads replies from, which the read-only
+    raw sniff does not provide."""
+    if not probe and raw_af_packet_supported():
+        agen = raw_dhcp_listen()
+        try:
+            first = await agen.__anext__()
+        except StopAsyncIteration:
+            return
+        except (AttributeError, PermissionError, OSError):
+            _LOG.info("raw AF_PACKET DHCP sniff unavailable, falling back to UDP/%d bind",
+                      DHCP_CLIENT_PORT, exc_info=True)
+        else:
+            yield first
+            async for item in agen:
+                yield item
+            return
+    async for item in _udp_listen(probe=probe):
+        yield item
 
 
 class DHCPCollector:
