@@ -223,6 +223,9 @@
             color:var(--dim);font-weight:600;}
   .src .sic svg{width:12px;height:12px;}
   .src .m{text-transform:capitalize;color:var(--text);flex:none;min-width:72px;overflow-wrap:anywhere;}
+  .src .m .msvg{display:inline-flex;vertical-align:-2px;margin-right:4px;color:var(--dim);}
+  .src .m .msvg svg{width:13px;height:13px;}
+  .src.agree .m .msvg{color:var(--accent);}
   .src .sbar{flex:none;width:52px;height:4px;border-radius:3px;background:var(--elevated-2);overflow:hidden;}
   .src .sbar>i{display:block;height:100%;width:0;background:var(--dim);}
   .src .sval{margin-left:auto;text-align:right;min-width:0;}
@@ -1317,6 +1320,14 @@
     #panel-inicio .rooms .card .bar,
     #panel-inicio .rooms .card .srcs,
     #panel-inicio .rooms .card .why{display:none;}
+    /* Panel: a room card is tappable to reveal its detection-methods breakdown inline (which
+       sensors see it), via selectRoomFromRail's srcs-open toggle. A chevron marks it, the map
+       is no longer opened by a room tap. */
+    #panel-inicio .rooms .card{cursor:pointer;position:relative;}
+    #panel-inicio .rooms .card::after{content:"\203A";position:absolute;top:10px;right:14px;
+      color:var(--dim);font-size:1.3em;line-height:1;transition:transform .18s ease;}
+    #panel-inicio .rooms .card.srcs-open::after{transform:rotate(90deg);color:var(--accent);}
+    #panel-inicio .rooms .card.srcs-open .srcs{display:block;}
 
     /* MAP: full-width region beneath the columns. Collapsed by default = only the "View house map"
        bar (radar hidden, so the OrbitControls canvas never sits in a scroll path). Tapping the bar
@@ -4665,6 +4676,10 @@ const POSTURE_LABEL = {walking:"walking", standing:"standing", sitting:"sitting"
 // falling back to the raw name for anything not yet mapped.
 const MODALITY_LABEL = {wifi_csi:"Wi-Fi", ruview:"Wi-Fi CSI", camera:"Camera", network:"Network",
                          sim:"Simulated", mmwave:"Radar", ble:"Bluetooth"};
+// One glyph per sensing modality, so a room's detection-methods breakdown reads at a glance
+// (Camera / Bluetooth / Wi-Fi / Network / Radar) — reuses the icons already in the sprite sheet.
+const MODALITY_ICON = {camera:"ic-camera", network:"ic-net", ble:"ic-bt", mmwave:"ic-radar",
+                        wifi_csi:"ic-wifi", ruview:"ic-wifi", sim:"ic-net"};
 // ---- Stage 3a (§6): THE one grey→green confidence scale. Three consumers — the room
 // card's confidence ring, render3D()'s floor tint, and the room-card confidence bar —
 // all call THIS function, so the gradient can never drift between them.
@@ -6803,6 +6818,12 @@ function upsert(rs){
     const bar = document.createElement("span"); bar.className = "sbar";
     const fill = document.createElement("i"); bar.appendChild(fill);
     const val = document.createElement("span"); val.className = "sval";
+    const mIco = MODALITY_ICON[modality];   // from a controlled map (not network data)
+    if(mIco){
+      const mi = document.createElement("span"); mi.className = "msvg"; mi.setAttribute("aria-hidden", "true");
+      mi.innerHTML = '<svg width="13" height="13"><use href="#' + mIco + '"/></svg>';
+      m.appendChild(mi);
+    }
     m.appendChild(document.createTextNode(MODALITY_LABEL[modality] || modality));
     if(!s){                                    // state 1: no coverage here
       row.className = "src absent";
@@ -6963,8 +6984,17 @@ document.addEventListener("focusout", (e) => {
 const HOME_PANEL_MQ = window.matchMedia("(orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1)");
 function selectRoomFromRail(room){
   if(HOME_PANEL_MQ.matches){
-    window.__wavrPanelOpenMap?.();      // expand the collapsed map (no-op if already open)
-    window.__wavrSelectRoom?.(room);    // select + cross-highlight on the map + scroll/focus the card
+    // On the panel a room tap EXPANDS that room's detection-methods breakdown (which sensors
+    // are seeing it — camera / Bluetooth / Wi-Fi / network) inline, so the "why" of the
+    // precision is clear right there. The house map stays reachable via its own "View house
+    // map" bar; it no longer hijacks a room tap.
+    const card = cards[room];
+    if(card){
+      const open = card.classList.toggle("srcs-open");
+      card.setAttribute("aria-expanded", open ? "true" : "false");
+      if(open) card.scrollIntoView({ behavior: REDUCED_MOTION.matches ? "auto" : "smooth", block: "nearest" });
+    }
+    setSelectedRoom(room);              // still cross-highlight the selection (no map auto-open)
     return;
   }
   setSelectedRoom(room);
