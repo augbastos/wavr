@@ -44,7 +44,8 @@ from wavr.mqtt_publisher import make_publisher
 from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
-from wavr.api_inventory import build_inventory_router
+from wavr.api_inventory import build_inventory_router, merge_alerts
+from wavr.house_status import compose_house_status, DEFAULT_NETWORK_WINDOW_MINUTES
 from wavr.watch import (WatchMode, IntrusionAlertLog, known_present_persons,
                         project_state, room_unrecognized)
 from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
@@ -1628,6 +1629,42 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if current is None:
             raise HTTPException(status_code=404, detail=f"unknown room: {room!r}")
         return await asyncio.to_thread(log.is_unusual, room, current["occupied"], weeks=weeks)
+
+    @app.get("/api/house-status")
+    async def house_status(window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES,
+                           _=Depends(require_scope("presence:read"))):
+        # Build A10 v0: the unified "esta tudo bem em casa?" answer, fusing the NETWORK
+        # layer (rogue-device/rogue-DHCP/gateway-identity -- the SAME `merge_alerts()`
+        # GET /api/alerts uses, so the two views can never disagree on what a network
+        # alert IS) with the PHYSICAL layer (Watch's A2 currently-ACTIVE intrusion rooms
+        # + A4's current-hour occupancy anomaly). Derived-only composition of signals
+        # that already exist -- see wavr.house_status's module docstring for the
+        # recency-window/score honesty rules. `window_minutes` overrides the default
+        # network-alert recency window (same override-friendly convention as
+        # /api/occupancy/routine's `weeks`).
+        network_alerts = merge_alerts(_inventory, dhcp_monitor=_dhcp_monitor,
+                                      gateway_monitor=_gateway_monitor)
+        intrusion_alerts = _intrusion.active_alerts()
+        routine_flags = []
+        if _occupancy_log is not None:
+            now = datetime.now(timezone.utc)
+            rooms = list(latest.items())
+            # Concurrent, off the event loop (mirrors the single-room /api/occupancy/unusual
+            # call above) -- one sqlite read per currently-fused room, never in a blocking
+            # serial loop.
+            checks = await asyncio.gather(*(
+                asyncio.to_thread(_occupancy_log.is_unusual, room, d.get("occupied"), at=now)
+                for room, d in rooms
+            ))
+            routine_flags = [
+                {"room": room, "ts": now.isoformat()}
+                for (room, _d), verdict in zip(rooms, checks)
+                if verdict.get("unusual") is True
+            ]
+        return compose_house_status(network_alerts=network_alerts,
+                                    intrusion_alerts=intrusion_alerts,
+                                    routine_flags=routine_flags,
+                                    window_minutes=window_minutes)
 
     @app.post("/api/presence/register-companion")
     async def register_companion(request: Request, label: str = Body(..., embed=True),

@@ -20,7 +20,10 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  #7) and `gateway_monitor`'s gateway-identity
                                  change alerts (`kind: "gateway_identity"`,
                                  inventory feature #2) -- each omitted entirely (same as
-                                 before) when its monitor is None.
+                                 before) when its monitor is None. The merge/sort
+                                 itself lives in the module-level `merge_alerts()`
+                                 below (Build A10: also the network-layer input to
+                                 `wavr.house_status`, so the two never drift).
   * PUT /api/inventory/name  -- {mac, name} -> persists a friendly device name.
   * PUT /api/inventory/type  -- {mac, device_type} -> persists the user
                                  device-type pin (taxonomy value; null/"" to
@@ -51,6 +54,32 @@ from fastapi import APIRouter, Body, HTTPException
 
 from wavr.device_meta import DeviceMeta, normalize_mac
 from wavr.netinventory_service import NetworkInventoryService
+
+
+def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
+                 gateway_monitor=None, intrusion_log=None) -> list[dict]:
+    """The ONE merged, chronologically-sorted alert list every alert-consuming
+    surface reads: GET /api/alerts below, and (Build A10) `wavr.house_status`'s
+    network-layer input via app.py. Factored out so both call sites share
+    EXACTLY the same merge/omission rules -- never two copies that could drift.
+
+    Rogue-device sightings always carry "kind" (additive field -- every existing
+    consumer already only reads a subset of keys). Merged with the opt-in
+    rogue-DHCP-server alerts (collectors-lote2 #7), the opt-in gateway-identity
+    change alerts (inventory feature #2, `kind: "gateway_identity"`), and Watch/Guard
+    intrusion alerts (`kind: "intrusion"`, severity "alert", room-level +
+    count-only -- never a target position or identity) -- each source omitted
+    entirely (unchanged shape) when its monitor/log is None, same rule as
+    before."""
+    merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
+    if dhcp_monitor is not None:
+        merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
+    if gateway_monitor is not None:
+        merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
+    if intrusion_log is not None:
+        merged += [a.to_dict() for a in intrusion_log.recent_alerts()]
+    merged.sort(key=lambda a: a["ts"])
+    return merged
 
 
 def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
@@ -116,26 +145,9 @@ def build_inventory_router(service: NetworkInventoryService,
 
     @router.get("/api/alerts")
     async def alerts():
-        # Rogue-device sightings always carry "kind" (additive field -- every
-        # existing consumer already only reads a subset of keys). Merged with
-        # the opt-in rogue-DHCP-server alerts (collectors-lote2 #7), oldest
-        # first (same ordering `recent_alerts()` already returns), when a
-        # monitor is wired in; omitted entirely (unchanged shape) otherwise.
-        merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
-        if dhcp_monitor is not None:
-            merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
-        # Gateway-identity change alerts (gateway-identity-rogue-dhcp, the inventory roadmap
-        # #2), `kind: "gateway_identity"`; omitted entirely when no monitor is
-        # wired in (unchanged shape), same rule as the dhcp merge above.
-        if gateway_monitor is not None:
-            merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
-        # Watch/Guard intrusion alerts (kind: "intrusion", severity "alert"), room-level
-        # + count-only (never a target position or identity); omitted entirely (unchanged
-        # shape) when Watch has never fired, same rule as the dhcp/gateway merges above.
-        if intrusion_log is not None:
-            merged += [a.to_dict() for a in intrusion_log.recent_alerts()]
-        merged.sort(key=lambda a: a["ts"])
-        return {"alerts": merged}
+        return {"alerts": merge_alerts(service, dhcp_monitor=dhcp_monitor,
+                                       gateway_monitor=gateway_monitor,
+                                       intrusion_log=intrusion_log)}
 
     if device_meta is not None:
         @router.put("/api/inventory/name", dependencies=list(name_deps or []))
