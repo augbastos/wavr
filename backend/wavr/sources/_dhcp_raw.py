@@ -25,7 +25,16 @@ the DHCP feature). Two independent fixes, both applied here:
      step should be near-instant when it works at all) and turns a timeout
      into a plain `OSError`, so it flows through each collector's existing
      `except (PermissionError, OSError)` "unavailable in this environment"
-     handling unchanged.
+     handling unchanged. A genuine timeout for a given `what` label is
+     remembered process-wide (`_timed_out_openers`) so THAT SAME opener is
+     never retried again -- the stdlib gives no way to kill an executor
+     thread that truly never returns, so retrying it every periodic cycle
+     would leak one more stuck thread each time and could eventually
+     exhaust the shared default executor (used by every other Wavr
+     collector too). This guard covers every opener that goes through
+     `open_with_timeout`, not just the raw AF_PACKET path -- including the
+     UDP `bind()` fallbacks in `sources.dhcp`/`sources.dhcp_fp`, which is
+     exactly the call that has actually been observed to stall on the G9.
   2. This module gives both collectors a way to sniff DHCP traffic WITHOUT
      ever binding UDP/67 or UDP/68 at all: a raw AF_PACKET socket reads
      Ethernet frames directly off the wire, and this module's own tiny
@@ -76,6 +85,27 @@ def raw_af_packet_supported() -> bool:
     return hasattr(socket, "AF_PACKET")
 
 
+# `what` labels that have PREVIOUSLY genuinely timed out (as opposed to failing fast
+# with Permission/AttributeError/"port in use") in this process -- see the guard
+# rationale in the module docstring. Keyed by the caller-supplied `what` string so
+# e.g. "raw AF_PACKET DHCP sniff", "UDP/68 bind", and "UDP/67 bind" are tracked (and
+# given up on) independently of one another.
+_timed_out_openers: set[str] = set()
+
+
+def reset_open_guards() -> None:
+    """Test-only: clear every "genuinely timed out once, don't retry" guard -- both
+    the generic per-`what` `_timed_out_openers` set here AND the legacy raw-socket-
+    specific `_raw_open_timed_out` flag below. A module-global sticky guard persists
+    across the whole test session by design (that's the point in production), so any
+    test that can trigger a real timeout MUST reset it first (e.g. via an autouse
+    fixture) or it will silently block a later, unrelated test that happens to reuse
+    the same `what` label."""
+    global _raw_open_timed_out
+    _timed_out_openers.clear()
+    _raw_open_timed_out = False
+
+
 async def open_with_timeout(opener: Callable[[], socket.socket], what: str) -> socket.socket:
     """Run a blocking socket-open callable (socket()+setsockopt()+bind(), all
     synchronous) in the default executor and bound its wall-clock time to
@@ -85,11 +115,21 @@ async def open_with_timeout(opener: Callable[[], socket.socket], what: str) -> s
     returned" without any new except clause at the call site. The executor
     thread itself cannot be forcibly killed if `opener` truly never returns
     (stdlib limitation) -- but the event loop is never blocked by it, which
-    is the actual hang this fixes."""
+    is the actual hang this fixes.
+
+    If `what` has already timed out once in this process, this raises OSError
+    immediately WITHOUT calling `run_in_executor` again -- retrying an opener
+    already known to hang would leak yet another unreclaimable background
+    thread (see `_timed_out_openers`)."""
+    if what in _timed_out_openers:
+        raise OSError(
+            f"{what} previously timed out opening in this process; not retrying "
+            "(would leak another background thread)")
     loop = asyncio.get_event_loop()
     try:
         return await asyncio.wait_for(loop.run_in_executor(None, opener), timeout=OPEN_TIMEOUT)
     except asyncio.TimeoutError as exc:
+        _timed_out_openers.add(what)
         raise OSError(
             f"{what} did not complete within {OPEN_TIMEOUT}s "
             "(a conflicting process likely already holds this socket/port)"
@@ -157,6 +197,14 @@ def _parse_udp_frame(frame: bytes) -> tuple[bytes, int, int, str] | None:
 # (the field bug that motivated this module is specifically the UDP/68
 # *bind* stalling, not an AF_PACKET open) -- this is a defensive bound for
 # an untested-but-plausible failure mode, not a confirmed one.
+#
+# This flag is checked BEFORE even calling `open_with_timeout` (see
+# `raw_dhcp_listen` below) and is now REDUNDANT with (but kept alongside) the
+# generic `_timed_out_openers` guard inside `open_with_timeout` itself, which
+# covers this same raw path (keyed by the "raw AF_PACKET DHCP sniff" `what`
+# string) as well as every UDP-bind opener -- the gap this flag alone left
+# open. Redundant guards here are cheap and harmless; removing this one would
+# only save a few lines.
 _raw_open_timed_out = False
 
 

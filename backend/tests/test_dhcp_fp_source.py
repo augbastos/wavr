@@ -4,11 +4,25 @@ from __future__ import annotations
 import pytest
 
 from wavr.sources import _dhcp_raw, dhcp_fp
+from wavr.sources._dhcp_raw import reset_open_guards
 from wavr.sources.dhcp_fp import (
     DHCPFingerprintCollector,
     _infer_os,
     parse_dhcp_packet,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_open_guards():
+    # Two tests below deliberately make `_open_server_port_socket` genuinely time
+    # out through `_dhcp_raw.open_with_timeout` -- that guard is a module global
+    # that otherwise persists for the rest of the test session and would poison
+    # any later test reusing the same "UDP/67 bind" `what` label. See
+    # tests/test_dhcp_raw.py for the guard's own unit tests.
+    reset_open_guards()
+    yield
+    reset_open_guards()
+
 
 _MAGIC_COOKIE = b"\x63\x82\x53\x63"
 
