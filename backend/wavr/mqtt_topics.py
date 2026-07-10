@@ -31,3 +31,30 @@ def status_topic(prefix: str) -> str:
     """Retained availability / Last-Will topic: 'online' while Wavr is connected,
     'offline' (via the broker's Last Will) the moment it drops off."""
     return f"{prefix}/status"
+
+
+# ---- Build C4: derived-signal topics (RulesEngine publishes, ha_discovery points at) ----
+# Same lockstep contract as the room topics above: both modules build these
+# ONLY through these helpers so a discovery config can never subscribe to a
+# topic the publisher doesn't actually write to.
+
+
+def intrusion_topic(prefix: str, room: str | None) -> str:
+    """Watch's A2 unrecognized-person binary signal. `room=None` is the
+    ROOM-AGNOSTIC house-level aggregate (mirrors `wavr.watch.IntrusionAlert`'s
+    own `room=None` convention for the spread-out-intrusion backstop) -- its
+    topic never carries a room name, so a subscriber can't infer WHICH room
+    from the topic alone when the signal is intentionally room-agnostic."""
+    if room is None:
+        return f"{prefix}/watch/house/intrusion"
+    return f"{prefix}/watch/rooms/{slug_room(room)}/intrusion"
+
+
+def routine_anomaly_topic(prefix: str, room: str) -> str:
+    """A4 'occupancy unusual for this hour' per-room binary signal."""
+    return f"{prefix}/rooms/{slug_room(room)}/routine_anomaly"
+
+
+def house_status_topic(prefix: str) -> str:
+    """A10's composed {status, score, reasons} house-status verdict."""
+    return f"{prefix}/house/status"

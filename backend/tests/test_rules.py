@@ -77,3 +77,85 @@ def test_room_with_slash_does_not_inject_topic_level():
     msgs = []
     RulesEngine(lambda t, p, r: msgs.append(t)).handle(_rs("Sala/Cozinha", True))
     assert msgs[0] == "wavr/rooms/sala_cozinha/state"
+
+
+# ---- Build C4: intrusion / routine-anomaly / house-status forwarding ----
+
+def test_handle_intrusion_publishes_on_change_only():
+    msgs = []
+    eng = RulesEngine(lambda t, p, r: msgs.append((t, p, r)))
+    eng.handle_intrusion("sala", True)
+    eng.handle_intrusion("sala", True)     # unchanged -> no re-publish
+    eng.handle_intrusion("sala", False)
+    topics = [(t, p, r) for t, p, r in msgs if t == "wavr/watch/rooms/sala/intrusion"]
+    assert [p for _, p, _ in topics] == ["ON", "OFF"]
+    assert all(r is True for _, _, r in topics)   # retained
+
+
+def test_handle_intrusion_house_level_room_agnostic_topic():
+    msgs = []
+    eng = RulesEngine(lambda t, p, r: msgs.append((t, p, r)))
+    eng.handle_intrusion(None, True)
+    assert msgs == [("wavr/watch/house/intrusion", "ON", True)]
+    for t, p, r in msgs:
+        assert "sala" not in t and "sala" not in p   # never names a room
+
+
+def test_handle_intrusion_scopes_are_independent():
+    msgs = []
+    eng = RulesEngine(lambda t, p, r: msgs.append((t, p, r)))
+    eng.handle_intrusion("sala", True)
+    eng.handle_intrusion("quarto", True)
+    topics = {t for t, _, _ in msgs}
+    assert topics == {"wavr/watch/rooms/sala/intrusion", "wavr/watch/rooms/quarto/intrusion"}
+
+
+def test_handle_routine_anomaly_publishes_on_change_only():
+    msgs = []
+    eng = RulesEngine(lambda t, p, r: msgs.append((t, p, r)))
+    eng.handle_routine_anomaly("sala", False)   # initial baseline still publishes
+    eng.handle_routine_anomaly("sala", False)   # unchanged -> no re-publish
+    eng.handle_routine_anomaly("sala", True)
+    topics = [(t, p, r) for t, p, r in msgs if t == "wavr/rooms/sala/routine_anomaly"]
+    assert [p for _, p, _ in topics] == ["OFF", "ON"]
+    assert all(r is True for _, _, r in topics)
+
+
+def test_handle_house_status_dedupes_on_unchanged_status_score_reasons():
+    import json
+    msgs = []
+    eng = RulesEngine(lambda t, p, r: msgs.append((t, p, r)))
+    ok = {"status": "ok", "score": 0, "reasons": [], "ts": "t1"}
+    eng.handle_house_status(ok)
+    eng.handle_house_status({**ok, "ts": "t2"})   # only `ts` differs -> still a no-op
+    assert len([m for m in msgs if m[0] == "wavr/house/status"]) == 1
+
+    alert = {"status": "alert", "score": 4,
+             "reasons": [{"layer": "physical", "kind": "intrusion",
+                         "what": "unrecognized person in sala", "severity": "alert",
+                         "ts": "t3"}], "ts": "t3"}
+    eng.handle_house_status(alert)
+    status_msgs = [m for m in msgs if m[0] == "wavr/house/status"]
+    assert len(status_msgs) == 2
+    topic, payload, retain = status_msgs[-1]
+    assert retain is True
+    body = json.loads(payload)
+    assert body == alert   # forwarded byte-for-byte, no re-ranking/new field
+
+
+def test_derived_mqtt_topics_and_payloads_carry_no_geometry_or_identity():
+    msgs = []
+    eng = RulesEngine(lambda t, p, r: msgs.append((t, p, r)))
+    eng.handle_intrusion("sala", True)
+    eng.handle_intrusion(None, True)
+    eng.handle_routine_anomaly("sala", True)
+    eng.handle_house_status({
+        "status": "alert", "score": 4,
+        "reasons": [{"layer": "physical", "kind": "intrusion",
+                     "what": "unrecognized person in sala", "severity": "alert",
+                     "ts": "t"}],
+        "ts": "t",
+    })
+    blob = " ".join(f"{t} {p}" for t, p, _ in msgs).lower()
+    for word in ("target", "pose", "vital", "position"):
+        assert word not in blob
