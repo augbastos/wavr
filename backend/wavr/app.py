@@ -1361,6 +1361,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # Feature B: current internet/gateway reachability. Null/null when
             # the monitor is off (or hasn't completed its first check yet).
             "internet": _internet.status() if _internet else {"ok": None, "since": None},
+            # Panel-review finding #9/#17: honest unavailable-by-environment
+            # signal for the two privileged-bind collectors (dhcp_fp binds
+            # UDP/67, rogue_dhcp's DHCPCollector binds UDP/68) -- DISTINCT
+            # from a source that is merely off/paused or crashed at runtime.
+            # {"available": bool|None, "reason": str|None} per collector;
+            # None/None means off or no cycle has run yet (identical to
+            # today's silent behavior -- purely additive, no existing key
+            # changes shape). available=False only when the raw socket bind
+            # itself failed (PermissionError/OSError), e.g. a non-root
+            # proot/container lacking CAP_NET_BIND_SERVICE.
+            "availability": {
+                "dhcp_fp": _inventory.dhcp_fp_status(),
+                "rogue_dhcp": (
+                    {"available": getattr(_dhcp_monitor, "available", None),
+                     "reason": getattr(_dhcp_monitor, "unavailable_reason", None)}
+                    if _dhcp_monitor else {"available": None, "reason": None}
+                ),
+            },
         }
 
     @app.get("/api/presence/report")

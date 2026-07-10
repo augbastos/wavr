@@ -323,6 +323,19 @@ class NetworkInventoryService:
             self._dhcp_fp = DHCPFingerprintCollector()
         return self._dhcp_fp
 
+    def dhcp_fp_status(self) -> dict:
+        """Honest availability signal for the DHCP-fingerprint collector
+        (panel-review finding #9/#17): {"available": bool|None, "reason":
+        str|None}. None/None when the feature is off, a scan cycle hasn't run
+        yet since startup (the collector is lazily built -- see
+        `_get_dhcp_fp`), or an injected test double doesn't carry the
+        attribute -- callers should treat that exactly like today's behavior
+        (no signal either way), never as a false "unavailable"."""
+        if self._dhcp_fp is None:
+            return {"available": None, "reason": None}
+        return {"available": getattr(self._dhcp_fp, "available", None),
+                "reason": getattr(self._dhcp_fp, "unavailable_reason", None)}
+
     def _make_hostname_resolver(self):
         """The reverse-DNS resolve hook passed to scan_inventory, or None when
         the feature is OFF (so zero PTR queries happen by default). An injected

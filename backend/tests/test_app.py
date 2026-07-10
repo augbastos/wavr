@@ -259,7 +259,7 @@ def test_status_shape_and_no_secrets():
         r = client.get("/api/status")
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"version", "sources", "features", "house", "internet"}
+        assert set(body) == {"version", "sources", "features", "house", "internet", "availability"}
         assert body["version"] == __version__
 
         assert isinstance(body["sources"], list) and body["sources"]
@@ -311,6 +311,14 @@ def test_status_shape_and_no_secrets():
 
         # internet monitor off by default -> null/null (Feature B contract)
         assert body["internet"] == {"ok": None, "since": None}
+
+        # Panel-review finding #9/#17: dhcp_fp/rogue_dhcp are off by default in
+        # this test's config, so both collectors are None/None (no cycle has
+        # ever run, not "unavailable") -- additive shape, two keys only.
+        assert set(body["availability"]) == {"dhcp_fp", "rogue_dhcp"}
+        for entry in body["availability"].values():
+            assert set(entry) == {"available", "reason"}
+            assert entry == {"available": None, "reason": None}
 
         # NO SECRETS: `features` are all-bool flags (asserted just above), so no secret
         # can hide there -- grep the REST of the payload (sources/house/internet/version)

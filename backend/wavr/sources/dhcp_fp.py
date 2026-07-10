@@ -192,6 +192,18 @@ class DHCPFingerprintCollector:
 
     def __init__(self, listen: PacketSource | None = None):
         self._listen = listen or _default_listen
+        # Tri-state honest-availability signal (panel-review finding #9/#17):
+        # None = never attempted a bind yet (feature off, or no scan cycle has
+        # run since startup); True = the UDP/67 bind succeeded at least once
+        # (this cycle may still have observed zero packets -- that's a normal
+        # quiet LAN, not unavailability); False = the raw bind itself failed
+        # with a permission/OS error -- e.g. a non-root proot/container
+        # lacking CAP_NET_BIND_SERVICE, or a real DHCP server already holding
+        # the port exclusively (see module docstring). Distinct from a
+        # transient runtime crash: this is "this environment can't grant the
+        # capability," not an error to alarm on.
+        self.available: bool | None = None
+        self.unavailable_reason: str | None = None
 
     async def collect(self, duration: float = 5.0) -> dict[str, dict]:
         """Listen for up to `duration` seconds (returns sooner if the
@@ -230,8 +242,18 @@ class DHCPFingerprintCollector:
                     break
                 packets.append(item)
 
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(_read_all(), timeout=duration)
+        try:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(_read_all(), timeout=duration)
+            self.available = True
+            self.unavailable_reason = None
+        except (PermissionError, OSError) as exc:
+            # The bind (the first thing the transport does, before any yield)
+            # failed -- environment can't grant this, not a runtime crash.
+            # Recorded so callers can show an honest "unavailable on this
+            # device" instead of a silently-empty collect() result.
+            self.available = False
+            self.unavailable_reason = f"{type(exc).__name__}: {exc}"
         aclose = getattr(agen, "aclose", None)
         if aclose:
             with contextlib.suppress(Exception):
