@@ -354,6 +354,15 @@
               transition:fill .25s ease-out;}
   .radar-zone.occ{fill:rgba(110,168,254,.2);stroke-dasharray:none;}
   .radar-zonelabel{fill:var(--zone);font-size:.22px;pointer-events:none;}
+  /* A9 bed/rest zone (fall/no-motion, ADR-0003): read-only overlay -- a lying posture
+     inside here never trips the research-grade fall alert. Distinct from the local
+     "Edit zones" occupancy rectangles (--zone/blue) so a bed zone always reads as its
+     own thing on the map. */
+  .zone-rest-poly{fill:rgba(61,181,74,.08);stroke:var(--accent);stroke-width:.02;
+                  stroke-dasharray:.06 .1;vector-effect:non-scaling-stroke;pointer-events:none;}
+  .zone-rest-label{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:.78rem;
+                   flex-basis:100%;}
+  .zone-rest-label input{margin:0;}
   .radar-draw{fill:rgba(61,181,74,.1);stroke:var(--accent);stroke-width:.02;
               stroke-dasharray:.12 .08;vector-effect:non-scaling-stroke;pointer-events:none;}
 
@@ -1902,12 +1911,15 @@
                    blank canvas — updateHouse() rewrites this only when the occupancy set changes. -->
               <p id="mapSrSummary" class="sr-only">House map: waiting for presence data.</p>
               <div id="zoneBar" class="zonebar" hidden>
-                <button id="zoneEdit" type="button" class="ctl small" data-tip="Draw custom zones for finer occupancy detection (stored on this device only)">Edit zones</button>
+                <button id="zoneEdit" type="button" class="ctl small" data-tip="Draw custom zones for finer occupancy detection (stored on this device only, unless marked as a bed/rest zone -- those save to your hub)">Edit zones</button>
                 <span id="zoneHint" class="zonehint" hidden>drag over the map to draw a zone</span>
               </div>
               <div id="zonePanel" class="zonepanel" hidden>
                 <form id="zoneNameForm" class="zone-name" hidden>
                   <input id="zoneNameInput" placeholder="zone name (e.g. couch)" aria-label="zone name" maxlength="40" autocomplete="off">
+                  <label id="zoneRestLabel" class="zone-rest-label" hidden data-tip="A9: a 'lying' posture inside this area never triggers the research-grade fall alert (ADR-0003) -- saved to your hub, not just this browser">
+                    <input type="checkbox" id="zoneRestInput"> bed/rest zone (protects from fall alerts)
+                  </label>
                   <button type="submit" class="ctl small">Save</button>
                   <button type="button" id="zoneCancel" class="ctl small off">Cancel</button>
                 </form>
@@ -5219,6 +5231,20 @@ async function renderRadar(){
       c.onclick = ()=>{ if(!ft.id) return; selectHouseEl("feature", ft.id); };
       houseLayer.appendChild(c);
     });
+    // A9 bed/rest zones (wavr.fall_detect): READ-ONLY visual round-trip -- drawn so a zone
+    // saved from another browser/device (or hand-edited house.json) is at least visible
+    // here, but not selectable/editable via this overlay (creation/deletion goes through
+    // the "Edit zones" rectangle tool above, 2D top-view only, same as every local zone).
+    (f.zones||[]).forEach(z=>{
+      if(!z.polygon || z.polygon.length < 3 || z.kind !== "rest") return;
+      const poly = document.createElementNS(SVG_NS, "polygon");
+      poly.setAttribute("points", z.polygon.map(p=>p[0]+","+p[1]).join(" "));
+      poly.setAttribute("class", "zone-rest-poly");
+      const title = document.createElementNS(SVG_NS, "title");
+      title.textContent = (z.name || "bed/rest zone") + " -- protects from fall alerts";
+      poly.appendChild(title);
+      houseLayer.appendChild(poly);
+    });
   }
   function rebuildRoomsForFloor(){
     const f = floorFor(currentFloor);
@@ -6101,7 +6127,12 @@ async function renderRadar(){
   const zoneListEl  = document.getElementById("zoneList");
   const zoneNameForm  = document.getElementById("zoneNameForm");
   const zoneNameInput = document.getElementById("zoneNameInput");
+  const zoneRestLabel = document.getElementById("zoneRestLabel");
+  const zoneRestInput = document.getElementById("zoneRestInput");
   if(MODE==="companion"){ document.getElementById("zoneBar").hidden = true; }  // viewer: zones view-only (no edit)
+  // A9 bed/rest zone checkbox: only meaningful where a real hub exists to persist it into
+  // the housemap (wavr.fall_detect reads it server-side) -- demo has no backend to save to.
+  if(zoneRestLabel) zoneRestLabel.hidden = (MODE !== "live");
   let editMode = false, pending = null, previewRect = null, dragStart = null;
   const round2 = (n) => Math.round(n*100)/100;
 
@@ -6214,11 +6245,34 @@ async function renderRadar(){
     pending = {x: round2(x), y: round2(y), w: round2(w), h: round2(h)};
     updatePreview(s, p);                                   // keep the preview while naming
     zoneNameForm.hidden = false; zoneNameInput.value = ""; zoneNameInput.focus();
+    if(zoneRestInput) zoneRestInput.checked = false;
   });
+  // A9: persist a bed/rest zone into the REAL housemap (wavr.fall_detect.in_rest_zone
+  // reads it server-side) -- reuses the existing PUT /api/house save path (saveHouseDoc,
+  // defined further below in this same closure -- hoisted, so it is safe to reference
+  // here even though its textual definition comes later; this only ever RUNS on a future
+  // form submit, well after saveHouseDoc exists). Rectangle -> 4-point polygon on the
+  // CURRENT floor, same coordinate space room polygons already use (radar user-space,
+  // metres). Note: the local `zones` list (localStorage, per-browser) and the housemap
+  // `zones` list (per-hub, what the fall-alert rule reads) are two SEPARATE stores kept
+  // only loosely in sync -- see the frontend section of the A9 PR notes.
+  function syncRestZoneToHouse(rect, name){
+    const f = floorFor(currentFloor); if(!f) return;
+    if(!Array.isArray(f.zones)) f.zones = [];
+    f.zones.push({
+      id: hedUid("z"), name, kind: "rest",
+      polygon: [[rect.x, rect.y], [rect.x + rect.w, rect.y],
+                [rect.x + rect.w, rect.y + rect.h], [rect.x, rect.y + rect.h]],
+    });
+    saveHouseDoc();
+  }
   zoneNameForm.onsubmit = (e) => {
     e.preventDefault(); if(!pending) return;
     const name = ((zoneNameInput.value || "").trim() || ("zone " + (zones.length+1))).slice(0, 40);
-    zones.push({id: Date.now(), name, x: pending.x, y: pending.y, w: pending.w, h: pending.h});
+    const isRest = !!(zoneRestInput && zoneRestInput.checked);
+    zones.push({id: Date.now(), name, x: pending.x, y: pending.y, w: pending.w, h: pending.h,
+               kind: isRest ? "rest" : undefined});
+    if(isRest && MODE==="live") syncRestZoneToHouse(pending, name);
     cancelPending(); saveZones(zones); refreshZones();
   };
   document.getElementById("zoneCancel").onclick = cancelPending;

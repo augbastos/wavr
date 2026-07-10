@@ -351,3 +351,84 @@ def test_upsert_generated_floor_id_avoids_collision():
     assert fids[0] == "f2" and fids[1] != "f2"
     assert len(fids) == len(set(fids))
     validate_house_map(merged)                                 # unique ids -> passes
+
+
+# === A9: bed/rest zones (fall/no-motion, ADR-0003) ===================================
+from wavr.housemap import in_rest_zone
+
+
+def _house_with_zone(zone_polygon=None, kind="rest"):
+    d = _valid()
+    d["floors"][0]["zones"] = [{
+        "id": "z1", "name": "bed", "kind": kind,
+        "polygon": zone_polygon or [[0.5, 0.5], [2.0, 0.5], [2.0, 2.0], [0.5, 2.0]],
+    }]
+    return d
+
+
+def test_zones_key_absent_still_validates():
+    # Old docs saved before A9 (no 'zones' floor key at all) must stay valid -- 'zones'
+    # is optional, defaulting to empty, never required.
+    validate_house_map(_valid())
+
+
+def test_valid_zone_passes():
+    validate_house_map(_house_with_zone())
+
+
+def test_zone_bad_kind_rejected():
+    d = _house_with_zone(kind="teleporter")
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert "kind" in str(e.value).lower()
+
+
+def test_zone_degenerate_polygon_rejected():
+    d = _house_with_zone(zone_polygon=[[0, 0], [1, 1]])
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert "polygon" in str(e.value).lower()
+
+
+def test_unknown_zone_key_rejected():
+    d = _house_with_zone()
+    d["floors"][0]["zones"][0]["extra"] = "nope"
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
+
+
+def test_non_list_zones_raise():
+    d = _valid()
+    d["floors"][0]["zones"] = "nope"
+    with pytest.raises(HouseMapError):
+        validate_house_map(d)
+
+
+def test_in_rest_zone_point_inside_true():
+    # room "sala" occupies [[0,0],[4,0],[4,3],[0,3]] -> top-left (0,0); a ROOM-LOCAL
+    # (1.0, 1.0) lands at absolute (1.0, 1.0), inside the zone rectangle [0.5..2, 0.5..2].
+    d = _house_with_zone()
+    assert in_rest_zone(d, "sala", 1.0, 1.0) is True
+
+
+def test_in_rest_zone_point_outside_false():
+    d = _house_with_zone()
+    assert in_rest_zone(d, "sala", 3.5, 2.5) is False   # far corner of the room, outside the zone
+
+
+def test_in_rest_zone_no_zone_on_floor_is_false():
+    assert in_rest_zone(_valid(), "sala", 1.0, 1.0) is False
+
+
+def test_in_rest_zone_unknown_room_is_false():
+    d = _house_with_zone()
+    assert in_rest_zone(d, "no-such-room", 1.0, 1.0) is False
+
+
+def test_in_rest_zone_ignores_non_rest_kind():
+    # in_rest_zone is pure geometry over already-loaded data (no re-validation) -- a
+    # future/foreign non-'rest' kind must never exempt a fall from firing, even if such
+    # a doc could exist (e.g. hand-edited house.json, an older/newer schema version).
+    d = _house_with_zone(kind="rest")
+    d["floors"][0]["zones"][0]["kind"] = "furniture"   # NOT 'rest' -- must not protect
+    assert in_rest_zone(d, "sala", 1.0, 1.0) is False

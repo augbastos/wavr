@@ -243,6 +243,14 @@ class Config:
     # lives (a bulk DELETE runs after every insert); <= 0 disables pruning.
     occupancy_log_enabled: bool
     occupancy_retention_days: float
+    # A9 fall/no-motion suspicion (RESEARCH-GRADE, ADR-0003) -- opt-in, DEFAULT OFF (it is
+    # explicitly non-medical-grade, so it must never surprise an operator who never asked
+    # for it). `fall_dwell_s` is the ONLY other knob (A9 requirement #2): how long a "lying
+    # outside every marked bed/rest zone" reading must persist before wavr.fall_detect fires
+    # one edge-triggered `fall_suspected` alert. See wavr.fall_detect for the dwell/flicker
+    # rule and the mandatory disclaimer every alert carries.
+    fall_detect_enabled: bool
+    fall_dwell_s: float
 
 
 def load_config() -> Config:
@@ -435,4 +443,11 @@ def load_config() -> Config:
         occupancy_log_enabled=os.getenv("WAVR_OCCUPANCY_LOG", "1").strip().lower()
             in ("1", "true", "yes", "on"),
         occupancy_retention_days=float(os.getenv("WAVR_OCCUPANCY_RETENTION_DAYS", "60")),
+        # A9 fall/no-motion (research-grade, ADR-0003): default OFF. Default dwell 60s --
+        # long enough that a normal floor-sit/stretch/play session doesn't trip it, short
+        # enough to still be a useful "check in" prompt; NOT VERIFIED against real falls,
+        # tune per household via WAVR_FALL_DWELL_S.
+        fall_detect_enabled=os.getenv("WAVR_FALL_DETECT", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+        fall_dwell_s=float(os.getenv("WAVR_FALL_DWELL_S", "60")),
     )

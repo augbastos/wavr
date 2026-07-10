@@ -38,6 +38,14 @@
   (central-only), rendered in the radar. Authored geometry as the coordinate frame;
   wall-occlusion fusion (spec B2), camera homography (spec A), and plan/CAD upload
   (specs F2/F3) are follow-ons.
+- **Fall / no-motion suspicion (research demo)** — a "lying" posture (from the existing
+  YOLO-pose heuristic) that persists outside an operator-marked bed/rest zone for a
+  configurable dwell fires one edge-triggered, room+duration-only alert into the shared
+  alert stream. Bed/rest zones are drawn per room in the map editor and saved via the
+  same `PUT /api/house`. Opt-in, default-OFF (`WAVR_FALL_DETECT`); a room-level dwell
+  rule, not full cross-frame track association — still explicitly a research
+  demonstration, never a certified medical/fall-detection device
+  ([ADR-0003](adr/0003-not-a-medical-device.md)).
 - **ADRs 0001–0006** + this roadmap; relicensed **AGPL-3.0**; a security + performance
   audit pass (vitals never persisted, WS Origin check, sqlite off the event loop,
   bounded queues, capped ping sweeps).
@@ -65,10 +73,8 @@
   ([ADR-0002](adr/0002-privacy-boundaries-ram-only.md)).
 - **Cross-source track association** — fuse targets from multiple sensors in one
   room (Kalman filtering + Hungarian assignment) instead of best-source
-  pass-through.
-- **Real fall detection** — lying posture + location + duration, on top of pose
-  and track association. A research demo, **not** a certified safety system
-  ([ADR-0003](adr/0003-not-a-medical-device.md)).
+  pass-through. Would sharpen the fall/no-motion dwell rule (Shipped, above) from
+  room-level to per-person.
 - **Local LLM narrator** — replace the opt-in Gemini narrator with a fully local
   model (e.g. Ollama), removing the only cloud egress entirely.
 

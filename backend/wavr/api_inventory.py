@@ -57,7 +57,7 @@ from wavr.netinventory_service import NetworkInventoryService
 
 
 def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
-                 gateway_monitor=None, intrusion_log=None) -> list[dict]:
+                 gateway_monitor=None, intrusion_log=None, fall_log=None) -> list[dict]:
     """The ONE merged, chronologically-sorted alert list every alert-consuming
     surface reads: GET /api/alerts below, and (Build A10) `wavr.house_status`'s
     network-layer input via app.py. Factored out so both call sites share
@@ -66,11 +66,13 @@ def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
     Rogue-device sightings always carry "kind" (additive field -- every existing
     consumer already only reads a subset of keys). Merged with the opt-in
     rogue-DHCP-server alerts (collectors-lote2 #7), the opt-in gateway-identity
-    change alerts (inventory feature #2, `kind: "gateway_identity"`), and Watch/Guard
+    change alerts (inventory feature #2, `kind: "gateway_identity"`), Watch/Guard
     intrusion alerts (`kind: "intrusion"`, severity "alert", room-level +
-    count-only -- never a target position or identity) -- each source omitted
-    entirely (unchanged shape) when its monitor/log is None, same rule as
-    before."""
+    count-only -- never a target position or identity), and A9's fall/no-motion
+    suspicion alerts (`kind: "fall_suspected"`, severity "alert", room + duration
+    only, RESEARCH-GRADE per ADR-0003 -- see wavr.fall_detect) -- each source
+    omitted entirely (unchanged shape) when its monitor/log is None, same rule
+    as before."""
     merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
     if dhcp_monitor is not None:
         merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
@@ -78,6 +80,8 @@ def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
         merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
     if intrusion_log is not None:
         merged += [a.to_dict() for a in intrusion_log.recent_alerts()]
+    if fall_log is not None:
+        merged += [a.to_dict() for a in fall_log.recent_alerts()]
     merged.sort(key=lambda a: a["ts"])
     return merged
 
@@ -136,7 +140,7 @@ def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
                             name_deps=None, dhcp_monitor=None,
                             gateway_monitor=None, known_store=None,
-                            intrusion_log=None) -> APIRouter:
+                            intrusion_log=None, fall_log=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
@@ -147,7 +151,7 @@ def build_inventory_router(service: NetworkInventoryService,
     async def alerts():
         return {"alerts": merge_alerts(service, dhcp_monitor=dhcp_monitor,
                                        gateway_monitor=gateway_monitor,
-                                       intrusion_log=intrusion_log)}
+                                       intrusion_log=intrusion_log, fall_log=fall_log)}
 
     if device_meta is not None:
         @router.put("/api/inventory/name", dependencies=list(name_deps or []))
