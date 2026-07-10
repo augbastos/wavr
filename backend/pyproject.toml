@@ -8,6 +8,10 @@ dependencies = [
   "uvicorn[standard]>=0.29",
   "python-dotenv>=1.0",
   "websockets>=12",
+  # numpy is imported unconditionally by wavr.app (via calib_store -> localize's homography
+  # math), so it is a real base requirement — not an optional camera extra. Keeping it out of
+  # base broke `pip install -e backend[dev]` in CI (ModuleNotFoundError: numpy on every app import).
+  "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
