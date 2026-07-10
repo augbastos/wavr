@@ -45,6 +45,8 @@ from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
+from wavr.watch import (WatchMode, IntrusionAlertLog, known_present_persons,
+                        project_state, room_unrecognized)
 from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
 from wavr.occupancy_log import OccupancyLog
 from wavr.known_store import KnownStore
@@ -280,6 +282,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _fusion = fusion or FusionEngine(threshold=cfg.fusion_threshold,
                                      now_fn=lambda: datetime.now(timezone.utc))
     latest: dict[str, dict] = {}  # room -> last RoomState dict (Camada 4 seam)
+    # Watch/Guard ("Vigia") -- server-side, in-memory, DEFAULT OFF (privacy-first boot).
+    # A single toggle that, while on, suppresses the family geometry/identity/vitals from
+    # every egress and surfaces only counts + the intrusion room. latest stays the FULL
+    # internal truth; the suppression is applied by wavr.watch.project_state at each egress.
+    _watch = WatchMode()
+    _intrusion = IntrusionAlertLog()  # edge-triggered "unrecognized person in <room>" alerts
     # deepcopy: load_house_map returns the module-level housemap.DEFAULT_MAP object
     # itself on any fallback (missing/invalid file), and put_house below mutates _house
     # in place (clear/update). Without this copy, the first PUT on a fresh install --
@@ -509,8 +517,22 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             await asyncio.to_thread(_occupancy_log.append_if_changed, d["room"],
                                     d["occupied"], d["confidence"],
                                     d.get("person_count"), d["ts"])
-        latest[d["room"]] = d
-        await _hub.publish(d)
+        latest[d["room"]] = d          # FULL internal truth (never suppressed in `latest`)
+        # Watch/Guard: at THIS fan-out egress (WS clients + MQTT via the hub) publish the
+        # SUPPRESSED view -- family geometry/identity/vitals stripped, only counts + the
+        # intrusion room leave. Intrusion needs the consent identity layer to know who is
+        # "known", so it is gated on identity_enabled: with identity off Watch still
+        # suppresses (fail-safe privacy) but fires NO alert (it cannot honestly tell known
+        # from unknown). `latest` stays FULL so the intrusion math + /api/state read the
+        # real identities; only what leaves the box is projected.
+        unrecognized = False
+        if _watch.on and cfg.identity_enabled:
+            known = len(known_present_persons(latest.values()))
+            unrecognized = room_unrecognized(d, known)
+            hit = _intrusion.record(d["room"], unrecognized, d.get("person_count"), known, d["ts"])
+            if hit is not None and _notify:
+                _notify("Wavr Vigia: pessoa nao reconhecida em " + str(d["room"]))
+        await _hub.publish(project_state(d, _watch.on, unrecognized))
         return d
 
     async def _ingest(event):
@@ -1001,7 +1023,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _inventory, device_meta=_device_meta,
         name_deps=[Depends(require_local), Depends(require_scope("control"))],
         dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
-        known_store=_known_store),
+        known_store=_known_store, intrusion_log=_intrusion),
         dependencies=[Depends(require_scope("network:read"))])
 
     # Consent-first identity registry routes. Router-level require_central keeps the
@@ -1123,9 +1145,64 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         limit = max(1, min(limit, 1000))
         return await asyncio.to_thread(_storage.recent, limit)
 
+    def _project_all():
+        # Snapshot projection for PULL egress (/api/state + the narrator). Mirrors the
+        # per-event hub projection in _publish so push and pull agree exactly. `latest` is
+        # the FULL internal truth; this returns the Watch-suppressed view when Watch is on
+        # (byte-identical to `latest` when off). Intrusion gating mirrors _publish exactly.
+        watch_on = _watch.on
+        gate = watch_on and cfg.identity_enabled
+        known = len(known_present_persons(latest.values())) if gate else 0
+        return {r: project_state(d, watch_on, bool(gate and room_unrecognized(d, known)))
+                for r, d in latest.items()}
+
+    def _watch_status():
+        on = _watch.on
+        gate = on and cfg.identity_enabled
+        known = len(known_present_persons(latest.values())) if gate else 0
+        rooms = sorted(r for r, d in latest.items() if room_unrecognized(d, known)) if gate else []
+        return {
+            "on": on,
+            "identity_enabled": cfg.identity_enabled,
+            # Honest: with the identity layer off Watch still SUPPRESSES geometry, but it
+            # cannot tell known from unknown, so intrusion detection is inert (no alerts).
+            "intrusion_detection": bool(gate),
+            "known_present": known,
+            "unrecognized_rooms": rooms,
+        }
+
+    @app.get("/api/watch")
+    async def get_watch(_=Depends(require_scope("presence:read"))):
+        return _watch_status()
+
+    @app.post("/api/watch")
+    async def set_watch(on: bool = Body(..., embed=True), _=Depends(require_local),
+                        __=Depends(require_scope("control"))):
+        # Toggling Watch changes what LEAVES the box (a privacy-affecting control), so it
+        # carries the same require_local CSRF + control scope as the camera/system toggles.
+        _watch.set(on)
+        # Evaluate intrusions IMMEDIATELY on the toggle -- do not wait for the next sensing
+        # event or the 5s refuse tick -- so enabling Watch fires an edge alert at once for a
+        # room already holding an unknown. Turning Watch OFF re-arms the edges (reset) so a
+        # still-present intrusion alerts again on the next enable. Gated on identity_enabled:
+        # with identity off there is no honest "known" baseline, so no alert is invented.
+        if on:
+            if cfg.identity_enabled:
+                known = len(known_present_persons(latest.values()))
+                for r, d in latest.items():
+                    hit = _intrusion.record(r, room_unrecognized(d, known),
+                                            d.get("person_count"), known, d.get("ts"))
+                    if hit is not None and _notify:
+                        _notify("Wavr Vigia: pessoa nao reconhecida em " + str(r))
+        else:
+            _intrusion.reset()
+        return _watch_status()
+
     @app.get("/api/state")
     async def state(_=Depends(require_scope("presence:read"))):
-        return latest
+        # Watch-projected: when Watch is on, family geometry/identity/vitals are stripped
+        # here too, so the dashboard is suppressed exactly like every other egress.
+        return _project_all()
 
     @app.get("/api/house")
     async def house(_=Depends(require_scope("presence:read"))):
@@ -1200,7 +1277,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                        f"the '{cfg.narrate_provider}' provider)")
         try:
             rows = await asyncio.to_thread(_storage.recent, 50)
-            text = await asyncio.to_thread(_narrator.narrate, latest, rows)
+            text = await asyncio.to_thread(_narrator.narrate, _project_all(), rows)
         except Exception:
             logging.exception("narrate failed")
             raise HTTPException(status_code=502, detail="narration backend error")
@@ -1456,6 +1533,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # surfaced so the Privacy & Egress view honestly shows a local history is
                 # being kept and can be turned off (WAVR_OCCUPANCY_LOG=0).
                 "occupancy_log": _occupancy_log is not None,
+                # Watch/Guard ("Vigia") -- in-memory toggle, default OFF. Surfaced so the
+                # Privacy & Egress view honestly shows when family geometry is being
+                # suppressed and only counts + intrusion room leave.
+                "watch": _watch.on,
                 # A5.1 hardening posture, surfaced honestly (bool-only, never the
                 # secret). `api_token`: a same-machine shared secret (WAVR_LOCAL_TOKEN)
                 # is REQUIRED on /api/* even on loopback. `health_gate`: F6 -- the

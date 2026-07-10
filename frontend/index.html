@@ -994,6 +994,14 @@
   .sensing-level-posture b{color:var(--text);font-weight:600;}
   .sensing-level-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px;}
   .sensing-level-note{font-size:.8rem;color:var(--dim);max-width:54ch;line-height:1.45;}
+  /* Watch/Guard ("Vigia") -- an orthogonal privacy overlay on the sensing ladder.
+     Reuses the .ctl.switch on/off affordance; the note turns amber only when an
+     unrecognized person is detected (green stays reserved for confident presence). */
+  .watch-row{margin-top:12px;border-top:1px dashed var(--line);padding-top:12px;}
+  .watch-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+  .watch-state{font-size:.8rem;color:var(--dim);}
+  .watch-note{margin:8px 0 0;font-size:.8rem;color:var(--dim);max-width:60ch;line-height:1.45;}
+  .watch-note.alarm{color:var(--warn);font-weight:600;}
   /* System: privacy & egress dashboard (the trust receipt) + diagnostics */
   .egress-summary{margin:0 0 4px;font-size:.9rem;font-weight:600;}
   .egress-summary.ok{color:var(--accent);}
@@ -1804,6 +1812,13 @@
           <div class="sensing-level-actions">
             <button id="privacyPauseBtn" type="button" class="ctl small off" data-tip="Drops to the next lower level right now — instantly turns off the heavier sensing">Privacy pause</button>
             <span id="sensingLevelNote" class="sensing-level-note" aria-live="polite"></span>
+          </div>
+          <div id="watchRow" class="watch-row">
+            <div class="watch-head">
+              <button id="watchToggle" type="button" class="ctl switch off" role="switch" aria-checked="false" data-tip="Watch (Vigia): detect an unrecognized person WITHOUT surveilling the family. While on, Wavr hides everyone positions, identities and vitals from the dashboard and from every export (MQTT, MCP, narrator) — only people counts and the room of an unrecognized person can leave.">Watch: off</button>
+              <span id="watchState" class="watch-state">Off</span>
+            </div>
+            <p id="watchNote" class="watch-note" aria-live="polite"></p>
           </div>
         </div>
         <div class="inicio-grid">
@@ -9461,6 +9476,66 @@ try {
   })();
 
   // =====================================================================
+  // Watch/Guard ("Vigia") -- an ORTHOGONAL privacy overlay on the sensing
+  // ladder (server-side, wavr.WatchMode). While on, the hub suppresses every
+  // family position/identity/vital from state + every egress and surfaces only
+  // counts + the intrusion room; this control just reflects + toggles it. Live
+  // mutates via POST /api/watch (require_local); demo renders an honest example.
+  // =====================================================================
+  var watchInfo = null, watchBusy = false;
+  function paintWatch(){
+    var btn = $("watchToggle"), stEl = $("watchState"), note = $("watchNote");
+    if(!btn) return;
+    var live = (M === "live");
+    var on = live ? !!(watchInfo && watchInfo.on) : false;
+    btn.disabled = !live || watchBusy;
+    btn.className = "ctl switch " + (on ? "on" : "off");
+    btn.setAttribute("aria-checked", on ? "true" : "false");
+    btn.textContent = watchBusy ? "applying…" : ("Watch: " + (on ? "on" : "off"));
+    if(stEl) stEl.textContent = on ? "On — family positions hidden" : "Off";
+    if(note){
+      note.className = "watch-note";
+      if(!live){
+        note.textContent = "Watch runs on the hub (local panel). It detects an unrecognized person while hiding everyone positions, identities and vitals from the dashboard and every export.";
+      } else if(!on){
+        note.textContent = "Off — full per-room view. Turn Watch on to hide everyone positions and be alerted only to an unrecognized person.";
+      } else if(watchInfo && !watchInfo.intrusion_detection){
+        note.textContent = "On — positions, identities and vitals are hidden everywhere. To flag an unrecognized person, enable the identity layer (who is home) so Wavr knows who is expected.";
+      } else {
+        var rooms = (watchInfo && watchInfo.unrecognized_rooms) || [];
+        if(rooms.length){
+          note.className = "watch-note alarm";
+          note.textContent = "Unrecognized person detected in: " + rooms.join(", ") + ". Family positions stay hidden.";
+        } else {
+          note.textContent = "Watching — no unrecognized person. Positions, identities and vitals are hidden from the dashboard and every export; only counts + an intrusion room can leave.";
+        }
+      }
+    }
+  }
+  function renderWatch(){
+    if(!$("watchToggle")) return;
+    if(M !== "live"){ paintWatch(); return; }
+    fetch(location.origin + "/api/watch").then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){ if(j && typeof j === "object") watchInfo = j; paintWatch(); })
+      .catch(function(){ paintWatch(); });
+  }
+  async function watchToggle(){
+    if(M !== "live" || watchBusy) return;
+    var target = !(watchInfo && watchInfo.on);
+    watchBusy = true; paintWatch();
+    try{
+      var r = await fetch(location.origin + "/api/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+        body: JSON.stringify({ on: target }),
+      });
+      if(r.ok){ var j = await r.json(); if(j && typeof j === "object") watchInfo = j; }
+    }catch(e){}
+    watchBusy = false; paintWatch();
+  }
+  (function(){ var b = $("watchToggle"); if(b) b.addEventListener("click", watchToggle); })();
+
+  // =====================================================================
   // P1 §7#4 — History filters: room + kind, purely over the rows the
   // timeline already holds. pushTimeline() tags each row (data-room/kind)
   // and calls __wavrTlRow so new rows respect the active filter.
@@ -10210,6 +10285,7 @@ try {
     renderSensing();     // A2.1 — same payload, zero new fetches
     renderHealthTile();  // A2.3 — only (re)paints visibility/copy; never fetches
     renderHealthStatusLine();   // System regroup — same passive poll, zero new fetches
+    renderWatch();       // Watch/Vigia — reflect + poll the live suppression state
     var sv = $("sobreVersion");
     if(sv && statusInfo && statusInfo.version != null) sv.textContent = " · version " + statusInfo.version;
   };
@@ -10230,6 +10306,7 @@ try {
   renderHealthTile();  // A2.3 — hidden outside live; never fetches on its own
   renderKill();
   renderTier();        // global Sensing-level meter — illustrative in demo, live in live
+  renderWatch();       // Watch/Vigia overlay — illustrative in demo, live in live
   renderDiag();
   applyTlFilter();
   renderPresence();    // A2.2 — live-only poller; no-ops (shows the note) elsewhere
