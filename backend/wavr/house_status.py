@@ -106,14 +106,21 @@ def _network_reasons(network_alerts, *, now: datetime, window_minutes: float) ->
 def _intrusion_reasons(intrusion_alerts) -> list[dict]:
     """Physical A2. Callers pass ONLY the alerts for currently-active rooms
     (e.g. the latest `wavr.watch.IntrusionAlert` per room in
-    `IntrusionAlertLog.active_rooms()`) -- see module docstring."""
+    `IntrusionAlertLog.active_rooms()`) -- see module docstring. A `room` of None is
+    the ROOM-AGNOSTIC house-level aggregate signal (someone unaccounted-for is in the
+    house, spread across rooms so no single room's count betrays them); it is captioned
+    without naming any room, geometry, or identity -- count-only, like the per-room
+    case."""
     reasons = []
     for a in intrusion_alerts or []:
         d = a.to_dict() if hasattr(a, "to_dict") else dict(a)
+        room = d.get("room")
+        what = ("an unrecognized person is present in the house"
+                if room is None else f"unrecognized person in {room}")
         reasons.append({
             "layer": LAYER_PHYSICAL,
             "kind": "intrusion",
-            "what": f"unrecognized person in {d.get('room')}",
+            "what": what,
             "severity": d.get("severity", SEVERITY_ALERT),
             "ts": d.get("ts"),
         })

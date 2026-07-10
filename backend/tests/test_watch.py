@@ -255,6 +255,8 @@ def test_watch_on_suppresses_family_geometry_at_state_egress():
         w = client.get("/api/watch").json()
         assert w["intrusion_detection"] is True and w["known_present"] == 1
         assert "sala" in w["unrecognized_rooms"]
+        # the house-level aggregate also fires (house total 2 > known 1)
+        assert w["house_unrecognized"] is True
         # a high-severity edge alert was pushed to the notifier
         assert any("Vigia" in n for n in notes)
 
@@ -267,8 +269,16 @@ def test_watch_intrusion_alert_in_stream_and_edge_triggered():
         import time; time.sleep(0.2)
         alerts = [a for a in client.get("/api/alerts").json()["alerts"]
                   if a.get("kind") == "intrusion"]
-        assert len(alerts) == 1                      # edge-triggered, one per room
-        assert alerts[0]["room"] == "sala" and alerts[0]["severity"] == "alert"
+        # edge-triggered, fires ONCE each: the per-room "sala" signal AND the
+        # room-agnostic house-level aggregate (room=None), never a duplicate
+        assert len(alerts) == 2
+        by_room = {a["room"]: a for a in alerts}
+        assert set(by_room) == {"sala", None}
+        assert all(a["severity"] == "alert" for a in alerts)
+        # the house-level alert is room-agnostic + count-only: no geometry/identity
+        house = by_room[None]
+        for leaked in ("x", "y", "targets", "identities", "vitals"):
+            assert leaked not in house
 
 
 def test_watch_on_but_identity_off_suppresses_without_false_alert():
@@ -300,3 +310,103 @@ def test_status_surfaces_watch_flag():
         assert client.get("/api/status").json()["features"]["watch"] is False
         client.post("/api/watch", json={"on": True}, headers=LOCAL)
         assert client.get("/api/status").json()["features"]["watch"] is True
+
+
+def test_house_unrecognized_catches_spread_out_intrusion_per_room_misses():
+    from wavr.watch import house_unrecognized
+    from wavr.fusion import house_person_count
+    known = 3  # three known people present, deduped house-wide
+    rooms = [{"room": "a", "person_count": 2}, {"room": "b", "person_count": 2}]
+    # per-room check MISSES it: neither room's own count exceeds the house known-count
+    assert all(not room_unrecognized(r, known) for r in rooms)
+    # the honest SUM (4) does exceed 3 -> the house-level aggregate catches the intruder
+    hc = house_person_count(rooms)
+    assert hc == 4
+    assert house_unrecognized(hc, known) is True
+
+
+def test_house_unrecognized_is_honest_about_unknown_counts():
+    from wavr.watch import house_unrecognized
+    from wavr.fusion import house_person_count
+    # a fully-uncounted house cannot assert intrusion -> None sum, never a fabricated 0
+    assert house_person_count([{"person_count": None}, {"room": "b"}]) is None
+    assert house_unrecognized(None, 0) is False       # unknown is NOT "all clear"
+    # a null-count room contributes nothing (never 0); only real numbers sum
+    hc = house_person_count([{"person_count": None}, {"person_count": 1}])
+    assert hc == 1 and house_unrecognized(hc, 0) is True
+    assert house_unrecognized(2, 2) is False          # all accounted for
+    assert house_unrecognized(2, 5) is False          # more known than counted
+    assert house_unrecognized(1, -3) is True          # negative known clamps to 0
+
+
+class _SpreadSource:
+    """Two KNOWN people (zoe + kai) present house-wide via one BLE identity event on
+    'casa'; two counting rooms hold 2 and 1 people -> house total 3 > known 2, yet
+    NEITHER room's own count exceeds 2. The per-room check finds nothing; only the
+    house-level aggregate catches the spread-out unaccounted person."""
+
+    async def events(self):
+        now = datetime.now(timezone.utc).isoformat()
+        yield SensingEvent(room="casa", modality="ble", presence=True, motion=0.0,
+                           breathing_bpm=None, heart_bpm=None, confidence=0.7, ts=now,
+                           identities=(Identity("zoe", "ble", -50),
+                                       Identity("kai", "ble", -55)))
+        n2 = datetime.now(timezone.utc).isoformat()
+        yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                           breathing_bpm=None, heart_bpm=None, confidence=0.95, ts=n2,
+                           targets=(Target(id=1, x=1.0, y=2.0), Target(id=2, x=3.0, y=0.5)),
+                           count=2)
+        n3 = datetime.now(timezone.utc).isoformat()
+        yield SensingEvent(room="cozinha", modality="camera", presence=True, motion=1.0,
+                           breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=n3,
+                           targets=(Target(id=3, x=2.0, y=1.0),), count=1)
+        while True:
+            await asyncio.sleep(0.05)
+
+
+def _settle_rooms(client, rooms, tries=60):
+    import time
+    for _ in range(tries):
+        st = client.get("/api/state").json()
+        if all(r in st for r in rooms):
+            return st
+        time.sleep(0.05)
+    return client.get("/api/state").json()
+
+
+def test_house_level_intrusion_caught_when_per_room_misses_and_leaks_nothing():
+    import json
+    import time
+    with TestClient(_build(True, lambda: _SpreadSource())) as client:
+        _settle_rooms(client, ["casa", "sala", "cozinha"])
+        assert client.post("/api/watch", json={"on": True}, headers=LOCAL).status_code == 200
+        time.sleep(0.2)
+        w = client.get("/api/watch").json()
+        # the per-room signal finds NOTHING (no single room's count > known=2)...
+        assert w["unrecognized_rooms"] == []
+        assert w["known_present"] == 2
+        # ...but the house-level aggregate (sum 3 > 2) catches the intruder
+        assert w["house_unrecognized"] is True
+        # the alert stream carries ONE room-agnostic (room=None) intrusion, count-only
+        alerts = [a for a in client.get("/api/alerts").json()["alerts"]
+                  if a.get("kind") == "intrusion"]
+        assert len(alerts) == 1 and alerts[0]["room"] is None
+        assert alerts[0]["severity"] == "alert"
+        # house-status physical layer sees it, one honest alert-tier reason, no room named
+        hs = client.get("/api/house-status").json()
+        intr = [x for x in hs["reasons"] if x["kind"] == "intrusion"]
+        assert intr and hs["status"] == "alert"
+        assert intr[0]["what"] == "an unrecognized person is present in the house"
+        # THREAT MODEL: no identity, coordinate, or vitals leaks through ANY egress the
+        # house-level signal rides (/api/watch, /api/alerts, /api/house-status, /api/state)
+        state = client.get("/api/state").json()
+        blob = json.dumps({"watch": w, "alerts": alerts, "house_status": hs, "state": state})
+        # distinctive identity tokens (not dictionary substrings of any RoomState field) so
+        # this raw-value sweep can only trip on an ACTUAL identity leak, never a field name
+        for leak in ("zoe", "kai", "breathing_bpm", "heart_bpm"):
+            assert leak not in blob, leak
+        assert '"x"' not in blob and '"y"' not in blob
+        # family geometry/identity/vitals are stripped from the per-room state egress too
+        for room in ("sala", "cozinha", "casa"):
+            assert state[room]["targets"] == [] and state[room]["identities"] == []
+            assert state[room]["vitals"] == {}

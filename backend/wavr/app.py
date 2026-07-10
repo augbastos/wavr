@@ -47,7 +47,7 @@ from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router, merge_alerts
 from wavr.house_status import compose_house_status, DEFAULT_NETWORK_WINDOW_MINUTES
 from wavr.watch import (WatchMode, IntrusionAlertLog, known_present_persons,
-                        project_state, room_unrecognized)
+                        project_state, room_unrecognized, house_unrecognized)
 from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
 from wavr.occupancy_log import OccupancyLog
 from wavr.known_store import KnownStore
@@ -533,6 +533,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             hit = _intrusion.record(d["room"], unrecognized, d.get("person_count"), known, d["ts"])
             if hit is not None and _notify:
                 _notify("Wavr Vigia: pessoa nao reconhecida em " + str(d["room"]))
+            # House-level aggregate (room=None): catches a SPREAD-OUT intrusion no single
+            # room's count reveals -- unaccounted people split across rooms so the honest
+            # SUM exceeds the known-present count even when no one room does. Room-AGNOSTIC
+            # + count-only: never says which room, who, or where. house_person_count is
+            # None (never a fabricated 0) for a fully-uncounted house, so it stays silent
+            # on "unknown". Edge-triggered like the per-room path -> fires once.
+            house_count = house_person_count(latest.values())
+            hhit = _intrusion.record(None, house_unrecognized(house_count, known),
+                                     house_count, known, d["ts"])
+            if hhit is not None and _notify:
+                _notify("Wavr Vigia: pessoa nao reconhecida em casa")
         await _hub.publish(project_state(d, _watch.on, unrecognized))
         return d
 
@@ -1120,7 +1131,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
              "active": mcph_active, "suppressed": _connectors.is_suppressed("mcp-http"),
              "override": _connectors.override("mcp-http"), "env_active": False,
              "needs": mcph_needs, "enforcement": "registry-overlay",
-             "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp: RoomState + house map (no Wavr vitals/targets/presence-identities, no secrets) + HA entity list incl. entity names (which may name people/devices)",
+             "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp: RoomState incl. room-level person_count (a bare count -- no identity/geometry) + house map (no Wavr vitals/targets/presence-identities, no secrets) + HA entity list incl. entity names (which may name people/devices)",
              "env_flag": None},
         ]
 
@@ -1162,6 +1173,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         gate = on and cfg.identity_enabled
         known = len(known_present_persons(latest.values())) if gate else 0
         rooms = sorted(r for r, d in latest.items() if room_unrecognized(d, known)) if gate else []
+        # House-level aggregate: True when the honest SUM of per-room counts exceeds the
+        # known-present count even if NO single room's does (a spread-out intrusion the
+        # per-room `unrecognized_rooms` list alone would miss). Count-only + room-agnostic;
+        # a fully-uncounted house (house_person_count None) cannot assert it -> False, never
+        # a false "all clear". Gated on identity like every other intrusion signal.
+        house_unrec = bool(gate and house_unrecognized(house_person_count(latest.values()), known))
         return {
             "on": on,
             "identity_enabled": cfg.identity_enabled,
@@ -1170,6 +1187,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             "intrusion_detection": bool(gate),
             "known_present": known,
             "unrecognized_rooms": rooms,
+            "house_unrecognized": house_unrec,
         }
 
     @app.get("/api/watch")
@@ -1195,6 +1213,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                             d.get("person_count"), known, d.get("ts"))
                     if hit is not None and _notify:
                         _notify("Wavr Vigia: pessoa nao reconhecida em " + str(r))
+                # House-level aggregate, evaluated on the same immediate toggle so enabling
+                # Watch fires the house-level edge at once too (room=None, room-agnostic +
+                # count-only). ts defaults to now (there is no single room).
+                house_count = house_person_count(latest.values())
+                hhit = _intrusion.record(None, house_unrecognized(house_count, known),
+                                         house_count, known)
+                if hhit is not None and _notify:
+                    _notify("Wavr Vigia: pessoa nao reconhecida em casa")
         else:
             _intrusion.reset()
         return _watch_status()
