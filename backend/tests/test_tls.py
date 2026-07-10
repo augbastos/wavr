@@ -7,10 +7,19 @@ tests both drive generation and parse the result back to assert its shape.
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtensionOID, NameOID
 
-from wavr.tls import CERT_CN, cert_fingerprint, ensure_cert, resolved_cert_path
+from wavr.tls import (
+    CERT_CN,
+    cert_fingerprint,
+    ensure_cert,
+    fingerprint_from_pem,
+    format_fingerprint,
+    remote_cert_fingerprint,
+    resolved_cert_path,
+)
 
 LOCAL_IP = "192.168.1.5"
 
@@ -157,6 +166,17 @@ def test_cert_fingerprint_matches_cryptography_sha256(tmp_path):
     assert got.replace(":", "") == expected                 # same bytes browsers show
 
 
+def test_format_fingerprint_matches_fingerprint_from_pem(tmp_path):
+    # format_fingerprint (DER bytes -> str) is the shared formatting authority
+    # peer_client's live-socket check calls directly; it must agree byte-for-byte
+    # with fingerprint_from_pem's PEM-path output for the same certificate.
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    pem = open(cert_path, encoding="ascii").read()
+    der = _load_cert(cert_path).public_bytes(serialization.Encoding.DER)
+    assert format_fingerprint(der) == fingerprint_from_pem(pem)
+
+
 def test_cert_fingerprint_none_for_missing_file(tmp_path):
     assert cert_fingerprint(str(tmp_path / "does-not-exist.pem")) is None
 
@@ -187,3 +207,53 @@ def test_defaults_used_when_no_paths_given(tmp_path, monkeypatch):
     assert _load_cert(out_cert) is not None
     import os
     assert os.path.exists(out_key)
+
+
+# --------------------------------------------------------------------------- #
+# fingerprint_from_pem / remote_cert_fingerprint (Phase 1 peer-pairing, 2026-07-09).
+# A real self-signed cert is generated via `ensure_cert` (same as every other
+# test above) rather than hand-typing base64 PEM bytes.
+# --------------------------------------------------------------------------- #
+def _generated_pem(tmp_path) -> str:
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    with open(cert_path, encoding="ascii") as fh:
+        return fh.read()
+
+
+def test_fingerprint_from_pem_matches_cert_fingerprint_shape(tmp_path):
+    pem = _generated_pem(tmp_path)
+    fp = fingerprint_from_pem(pem)
+    assert fp is not None
+    assert len(fp) == 32 * 3 - 1  # 32 hex-pairs, colon-joined
+    assert fp == fp.upper()
+
+
+def test_fingerprint_from_pem_agrees_with_cert_fingerprint(tmp_path):
+    # Same bytes, read from disk vs passed as a PEM string -> identical fingerprint.
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    with open(cert_path, encoding="ascii") as fh:
+        pem = fh.read()
+    assert fingerprint_from_pem(pem) == cert_fingerprint(cert_path)
+
+
+def test_fingerprint_from_pem_none_on_garbage():
+    assert fingerprint_from_pem("not a cert") is None
+
+
+def test_remote_cert_fingerprint_uses_injected_fetch(tmp_path):
+    pem = _generated_pem(tmp_path)
+
+    def fake_fetch(host, port, timeout):
+        assert (host, port) == ("192.168.1.57", 8443)
+        return pem
+
+    fp = remote_cert_fingerprint("192.168.1.57", 8443, fetch=fake_fetch)
+    assert fp == fingerprint_from_pem(pem)
+
+
+def test_remote_cert_fingerprint_none_on_connect_failure():
+    def failing_fetch(host, port, timeout):
+        raise OSError("connection refused")
+    assert remote_cert_fingerprint("10.0.0.99", 8443, fetch=failing_fetch) is None

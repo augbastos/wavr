@@ -63,7 +63,13 @@ class PairingManager:
         self._attempt_window = attempt_window
         self._codes: dict[str, _PendingCode] = {}
         self._tickets: dict[str, _PendingTicket] = {}
-        self._failed: list[datetime] = []   # timestamps of recent FAILED redeems
+        # Brute-force defense, keyed PER SOURCE IP (sweep [4]/[13]): source_ip ->
+        # timestamps of that host's recent FAILED redeems. A single unauth in-subnet
+        # host flooding junk guesses can only saturate ITS OWN bucket, so it can no
+        # longer lock out legitimate pairing (device or peer) from other hosts.
+        # `None`/absent source_ip shares one "" bucket (backward-compatible with the
+        # old single global list for callers that don't pass a source).
+        self._failed: dict[str, list[datetime]] = {}
 
     # -- pairing codes -----------------------------------------------------
     def mint_code(self, role: str = "user") -> str:
@@ -76,20 +82,27 @@ class PairingManager:
         self._codes[code] = _PendingCode(role, self._now() + timedelta(seconds=self._code_ttl))
         return code
 
-    def redeem(self, code: str, name: str) -> tuple[str, str] | None:
+    def redeem(self, code: str, name: str, source_ip: str | None = None) -> tuple[str, str] | None:
         """Redeem a code for a new device: returns (device_id, token) once, or None
         if the code is unknown, already used, or expired. One-time: the code is
-        consumed on the first attempt (valid or not) so it can't be reused."""
+        consumed on the first attempt (valid or not) so it can't be reused.
+
+        `source_ip` (the caller's `request.client.host`) keys the FAILED-attempt
+        rate-limiter PER HOST (sweep [4]/[13]): one host's junk guesses throttle
+        only that host, never everyone's pairing. `None` uses a shared bucket so
+        callers that pre-date this param behave exactly as before."""
         now = self._now()
-        # Rate-limit brute force (audit H1): count only FAILED attempts so legit
-        # redeems are never throttled; over the cap in the window, reject outright.
-        self._failed = [t for t in self._failed
-                        if t >= now - timedelta(seconds=self._attempt_window)]
-        if len(self._failed) >= self._max_failed:
+        # Rate-limit brute force (audit H1), now per source IP: count only FAILED
+        # attempts so legit redeems are never throttled; over the cap in the window
+        # FOR THIS IP, reject outright. Purge expired timestamps across all buckets
+        # first so the map stays bounded even under a flood of distinct source IPs.
+        self._purge_failed(now)
+        key = source_ip or ""
+        if len(self._failed.get(key, ())) >= self._max_failed:
             return None
         pending = self._codes.pop(code, None)       # consume the correct code on hit
         if pending is None or now >= pending.expires_at:
-            self._failed.append(now)                # wrong/expired guess -> counts
+            self._failed.setdefault(key, []).append(now)   # wrong/expired guess -> counts (per IP)
             return None
         return self._store.add(name, pending.role)
 
@@ -128,3 +141,16 @@ class PairingManager:
         now = self._now()
         self._codes = {k: v for k, v in self._codes.items() if now < v.expires_at}
         self._tickets = {k: v for k, v in self._tickets.items() if now < v.expires_at}
+
+    def _purge_failed(self, now: datetime) -> None:
+        """Drop out-of-window failure timestamps and empty per-IP buckets so
+        `self._failed` stays bounded no matter how many distinct source IPs have
+        ever made a failed attempt (a flood of one-shot junk from spoofed/rotating
+        IPs cannot grow the map unboundedly)."""
+        cutoff = now - timedelta(seconds=self._attempt_window)
+        pruned: dict[str, list[datetime]] = {}
+        for ip, stamps in self._failed.items():
+            keep = [t for t in stamps if t >= cutoff]
+            if keep:
+                pruned[ip] = keep
+        self._failed = pruned
