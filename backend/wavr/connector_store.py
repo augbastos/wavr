@@ -7,14 +7,22 @@ camera_store.py / identity_store.py: a small sqlite store sharing wavr.db
 (git-ignored) but owning its own table; ":memory:" for tests; lock-guarded so it
 can be driven from a thread pool.
 
-The registry NEVER becomes a second way to ENABLE egress (that would be a silent
-cloud/PII leak). For the built-in, env-gated features (narrator, HA import) it is a
-MONOTONE, RESTRICT-ONLY overlay: a row can only turn a live feature OFF (a
-kill-switch), never bypass the env flag. Effective state stays
-`env_active AND NOT is_suppressed(id)` -- absent row => pure env => byte-identical
-to today. For future generic connectors (kind='generic') the registry IS the full
-enforcing gate: default enabled=0, an explicit toggle flips it, the connector's own
-egress code checks is_enabled(id).
+The registry is the single admin PERMISSION BROKER for outward-facing features
+(project_wavr_connectors_vision): the one screen where an admin turns things ON, all
+default-OFF. For the built-in, env-gated features (narrator, HA import, MCP-HTTP) a
+row is a persisted admin OVERRIDE that WINS over the env flag: enabled=1 = a
+DELIBERATE enable that force-activates the gate even when the env flag is unset;
+enabled=0 = a DELIBERATE disable (kill-switch) even when the env flag is on. The
+effective gate is `effective_active(id, env_active)` -- override when a row exists,
+else the env flag. An ABSENT row => pure env => byte-identical to today, so an empty
+registry egresses nothing. The override enables the GATE only; a connector cannot
+actually egress until it is separately configured (a provider key, HA creds, an HTTP
+mount) -- the chokepoints prove that readiness independently, so an
+enabled-but-unconfigured connector reaches nowhere. Writing an override is gated at
+the route to the loopback admin (require_local CSRF + admin scope). For future generic
+connectors (kind='generic') the registry IS the full enforcing gate: default
+enabled=0, an explicit toggle flips it, the connector's own egress code checks
+is_enabled(id).
 
 SECRETS: this table stores NON-SECRET metadata only. `config_json` references env
 by NAME, never a key/token/rtsp-url-with-credentials -- nothing here is ever logged
@@ -52,14 +60,18 @@ def _utcnow_iso() -> str:
 class ConnectorStore:
     """SQLite-backed connector registry. Two row kinds:
 
-      * kind='builtin' -- an OVERLAY row for an env-gated feature. Its only power is
-        `enabled=0` = SUPPRESSED = kill-switch (is_suppressed True). enabled=1 clears
-        the suppression; it can NEVER exceed the env flag (the chokepoint ANDs env).
+      * kind='builtin' -- a persisted admin OVERRIDE row for an env-gated feature.
+        enabled=1 = override "on" = a DELIBERATE enable that force-activates the gate
+        even when the env flag is unset; enabled=0 = override "off" = kill-switch
+        (is_suppressed True) even when the env flag is on. See override() /
+        effective_active(): the override WINS over the env flag when a row exists.
       * kind='generic' -- a full gate for a future MCP/API connector. enabled=1 =
         is_enabled True = the connector's egress code may run; default 0 = off.
 
-    Absent id => is_suppressed False AND is_enabled False, so an empty registry is
-    byte-identical to today (nothing suppressed, no generic active)."""
+    Absent id => override None => the env flag alone decides, so an empty registry is
+    byte-identical to today (nothing suppressed, nothing force-enabled, no generic
+    active). An override enables the GATE only; actual egress still requires the
+    feature to be configured, proven separately at each chokepoint."""
 
     def __init__(self, path: str = "wavr.db", now_fn=_utcnow_iso):
         self._conn = sqlite3.connect(path, check_same_thread=False)
@@ -135,6 +147,36 @@ class ConnectorStore:
         False => a future connector's egress code stays inert (DEFAULT-OFF)."""
         row = self.get(id)
         return row is not None and row["enabled"] == 1
+
+    def override(self, id: str) -> str | None:
+        """The persisted admin OVERRIDE for a built-in connector, or None when absent.
+
+          * "on"  -- a row with enabled==1: a DELIBERATE admin ENABLE. It force-enables
+            the feature's gate even when the env flag is unset (subject to the feature
+            actually being configured -- an enabled-but-unconfigured connector still
+            egresses NOTHING; the chokepoint proves that separately).
+          * "off" -- a row with enabled==0: a DELIBERATE admin DISABLE (kill-switch),
+            overriding an env flag that is on.
+          * None  -- no row: the env flag alone decides => byte-identical to today.
+
+        The override is the single admin choice persisted on the box (survives restart);
+        writing it is gated at the route (require_local + admin scope on the loopback)."""
+        row = self.get(id)
+        if row is None:
+            return None
+        return "on" if row["enabled"] == 1 else "off"
+
+    def effective_active(self, id: str, env_active: bool) -> bool:
+        """Effective GATE for a built-in feature: the persisted admin override WINS when
+        present (a deliberate, loopback-admin action), else the env flag decides. An
+        empty registry => `env_active` unchanged => byte-identical to today. This is the
+        gate ONLY -- whether the feature can actually run (provider key, HA creds, an
+        HTTP mount) is a separate readiness check the caller ANDs in, so this never
+        conjures egress from an unconfigured connector."""
+        ov = self.override(id)
+        if ov is None:
+            return bool(env_active)
+        return ov == "on"
 
     def close(self) -> None:
         self._conn.close()

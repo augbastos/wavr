@@ -526,6 +526,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _owns_connectors = connector_store is None
     _connectors = connector_store or ConnectorStore(cfg.db_path)
 
+    # Connectors override: an admin who turned the narrator ON in the Connectors screen
+    # (a persisted enable override, WAVR_NARRATE_ENABLED unset) gets the provider client
+    # built HERE, at startup, exactly like the env path above -- so the override actually
+    # activates the feature after a restart. Still TWO-FACTOR: provider_configured(cfg)
+    # must hold (a key for a cloud provider, or the local Ollama selection), so an
+    # enable-without-a-key stays inert (the /api/narrate chokepoint reports "needs a
+    # provider key" and egresses nothing). No key configured => _narrator stays None.
+    if (_narrator is None and provider_configured(cfg)
+            and _connectors.override("narrator") == "on"):
+        _narrator = Narrator(make_generate(cfg))
+
     # Core Panel admin unlock PIN: always built (like CameraStore/ConnectorStore),
     # inert until POST /api/core/pin sets one -- an unset PIN just verifies False
     # (never a crash / never a bypass). PinAttemptLimiter is pure in-memory
@@ -961,16 +972,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     def _connector_catalog() -> list[dict]:
-        # The built-in connectors surfaced from EXISTING gated features. available/
-        # active are COMPUTED LIVE from cfg (never seeded into the DB, which would let
-        # a DEFAULT-0 row suppress a live feature). The registry is a MONOTONE overlay:
-        # effective active = env_active AND NOT is_suppressed(id). A row can only turn
-        # a feature OFF; it can NEVER enable egress beyond the env flag.
-        #  * enforcement='registry-overlay' -- the UI toggle has real teeth (a
-        #    suppression row makes the chokepoint 503/403 on the NEXT request).
-        #  * enforcement='env' -- the gate is bound inside the separate MCP server
-        #    process (ADR-0005); the card REFLECTS the flag + shows the env var to edit,
-        #    rather than pretending a dead toggle works (TRANSPARENT).
+        # The built-in connectors surfaced from EXISTING gated features. available/env
+        # state are COMPUTED LIVE from cfg (never seeded into the DB). The registry is
+        # the permission BROKER: the effective GATE is the persisted admin override when
+        # present (a deliberate loopback-admin action), else the env flag decides
+        # (effective_active). A row can DISABLE an env-on feature (kill-switch) OR ENABLE
+        # an env-off one -- but only a DELIBERATE POST enable writes a row, so an empty
+        # registry is byte-identical to today.
+        #  * `override` -- "on"/"off"/None: the persisted admin toggle (drives the UI switch).
+        #  * `env_active` -- is the env flag alone making it on (independent of override).
+        #  * `active` -- the HONEST truth: gate-on AND actually able to run right now. An
+        #    enabled-but-unconfigured connector is gate-on but NOT active (egresses nothing).
+        #  * `needs` -- None | "restart" | "config": when the admin turned it on but it is
+        #    not live yet, WHY -- so the UI says so honestly instead of faking "live".
+        #  * enforcement='registry-overlay' -- the UI toggle has real teeth (enable/disable).
+        #  * enforcement='env' -- the gate is bound inside the SEPARATE MCP server process
+        #    (ADR-0005); an in-app override cannot reach it, so the card REFLECTS the flag +
+        #    names the env var to edit rather than faking a switch (TRANSPARENT).
         narr_provider = cfg.narrate_provider
         narr_available = provider_configured(cfg)
         narr_env = cfg.narrate_enabled and narr_available
@@ -979,37 +997,61 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         ha_configured = bool(cfg.ha_url and cfg.ha_token)
         haimp_env = cfg.ha_import and ha_configured
         hactl_env = cfg.mcp_control and ha_configured
+
+        # Narrator: gate = env-or-override; live only once the provider client is built
+        # (that happens at startup, so an override needs a hub restart to take effect).
+        narr_gate = _connectors.effective_active("narrator", narr_env)
+        narr_active = narr_gate and _narrator is not None
+        narr_needs = (None if (not narr_gate or narr_active)
+                      else ("config" if not narr_available else "restart"))
+        # HA import: gate = env-or-override; live as soon as HA creds are present (the
+        # fetch is per-request, so NO restart is needed once configured).
+        haimp_gate = _connectors.effective_active("ha-import", haimp_env)
+        haimp_active = haimp_gate and ha_configured
+        haimp_needs = "config" if (haimp_gate and not haimp_active) else None
+        # MCP-over-HTTP: no env flag; the registry IS the gate (per-request is_enabled via
+        # effective_active). Live only when the mount is wired (multidevice ON + [mcp]),
+        # so an override without the mount needs a hub restart with multidevice enabled.
+        mcph_gate = _connectors.effective_active("mcp-http", False)
+        mcph_active = mcph_gate and _mcp_http_route is not None
+        mcph_needs = "restart" if (mcph_gate and not mcph_active) else None
+
         return [
             {"id": "narrator", "kind": "builtin", "direction": "outbound",
              "label": "LLM Narrator", "available": narr_available,
-             "active": narr_env and not _connectors.is_suppressed("narrator"),
-             "suppressed": _connectors.is_suppressed("narrator"),
+             "active": narr_active, "suppressed": _connectors.is_suppressed("narrator"),
+             "override": _connectors.override("narrator"), "env_active": narr_env,
+             "needs": narr_needs,
              "enforcement": "registry-overlay", "scope": narr_scope,
              "env_flag": "WAVR_NARRATE_ENABLED"},
             {"id": "ha-import", "kind": "builtin", "direction": "inbound",
              "label": "Home Assistant Import", "available": ha_configured,
-             "active": haimp_env and not _connectors.is_suppressed("ha-import"),
-             "suppressed": _connectors.is_suppressed("ha-import"),
+             "active": haimp_active, "suppressed": _connectors.is_suppressed("ha-import"),
+             "override": _connectors.override("ha-import"), "env_active": haimp_env,
+             "needs": haimp_needs,
              "enforcement": "registry-overlay", "scope": "local HA registry (LAN)",
              "env_flag": "WAVR_HA_IMPORT"},
             {"id": "ha-control", "kind": "builtin", "direction": "outbound",
              "label": "Home Assistant Control", "available": ha_configured,
              "active": hactl_env, "suppressed": False,
+             "override": None, "env_active": hactl_env, "needs": None,
              "enforcement": "env", "scope": "outbound-control: local HA (LAN)",
              "env_flag": "WAVR_MCP_CONTROL"},
             {"id": "mcp-read", "kind": "builtin", "direction": "inbound",
              "label": "MCP Server (read-only)", "available": True,
              "active": False, "suppressed": False,
+             "override": None, "env_active": False, "needs": None,
              "enforcement": "env", "scope": "read-only RoomState; runs as a separate MCP server",
              "env_flag": None},
             # ADR-0008 Slice 1: the in-app READ-ONLY MCP-over-HTTP listener. Available only
             # when the mount is actually wired (multidevice ON + [mcp] extra). DEFAULT-OFF;
-            # registry-overlay so the toggle is a real per-request kill-switch (is_enabled).
+            # registry-overlay so the toggle is a real per-request enable/kill-switch.
             {"id": "mcp-http", "kind": "builtin", "direction": "inbound",
              "label": "MCP Server (HTTP, read-only)",
              "available": _mcp_http_route is not None,
-             "active": _mcp_http_route is not None and _connectors.is_enabled("mcp-http"),
-             "suppressed": False, "enforcement": "registry-overlay",
+             "active": mcph_active, "suppressed": _connectors.is_suppressed("mcp-http"),
+             "override": _connectors.override("mcp-http"), "env_active": False,
+             "needs": mcph_needs, "enforcement": "registry-overlay",
              "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp: RoomState + house map (no Wavr vitals/targets/presence-identities, no secrets) + HA entity list incl. entity names (which may name people/devices)",
              "env_flag": None},
         ]
@@ -1085,17 +1127,32 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/narrate")
     async def narrate(_=Depends(require_local), __=Depends(require_scope("control"))):
+        # Connectors & Services override (REVOCABLE, read per request). Checked FIRST so a
+        # deliberate "off" kill-switch revokes even a live narrator immediately, no restart.
+        narr_ov = _connectors.override("narrator")
+        if narr_ov == "off":
+            raise HTTPException(status_code=503,
+                                detail="narrator revoked in Connectors screen")
         if _narrator is None:
+            # Enabled in the Connectors screen but the provider client isn't built yet:
+            # be HONEST about what is missing rather than pretend it's live -- and, crucially,
+            # still egress NOTHING (we return 503, we do not narrate). An enable without a
+            # provider key needs the key; an enable WITH a key needs a hub restart (the
+            # client is built at startup, mirroring the WAVR_NARRATE_ENABLED path).
+            if narr_ov == "on":
+                if not provider_configured(cfg):
+                    raise HTTPException(
+                        status_code=503,
+                        detail=("narrator enabled in Connectors — configure the "
+                                f"'{cfg.narrate_provider}' provider (API key), then restart the hub"))
+                raise HTTPException(
+                    status_code=503,
+                    detail="narrator enabled in Connectors — restart the hub to activate")
+            # Default (no override): byte-identical to before.
             raise HTTPException(
                 status_code=503,
                 detail="narration not configured (set WAVR_NARRATE_ENABLED=1 and configure "
                        f"the '{cfg.narrate_provider}' provider)")
-        # Connectors & Services kill-switch (REVOCABLE, read per request): a
-        # suppression row revokes this outbound connector immediately, no restart.
-        # Absent row => byte-identical to before.
-        if _connectors.is_suppressed("narrator"):
-            raise HTTPException(status_code=503,
-                                detail="narrator revoked in Connectors screen")
         try:
             rows = await asyncio.to_thread(_storage.recent, 50)
             text = await asyncio.to_thread(_narrator.narrate, latest, rows)
@@ -1112,15 +1169,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # only ever contacts the configured ha_url). The HA token is read from
         # config here and passed to the transport only -- it is NEVER in the
         # response or any error string below.
-        if not cfg.ha_import:
-            raise HTTPException(status_code=403,
-                                detail="HA import disabled (WAVR_HA_IMPORT=0)")
-        # Connectors & Services kill-switch (REVOCABLE, read per request): a
-        # suppression row revokes this connector immediately, no restart. Absent row
-        # => byte-identical to before.
-        if _connectors.is_suppressed("ha-import"):
+        # Connectors & Services override (REVOCABLE, read per request). A deliberate "off"
+        # revokes even with WAVR_HA_IMPORT=1 (kill-switch); a deliberate "on" ENABLES the
+        # import when the env flag is unset. Both survive restart; absent row => the env
+        # flag alone decides => byte-identical to before. Unlike the narrator this needs
+        # NO restart to go live once HA creds are configured (the fetch is per-request).
+        ha_ov = _connectors.override("ha-import")
+        if ha_ov == "off":
             raise HTTPException(status_code=403,
                                 detail="HA import revoked in Connectors screen")
+        if not (cfg.ha_import or ha_ov == "on"):
+            raise HTTPException(status_code=403,
+                                detail="HA import disabled (WAVR_HA_IMPORT=0)")
         if client_from_config(cfg) is None:
             # HA not configured (empty ha_url/ha_token) -> nothing to import, no write.
             raise HTTPException(status_code=400,
