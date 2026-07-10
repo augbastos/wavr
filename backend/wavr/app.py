@@ -539,6 +539,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             hit = _intrusion.record(d["room"], unrecognized, d.get("person_count"), known, d["ts"])
             if hit is not None and _notify:
                 _notify("Wavr Vigia: pessoa nao reconhecida em " + str(d["room"]))
+            # Build C4: forward the CURRENT active/clear verdict to MQTT every time (not
+            # just on a new-alert edge) -- RulesEngine.handle_intrusion dedupes internally,
+            # but it needs every re-evaluation to ever see the flagged-to-clear transition.
+            if _rules is not None:
+                _rules.handle_intrusion(d["room"], d["room"] in _intrusion.active_rooms())
             # House-level aggregate (room=None): catches a SPREAD-OUT intrusion no single
             # room's count reveals -- unaccounted people split across rooms so the honest
             # SUM exceeds the known-present count even when no one room does. Room-AGNOSTIC
@@ -550,6 +555,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                      house_count, known, d["ts"])
             if hhit is not None and _notify:
                 _notify("Wavr Vigia: pessoa nao reconhecida em casa")
+            if _rules is not None:
+                _rules.handle_intrusion(None, None in _intrusion.active_rooms())
         # A9 fall/no-motion suspicion (RESEARCH-GRADE, ADR-0003): independent of Watch/
         # identity -- posture is not family geometry/PII, so it is evaluated unconditionally
         # once opted in (`_fall` is None otherwise). Reads `d["targets"]` -- the FULL
@@ -594,10 +601,50 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             except Exception:
                 logging.warning("refuse tick failed for room %s", room, exc_info=True)
 
+    async def _publish_derived_mqtt():
+        # Build C4: push A4's routine-anomaly + A10's composed house-status verdict
+        # onto MQTT so a user can build Home Assistant automations off them (ADR-0005
+        # -- Wavr stays a signal SOURCE, never an automation engine). No-op when
+        # MQTT/rules aren't wired, mirroring every other `_rules is None` skip in this
+        # module. Runs on the SAME cadence as the re-fuse tick (cfg.refuse_interval) --
+        # no new loop/config knob -- and RulesEngine dedupes internally, so a steady
+        # "nothing to report" tick never re-publishes.
+        if _rules is None:
+            return
+        routine_flags = []
+        if _occupancy_log is not None:
+            now = datetime.now(timezone.utc)
+            rooms = list(latest.items())
+            # Concurrent, off the event loop -- mirrors GET /api/house-status's own
+            # per-room is_unusual() sweep (one sqlite read per currently-fused room,
+            # never a blocking serial loop).
+            checks = await asyncio.gather(*(
+                asyncio.to_thread(_occupancy_log.is_unusual, room, d.get("occupied"), at=now)
+                for room, d in rooms
+            ))
+            for (room, _d), verdict in zip(rooms, checks):
+                # is_unusual()'s honest `None` ("insufficient data") folds to False here
+                # -- an anomaly binary_sensor must never assert "unusual" on a "don't
+                # know" verdict.
+                unusual = verdict.get("unusual") is True
+                _rules.handle_routine_anomaly(room, unusual)
+                if unusual:
+                    routine_flags.append({"room": room, "ts": now.isoformat()})
+        network_alerts = merge_alerts(_inventory, dhcp_monitor=_dhcp_monitor,
+                                      gateway_monitor=_gateway_monitor)
+        status = compose_house_status(
+            network_alerts=network_alerts,
+            intrusion_alerts=_intrusion.active_alerts(),
+            fall_alerts=_fall.active_alerts() if _fall is not None else None,
+            routine_flags=routine_flags,
+        )
+        _rules.handle_house_status(status)
+
     async def _refuse_loop():
         while True:
             await asyncio.sleep(cfg.refuse_interval)
             await _refuse_once()
+            await _publish_derived_mqtt()
 
     # Consent-first identity/device registry (2026-07-06 ethics decision): the
     # persistent, admin-confirmed source of {addr -> person}. Built like CameraStore
@@ -862,6 +909,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * camera_health: the F3 monitor, so a test can latch a camera down/up and
     #    assert the /api/cameras liveness tri-state (names only, no frame/creds).
     app.state.refuse_once = _refuse_once
+    #  * publish_derived_mqtt: Build C4's routine-anomaly/house-status MQTT tick, so a
+    #    test can drive one deterministic push without waiting on cfg.refuse_interval.
+    app.state.publish_derived_mqtt = _publish_derived_mqtt
     app.state.camera_health = _camera_health
     #  * calib_sample: the walk-to-calibrate feet-pixel sink, so a test can record a
     #    coordinate and assert GET calib-sample surfaces it (never a frame -- ADR-0002).
@@ -1232,6 +1282,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                             d.get("person_count"), known, d.get("ts"))
                     if hit is not None and _notify:
                         _notify("Wavr Vigia: pessoa nao reconhecida em " + str(r))
+                    if _rules is not None:
+                        _rules.handle_intrusion(r, r in _intrusion.active_rooms())
                 # House-level aggregate, evaluated on the same immediate toggle so enabling
                 # Watch fires the house-level edge at once too (room=None, room-agnostic +
                 # count-only). ts defaults to now (there is no single room).
@@ -1240,7 +1292,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                          house_count, known)
                 if hhit is not None and _notify:
                     _notify("Wavr Vigia: pessoa nao reconhecida em casa")
+                if _rules is not None:
+                    _rules.handle_intrusion(None, None in _intrusion.active_rooms())
         else:
+            # Build C4: Watch turning off must clear any retained ON intrusion topic --
+            # otherwise a resolved intrusion stays stuck ON on the broker forever (the
+            # SAME staleness `wavr.house_status`'s module docstring warns against),
+            # since `_publish`'s own intrusion re-evaluation stops running once
+            # `_watch.on` is False. Publish OFF for every currently-active scope BEFORE
+            # `reset()` drops the edge state.
+            if _rules is not None:
+                for r in _intrusion.active_rooms():
+                    _rules.handle_intrusion(r, False)
             _intrusion.reset()
         return _watch_status()
 
