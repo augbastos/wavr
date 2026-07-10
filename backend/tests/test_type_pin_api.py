@@ -8,10 +8,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from wavr.api_inventory import build_inventory_router
+from wavr.api_inventory import _device_view, build_inventory_router
 from wavr.app import create_app
 from wavr.camera_store import CameraStore
 from wavr.device_meta import DeviceMeta
+from wavr.netinventory import Device
 from wavr.netinventory_service import NetworkInventoryService
 
 WINDOWS_ARP = """
@@ -193,6 +194,19 @@ def test_inventory_view_backward_compatible_plus_additive_fields():
     assert isinstance(apple["sources"], list) and apple["sources"]
     assert "risks" not in apple                   # port scan off -> absent, as before
     assert "open_ports" not in apple
+    assert "hostname" not in apple                 # no self-announced/PTR name -> absent, as before
+
+
+def test_inventory_view_exposes_hostname_when_populated():
+    # Confirmed-gap fix (2f57435): Device.hostname is now filled from a
+    # self-announced mDNS/SSDP/SNMP/NetBIOS name even without the opt-in PTR
+    # resolver, but the /api/inventory view never surfaced it -- additive.
+    d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Apple",
+               device_type="speaker", known=True, hostname="Living-Room-HomePod")
+    view = _device_view(d)
+    assert view["hostname"] == "Living-Room-HomePod"
+    # every pre-existing field still present, unchanged
+    assert {"mac", "ip", "vendor", "device_type", "type_confidence", "known"} <= set(view)
 
 
 # ---- app-level CSRF gating (mirrors PUT /api/inventory/name) ---------------------

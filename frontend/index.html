@@ -423,9 +423,12 @@
   .dev-rename-btn{align-self:flex-start;background:none;border:none;color:var(--dim);cursor:pointer;
                   font-size:.75rem;padding:2px 0;margin-top:2px;transition:color .15s ease-out;}
   .dev-rename-btn:hover,.dev-rename-btn:focus-visible{color:var(--accent);}
+  .dev-rename-btn:disabled{opacity:.5;cursor:default;}
   .dev-rename-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;}
   .dev-rename-form input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
                          border-radius:8px;padding:6px 10px;font-size:.8rem;min-width:140px;}
+  .alert-actions{margin-top:4px;}
+  .alert-honesty{margin:2px 0 8px;}
   .alert-row{font-size:.8rem;padding:7px 0;border-top:1px dashed var(--line);}
   .alert-row .at{color:var(--danger);font-weight:600;}
   .alert-row .ameta{color:var(--dim);font-variant-numeric:tabular-nums;
@@ -1928,6 +1931,9 @@
             </div>
             <div class="net-col">
               <h4>Intrusion alerts</h4>
+              <p class="net-hint alert-honesty">A device with a randomized MAC and no self-announced
+                name can't be auto-identified from the network alone — that's why it shows up here as
+                unfamiliar. If it's actually yours, use "this is mine" on its row to mark it known.</p>
               <div id="alertList" class="alert-list" aria-live="polite"></div>
             </div>
           </div>
@@ -3985,8 +3991,12 @@ function renderNetwork(){
       const main = document.createElement("span");
       // v2: device_type is the backend's fixed taxonomy → English label + confidence-honest cue
       const vendorType = (d.vendor || "unknown") + " · " + dtypeLabel(d.device_type);  // plain-text form (aria)
-      if(d.name){
-        main.className = "dev-main named"; main.textContent = d.name;    // textContent only — XSS-safe
+      // Resolved-identity priority: a user-set name wins; otherwise the device's own
+      // self-announced/PTR-resolved hostname (still a real identity, just not user-confirmed);
+      // only when NEITHER is known does the row fall back to the honest vendor+type guess.
+      const resolvedIdentity = d.name || d.hostname || null;
+      if(resolvedIdentity){
+        main.className = "dev-main named"; main.textContent = resolvedIdentity;   // textContent only — XSS-safe
         const sub = document.createElement("span"); sub.className = "dev-sub";
         sub.textContent = " · " + (d.vendor || "unknown") + " · ";
         sub.appendChild(dtypeLabelEl(d.device_type, d.type_confidence, d.known === false));
@@ -4050,9 +4060,40 @@ function renderNetwork(){
         } else {
           const rn = document.createElement("button");
           rn.type = "button"; rn.className = "dev-rename-btn"; rn.textContent = "✎ rename";
-          rn.setAttribute("aria-label", "rename " + (d.name || vendorType));
+          rn.setAttribute("aria-label", "rename " + (resolvedIdentity || vendorType));
           rn.onclick = ()=>{ editingMac = d.mac; editingValue = d.name || ""; editingJustOpened = true; refresh(); };
           left.appendChild(rn);
+        }
+        // Known/unfamiliar toggle — POST /api/inventory/known (same X-Wavr-Local CSRF rule as
+        // rename/type-pin). known:true immediately drops any rogue_device alert for this MAC
+        // (backend's apply_known_change); known:false re-arms it. Independent of the rename
+        // edit-state above so it stays visible while a rename is in progress.
+        if(d.mac){
+          const knownBtn = document.createElement("button");
+          knownBtn.type = "button"; knownBtn.className = "dev-rename-btn dev-known-btn";
+          knownBtn.textContent = d.known ? "↺ mark as unfamiliar" : "✓ this is mine";
+          knownBtn.setAttribute("aria-label",
+            (d.known ? "mark " : "mark ") + (resolvedIdentity || vendorType) + (d.known ? " as unfamiliar" : " as known"));
+          knownBtn.onclick = async ()=>{
+            knownBtn.disabled = true;
+            const nextKnown = !d.known;
+            let r;
+            try{
+              r = await fetch(location.origin+"/api/inventory/known", {method:"POST",
+                headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+                body: JSON.stringify({mac:d.mac, known:nextKnown})});
+            }catch{}
+            if(r && r.ok){
+              actionFeedback(devFb, true, null, nextKnown ? "✓ marked known" : "✓ marked unfamiliar");
+              refresh();
+            } else {
+              let msg = "update failed";
+              try{ const j = await r.json(); if(j && (j.detail || j.error)) msg = String(j.detail || j.error); }catch{}
+              actionFeedback(devFb, false, msg);
+              knownBtn.disabled = false;
+            }
+          };
+          left.appendChild(knownBtn);
         }
       }
       const tag = document.createElement("span");
@@ -4108,6 +4149,39 @@ function renderNetwork(){
         meta.appendChild(document.createTextNode(" " + MIDDOT + " " + rest));
       }
       row.appendChild(badge); row.appendChild(at); row.appendChild(meta);
+      // Mark-as-known action — live only (needs the X-Wavr-Local CSRF header). Only for
+      // rogue_device sightings (a real MAC to mark); gateway_identity/rogue_dhcp are
+      // network-level events with no single device to allowlist. On success the backend
+      // drops this alert from the very next GET /api/alerts (apply_known_change), so
+      // refresh() removing the row IS the confirmation — no separate "gone" state needed.
+      if(kind === "rogue_device" && MODE==="live" && a.mac){
+        const act = document.createElement("div"); act.className = "alert-actions";
+        const mineBtn = document.createElement("button");
+        mineBtn.type = "button"; mineBtn.className = "dev-rename-btn dev-known-btn";
+        mineBtn.textContent = "✓ this is mine";
+        mineBtn.setAttribute("aria-label", "mark " + (a.hostname || a.vendor || "this device") + " as known");
+        const fb = document.createElement("span"); fb.className = "action-fb"; fb.setAttribute("aria-live", "polite");
+        mineBtn.onclick = async ()=>{
+          mineBtn.disabled = true;
+          let r;
+          try{
+            r = await fetch(location.origin+"/api/inventory/known", {method:"POST",
+              headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+              body: JSON.stringify({mac:a.mac, known:true})});
+          }catch{}
+          if(r && r.ok){
+            actionFeedback(fb, true, null, "✓ marked known");
+            refresh();
+          } else {
+            let msg = "update failed";
+            try{ const j = await r.json(); if(j && (j.detail || j.error)) msg = String(j.detail || j.error); }catch{}
+            actionFeedback(fb, false, msg);
+            mineBtn.disabled = false;
+          }
+        };
+        act.appendChild(mineBtn); act.appendChild(fb);
+        row.appendChild(act);
+      }
       alertList.appendChild(row);
     });
   }
@@ -7864,6 +7938,10 @@ try {
 
   function detMetaLine(d){
     var bits = [];
+    // Resolved identity (a user-set name, else the device's own self-announced/PTR
+    // hostname) leads the line when known — same priority as the Network tab's rows.
+    if(d.name) bits.push(d.name);
+    else if(d.hostname) bits.push(d.hostname);
     if(d.ip) bits.push(d.ip);
     if(typeof maskMac === "function" && d.mac) bits.push(maskMac(d.mac));
     if(d.vendor && d.vendor !== "unknown") bits.push(d.vendor);
@@ -7966,7 +8044,10 @@ try {
     ic.appendChild(icon(dtypeIcon(d.device_type)));   // v2: taxonomy icon (ic-qmark fallback)
     var tw = elc("div");
     var known = d.vendor && d.vendor !== "unknown";
-    tw.appendChild(elc("div", "cap-title", known ? d.vendor : "Unknown device"));
+    // Resolved identity (name, else the device's own self-announced/PTR hostname) leads the
+    // title when known — same priority as the Network tab's rows; only a truly unresolved
+    // device (no name, no hostname, no vendor) keeps the honest "Unknown device" title.
+    tw.appendChild(elc("div", "cap-title", d.name || d.hostname || (known ? d.vendor : "Unknown device")));
     var brandU = elc("div", "cap-brand");
     brandU.appendChild(dtypeLabelEl(d.device_type, d.type_confidence, d.known === false));
     tw.appendChild(brandU);
