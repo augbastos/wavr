@@ -46,6 +46,7 @@ from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
 from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
+from wavr.known_store import KnownStore
 from wavr.netinventory import _same_ip
 from wavr.ha_client import client_from_config
 from wavr.ha_import import fetch_registry, import_devices
@@ -265,7 +266,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                dns_query_fn=None, speedtest_fn=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
-               connector_store=None, pin_store=None, companion_resolve_mac=None) -> FastAPI:
+               connector_store=None, pin_store=None, companion_resolve_mac=None,
+               known_store=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -323,6 +325,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # sensitive and the store is inert until something calls seen()/set_name().
     _owns_device_meta = device_meta is None
     _device_meta = device_meta or DeviceMeta(cfg.db_path)
+
+    # Runtime known-device store: persisted per-MAC known/unknown flag, always
+    # built (like device_meta) -- inert until POST /api/inventory/known runs
+    # (an empty store changes nothing: today's static WAVR_NET_MACS-only
+    # behaviour). Lets an ordinary house device that was never on the static
+    # env allowlist be marked known WITHOUT a restart -- the core fix for
+    # rogue alerts firing on non-intruder devices.
+    _owns_known_store = known_store is None
+    _known_store = known_store or KnownStore(cfg.db_path)
 
     # HA-import store (A4.1): persisted per-MAC identity imported from the local
     # Home Assistant device registry, always built (like device_meta) -- inert
@@ -401,7 +412,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         gateway_monitor=_gateway_monitor,
         # HA-import identity (A4.1): each scan folds the user-imported HA
         # registry back in as the recog `ha` signal (medium-capped, A4.0).
-        ha_store=_ha_import_store)
+        ha_store=_ha_import_store,
+        # Runtime known-device store: read fresh every scan (same pattern as
+        # device_meta/ha_store above) and unioned with the static
+        # WAVR_NET_MACS allowlist -- a POST /api/inventory/known mark-known
+        # takes effect on the very next scan with no restart.
+        known_provider=_known_store.known_macs)
 
     # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
     # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
@@ -745,6 +761,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_device_meta:
                 with suppress(Exception):
                     _device_meta.close()
+            if _owns_known_store:
+                with suppress(Exception):
+                    _known_store.close()
             if _owns_ha_store:
                 with suppress(Exception):
                     _ha_import_store.close()
@@ -956,7 +975,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(build_inventory_router(
         _inventory, device_meta=_device_meta,
         name_deps=[Depends(require_local), Depends(require_scope("control"))],
-        dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor),
+        dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
+        known_store=_known_store),
         dependencies=[Depends(require_scope("network:read"))])
 
     # Consent-first identity registry routes. Router-level require_central keeps the
