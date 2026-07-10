@@ -251,6 +251,14 @@ class Config:
     # rule and the mandatory disclaimer every alert carries.
     fall_detect_enabled: bool
     fall_dwell_s: float
+    # Watch house-LEVEL intrusion loudness (WAVR_WATCH_INTRUSION_LOUD) -- default OFF.
+    # The house-level aggregate (sum of per-room counts > known-present, room=None) has a
+    # real false-positive risk (a person in a doorway double-counted by two rooms inflates
+    # the sum), so by default it is INFORMATIONAL: surfaced in /api/watch, /api/house-status
+    # and the C4 HA house-level binary_sensor, but it does NOT emit the high-severity alert
+    # into GET /api/alerts. Set to 1 to make the house-level signal loud (emit that alert).
+    # The per-room intrusion signal (more reliable, less double-count) is ALWAYS emitted.
+    watch_intrusion_loud: bool
 
 
 def load_config() -> Config:
@@ -450,4 +458,6 @@ def load_config() -> Config:
         fall_detect_enabled=os.getenv("WAVR_FALL_DETECT", "").strip().lower()
             in ("1", "true", "yes", "on"),
         fall_dwell_s=float(os.getenv("WAVR_FALL_DWELL_S", "60")),
+        watch_intrusion_loud=os.getenv("WAVR_WATCH_INTRUSION_LOUD", "").strip().lower()
+            in ("1", "true", "yes", "on"),
     )
