@@ -1,5 +1,8 @@
+import asyncio
+import contextlib
+
 import pytest
-from wavr.sources.camera import CameraSource, Detection, classify_posture
+from wavr.sources.camera import CameraPrivacySignal, CameraSource, Detection, classify_posture
 from wavr.events import Target
 import wavr.sources.camera as _cam
 
@@ -442,3 +445,203 @@ async def test_health_hook_bad_callback_never_breaks_source():
                        unhealthy_secs=0.0, reconnect_delay=0, interval=0)
     [ev] = await _first_n(src, 1)   # a throwing callback must not break the loop
     assert ev.presence is True
+
+
+# ---- Tapo privacy mode: CameraPrivacySignal edge hook (never cries wolf) --------
+
+async def test_privacy_signal_edge_triggers_then_recovers():
+    _reset_active()
+    calls = []
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            raise CameraPrivacySignal("covered")
+            yield          # (unreachable) keeps this an async generator
+        yield "frameA"     # 2nd connection: real frame -> privacy recovery edge
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q", frames=frames,
+                       detect=lambda f: Detection(count=1, confidence=0.9),
+                       on_privacy=lambda n, a: calls.append((n, a)),
+                       reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True                              # normal event still flows
+    assert calls == [("cam_q", True), ("cam_q", False)]      # edge-triggered exactly once each
+
+
+async def test_privacy_signal_never_reports_down_across_many_cycles():
+    # Even with unhealthy_secs=0.0 (which would immediately down-latch a generic
+    # failure), a camera that keeps producing the privacy signature must NEVER be
+    # reported unhealthy -- an indefinitely-covered camera is not a fault.
+    _reset_active()
+    calls = []
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] <= 5:
+            raise CameraPrivacySignal("covered")
+            yield
+        yield "frameA"
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q", frames=frames,
+                       detect=lambda f: Detection(count=1, confidence=0.9),
+                       on_health=lambda n, h: calls.append(("health", n, h)),
+                       on_privacy=lambda n, a: calls.append(("privacy", n, a)),
+                       unhealthy_secs=0.0, reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+    assert not any(c[0] == "health" for c in calls)           # never cried wolf
+    assert calls.count(("privacy", "cam_q", True)) == 1       # edge-triggered once
+    assert ("privacy", "cam_q", False) in calls                # recovery on the real frame
+
+
+async def test_privacy_claim_drops_on_subsequent_genuine_failure():
+    # privacy (cycle 1) -> a DIFFERENT, genuine failure (cycle 2, not the privacy
+    # signature) -> the stale privacy claim is dropped and the ordinary down latch
+    # takes over normally (unhealthy_secs=0.0) -> recovers on the real frame (cycle 3).
+    _reset_active()
+    calls = []
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            raise CameraPrivacySignal("covered")
+            yield
+        if state["conn"] == 2:
+            raise RuntimeError("genuinely down now")
+            yield
+        yield "frameA"
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q", frames=frames,
+                       detect=lambda f: Detection(count=1, confidence=0.9),
+                       on_health=lambda n, h: calls.append(("health", n, h)),
+                       on_privacy=lambda n, a: calls.append(("privacy", n, a)),
+                       unhealthy_secs=0.0, reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+    assert calls == [
+        ("privacy", "cam_q", True),
+        ("privacy", "cam_q", False),
+        ("health", "cam_q", False),
+        ("health", "cam_q", True),
+    ]
+
+
+async def test_privacy_signal_clears_a_stale_down_latch():
+    # A camera already latched DOWN (genuine fault) that then starts reproducing the
+    # privacy signature must have its down-latch cleared -- it is not both.
+    _reset_active()
+    calls = []
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            raise RuntimeError("dead")
+            yield
+        if state["conn"] == 2:
+            raise CameraPrivacySignal("covered")
+            yield
+        yield "frameA"
+
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q", frames=frames,
+                       detect=lambda f: Detection(count=1, confidence=0.9),
+                       on_health=lambda n, h: calls.append(("health", n, h)),
+                       on_privacy=lambda n, a: calls.append(("privacy", n, a)),
+                       unhealthy_secs=0.0, reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+    assert calls == [
+        ("health", "cam_q", False),     # cycle 1: genuine fault -> down latched
+        ("health", "cam_q", True),      # cycle 2: privacy signal clears the stale down
+        ("privacy", "cam_q", True),
+        ("privacy", "cam_q", False),    # cycle 3: real frame -> privacy recovers too
+    ]
+
+
+async def test_privacy_hook_absent_callback_is_noop():
+    _reset_active()
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            raise CameraPrivacySignal("covered")
+            yield
+        yield "frameA"
+    # No on_privacy wired -> must not crash; behaves exactly like before this feature.
+    src = CameraSource("quarto", rtsp_url="rtsp://x", frames=frames,
+                       detect=lambda f: Detection(1, 0.8), reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+
+
+async def test_privacy_hook_bad_callback_never_breaks_source():
+    _reset_active()
+    def bad(name, active):
+        raise RuntimeError("monitor down")
+    state = {"conn": 0}
+    async def frames(url):
+        state["conn"] += 1
+        if state["conn"] == 1:
+            raise CameraPrivacySignal("covered")
+            yield
+        yield "frameA"
+    src = CameraSource("quarto", rtsp_url="rtsp://x", name="cam_q", frames=frames,
+                       detect=lambda f: Detection(1, 0.9), on_privacy=bad,
+                       reconnect_delay=0, interval=0)
+    [ev] = await _first_n(src, 1)    # a throwing callback must not break the loop
+    assert ev.presence is True
+
+
+# ---- Tapo privacy mode: rtsp_frames' real-adapter signature ---------------------
+
+async def test_rtsp_frames_raises_privacy_signal_when_opened_but_empty(monkeypatch):
+    from wavr.sources import camera
+    class FakeCap:
+        def isOpened(self): return True
+    monkeypatch.setattr(camera, "_open_capture", lambda url: FakeCap())
+    monkeypatch.setattr(camera, "_read", lambda cap: (False, None))   # zero frames, ever
+    monkeypatch.setattr(camera, "_release", lambda cap: None)
+    agen = camera.rtsp_frames("rtsp://cam")
+    with pytest.raises(camera.CameraPrivacySignal):
+        async for _ in agen:
+            pass
+
+
+async def test_rtsp_frames_no_privacy_signal_when_never_opened(monkeypatch):
+    # A capture that never opens (isOpened() False -- e.g. wrong IP/creds/camera off
+    # the network) must NOT raise the privacy signal -- it ends cleanly, unaffected,
+    # exactly like before this feature (feeds the ordinary down-latch path).
+    from wavr.sources import camera
+    class FakeCap:
+        def isOpened(self): return False
+    monkeypatch.setattr(camera, "_open_capture", lambda url: FakeCap())
+    monkeypatch.setattr(camera, "_read", lambda cap: (False, None))
+    monkeypatch.setattr(camera, "_release", lambda cap: None)
+    agen = camera.rtsp_frames("rtsp://cam")
+    got = []
+    async for f in agen:
+        got.append(f)
+    assert got == []
+
+
+async def test_rtsp_frames_no_privacy_signal_when_frames_flowed(monkeypatch):
+    # A capture that opened AND produced at least one real frame before ending is an
+    # ordinary transient blip/reconnect -- not a privacy candidate.
+    from wavr.sources import camera
+    class FakeCap:
+        def isOpened(self): return True
+    reads = iter([(True, "f1"), (False, None)])
+    monkeypatch.setattr(camera, "_open_capture", lambda url: FakeCap())
+    monkeypatch.setattr(camera, "_read", lambda cap: next(reads))
+    monkeypatch.setattr(camera, "_release", lambda cap: None)
+    agen = camera.rtsp_frames("rtsp://cam")
+    got = []
+    async for f in agen:
+        got.append(f)
+    assert got == ["f1"]
+
+
+def test_is_opened_never_raises_on_odd_object():
+    from wavr.sources import camera
+    assert camera._is_opened("not a capture") is False
+    assert camera._is_opened(object()) is False

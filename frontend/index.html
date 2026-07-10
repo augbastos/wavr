@@ -292,13 +292,17 @@
   .radar-room{fill:none;stroke:var(--line-strong);stroke-width:.025;vector-effect:non-scaling-stroke;
               transition:fill .3s ease-out,stroke .3s ease-out;}
   .radar-room.occ{fill:rgba(61,181,74,.08);stroke:var(--accent);}
-  /* Map liveness honesty (fake-presence-on-disconnect fix): three states beyond the
-     green 'occupied' tint + the dark 'empty' base (no class = a live sensor confirms
-     EMPTY). '.off' = a camera covering this room is offline (F3 latched it down): amber
+  /* Map liveness honesty (fake-presence-on-disconnect fix): states beyond the green
+     'occupied' tint + the dark 'empty' base (no class = a live sensor confirms EMPTY).
+     '.off' = a camera covering this room is offline (F3 latched it down): amber
      attention, NEVER green — a decayed/last reading must never read as confident
-     presence. '.blind' = no live sensor here (room not in latest): a dashed dim outline
-     = 'no coverage', distinct from a monitored-but-empty room's solid dark base. */
+     presence. '.privacy' = a covering camera is deliberately covered (Tapo privacy
+     mode): calm blue, NEVER amber — this is the privacy-first stance made physical,
+     not a fault, so it must never read as an alert. '.blind' = no live sensor here
+     (room not in latest): a dashed dim outline = 'no coverage', distinct from a
+     monitored-but-empty room's solid dark base. */
   .radar-room.off{fill:rgba(232,161,58,.12);stroke:var(--warn);}
+  .radar-room.privacy{fill:rgba(110,168,254,.10);stroke:var(--zone);stroke-dasharray:.1 .08;}
   .radar-room.blind{fill:rgba(154,164,173,.04);stroke:var(--dim);stroke-dasharray:.1 .08;}
   .radar-roomlabel{fill:var(--dim);font-size:.24px;text-transform:capitalize;}
   .radar-dot{fill:var(--accent);}
@@ -3604,8 +3608,8 @@ async function renderCameras(){
       label.appendChild(confEl);
       // Liveness honesty (fake-presence-on-disconnect fix): surface an OFFLINE
       // camera so its room's decayed reading is never mistaken for a confirmed
-      // empty. c.liveness is a fixed backend enum ('live'|'offline'|'unknown') —
-      // set via textContent + inline style (XSS-safe, never innerHTML).
+      // empty. c.liveness is a fixed backend enum ('live'|'offline'|'privacy'|
+      // 'unknown') — set via textContent + inline style (XSS-safe, never innerHTML).
       if(c.liveness === "offline"){
         const live = document.createElement("span");
         live.textContent = " · offline";
@@ -3613,6 +3617,16 @@ async function renderCameras(){
         live.style.fontWeight = "600";
         live.title = "No frames arriving — this room's presence can't be confirmed";
         label.appendChild(live);
+      } else if(c.liveness === "privacy"){
+        // Tapo privacy mode (RTSP session opened but produced no frames): NOT an
+        // error. Calm blue (--zone), distinct from the amber 'offline' warning above —
+        // the covered lens is the privacy-first stance made physical, not a fault.
+        const priv = document.createElement("span");
+        priv.textContent = " · privacy mode";
+        priv.style.color = "#6ea8fe";
+        priv.style.fontWeight = "600";
+        priv.title = "Lens is covered (privacy mode) — no video, this is expected";
+        label.appendChild(priv);
       }
       row.appendChild(label);
       const rm = document.createElement("button"); rm.className="rm"; rm.textContent="Remove";
@@ -4838,12 +4852,16 @@ async function renderRadar(){
   //                decays a dead single-camera room to unoccupied, at which point one of
   //                the states below takes over — that is how frozen presence is undone).
   //   'offline'  — not occupied AND a covering camera is down: amber, never trusted empty.
+  //   'privacy'  — not occupied/offline AND a covering camera is deliberately covered
+  //                (Tapo privacy mode): calm blue, NEVER amber/error — a covered camera
+  //                is the privacy-first stance made physical, not a fault (no cry-wolf).
   //   'empty'    — in latest, a live sensor confirms empty: the dark base (unchanged).
   //   'blind'    — never in latest, no live sensor here: 'no coverage'.
   const roomLiveness = {};
   function mapState(name){
     if(roomOcc[name]) return "occupied";              // presence always wins — never hidden
     if(roomLiveness[name] === "offline") return "offline";
+    if(roomLiveness[name] === "privacy") return "privacy";
     if(name in roomOcc) return "empty";               // live sensor confirmed empty
     return "blind";                                   // no live sensor here
   }
@@ -4854,6 +4872,7 @@ async function renderRadar(){
     const st = mapState(name), cl = e.rect.classList;
     cl.toggle("occ", st === "occupied");
     cl.toggle("off", st === "offline");
+    cl.toggle("privacy", st === "privacy");
     cl.toggle("blind", st === "blind");
   }
 
@@ -5225,6 +5244,7 @@ async function renderRadar(){
   const WALL_BASE = 0x2e3742;    // neutral unlit wall base (P5 fix 3)
   const MAP_WARN = 0xe8a13a;     // --warn: offline-camera floor tint (never green)
   const MAP_BLIND = 0x4a5563;    // cool slate: 'no coverage', greyed vs the dark empty base
+  const MAP_PRIVACY = 0x6ea8fe;  // --zone: calm blue, deliberately-covered camera (not an error)
 
   // Tag a material with its two opacity states so setActiveFloor3D() can re-tint the whole
   // stack without any geometry rebuild. Ground/grid/handles are untagged → left alone.
@@ -5506,6 +5526,12 @@ async function renderRadar(){
       const warn = new THREE.Color(MAP_WARN);
       e.mesh.material.color.copy(e.base).lerp(warn, 0.32);
       if(e.wallMat) e.wallMat.color.copy(e.wallBase).lerp(warn, 0.26);
+    } else if(st === "privacy"){
+      // A covering camera is deliberately covered (Tapo privacy mode): calm blue, NEVER
+      // amber/warn — this is a privacy choice made physical, not a fault.
+      const priv = new THREE.Color(MAP_PRIVACY);
+      e.mesh.material.color.copy(e.base).lerp(priv, 0.28);
+      if(e.wallMat) e.wallMat.color.copy(e.wallBase).lerp(priv, 0.22);
     } else if(st === "blind"){
       // No live sensor here (not in latest): greyed 'no coverage', distinct from the dark
       // base of a sensor-confirmed-empty room.
@@ -5519,7 +5545,10 @@ async function renderRadar(){
   }
   // applyMapLiveness (module-level ref, set here): rebuild roomLiveness from a /api/cameras
   // payload (name+room+liveness enum ONLY — never a frame, url or credential; ADR-0002) and
-  // repaint every room in BOTH views. A room is 'offline' if ANY of its cameras is down.
+  // repaint every room in BOTH views. A room is 'offline' if ANY of its cameras is down
+  // (a real fault always wins). Otherwise 'live' wins over 'privacy' — a room with one
+  // live camera and one covered camera is still covered by a working sensor, so 'privacy'
+  // only surfaces when NO camera in the room is actually streaming.
   applyMapLiveness = (cams)=>{
     const next = {};
     (Array.isArray(cams) ? cams : []).forEach(c=>{
@@ -5528,6 +5557,9 @@ async function renderRadar(){
       if(c.liveness === "offline") next[c.room] = "offline";
       else if(prev !== "offline"){
         if(c.liveness === "live") next[c.room] = "live";
+        else if(c.liveness === "privacy"){
+          if(prev !== "live") next[c.room] = "privacy";
+        }
         else if(prev == null) next[c.room] = "unknown";
       }
     });

@@ -566,6 +566,42 @@ def test_cameras_liveness_tristate():
         assert cams[0]["liveness"] == "unknown"
 
 
+def test_cameras_liveness_privacy_state():
+    # Tapo privacy-mode detection: a covered camera reports 'privacy', NEVER 'offline'
+    # -- a deliberately-covered lens must not cry-wolf as an error/fault.
+    store = CameraStore(":memory:")
+    store.add("cam_q", "quarto", "rtsp://u:p@10.0.0.5/s1", 0.5, mac=None)
+    app = create_app(
+        sources=[], storage=Storage(":memory:"), hub=Hub(),
+        fusion=FusionEngine(), camera_store=store,
+    )
+    with TestClient(app) as client:
+        app.state.camera_health.report_privacy("cam_q", True)
+        cams = client.get("/api/cameras").json()
+        assert cams[0]["liveness"] == "privacy"
+        assert "***" in cams[0]["rtsp_url"]                 # creds still masked
+
+        app.state.camera_health.report_privacy("cam_q", False)   # uncovered again
+        cams = client.get("/api/cameras").json()
+        assert cams[0]["liveness"] == "unknown"
+
+
+def test_cameras_liveness_offline_wins_over_privacy():
+    # A genuine fault (down) must win over a lingering/stale privacy claim -- a real
+    # fault is always worth surfacing.
+    store = CameraStore(":memory:")
+    store.add("cam_q", "quarto", "rtsp://u:p@10.0.0.5/s1", 0.5, mac=None)
+    app = create_app(
+        sources=[], storage=Storage(":memory:"), hub=Hub(),
+        fusion=FusionEngine(), camera_store=store,
+    )
+    with TestClient(app) as client:
+        app.state.camera_health.report_privacy("cam_q", True)
+        app.state.camera_health.report("cam_q", False)
+        cams = client.get("/api/cameras").json()
+        assert cams[0]["liveness"] == "offline"
+
+
 def test_refuse_publishes_decayed_state():
     # The periodic re-fuse tick must age a room that has stopped receiving events:
     # a live "occupied 82%" reading decays to 0 and flips vacant across ticks,

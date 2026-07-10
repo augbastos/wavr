@@ -36,6 +36,7 @@ from wavr.localize import make_localizer, homography_from_points, floor_spots_fo
 from wavr.calib_sample import CalibSampleStore
 from wavr.camera_health import CameraHealthMonitor
 from wavr.camera_url import rebind_rtsp_host, rtsp_host
+from wavr.camera_privacy import PrivacyControlNotImplemented, set_privacy_mode
 from wavr.netaddr import is_lan_ip
 from wavr.rules import RulesEngine
 from wavr.away import AwayMonitor
@@ -201,7 +202,7 @@ def _rebind_ip_ok(ip: str) -> bool:
 
 
 def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
-                    sample_store=None, sampling=False):
+                    sample_store=None, sampling=False, on_privacy=None):
     # F3: pass the camera name + the health monitor's report callback + the unhealthy
     # threshold so a drifted/dead camera is edge-reported (name+bool only, never a
     # frame -- ADR-0002). `on_health` is None for callers that don't wire the monitor.
@@ -251,7 +252,8 @@ def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
                                 interval=cfg.cam_interval, confidence=cam["confidence"],
                                 on_health=on_health,
                                 unhealthy_secs=cfg.cam_unhealthy_secs,
-                                pose=pose, pose_detect=pose_detect)
+                                pose=pose, pose_detect=pose_detect,
+                                on_privacy=on_privacy)
 
 
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
@@ -586,22 +588,29 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         get_camera=_cameras.get, latest_inventory=_inventory.latest_inventory)
     for cam in _cameras.list():                       # persisted cameras -> boot-OFF sources
         manager.register(cam["name"],
-                         _camera_factory(cam, cfg, _camera_health.report, _calib, _house),
+                         _camera_factory(cam, cfg, _camera_health.report, _calib, _house,
+                                        on_privacy=_camera_health.report_privacy),
                          False)
 
     def _masked_cameras():
-        # Per-camera liveness tri-state (read-only, name+enum only — no frame, no
-        # creds). 'offline' = F3 health hook latched the camera down (frames stopped
-        # >= cam_unhealthy_secs); 'live' = its source task is running (frames
-        # flowing); 'unknown' = registered but boot-OFF / not started, so we
-        # HONESTLY don't know — never asserted empty. Lets the map distinguish an
-        # offline camera's stale/decayed reading from a sensor-confirmed empty room.
+        # Per-camera liveness enum (read-only, name+enum only — no frame, no creds).
+        # 'offline' = F3 health hook latched the camera down (frames stopped >=
+        # cam_unhealthy_secs) — something is actually wrong, worth attention. 'privacy'
+        # = the RTSP session opened but produced no frames (CameraPrivacySignal): the
+        # honest read for a deliberately-covered Tapo camera — NOT an error, NEVER
+        # counted as 'offline'/unhealthy, so a covered camera never cries wolf. 'live' =
+        # its source task is running (frames flowing); 'unknown' = registered but
+        # boot-OFF / not started, so we HONESTLY don't know — never asserted empty.
+        # 'offline' wins over 'privacy' if a camera somehow reports both in the same
+        # tick (a real fault is worth surfacing even if a stale privacy read lingers).
         down = set(_camera_health.down())
+        privacy = set(_camera_health.privacy())
         active = {s["name"]: s["active"] for s in manager.status()["sources"]}
         out = []
         for cam in _cameras.list():
             name = cam["name"]
             liveness = ("offline" if name in down
+                        else "privacy" if name in privacy
                         else "live" if active.get(name) else "unknown")
             out.append({**cam, "rtsp_url": _mask_rtsp(cam["rtsp_url"]),
                         "liveness": liveness})
@@ -1561,7 +1570,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _cameras.add(name, room, rtsp_url, confidence, mac=clean_mac)
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail=f"camera exists: {name}")
-        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house), False)  # boots OFF
+        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house,
+                                            on_privacy=_camera_health.report_privacy), False)  # boots OFF
         return _masked_cameras()
 
     @app.post("/api/onvif/probe")
@@ -1634,7 +1644,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         with suppress(KeyError):
             await manager.unregister(name)   # kill before re-register (mirror rebind)
         manager.register(name,
-                         _camera_factory(cam, cfg, _camera_health.report, _calib, _house),
+                         _camera_factory(cam, cfg, _camera_health.report, _calib, _house,
+                                        on_privacy=_camera_health.report_privacy),
                          False)
 
     @app.get("/api/cameras/{name}/calibration")
@@ -1785,11 +1796,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if active:
             manager.register(name, _camera_factory(
                 cam, cfg, _camera_health.report, _calib, _house,
-                sample_store=_calib_sample, sampling=True), True)   # boots ON to walk
+                sample_store=_calib_sample, sampling=True,
+                on_privacy=_camera_health.report_privacy), True)   # boots ON to walk
         else:
             _calib_sample.clear(name)         # drop any lingering feet pixel
             manager.register(name, _camera_factory(
-                cam, cfg, _camera_health.report, _calib, _house), False)  # back OFF
+                cam, cfg, _camera_health.report, _calib, _house,
+                on_privacy=_camera_health.report_privacy), False)  # back OFF
         active_now = {s["name"]: s["active"] for s in manager.status()["sources"]}
         return {"camera": name, "sampling": active,
                 "active": bool(active_now.get(name))}
@@ -1832,9 +1845,33 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         with suppress(KeyError):
             await manager.unregister(name)   # mirror delete_camera: kill before re-register
         # Re-register boot-OFF (ADR-0002: a rebind never auto-enables a camera).
-        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house), False)
+        manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house,
+                                            on_privacy=_camera_health.report_privacy), False)
         _camera_health.clear(name)
         return _masked_cameras()
+
+    @app.post("/api/cameras/{name}/privacy-mode")
+    async def set_camera_privacy_mode(name: str, enabled: bool = Body(..., embed=True),
+                                      _=Depends(require_local),
+                                      __=Depends(require_scope("control"))):
+        # STUB -- always 501. Wavr can DETECT Tapo privacy mode (GET /api/cameras'
+        # liveness='privacy'), but CONTROLLING it locally has no documented ONVIF or
+        # local-API path (TP-Link's own docs say ONVIF-compliant software cannot toggle
+        # it; the only known path is an undocumented, proprietary encrypted protocol --
+        # see wavr.camera_privacy for the full reasoning). This route exists so the gap
+        # is honest and discoverable in the API, not silently missing, and gives the
+        # frontend a real endpoint to call for a disabled/"not yet available" control.
+        # Gated identically to /rebind (require_local CSRF + control scope) so it is
+        # never reachable from an unauthenticated/remote caller even once implemented.
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        cam = _cameras.get(name)
+        if not cam:
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        try:
+            set_privacy_mode(name, cam["rtsp_url"], enabled)
+        except PrivacyControlNotImplemented as e:
+            raise HTTPException(status_code=501, detail=str(e)) from None
 
     # ------------------------------------------------------------------- #
     # ONVIF PTZ actuator routes (A4.3) -- opt-in (WAVR_PTZ) + require_local +
