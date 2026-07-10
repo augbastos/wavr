@@ -58,6 +58,24 @@ def test_store_round_trip_and_predicates():
     assert s.is_suppressed("gen-x") is False          # gone => back to default
 
 
+def test_store_override_and_effective_active():
+    # override(): absent => None (env decides); enabled=1 => "on"; enabled=0 => "off".
+    s = ConnectorStore(":memory:")
+    assert s.override("narrator") is None
+    # effective_active with no row is byte-identical to the env flag passed in.
+    assert s.effective_active("narrator", True) is True
+    assert s.effective_active("narrator", False) is False
+    # A deliberate enable WINS over an env flag that is off.
+    s.upsert("narrator", "builtin", "LLM Narrator")
+    s.set_enabled("narrator", True)
+    assert s.override("narrator") == "on"
+    assert s.effective_active("narrator", False) is True     # override forces on
+    # A deliberate disable WINS over an env flag that is on (kill-switch).
+    s.set_enabled("narrator", False)
+    assert s.override("narrator") == "off"
+    assert s.effective_active("narrator", True) is False     # override forces off
+
+
 def test_store_upsert_preserves_enabled():
     # An upsert refreshes metadata but must NEVER silently flip the kill-switch bit.
     s = ConnectorStore(":memory:")
@@ -84,6 +102,9 @@ def test_empty_registry_lists_builtins_all_inactive(tmp_path, monkeypatch):
     assert set(by_id) == {"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http"}  # no generics
     # DEFAULT-OFF: nothing is active with a bare env + empty registry.
     assert all(x["active"] is False for x in by_id.values())
+    # Empty store => no override anywhere and nothing "enabled but pending" => byte-identical.
+    assert all(x["override"] is None for x in by_id.values())
+    assert all(x["needs"] is None for x in by_id.values())
     assert by_id["narrator"]["available"] is False          # no provider configured
     assert by_id["narrator"]["enforcement"] == "registry-overlay"
     assert by_id["ha-control"]["enforcement"] == "env"
@@ -165,16 +186,94 @@ def test_narrator_kill_switch_revokes_and_restores(tmp_path, monkeypatch):
     assert c.post("/api/narrate").status_code == 200
 
 
-def test_registry_cannot_enable_egress_beyond_env(tmp_path, monkeypatch):
-    # MONOTONE overlay: enabling narrator in the registry while WAVR_NARRATE_ENABLED is
-    # unset AND no narrator is configured must NOT create egress. The card stays
-    # inactive and POST /api/narrate stays 503 "not configured".
-    c, s = _client(tmp_path, monkeypatch)          # no injected narrator, env off
+def test_override_enable_without_provider_stays_inert_and_honest(tmp_path, monkeypatch):
+    # The override is a REAL enable now, BUT an enabled-yet-unconfigured connector must
+    # still egress NOTHING. Enable narrator while WAVR_NARRATE_ENABLED is unset AND no
+    # provider is configured: the gate flips on (override "on") but the card stays
+    # inactive, honestly reports needs="config", and POST /api/narrate stays 503 with a
+    # message telling the admin what is missing (never a silent egress).
+    c, s = _client(tmp_path, monkeypatch)          # no injected narrator, env off, no key
     c.post("/api/connectors/narrator/enable", json={"enabled": True})
     got = {x["id"]: x for x in c.get("/api/connectors").json()["connectors"]}
-    assert got["narrator"]["active"] is False       # env still ANDed => inactive
+    assert got["narrator"]["override"] == "on"      # deliberate admin enable, persisted
+    assert got["narrator"]["active"] is False        # not actually live (no provider)
+    assert got["narrator"]["needs"] == "config"      # honest: needs a provider key
     r = c.post("/api/narrate")
-    assert r.status_code == 503 and "not configured" in r.json()["detail"]
+    assert r.status_code == 503                       # no egress
+    assert "enabled in Connectors" in r.json()["detail"]
+    assert "provider" in r.json()["detail"]
+
+
+def test_override_enable_persists_across_restart(tmp_path, monkeypatch):
+    # The admin's enable is stored ON THE BOX and survives a process restart.
+    p = str(tmp_path / "conn.db")
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "w.db"))
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
+    app = create_app(sources=[], storage=Storage(":memory:"),
+                     connector_store=ConnectorStore(p))
+    with TestClient(app, headers=CSRF) as c:
+        assert c.post("/api/connectors/narrator/enable",
+                      json={"enabled": True}).status_code == 200
+    # A fresh store off the same file (a "restart") still sees the override.
+    assert ConnectorStore(p).override("narrator") == "on"
+
+
+def test_narrator_override_activates_after_restart_with_provider(tmp_path, monkeypatch):
+    # Restart honesty: an override "on" set BEFORE app start, with a configured provider
+    # (local Ollama needs no key), builds the provider client at startup so the feature is
+    # actually LIVE -- active True, needs None. This is the "needs a hub restart" path
+    # paying off after the restart.
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "w.db"))
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
+    monkeypatch.setenv("WAVR_NARRATE_PROVIDER", "ollama")   # configured, no key needed
+    s = ConnectorStore(":memory:")
+    s.upsert("narrator", "builtin", "LLM Narrator")
+    s.set_enabled("narrator", True)                          # override "on" pre-restart
+    c, _ = _client(tmp_path, monkeypatch, store=s)           # WAVR_NARRATE_ENABLED unset
+    got = {x["id"]: x for x in c.get("/api/connectors").json()["connectors"]}
+    assert got["narrator"]["override"] == "on"
+    assert got["narrator"]["active"] is True                 # provider client built at startup
+    assert got["narrator"]["needs"] is None
+    assert got["narrator"]["scope"] == "local, zero egress"  # ollama == on-box
+
+
+def test_ha_import_override_enables_gate_when_env_off(tmp_path, monkeypatch):
+    # WAVR_HA_IMPORT=0 (env off) + no override => the chokepoint 403s "disabled". Enabling
+    # the override flips the GATE on: the same call now passes the gate and only fails on
+    # the missing HA creds (400 "not configured") -- proof the override enabled beyond env,
+    # while still egressing nothing until HA is actually configured.
+    monkeypatch.setenv("WAVR_HA_IMPORT", "0")
+    c, s = _client(tmp_path, monkeypatch)
+    r = c.post("/api/ha/import", json={"dry_run": True})
+    assert r.status_code == 403 and "disabled" in r.json()["detail"]
+    c.post("/api/connectors/ha-import/enable", json={"enabled": True})
+    got = {x["id"]: x for x in c.get("/api/connectors").json()["connectors"]}
+    assert got["ha-import"]["override"] == "on"
+    assert got["ha-import"]["needs"] == "config"     # HA creds still missing => not live
+    r = c.post("/api/ha/import", json={"dry_run": True})
+    assert r.status_code == 400 and "not configured" in r.json()["detail"]
+
+
+def test_ha_import_override_off_revokes_when_env_on(tmp_path, monkeypatch):
+    # Kill-switch still works: default WAVR_HA_IMPORT=1 (env on), an override "off" revokes
+    # it immediately, no restart.
+    c, s = _client(tmp_path, monkeypatch)
+    c.post("/api/connectors/ha-import/enable", json={"enabled": False})
+    assert s.override("ha-import") == "off"
+    r = c.post("/api/ha/import", json={"dry_run": True})
+    assert r.status_code == 403 and "revoked" in r.json()["detail"]
+
+
+def test_mcp_http_override_enable_needs_restart_when_unavailable(tmp_path, monkeypatch):
+    # Without multidevice the in-app MCP-HTTP mount is not wired (available False).
+    # Enabling it persists the override but the card is HONEST: active False, needs
+    # "restart" -- nothing is exposed until the hub restarts with multidevice on.
+    c, s = _client(tmp_path, monkeypatch)
+    r = c.post("/api/connectors/mcp-http/enable", json={"enabled": True})
+    assert r.status_code == 200
+    d = r.json()["connector"]
+    assert d["override"] == "on" and d["available"] is False
+    assert d["active"] is False and d["needs"] == "restart"
 
 
 # --------------------------------------------------------------------------- #

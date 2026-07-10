@@ -805,6 +805,8 @@
   /* Must | Connectors | 3: calm neutral "managed elsewhere" chip (expected, not a fault) +
      the exact env var/restart instruction demoted behind a native <details> disclosure. */
   .conn-managed-chip{font-size:.74rem;color:var(--dim);}
+  /* Honest "enabled but not live yet" note (restart / key / HA creds needed). */
+  .conn-note{font-size:.74rem;color:var(--warn);margin:2px 0 0;flex-basis:100%;}
   .conn-env-details{font-size:.76rem;color:var(--dim);}
   .conn-env-details summary{cursor:pointer;color:var(--accent);}
   .conn-env-details p{margin:4px 0 0;}
@@ -4431,11 +4433,13 @@ renderIdentity();
 // GET /api/connectors is router require_central (a multidevice 'user' peer 403s -> panel stays
 // hidden, like the identity registry); the enable toggle adds require_local (X-Wavr-Local CSRF).
 // Descriptor shape from the backend: {id,kind,direction,label,available,active,suppressed,
-// enforcement,scope,env_flag}. Enforcement decides the control:
-//   * 'registry-overlay' (built-in kill-switch) -> "Allowed"/"Revoked" toggle. A row can only
-//     SUPPRESS a live feature; the chokepoint still ANDs the env flag, so this can NEVER enable
-//     egress beyond env. When permitted-but-not-active the chip names the env flag to set (honest,
-//     no overclaim).
+// override,env_active,needs,enforcement,scope,env_flag}. Enforcement decides the control:
+//   * 'registry-overlay' (built-in) -> a REAL On/Off toggle that PERSISTS an admin override.
+//     `override` ("on"/"off"/null) is the persisted choice; the switch is on iff override=="on"
+//     OR (no override AND env_active) -- i.e. the env flag turned it on. Turning it off writes a
+//     kill-switch; turning it on enables the gate even with the env flag unset. `active` is the
+//     HONEST truth (gate-on AND actually able to run); `needs` ("restart"/"config"/null) says why
+//     an enabled connector is not live yet, so the UI never fakes "live".
 //   * 'env' (bound in a separate process, e.g. MCP control) -> NO live toggle; the card reflects
 //     the flag + names the env var to edit, rather than faking a dead switch.
 //   * 'registry' (generic connector) -> the registry IS the full gate: "On"/"Off" flips it.
@@ -4483,8 +4487,25 @@ async function renderConnectors(){
     if(c.suppressed) return {word:"revoked", cls:"revoked"};
     if(c.active)     return {word:"active",  cls:"active"};
     if(c.enforcement === "env" && !c.env_flag) return {word:"read-only · separate MCP server", cls:""};
+    // Enabled by the admin but not live yet — say so honestly, never fake "active".
+    if(c.needs === "restart") return {word:"enabled · needs a hub restart", cls:"setup"};
+    if(c.needs === "config")  return {word:"enabled · needs setup", cls:"setup"};
     if(!c.available) return {word:"needs setup", cls:"setup"};
-    return {word:"ready", cls:""};            // configured, but its enable flag is still off
+    return {word:"ready", cls:""};            // configured, but its enable toggle is still off
+  }
+  // Honest one-line note for an enabled-but-not-live connector (behind the switch).
+  function needsNote(c){
+    if(c.needs === "restart"){
+      return c.id === "mcp-http"
+        ? "Enabled — restart the hub with multi-device on to activate."
+        : "Enabled — restart the hub to activate.";
+    }
+    if(c.needs === "config"){
+      if(c.id === "narrator") return "Enabled — add a provider API key, then restart the hub.";
+      if(c.id === "ha-import") return "Enabled — set WAVR_HA_URL + WAVR_HA_TOKEN in the hub config.";
+      return "Enabled — finish configuring it to go live.";
+    }
+    return "";
   }
 
   function buildCard(connectors, c){
@@ -4544,15 +4565,18 @@ async function renderConnectors(){
         foot.appendChild(det);
       }
     } else {
-      // registry (generic full gate) OR registry-overlay (built-in kill-switch): a live toggle.
+      // registry (generic full gate) OR registry-overlay (built-in override): a REAL,
+      // persisting On/Off toggle. The switch is on when the admin enabled it (override
+      // "on") OR the hub's env flag turned it on with no override. Flipping it POSTs a
+      // persisted override that survives restart and revokes immediately when turned off.
       const isGeneric = c.enforcement === "registry";
-      const on = isGeneric ? c.active : !c.suppressed;   // overlay: on = permitted (not suppressed)
+      const on = isGeneric ? c.active
+                           : (c.override === "on" || (c.override == null && c.env_active === true));
       const tog = document.createElement("button"); tog.type = "button";
       tog.className = "ctl switch" + (on ? " on" : "");
       tog.setAttribute("aria-pressed", on ? "true" : "false");
-      tog.setAttribute("aria-label",
-        (isGeneric ? (on ? "turn off " : "turn on ") : (on ? "revoke " : "allow ")) + (c.label || c.id));
-      tog.textContent = isGeneric ? (on ? "On" : "Off") : (on ? "Allowed" : "Revoked");
+      tog.setAttribute("aria-label", (on ? "turn off " : "turn on ") + (c.label || c.id));
+      tog.textContent = on ? "On" : "Off";
       tog.onclick = async ()=>{
         tog.disabled = true;
         let r;
@@ -4566,7 +4590,7 @@ async function renderConnectors(){
             const idx = connectors.findIndex(x => x.id === updated.id);
             if(idx >= 0) connectors[idx] = updated;
           }
-          actionFeedback(fb, true, null, on ? "✓ revoked" : "✓ enabled");
+          actionFeedback(fb, true, null, on ? "✓ turned off" : "✓ turned on");
           render(connectors);               // re-render from the authoritative descriptor
         } else {
           tog.disabled = false;
@@ -4578,15 +4602,24 @@ async function renderConnectors(){
       const stch = document.createElement("span"); stch.className = "conn-state " + st.cls;
       stch.textContent = st.word;
       foot.appendChild(stch);
-      // Finding #21 (registry/registry-overlay branch): demote the WAVR_* var + restart
-      // instruction behind a Details disclosure, same treatment as the enforcement==='env'
-      // branch above — jargon never sits in primary card text.
-      if(st.word === "ready" && c.env_flag){
+      // Enabled-but-not-live: a plain-language note about what's still needed (restart /
+      // key / HA creds). This is the honesty requirement — an enabled connector that
+      // can't yet run says so, and reaches nowhere until it's configured.
+      const note = needsNote(c);
+      if(note){
+        const np = document.createElement("p"); np.className = "conn-note";
+        np.textContent = note;              // textContent — no interpolation of untrusted data
+        foot.appendChild(np);
+      }
+      // When it's off and configurable via the hub too, offer the env alternative behind
+      // a Details disclosure so jargon never sits in the primary card text.
+      if(!on && c.env_flag){
         const det = document.createElement("details"); det.className = "conn-env-details";
         const sum = document.createElement("summary"); sum.textContent = "Details";
         det.appendChild(sum);
         const p = document.createElement("p");
-        p.textContent = "Set " + c.env_flag + " and restart the hub to turn this on.";
+        p.textContent = "Prefer config files? Set " + c.env_flag
+          + "=1 in the hub and restart — same effect as this switch.";
         det.appendChild(p);
         foot.appendChild(det);
       }

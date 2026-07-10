@@ -24,15 +24,21 @@ from wavr.connector_store import BUILTIN_IDS
 
 def _generic_descriptor(row: dict) -> dict:
     """Shape a kind='generic' store row as a connector descriptor. `active` is the
-    full gate (enabled==1); the registry IS the enforcing gate for generics."""
+    full gate (enabled==1); the registry IS the enforcing gate for generics -- there
+    is no env flag behind it, so `override` simply mirrors the persisted enable bit and
+    `needs` is always None (a generic is fully live from the UI, no restart/key)."""
+    on = row["enabled"] == 1
     return {
         "id": row["id"],
         "kind": "generic",
         "direction": "outbound",
         "label": row["label"],
         "available": True,
-        "active": row["enabled"] == 1,
+        "active": on,
         "suppressed": False,
+        "override": "on" if on else "off",
+        "env_active": False,
+        "needs": None,
         "enforcement": "registry",
         "scope": row["scope"],
         "env_flag": None,
@@ -76,10 +82,15 @@ def build_connectors_router(store, catalog_fn, write_deps=None) -> APIRouter:
                     status_code=409,
                     detail=(f"connector '{id}' is controlled by environment flag "
                             f"{env_flag}; edit config and restart"))
-            # registry-overlay: a row can only SUPPRESS (kill-switch). Ensure the row
-            # exists (label/scope from the catalog, never client input) then set the
-            # bit. enabled=True merely clears suppression; the chokepoint still ANDs
-            # the env flag, so this can NEVER enable egress beyond env.
+            # registry-overlay: the registry is the permission BROKER. Ensure the row
+            # exists (label/scope from the CATALOG, never client input) then persist the
+            # admin override bit: enabled=True => override "on" (a DELIBERATE enable that
+            # force-activates the gate even when the env flag is unset); enabled=False =>
+            # override "off" (kill-switch). This write is the ONLY way to enable beyond
+            # env, and it is reachable only on the loopback with admin scope + CSRF (the
+            # router deps) -- never a non-local or non-admin caller. Egress still cannot
+            # happen until the feature is actually configured (the chokepoint AND the
+            # catalog's active/needs prove readiness separately).
             store.upsert(id, "builtin", desc["label"], scope=desc.get("scope"))
             store.set_enabled(id, enabled)
             updated = next((d for d in catalog_fn() if d["id"] == id), None)
