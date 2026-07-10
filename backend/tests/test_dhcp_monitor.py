@@ -225,6 +225,74 @@ async def test_raising_collect_counts_as_no_observation_and_does_not_raise():
     assert observed == set()
 
 
+# ---- honest availability signal (panel-review finding #9/#17) --------------
+
+async def test_available_none_before_first_check():
+    m = RogueDhcpMonitor(collect=_collector([_obs("192.168.1.1")]))
+    assert m.available is None
+    assert m.unavailable_reason is None
+    assert m.status()["available"] is None
+    assert m.status()["unavailable_reason"] is None
+
+
+async def test_available_true_after_a_clean_cycle():
+    m = RogueDhcpMonitor(collect=_collector([_obs("192.168.1.1")]))
+    await m.check_once()
+    assert m.available is True
+    assert m.unavailable_reason is None
+
+
+async def test_available_false_on_permission_error_from_collect():
+    # Simulates a non-root proot/container lacking CAP_NET_BIND_SERVICE for
+    # the UDP/68 raw bind DHCPCollector's transport performs.
+    async def boom():
+        raise PermissionError("[Errno 13] Permission denied")
+    m = RogueDhcpMonitor(collect=boom)
+    observed = await m.check_once()   # must not raise -- same tolerance as any collect failure
+    assert observed == set()
+    assert m.available is False
+    assert "PermissionError" in m.unavailable_reason
+    assert m.status()["available"] is False
+
+
+async def test_available_false_on_plain_os_error_from_collect():
+    async def boom():
+        raise OSError("Address already in use")
+    m = RogueDhcpMonitor(collect=boom)
+    await m.check_once()
+    assert m.available is False
+    assert "Address already in use" in m.unavailable_reason
+
+
+async def test_generic_exception_does_not_set_available_false():
+    # A non-OSError failure (e.g. a bug, not an environment limitation) keeps
+    # the honest tri-state: it must NOT be mislabeled "unavailable by
+    # environment" -- that label is reserved for the bind-failure case.
+    async def boom():
+        raise RuntimeError("socket closed")
+    m = RogueDhcpMonitor(collect=boom)
+    await m.check_once()
+    assert m.available is None
+    assert m.unavailable_reason is None
+
+
+async def test_available_reflects_most_recent_cycle():
+    state = {"boom": True}
+
+    async def collect():
+        if state["boom"]:
+            raise PermissionError("Permission denied")
+        return _obs("192.168.1.1")
+    m = RogueDhcpMonitor(collect=collect)
+    await m.check_once()
+    assert m.available is False
+
+    state["boom"] = False
+    await m.check_once()
+    assert m.available is True
+    assert m.unavailable_reason is None
+
+
 async def test_raising_on_rogue_does_not_propagate():
     def boom(alert):
         raise RuntimeError("notifier down")

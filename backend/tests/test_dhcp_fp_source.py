@@ -157,3 +157,73 @@ async def test_collector_merges_discover_then_request_without_duplicating():
     out = await DHCPFingerprintCollector(listen=listen).collect(duration=0.2)
     assert len(out) == 1
     assert out["aa:bb:cc:00:11:22"]["os"] == "Windows"  # first-seen value kept, not overwritten
+
+
+# ---- honest availability signal (panel-review finding #9/#17) ------------------
+
+async def test_collector_available_none_before_first_collect():
+    async def listen():
+        yield _WINDOWS_DISCOVER, "0.0.0.0"
+
+    collector = DHCPFingerprintCollector(listen=listen)
+    assert collector.available is None
+    assert collector.unavailable_reason is None
+
+
+async def test_collector_available_true_after_a_clean_run():
+    async def listen():
+        yield _WINDOWS_DISCOVER, "0.0.0.0"
+
+    collector = DHCPFingerprintCollector(listen=listen)
+    await collector.collect(duration=0.2)
+    assert collector.available is True
+    assert collector.unavailable_reason is None
+
+
+async def test_collector_available_false_on_permission_error_bind_failure():
+    # Simulates a non-root proot/container lacking CAP_NET_BIND_SERVICE: the
+    # transport raises the moment it's first iterated, before any packet.
+    async def listen():
+        raise PermissionError("[Errno 13] Permission denied")
+        yield  # pragma: no cover -- makes this an async generator
+
+    collector = DHCPFingerprintCollector(listen=listen)
+    out = await collector.collect(duration=0.2)
+    assert out == {}   # never raises up to the caller -- swallowed, recorded instead
+    assert collector.available is False
+    assert "PermissionError" in collector.unavailable_reason
+
+
+async def test_collector_available_false_on_plain_os_error_bind_failure():
+    # A real DHCP server already holding the port exclusively surfaces as a
+    # plain OSError (not necessarily PermissionError) on some platforms.
+    async def listen():
+        raise OSError("Address already in use")
+        yield  # pragma: no cover
+
+    collector = DHCPFingerprintCollector(listen=listen)
+    out = await collector.collect(duration=0.2)
+    assert out == {}
+    assert collector.available is False
+    assert "Address already in use" in collector.unavailable_reason
+
+
+async def test_collector_reflects_most_recent_attempt_across_repeated_collect():
+    # A source of truth that flips honestly with the environment, not a
+    # sticky "unavailable forever" flag -- mirrors RogueDhcpMonitor's
+    # equivalent contract.
+    state = {"boom": True}
+
+    async def listen():
+        if state["boom"]:
+            raise PermissionError("Permission denied")
+        yield _WINDOWS_DISCOVER, "0.0.0.0"
+
+    collector = DHCPFingerprintCollector(listen=listen)
+    await collector.collect(duration=0.2)
+    assert collector.available is False
+
+    state["boom"] = False
+    await collector.collect(duration=0.2)
+    assert collector.available is True
+    assert collector.unavailable_reason is None

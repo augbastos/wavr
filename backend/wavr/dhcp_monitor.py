@@ -138,11 +138,21 @@ class RogueDhcpMonitor:
         self._alerts: list[DhcpRogueAlert] = []
         self._last_observed: set[str] = set()
         self._task: asyncio.Task | None = None
+        # Tri-state honest-availability signal (panel-review finding #9/#17) --
+        # same contract as sources.dhcp_fp.DHCPFingerprintCollector.available:
+        # None = never attempted a cycle yet; True = the underlying collect()
+        # ran without a permission/OS error (this cycle may still have seen
+        # zero servers -- a normal quiet LAN); False = the raw UDP/68 bind
+        # failed (e.g. non-root proot/container lacking CAP_NET_BIND_SERVICE).
+        self.available: bool | None = None
+        self.unavailable_reason: str | None = None
 
     def status(self) -> dict:
         return {
             "known_servers": sorted(self._known) if self._known else [],
             "observed_servers": sorted(self._last_observed),
+            "available": self.available,
+            "unavailable_reason": self.unavailable_reason,
         }
 
     def recent_alerts(self, limit: int = 50) -> list[DhcpRogueAlert]:
@@ -156,9 +166,22 @@ class RogueDhcpMonitor:
         rule as InternetMonitor.check_once."""
         try:
             raw = await self._collect()
+        except (PermissionError, OSError) as exc:
+            # The raw UDP/68 bind (the first thing DHCPCollector's transport
+            # does) failed -- environment can't grant this, not a transient
+            # collect failure. Recorded distinctly so callers can show an
+            # honest "unavailable on this device" instead of a silent
+            # zero-servers-observed cycle.
+            _LOG.warning("dhcp monitor unavailable in this environment", exc_info=True)
+            self.available = False
+            self.unavailable_reason = f"{type(exc).__name__}: {exc}"
+            raw = {}
         except Exception:
             _LOG.warning("dhcp monitor collect failed", exc_info=True)
             raw = {}
+        else:
+            self.available = True
+            self.unavailable_reason = None
         observed = set(raw.keys())
         self._last_observed = observed
         self._record(observed)

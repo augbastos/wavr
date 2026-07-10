@@ -597,3 +597,39 @@ async def test_dhcp_fp_off_by_default_never_invoked():
     assert fake.calls == 0
     dev = next(d for d in svc.latest_inventory() if d.mac == "24:0a:c4:aa:bb:cc")
     assert dev.device_type != "router"
+
+
+# ---- dhcp_fp_status(): honest availability signal (panel-review #9/#17) ----
+
+def test_dhcp_fp_status_none_when_never_built():
+    # Feature off (default) -- the collector is never lazily constructed, so
+    # there is no signal either way: None/None, not a false "unavailable".
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0)
+    assert svc.dhcp_fp_status() == {"available": None, "reason": None}
+
+
+async def test_dhcp_fp_status_none_before_any_scan_even_when_enabled():
+    # Injected collector present but scan_once() hasn't run yet -- the
+    # injected fake has no `.available` attribute (mirrors the real
+    # collector's pre-first-collect() state), so this stays honest None/None
+    # rather than crashing or guessing.
+    fake = _FakeCollector({})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   dhcp_fp_enabled=True, dhcp_fp=fake)
+    assert svc.dhcp_fp_status() == {"available": None, "reason": None}
+
+
+async def test_dhcp_fp_status_reflects_real_collector_after_bind_failure():
+    from wavr.sources.dhcp_fp import DHCPFingerprintCollector
+
+    async def listen():
+        raise PermissionError("Permission denied")
+        yield  # pragma: no cover
+
+    real = DHCPFingerprintCollector(listen=listen)
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   dhcp_fp_enabled=True, dhcp_fp=real)
+    await svc.scan_once()
+    status = svc.dhcp_fp_status()
+    assert status["available"] is False
+    assert "PermissionError" in status["reason"]
