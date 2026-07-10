@@ -553,6 +553,17 @@
   .calib-pt .rmpt:hover{color:var(--danger);}
   .calib-fb{font-size:.8rem;min-height:1.1em;margin-top:8px;}
   .calib-fb.ok{color:var(--accent);}.calib-fb.err{color:var(--danger);}
+  /* Walk-to-calibrate mini floor plan: the sequence of KNOWN spots (centre + corners) drawn
+     to scale from calib-spots, so "stand here" is a point on a plan, not just a sentence.
+     No frame/photo involved — pure geometry (ADR-0002), same room-outline idiom as the map. */
+  .calib-walkmap{width:100%;max-width:220px;margin:2px 0 8px;background:var(--elevated);
+    border:1px solid var(--line);border-radius:10px;display:block;}
+  .calib-walkmap .wm-room{fill:none;stroke:var(--line);stroke-width:1.4;}
+  .calib-walkmap .wm-spot{fill:var(--dim);stroke:var(--elevated);stroke-width:1;}
+  .calib-walkmap .wm-spot.done{fill:var(--accent);opacity:.55;}
+  .calib-walkmap .wm-spot.cur{fill:var(--accent);}
+  .calib-walkmap .wm-label{font-size:5px;fill:var(--text);font-variant-numeric:tabular-nums;
+    text-anchor:middle;pointer-events:none;}
 
   /* ---------------- Stage 2: Devices — sub-tabs, catalog, explainer, setup ladder ---------------- */
   .dsub-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -3525,11 +3536,19 @@ async function renderCameras(){
     // Live wizard sub-panel (hidden until started).
     const wiz = document.createElement("div"); wiz.className = "calib-sec"; wiz.hidden = true;
     wiz.style.borderTop = "0"; wiz.style.paddingTop = "0";
+    // Mini floor plan: the sequence of KNOWN spots to scale (centre + corners), so "stand
+    // here" is a point on a drawn plan, not only a sentence. Pure geometry from calib-spots
+    // (floor metres) -- no frame, no photo (ADR-0002).
+    const walkmap = document.createElementNS(SVG_NS, "svg");
+    walkmap.setAttribute("class", "calib-walkmap");
+    walkmap.setAttribute("viewBox", "0 0 100 100");
+    walkmap.setAttribute("role", "img");
+    walkmap.setAttribute("aria-label", `Known floor spots to walk to for ${name}`);
     const live = document.createElement("p"); live.className = "calib-status";
     live.setAttribute("role","status"); live.setAttribute("aria-live","polite");
     const step = document.createElement("p"); step.className = "hint"; step.style.color = "var(--text)";
     const prog = document.createElement("p"); prog.className = "hint";
-    wiz.appendChild(live); wiz.appendChild(step); wiz.appendChild(prog);
+    wiz.appendChild(walkmap); wiz.appendChild(live); wiz.appendChild(step); wiz.appendChild(prog);
     const wizBtns = document.createElement("div"); wizBtns.className = "calib-btns";
     const capBtn = document.createElement("button"); capBtn.type = "button"; capBtn.textContent = "Capture this spot";
     const solveBtn = document.createElement("button"); solveBtn.type = "button"; solveBtn.textContent = "Solve & save";
@@ -3542,7 +3561,46 @@ async function renderCameras(){
     // live-detection poll, and the frame dims the feet pixels are measured in.
     const walk = { on:false, spots:[], idx:0, captured:[], pollId:null, imgW:null, imgH:null, seen:false };
     const stopPoll = ()=>{ if(walk.pollId){ clearInterval(walk.pollId); walk.pollId = null; } };
+    // Redraw the mini plan: room outline from the corner spots, a numbered dot per spot
+    // (centre + each corner) -- dim = pending, dimmed accent = captured, full accent = the
+    // CURRENT target (walk.captured.length always == the count of spots done, since capture
+    // is sequential -- never skips ahead).
+    const renderWalkMap = ()=>{
+      while(walkmap.firstChild) walkmap.firstChild.remove();
+      const spots = walk.spots; if(!spots.length) return;
+      const corners = spots.filter(s=>s.label !== "centre");
+      const xs = (corners.length ? corners : spots).map(s=>s.x);
+      const ys = (corners.length ? corners : spots).map(s=>s.y);
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      const spanX = Math.max(maxX - minX, 0.5), spanY = Math.max(maxY - minY, 0.5);
+      const pad = 16;
+      const sx = (x)=> pad + (x - minX) / spanX * (100 - 2*pad);
+      const sy = (y)=> pad + (y - minY) / spanY * (100 - 2*pad);
+      if(corners.length >= 3){
+        const poly = document.createElementNS(SVG_NS, "polygon");
+        poly.setAttribute("class", "wm-room");
+        poly.setAttribute("points", corners.map(s=>`${sx(s.x)},${sy(s.y)}`).join(" "));
+        walkmap.appendChild(poly);
+      }
+      spots.forEach((s,i)=>{
+        const done = i < walk.captured.length, cur = i === walk.captured.length;
+        const c = document.createElementNS(SVG_NS, "circle");
+        c.setAttribute("class", "wm-spot" + (done ? " done" : cur ? " cur" : ""));
+        c.setAttribute("cx", sx(s.x)); c.setAttribute("cy", sy(s.y)); c.setAttribute("r", cur ? 4.5 : 3.2);
+        const t = document.createElementNS(SVG_NS, "title");
+        t.textContent = (s.label === "centre" ? "centre" : s.label) + (done ? " — captured" : cur ? " — walk here now" : "");
+        c.appendChild(t);
+        walkmap.appendChild(c);
+        const lbl = document.createElementNS(SVG_NS, "text");
+        lbl.setAttribute("class", "wm-label");
+        lbl.setAttribute("x", sx(s.x)); lbl.setAttribute("y", sy(s.y) - 6);
+        lbl.textContent = String(i+1);
+        walkmap.appendChild(lbl);
+      });
+    };
     const renderWalk = ()=>{
+      renderWalkMap();
       const spot = walk.spots[walk.idx];
       if(spot){
         const label = spot.label === "centre" ? "the CENTRE of the room"
@@ -3616,7 +3674,8 @@ async function renderCameras(){
       const floor_points = walk.captured.map(c=>c.floor);
       let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`,
         {image_points, floor_points, img_w:imgW, img_h:imgH}); }catch{}
-      if(r && r.ok){ await endWalk(); setFb(true, "calibrated by walking — accurate placement is on. Re-enable the camera to apply.");
+      if(r && r.ok){ await endWalk();
+        setFb(true, "calibrated by walking — quality 0.85, accurate placement is on. Re-enable the camera to apply, or calibrate again any time to redo it.");
         loadStatus(); }
       else { setFb(false, (await errText(r)) || "couldn't solve (spots may be too close or in a line — try again)"); }
     };
@@ -3642,9 +3701,12 @@ async function renderCameras(){
         {headers:{"X-Wavr-Local":"1"}})).json(); }
       catch{ status.textContent = "Couldn't read calibration."; return; }
       if(c && c.mount) for(const k in mountInputs) if(c.mount[k] != null) mountInputs[k].value = c.mount[k];
+      // Position-quality hint mirrors backend localize.Q_HOMOGRAPHY (0.85) / Q_MONOCULAR
+      // (0.45) exactly -- a number, not just a label, so "accurate" vs "estimate" is honest
+      // and comparable across cameras.
       let lead;
-      if(c && c.homography) lead = "Calibrated (precise 4-point). ";
-      else if(c && c.mount) lead = "Estimate active (approximate). ";
+      if(c && c.homography) lead = "Calibrated (precise 4-point) — quality 0.85. ";
+      else if(c && c.mount) lead = "Estimate active (approximate) — quality 0.45. ";
       else lead = "Not calibrated — this camera reports its room only. ";
       status.textContent = "";
       const b = document.createElement("b"); b.textContent = lead;
