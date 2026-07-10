@@ -178,10 +178,13 @@ def test_parse_presets():
 
 
 def test_build_get_status_shape_and_no_password():
-    body = build_get_status("Profile_1", "admin", "pw")
+    # Distinctive plaintext-password sentinel WITH a hyphen: base64 (the nonce/digest alphabet)
+    # never contains "-", so this can't collide with the random WS-Security nonce the way the old
+    # 2-char "pw" did (~1.7% false-positive flake). We assert the plaintext never leaks into the body.
+    body = build_get_status("Profile_1", "admin", "secret-pw-xyz")
     assert "<tptz:GetStatus" in body
     assert "<tptz:ProfileToken>Profile_1</tptz:ProfileToken>" in body
-    assert "admin" in body and "pw" not in body   # WS-UsernameToken digest, no plaintext pw
+    assert "admin" in body and "secret-pw-xyz" not in body   # WS-UsernameToken digest, no plaintext pw
     # token XML-escaped
     assert "a&amp;b" in build_get_status("a&b", "u", "p")
 
