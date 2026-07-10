@@ -26,7 +26,19 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  device-type pin (taxonomy value; null/"" to
                                  clear). The pin is recog's highest-precedence
                                  signal and is reflected on the very next GET.
-Both PUTs are only registered when `device_meta` is given and are gated by
+  * POST /api/inventory/known -- {mac, known} -> persists a RUNTIME
+                                 known/unknown flag (wavr.known_store.
+                                 KnownStore) so an ordinary house device that
+                                 was never on the static WAVR_NET_MACS env
+                                 allowlist can be marked known WITHOUT a
+                                 restart. known=true immediately drops any
+                                 existing rogue_device alert for that MAC
+                                 from GET /api/alerts and from the very next
+                                 scan onward; known=false re-arms it (it
+                                 alerts again if it resurfaces unknown). See
+                                 `NetworkInventoryService.apply_known_change`.
+Both PUTs and the known POST are only registered when their store
+(`device_meta`/`known_store` respectively) is given, and are gated by
 `name_deps` (the app's require_local CSRF guard), same rule as every other
 state-changing route.
 
@@ -89,7 +101,7 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
 def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
                             name_deps=None, dhcp_monitor=None,
-                            gateway_monitor=None) -> APIRouter:
+                            gateway_monitor=None, known_store=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
@@ -138,6 +150,20 @@ def build_inventory_router(service: NetworkInventoryService,
                 entry = device_meta.set_type(mac_norm, device_type)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
+            return entry
+
+    if known_store is not None:
+        @router.post("/api/inventory/known", dependencies=list(name_deps or []))
+        async def mark_known(mac: str = Body(...), known: bool = Body(...)):
+            try:
+                mac_norm = normalize_mac(mac)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="invalid MAC address")
+            entry = known_store.set_known(mac_norm, known)
+            # Sync the live alert log + cached inventory immediately (see
+            # apply_known_change's docstring) -- the KnownStore write above
+            # already makes it authoritative for the NEXT scan regardless.
+            service.apply_known_change(mac_norm, known)
             return entry
 
     return router

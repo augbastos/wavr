@@ -143,6 +143,16 @@ class NetworkInventoryService:
     every device in a scan calls `device_meta.seen(mac)` (Feature A: persisted
     first-seen/last-seen). A persistence failure (e.g. disk issue) is caught
     and logged, same tolerance as `on_rogue` -- it must never break scanning.
+
+    `known_provider` is an OPTIONAL callable returning the CURRENT set of
+    runtime-known MACs (wavr.known_store.KnownStore.known_macs) -- read
+    FRESH at the top of every scan (`_dynamic_known`) and unioned with the
+    static `known_macs` allowlist, so a runtime mark-known
+    (POST /api/inventory/known) takes effect on the very next scan with no
+    restart, exactly like `_type_pins`/`_ha_signals`. Deliberately never
+    baked into a static set at construction time. Tolerant: a provider
+    failure falls back to the static allowlist only, same rule as every
+    other optional collector here.
     """
 
     def __init__(self, known_macs=None,
@@ -163,8 +173,12 @@ class NetworkInventoryService:
                  hostname_resolve_enabled: bool = False, hostname_resolver=None,
                  latency_enabled: bool = False, ping=None,
                  gateway_detect_enabled: bool = False, gateway_detector=None,
-                 gateway_monitor=None, ha_store=None):
+                 gateway_monitor=None, ha_store=None, known_provider=None):
         self._known = _norm_macs(known_macs)
+        # Runtime known-MAC provider (wavr.known_store.KnownStore.known_macs) --
+        # see the class docstring; None -> unchanged, static-allowlist-only
+        # behaviour (today's default).
+        self._known_provider = known_provider
         self._scan = scan
         self._interval = interval
         self._max_alerts = max_alerts
@@ -255,12 +269,26 @@ class NetworkInventoryService:
         return (port_scan_known_only_enabled() if self._port_scan_known_only is None
                 else self._port_scan_known_only)
 
+    def _dynamic_known(self) -> set[str]:
+        """The static env allowlist UNIONED with the runtime KnownStore (if
+        wired), read fresh every scan -- see `known_provider` in the class
+        docstring. Tolerant, same rule as `_type_pins`/`_ha_signals`: a
+        broken/missing provider must never break scanning, it just falls
+        back to the static allowlist only."""
+        if not self._known_provider:
+            return self._known
+        try:
+            return self._known | _norm_macs(self._known_provider())
+        except Exception:
+            _LOG.warning("known_provider failed", exc_info=True)
+            return self._known
+
     async def scan_once(self) -> list[Device]:
         """Run a single scan: refresh the inventory and fold any new unknown MACs
         into the rogue-alert log. Called by the background loop; also directly
         callable (deterministic) for tests."""
         pins = self._type_pins()
-        devices = await scan_inventory(known_macs=self._known, scan=self._scan,
+        devices = await scan_inventory(known_macs=self._dynamic_known(), scan=self._scan,
                                        pins=pins, resolve=self._make_hostname_resolver(),
                                        gateway=self._gateway_hook())
         if self._port_scan_on():
@@ -571,6 +599,40 @@ class NetworkInventoryService:
         # A departed device re-alerts if it returns, which is fine.
         if len(self._alerted) > 4 * self._max_alerts:
             self._alerted &= {d.mac for d in devices}
+
+    def apply_known_change(self, mac: str, known: bool) -> None:
+        """Called synchronously by the POST /api/inventory/known route the
+        moment an admin toggles a device's runtime-known state (after it has
+        already persisted the change to wavr.known_store.KnownStore) --
+        keeps the LIVE alert log and cached inventory in sync without
+        waiting for the next scan cycle:
+
+        Known ON: any existing rogue_device alert(s) for this MAC are
+        dropped from the in-memory alert log immediately (so /api/alerts
+        stops showing it right away) and the MAC is cleared from the
+        edge-trigger dedup set (an already-known device needs no dedup
+        tracking). The cached `latest_inventory()` is also patched so
+        GET /api/inventory reflects known=true immediately, same courtesy
+        `_device_view`'s type-pin override already gives PUT
+        /api/inventory/type.
+
+        Known OFF ("re-arm"): clears the edge-trigger dedup set for this MAC
+        so a device that resurfaces as unknown on the NEXT scan alerts
+        again, exactly like a brand-new unknown MAC would -- nothing is
+        invented retroactively for the moment leading up to this toggle.
+        The cached inventory is patched to known=false immediately too.
+
+        The next scan_once() re-derives the authoritative `known` flag from
+        `_dynamic_known()` (which reads the KnownStore fresh) regardless --
+        this method only closes the gap until that happens."""
+        mac = mac.strip().replace("-", ":").lower()
+        self._alerted.discard(mac)
+        if known:
+            self._alerts = [a for a in self._alerts if a.mac != mac]
+        self._inventory = [
+            replace(d, known=known) if d.mac == mac else d
+            for d in self._inventory
+        ]
 
     def latest_inventory(self) -> list[Device]:
         """The devices from the most recent scan (empty before the first)."""
