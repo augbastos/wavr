@@ -46,6 +46,7 @@ from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router
 from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
+from wavr.occupancy_log import OccupancyLog
 from wavr.known_store import KnownStore
 from wavr.netinventory import _same_ip
 from wavr.ha_client import client_from_config
@@ -267,7 +268,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
-               known_store=None) -> FastAPI:
+               known_store=None, occupancy_log=None) -> FastAPI:
     cfg = load_config()
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
@@ -325,6 +326,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # sensitive and the store is inert until something calls seen()/set_name().
     _owns_device_meta = device_meta is None
     _device_meta = device_meta or DeviceMeta(cfg.db_path)
+
+    # A4 house memory: append-only, edge-triggered per-room occupancy history feeding
+    # timeline/routine/anomaly reads (see wavr.occupancy_log). Mirrors gateway_monitor's
+    # opt-in-store pattern (not device_meta's always-on one): an injected `occupancy_log`
+    # (tests) wins outright; otherwise built ONLY when WAVR_OCCUPANCY_LOG is on. When it
+    # stays None, `_publish` below simply skips logging (identical to today's behaviour --
+    # no new table, no new reads, no `/api/occupancy/*` data).
+    _owns_occupancy_log = False
+    _occupancy_log = occupancy_log
+    if _occupancy_log is None and cfg.occupancy_log_enabled:
+        _occupancy_log = OccupancyLog(cfg.db_path, retention_days=cfg.occupancy_retention_days)
+        _owns_occupancy_log = True
 
     # Runtime known-device store: persisted per-MAC known/unknown flag, always
     # built (like device_meta) -- inert until POST /api/inventory/known runs
@@ -487,6 +500,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         d = rs.to_dict()
         if persist:
             await asyncio.to_thread(_storage.insert_state, rs)  # fsync off the event loop
+        # A4 house memory: independently edge-triggered off the room's OWN last-logged
+        # row (OccupancyLog.append_if_changed), not off `persist` above -- so the tick's
+        # every-5s no-op re-fuse passes never grow the table, but a genuine occupied/
+        # confidence/person_count change is captured even on a `persist=False` tick pass.
+        # None when disabled (WAVR_OCCUPANCY_LOG=0) -- identical to today's behaviour.
+        if _occupancy_log is not None:
+            await asyncio.to_thread(_occupancy_log.append_if_changed, d["room"],
+                                    d["occupied"], d["confidence"],
+                                    d.get("person_count"), d["ts"])
         latest[d["room"]] = d
         await _hub.publish(d)
         return d
@@ -761,6 +783,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_device_meta:
                 with suppress(Exception):
                     _device_meta.close()
+            if _owns_occupancy_log:
+                with suppress(Exception):
+                    _occupancy_log.close()
             if _owns_known_store:
                 with suppress(Exception):
                     _known_store.close()
@@ -1426,6 +1451,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # The single active-LAN-attack primitive; surfaced so the Privacy &
                 # Egress view stays honest that a device-blocking path can exist.
                 "blocking": cfg.net_blocking,
+                # A4 house memory (wavr.occupancy_log) -- ON by default (derived-only,
+                # zero egress, same disclosure class as the existing room_states table);
+                # surfaced so the Privacy & Egress view honestly shows a local history is
+                # being kept and can be turned off (WAVR_OCCUPANCY_LOG=0).
+                "occupancy_log": _occupancy_log is not None,
                 # A5.1 hardening posture, surfaced honestly (bool-only, never the
                 # secret). `api_token`: a same-machine shared secret (WAVR_LOCAL_TOKEN)
                 # is REQUIRED on /api/* even on loopback. `health_gate`: F6 -- the
@@ -1481,6 +1511,42 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # synchronous-call convention netinventory_service already uses for
         # this same store). Safe to call on every GET.
         return build_report(_device_meta)
+
+    # A4 house memory (wavr.occupancy_log): DERIVED-ONLY read APIs over the append-only
+    # per-room log. Same scope as /api/history and /api/state (presence:read) -- this is
+    # the same class of coarse occupancy data, just over time instead of "now". 503 (not
+    # 404/empty) when WAVR_OCCUPANCY_LOG=0, mirroring the WoL/PTZ opt-in-feature pattern
+    # above, so a caller can tell "disabled" apart from "no data yet".
+    def _require_occupancy_log() -> OccupancyLog:
+        if _occupancy_log is None:
+            raise HTTPException(status_code=503,
+                                detail="Occupancy history disabled (set WAVR_OCCUPANCY_LOG=1)")
+        return _occupancy_log
+
+    @app.get("/api/occupancy/history")
+    async def occupancy_history(room: str | None = None, start: str | None = None,
+                                end: str | None = None, limit: int = 500,
+                                _=Depends(require_scope("presence:read"))):
+        log = _require_occupancy_log()
+        return await asyncio.to_thread(log.timeline, room, start=start, end=end, limit=limit)
+
+    @app.get("/api/occupancy/routine")
+    async def occupancy_routine(room: str, weeks: float = 4.0,
+                                _=Depends(require_scope("presence:read"))):
+        log = _require_occupancy_log()
+        return await asyncio.to_thread(log.routine, room, weeks=weeks)
+
+    @app.get("/api/occupancy/unusual")
+    async def occupancy_unusual(room: str, weeks: float = 4.0,
+                                _=Depends(require_scope("presence:read"))):
+        log = _require_occupancy_log()
+        # Compares the room's CURRENT live occupied reading (the same `latest` seam
+        # /api/state serves) against its own routine baseline -- never a second source
+        # of truth for "is it occupied right now".
+        current = latest.get(room)
+        if current is None:
+            raise HTTPException(status_code=404, detail=f"unknown room: {room!r}")
+        return await asyncio.to_thread(log.is_unusual, room, current["occupied"], weeks=weeks)
 
     @app.post("/api/presence/register-companion")
     async def register_companion(request: Request, label: str = Body(..., embed=True),
