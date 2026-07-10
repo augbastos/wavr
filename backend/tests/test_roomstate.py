@@ -8,7 +8,7 @@ def test_roomstate_to_dict_has_exact_keys():
                    ts="2026-07-01T16:20:01+00:00")
     d = rs.to_dict()
     assert set(d.keys()) == {"room", "occupied", "confidence", "vitals", "sources",
-                             "targets", "identities", "explanation", "ts"}
+                             "targets", "identities", "person_count", "explanation", "ts"}
     assert d["occupied"] is True and d["confidence"] == 0.72
 
 

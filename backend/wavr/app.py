@@ -23,7 +23,7 @@ from wavr.config import load_config
 from wavr.housemap import load_house_map, room_names, room_polygon, save_house_map, upsert_room, HouseMapError
 from wavr.storage import Storage
 from wavr.hub import Hub
-from wavr.fusion import FusionEngine
+from wavr.fusion import FusionEngine, house_person_count
 from wavr.sourcemanager import SourceManager
 from wavr.sources.simulated import SimulatedSource
 from wavr.sources.network import NetworkSource, _local_ipv4
@@ -1446,6 +1446,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             "house": {
                 "floors": len(_house.get("floors", [])),
                 "rooms": len(room_names(_house)),
+                # Live house-level person count (additive): sum of per-room person_count
+                # where a counting-capable source vouches for a number; None = unknown.
+                # The LEAST personal datum (a bare integer, no geometry/identity).
+                "people": house_person_count(latest.values()),
             },
             # Feature B: current internet/gateway reachability. Null/null when
             # the monitor is off (or hasn't completed its first check yet).

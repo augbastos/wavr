@@ -194,6 +194,11 @@
         transition:background .3s ease-out,color .3s ease-out;}
   .pill.on{background:var(--accent-soft);color:var(--accent);}
   .pill.off{background:rgba(154,164,173,.12);color:var(--dim);}
+  /* Person count badge (additive): shown only when a counting-capable source vouches
+     for a number; hidden otherwise so the card reads as just the presence pill. */
+  .pcount{display:inline-block;font-size:.72rem;color:var(--dim);margin:6px 0 6px 6px;
+          font-variant-numeric:tabular-nums;}
+  .pcount[hidden]{display:none;}
   .bar{height:6px;border-radius:4px;background:var(--elevated-2);overflow:hidden;margin:6px 0 0;}
   .bar>i{display:block;height:100%;background:var(--dim);width:100%;
          transform:scaleX(0);transform-origin:left;transition:transform .3s ease-out,background-color .3s ease-out;}
@@ -6836,6 +6841,7 @@ function upsert(rs){
         <div class="card-info">
           <h2></h2>
           <span class="pill"></span>
+          <span class="pcount" hidden></span>
           <div class="bar"><i></i></div>
         </div>
       </div>
@@ -6874,6 +6880,18 @@ function upsert(rs){
   pill.textContent = rs.occupied ? "occupied" : "empty";
   pill.className = "pill " + (rs.occupied ? "on" : "off");
   c.classList.toggle("quiet", !rs.occupied);   // quiet state: unoccupied ring reads unlit
+  // Person count (additive, honest): show "N people" only when a counting-capable
+  // source (camera/mmwave) vouches for a number AND the room is occupied; otherwise
+  // stay hidden so the room reads as just the presence dot -- never fabricate a 0.
+  const pc = c.querySelector(".pcount");
+  const pcn = rs.person_count;
+  if(rs.occupied && typeof pcn === "number" && pcn > 0){
+    pc.textContent = pcn === 1 ? "1 person" : pcn + " people";
+    pc.hidden = false;
+  } else {
+    pc.textContent = "";
+    pc.hidden = true;
+  }
   // ---- 3-state sensor-consensus rows (§6). States, driven from RoomState sources[]:
   //   absent  — modality seen in the house but not in THIS room's array: "no sensor here"
   //   disagree — present but voting against the fused verdict: warn-amber, NOT danger-red

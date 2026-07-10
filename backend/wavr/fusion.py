@@ -14,6 +14,13 @@ from wavr.roomstate import RoomState
 DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
                    "network": 0.5, "sim": 0.6}
 
+# Modalities that can honestly COUNT people (not just detect presence). Camera runs
+# person-detection (Detection.count); mmwave resolves discrete targets (len(targets)).
+# Presence-only sources (network/ble/wifi_csi/sim) are excluded -- they know "someone
+# is here", never "how many", so they must never set a count. ONE place the
+# counting-capable set is defined; keep in sync with the sources that set count.
+COUNTING_MODALITIES = frozenset({"camera", "mmwave"})
+
 # Freshness decay window (seconds). A source votes at full trust up to
 # FRESHNESS_S, then its trust decays linearly to zero at STALE_S — so a source
 # that stopped reporting gradually loses its vote instead of freezing the fused
@@ -187,7 +194,8 @@ class FusionEngine:
                 decays[modality] = 0.0
                 sources.append({"modality": modality, "presence": e.presence,
                                 "confidence": round(e.confidence, 3),
-                                "age_s": None, "health": "invalid_ts"})
+                                "age_s": None, "health": "invalid_ts",
+                                "count": None})
                 continue
             age_s = max(0.0, (ref - e_ts).total_seconds())
             decay, health = self._freshness(age_s)
@@ -199,7 +207,8 @@ class FusionEngine:
                 strength = max(strength, mass)
             sources.append({"modality": modality, "presence": e.presence,
                             "confidence": round(e.confidence, 3),
-                            "age_s": round(age_s), "health": health})
+                            "age_s": round(age_s), "health": health,
+                            "count": (e.count if modality in COUNTING_MODALITIES else None)})
             if e.presence and e.breathing_bpm is not None:
                 vitals = {"breathing_bpm": e.breathing_bpm, "heart_bpm": e.heart_bpm}
         agreement = num / den if den > 0 else 0.0
@@ -228,6 +237,28 @@ class FusionEngine:
                     best_w = w
                     best_targets = [t.to_dict() for t in e.targets]
 
+        # Person COUNT (additive, honest). Only counting-capable modalities that are
+        # PRESENT and still fresh (decay>0) may set it -- the SAME gate as targets
+        # above. Among those, the highest-weight source wins when counts disagree
+        # (deterministic precedence, mirroring the targets pass-through); each source
+        # own count rides in sources[] so a disagreement is SURFACED, never silently
+        # resolved. Like the targets/identity passes it NEVER feeds num/den/strength --
+        # confidence is provably unchanged. None = no counting-capable source vouches
+        # for a number here (unknown, not a fabricated 0).
+        person_count: int | None = None
+        best_cw = -1.0
+        for modality, e in events.items():
+            if modality not in COUNTING_MODALITIES:
+                continue
+            if not (e.presence and decays.get(modality, 0.0) > 0.0):
+                continue
+            if e.count is None:
+                continue
+            w = self._weights.get(modality, 0.5)
+            if w > best_cw:
+                best_cw = w
+                person_count = int(e.count)
+
         # Identity pass-through (non-biometric "who is home"). METADATA ONLY: this
         # rides the SAME present + fresh (decay>0) gate as targets and NEVER feeds
         # num/den/strength/agreement above — so `confidence` is provably unchanged
@@ -254,4 +285,22 @@ class FusionEngine:
 
         return RoomState(room=room, occupied=occupied, confidence=confidence,
                          vitals=vitals, sources=sources, targets=best_targets,
-                         identities=identities, explanation=explanation, ts=ts)
+                         identities=identities, person_count=person_count,
+                         explanation=explanation, ts=ts)
+
+
+def house_person_count(states) -> int | None:
+    """House-level person count = sum of the per-room person_count values that are
+    known (not None). None when NO room has a counting-capable source vouching for a
+    number -- an honest "unknown", never a fabricated 0. Accepts RoomState objects or
+    their to_dict() form. Single source of truth for the house total; do not re-derive
+    it elsewhere. Counts distinct rooms, so a person in one room is counted once;
+    overlapping sensor coverage across rooms can still double-count -- an inherent
+    limit of summing per-room counts, surfaced honestly rather than hidden."""
+    total: int | None = None
+    for s in states:
+        c = s.get("person_count") if isinstance(s, dict) else getattr(s, "person_count", None)
+        if c is None:
+            continue
+        total = (total or 0) + int(c)
+    return total

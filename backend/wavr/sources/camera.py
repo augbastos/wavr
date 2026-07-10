@@ -172,6 +172,7 @@ class CameraSource:
                                 confidence=det.confidence if present else 0.0,
                                 ts=datetime.now(timezone.utc).isoformat(),
                                 targets=targets,
+                                count=det.count,   # honest per-source count (0 when empty)
                             )
                             if self._interval:
                                 await asyncio.sleep(self._interval)
