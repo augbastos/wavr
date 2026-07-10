@@ -1522,6 +1522,39 @@
   .whatsnew-set-list{margin:6px 0 0;padding-left:1.2em;display:flex;flex-direction:column;gap:7px;}
   .whatsnew-set-list li{font-size:.9rem;line-height:1.4;color:var(--text);}
 
+  /* ---------------- Alert glance-box (tap the alert count on the ambient face) ----------------
+     A floating card in the bottom-right, over the lock (z 20 > lock's 10). Read-only glance —
+     each item explains one alert; tapping one deep-links into the Network tab (through the lock
+     if a PIN is set). Never dissolves the panel on its own; only its items navigate. */
+  #coreAlerts[data-tappable="1"]{cursor:pointer;}
+  .core-alerts-pop{position:absolute;right:clamp(12px,3vw,32px);bottom:clamp(48px,10vh,84px);
+                   z-index:20;width:min(400px,86vw);max-height:70vh;overflow:auto;
+                   padding:clamp(10px,1.6vh,16px);border-radius:16px;
+                   background:var(--elevated);border:1px solid var(--line);
+                   box-shadow:0 20px 60px rgba(0,0,0,.45);animation:coreLockIn .25s ease;}
+  .core-alerts-pop-head{display:flex;justify-content:space-between;align-items:center;
+                        margin:0 0 8px;}
+  .core-alerts-pop-title{margin:0;font-size:clamp(13px,1.8vh,15px);font-weight:600;color:var(--text);}
+  .core-alerts-pop-close{background:transparent;border:0;color:var(--dim);font-size:20px;
+                         line-height:1;padding:2px 6px;cursor:pointer;}
+  .core-alert-item{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;
+                   padding:9px 8px;border:0;border-radius:10px;background:transparent;
+                   color:var(--text);cursor:pointer;transition:background .12s ease;}
+  .core-alert-item:hover,.core-alert-item:focus{background:var(--surface);outline:none;}
+  .core-alert-item:active{transform:scale(.99);}
+  .core-alert-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;margin-top:5px;
+                  background:var(--accent);}
+  .core-alert-item.sev-watch .core-alert-dot{background:var(--warn);}
+  .core-alert-item.sev-alert .core-alert-dot,
+  .core-alert-item.sev-critical .core-alert-dot{background:var(--danger);}
+  .core-alert-txt{display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .core-alert-title{font-size:clamp(13px,1.7vh,15px);font-weight:600;}
+  .core-alert-why{font-size:clamp(11px,1.4vh,13px);color:var(--dim);line-height:1.35;}
+  .core-alert-go{margin-left:auto;flex:0 0 auto;color:var(--dim);font-size:16px;align-self:center;}
+  /* brief highlight on the row we deep-linked to, so the eye lands on it */
+  .alert-row.alert-jump{animation:alertJump 2s ease;}
+  @keyframes alertJump{0%,100%{background:transparent} 15%,55%{background:var(--surface)}}
+
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
     .bar>i,.ctl,.rm,.radar-target,.radar-zone,.pill,.house,.hero-line1,.radar-room,
@@ -2540,6 +2573,16 @@
       <ul id="cwnList" class="core-whatsnew-list"></ul>
       <button type="button" id="cwnOk" class="ctl primary core-whatsnew-ok">OK</button>
     </div>
+  </div>
+  <!-- Alert glance-box: tap the alert count (bottom-right) to see what each alert is; tapping one
+       deep-links into the Network tab (through the lock if a PIN is set). Filled from #alertList
+       by openAlertsPop(); read-only, layered over the lock, never dissolves the panel by itself. -->
+  <div id="coreAlertsPop" class="core-alerts-pop" hidden role="dialog" aria-label="Alerts">
+    <div class="core-alerts-pop-head">
+      <p class="core-alerts-pop-title" id="coreAlertsPopTitle">Alerts</p>
+      <button type="button" id="coreAlertsPopClose" class="core-alerts-pop-close" aria-label="Close">×</button>
+    </div>
+    <div id="coreAlertsPopList"></div>
   </div>
 </div>
 
@@ -4006,6 +4049,11 @@ function renderNetwork(){
       const sev = (typeof a.severity === "string" && a.severity) ? a.severity : "note";
       const kind = a.kind || "rogue_device";
       const row = document.createElement("div"); row.className = "alert-row sev-" + sev;
+      // Stable identity so the Core-panel alert glance-box can deep-link back to THIS row after
+      // the list re-renders (kind + timestamp + the strongest identity field the kind carries).
+      row.dataset.kind = kind;
+      row.dataset.alertKey = kind + "|" + (a.ts || "") + "|" +
+        (a.observed_mac || a.extra_server || a.mac || a.ip || a.gateway_ip || "");
       const badge = document.createElement("span");
       badge.className = "sev-badge sev-" + sev; badge.textContent = sev;   // textContent — untrusted
       const at = document.createElement("span"); at.className = "at";
@@ -10788,6 +10836,73 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
   // life while Wavr talks — see [[project-wavr-voice-agent]]. Safe no-op until voice ships.
   window.__wavrWaveSpeak = function(level){ if(wave && wave.setSpeaking) wave.setSpeaking(level); };
 
+  // ---------------- Alert glance-box: tap the count -> explain each alert -> deep-link to it ----
+  var alertsPopEl   = document.getElementById("coreAlertsPop");
+  var alertsPopList = document.getElementById("coreAlertsPopList");
+  var alertsPopTtl  = document.getElementById("coreAlertsPopTitle");
+  var alertsPopX    = document.getElementById("coreAlertsPopClose");
+  var pendingAlertNav = null;   // an alert key to deep-link to right after the dashboard reveals
+  var ALERT_EXPLAIN = {
+    gateway_identity: "Your router answered from a different hardware address. Usually a reboot or a swapped router — but it can also mean someone is impersonating your gateway.",
+    rogue_dhcp: "Another device is handing out network addresses like a router. Usually a second router or a misconfiguration; occasionally an attack.",
+    rogue_device: "A device we haven't seen on this network before just showed up."
+  };
+  function closeAlertsPop(){ if(alertsPopEl) alertsPopEl.hidden = true; }
+  function openAlertsPop(){
+    if(!alertsPopEl || !alertsPopList) return;
+    var rows = document.querySelectorAll("#alertList .alert-row");
+    alertsPopList.textContent = "";
+    if(!rows.length){ closeAlertsPop(); return; }
+    if(alertsPopTtl) alertsPopTtl.textContent = rows.length + (rows.length > 1 ? " alerts" : " alert");
+    Array.prototype.forEach.call(rows, function(row){
+      var kind = row.dataset.kind || "rogue_device";
+      var key  = row.dataset.alertKey || "";
+      var sev  = (row.className.match(/sev-(\w+)/) || [])[1] || "note";
+      var titleEl = row.querySelector(".at");
+      var item = document.createElement("button");
+      item.type = "button"; item.className = "core-alert-item sev-" + sev;
+      var dot = document.createElement("span"); dot.className = "core-alert-dot"; item.appendChild(dot);
+      var txt = document.createElement("span"); txt.className = "core-alert-txt";
+      var t = document.createElement("span"); t.className = "core-alert-title";
+      t.textContent = titleEl ? titleEl.textContent : "Alert";   // textContent — untrusted network data
+      var w = document.createElement("span"); w.className = "core-alert-why";
+      w.textContent = ALERT_EXPLAIN[kind] || "A network alert.";
+      txt.appendChild(t); txt.appendChild(w); item.appendChild(txt);
+      var go = document.createElement("span"); go.className = "core-alert-go"; go.textContent = "›"; item.appendChild(go);
+      item.addEventListener("click", function(){ navAlert(key); });
+      alertsPopList.appendChild(item);
+    });
+    alertsPopEl.hidden = false;
+  }
+  function navAlert(key){
+    pendingAlertNav = key || null;
+    closeAlertsPop();
+    wake();   // no event -> runs the unlock/reveal path; revealDashboard() consumes pendingAlertNav
+  }
+  function goToAlert(key){
+    var tabBtn = document.getElementById("tab-rede");
+    if(tabBtn) tabBtn.click();   // switch to the Network tab (its click handler is already wired)
+    setTimeout(function(){
+      var esc = (key && window.CSS && CSS.escape) ? CSS.escape(key) : key;
+      var target = key ? document.querySelector('#alertList .alert-row[data-alert-key="' + esc + '"]') : null;
+      target = target || document.querySelector("#alertList .alert-row");
+      if(target){
+        try{ target.scrollIntoView({behavior: "smooth", block: "center"}); }catch(e){ target.scrollIntoView(); }
+        target.classList.remove("alert-jump"); void target.offsetWidth; target.classList.add("alert-jump");
+      }
+    }, 140);
+  }
+  if(alertsPopX) alertsPopX.addEventListener("click", closeAlertsPop);
+  if(alertsEl){
+    alertsEl.setAttribute("data-tappable", "1");
+    alertsEl.setAttribute("role", "button");
+    alertsEl.setAttribute("tabindex", "0");
+    alertsEl.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      if(alertsPopEl && !alertsPopEl.hidden) closeAlertsPop(); else openAlertsPop();
+    });
+  }
+
   // ---------------- Feature 2: lock (glance-free ambient face, control-gated wake) ----------------
   // The ambient face above (clock/wave/rooms/alerts/coreSys) is NEVER gated — only the reveal
   // of the dashboard underneath is. "Configured" means either a device biometric
@@ -10997,8 +11112,22 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     panel.classList.remove("core-dissolved");
     panel.removeAttribute("aria-hidden");
     clearTimeout(idleTimer);
+    closeAlertsPop();                    // don't leave the glance-box floating over the ambient face
     if(!document.hidden) wave.start();   // ambient face is back on top: resume the wave
   }
+  // Tapping the Wavr brand mark (top-left) returns to the ambient wave face — the panel's
+  // "home button". Exposed + wired to both the rail brand and the mobile top-bar brand.
+  window.__wavrReturnToAmbient = returnToAmbient;
+  ["nav-brand", "topbar-brand"].forEach(function(cls){
+    var el = document.querySelector("." + cls);
+    if(!el) return;
+    el.style.cursor = "pointer";
+    el.setAttribute("role", "button");
+    el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-label", "Back to the ambient home screen");
+    el.addEventListener("click", function(){ if(!dissolved) return; returnToAmbient(); });
+    el.addEventListener("keydown", function(ev){ if((ev.key === "Enter" || ev.key === " ") && dissolved){ ev.preventDefault(); returnToAmbient(); } });
+  });
   function revealDashboard(){
     if(!dissolved){
       dissolved = true;
@@ -11007,13 +11136,23 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
       wave.stop();   // dashboard is now on top: stop spending frames on a hidden canvas
     }
     armIdle();
+    // If a specific alert was tapped on the ambient face, land on it now (after any unlock).
+    if(pendingAlertNav){ var _k = pendingAlertNav; pendingAlertNav = null; goToAlert(_k); }
   }
-  function wake(){
+  function wake(e){
     if(dissolved){ armIdle(); return; }             // dashboard already up: just keep it alive
     // What's New takeover is up: a stray touch must NOT dissolve the panel (which would skip
     // the OK-acknowledge AND bypass the lock underneath). Only its OK button dismisses it.
     var _wn = document.getElementById("coreWhatsNew");
     if(_wn && !_wn.hidden){ armIdle(); return; }
+    // Alert glance-box open: a tap inside it is handled by its buttons; a tap outside just closes
+    // it — neither dissolves the panel. (navAlert() calls wake() with no event to go past this.)
+    if(alertsPopEl && !alertsPopEl.hidden){
+      if(e && alertsPopEl.contains(e.target)) return;
+      closeAlertsPop(); armIdle(); return;
+    }
+    // Tapping the alert count opens the glance-box (its click handler) — never dissolves.
+    if(e && alertsEl && (e.target === alertsEl || alertsEl.contains(e.target))){ armIdle(); return; }
     if(lockPadOpen()){ armIdle(); return; }          // pad/biometric prompt has its own handlers
     if(authenticated){ revealDashboard(); return; }
     if(gatingInProgress) return;
