@@ -260,3 +260,15 @@ def test_config_cam_unhealthy_secs_default_and_override(monkeypatch):
     assert load_config().cam_unhealthy_secs == 30.0
     monkeypatch.setenv("WAVR_CAM_UNHEALTHY_SECS", "5")
     assert load_config().cam_unhealthy_secs == 5.0
+
+
+def test_config_watch_intrusion_loud_defaults_off_and_parses(monkeypatch):
+    # House-level Watch intrusion is informational-by-default (double-count false-positive
+    # risk): the loud /api/alerts emission is opt-in, off unless WAVR_WATCH_INTRUSION_LOUD.
+    monkeypatch.delenv("WAVR_WATCH_INTRUSION_LOUD", raising=False)
+    assert load_config().watch_intrusion_loud is False   # default OFF
+    for val in ("1", "true", "yes", "on"):
+        monkeypatch.setenv("WAVR_WATCH_INTRUSION_LOUD", val)
+        assert load_config().watch_intrusion_loud is True
+    monkeypatch.setenv("WAVR_WATCH_INTRUSION_LOUD", "no")
+    assert load_config().watch_intrusion_loud is False

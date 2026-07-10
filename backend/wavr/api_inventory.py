@@ -57,7 +57,8 @@ from wavr.netinventory_service import NetworkInventoryService
 
 
 def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
-                 gateway_monitor=None, intrusion_log=None, fall_log=None) -> list[dict]:
+                 gateway_monitor=None, intrusion_log=None, fall_log=None,
+                 intrusion_house_loud: bool = False) -> list[dict]:
     """The ONE merged, chronologically-sorted alert list every alert-consuming
     surface reads: GET /api/alerts below, and (Build A10) `wavr.house_status`'s
     network-layer input via app.py. Factored out so both call sites share
@@ -72,14 +73,32 @@ def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
     suspicion alerts (`kind: "fall_suspected"`, severity "alert", room + duration
     only, RESEARCH-GRADE per ADR-0003 -- see wavr.fall_detect) -- each source
     omitted entirely (unchanged shape) when its monitor/log is None, same rule
-    as before."""
+    as before.
+
+    The house-LEVEL intrusion alert (room=None, the sum-of-per-room aggregate) is
+    INFORMATIONAL by default: it double-counts a person in a doorway seen by two
+    rooms, so it does NOT ride this loud /api/alerts path unless
+    `intrusion_house_loud` (WAVR_WATCH_INTRUSION_LOUD) is on. It stays surfaced in
+    /api/watch, /api/house-status and the C4 HA house-level binary_sensor
+    regardless. The per-room intrusion signal (room set, more reliable, less
+    double-count) is ALWAYS emitted here -- unchanged."""
     merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
     if dhcp_monitor is not None:
         merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
     if gateway_monitor is not None:
         merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
     if intrusion_log is not None:
-        merged += [a.to_dict() for a in intrusion_log.recent_alerts()]
+        for a in intrusion_log.recent_alerts():
+            d = a.to_dict()
+            # House-level aggregate (room=None) is INFORMATIONAL by default: it double-
+            # counts a person in a doorway seen by two rooms, so its false-positive risk
+            # means it must NOT ride the loud /api/alerts notify path unless
+            # WAVR_WATCH_INTRUSION_LOUD is on. It stays visible in /api/watch,
+            # /api/house-status and the C4 HA house-level binary_sensor regardless. The
+            # per-room signal (room set, more reliable) is ALWAYS emitted -- unchanged.
+            if d.get("room") is None and not intrusion_house_loud:
+                continue
+            merged.append(d)
     if fall_log is not None:
         merged += [a.to_dict() for a in fall_log.recent_alerts()]
     merged.sort(key=lambda a: a["ts"])
@@ -140,7 +159,8 @@ def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
                             name_deps=None, dhcp_monitor=None,
                             gateway_monitor=None, known_store=None,
-                            intrusion_log=None, fall_log=None) -> APIRouter:
+                            intrusion_log=None, fall_log=None,
+                            intrusion_house_loud=False) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
@@ -151,7 +171,8 @@ def build_inventory_router(service: NetworkInventoryService,
     async def alerts():
         return {"alerts": merge_alerts(service, dhcp_monitor=dhcp_monitor,
                                        gateway_monitor=gateway_monitor,
-                                       intrusion_log=intrusion_log, fall_log=fall_log)}
+                                       intrusion_log=intrusion_log, fall_log=fall_log,
+                                       intrusion_house_loud=intrusion_house_loud)}
 
     if device_meta is not None:
         @router.put("/api/inventory/name", dependencies=list(name_deps or []))

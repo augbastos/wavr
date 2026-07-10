@@ -4266,6 +4266,20 @@ function renderNetwork(){
         at.textContent = "rogue DHCP server" + (when ? " " + when : "");
         meta.appendChild(dtypeIconEl("router", "low", true, true));
         meta.appendChild(document.createTextNode("unexpected DHCP server " + MIDDOT + " " + (a.extra_server || "?")));
+      } else if(kind === "fall_suspected"){
+        // A9 wellbeing / fall-suspected alert (RESEARCH-GRADE, ADR-0003) -- its OWN honest
+        // treatment, NEVER a device sighting. Room + how-long + the mandatory disclaimer,
+        // all textContent. See wavr.fall_detect.FallAlert.
+        at.textContent = "possible fall - check in" + (when ? " " + when : "");
+        const durTxt = (typeof a.duration_s === "number" && isFinite(a.duration_s))
+          ? " " + MIDDOT + " " + Math.round(a.duration_s) + "s" : "";
+        meta.appendChild(document.createTextNode(
+          "someone may be lying down in " + (a.room || "a room") + durTxt));
+        const disc = document.createElement("span");
+        disc.className = "alert-disclaimer";
+        disc.textContent = a.disclaimer ||
+          "Research demonstration, not a certified medical or fall-detection device (ADR-0003).";
+        meta.appendChild(disc);
       } else {
         // Per-device rogue sighting (unknown MAC).
         at.textContent = "new device" + (when ? " " + when : "");
@@ -11324,7 +11338,8 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
   var ALERT_EXPLAIN = {
     gateway_identity: "Your router answered from a different hardware address. Usually a reboot or a swapped router — but it can also mean someone is impersonating your gateway.",
     rogue_dhcp: "Another device is handing out network addresses like a router. Usually a second router or a misconfiguration; occasionally an attack.",
-    rogue_device: "A device we haven't seen on this network before just showed up."
+    rogue_device: "A device we haven't seen on this network before just showed up.",
+    fall_suspected: "Someone may have been lying down outside a bed or rest area for a while. This is a research demonstration, not a certified medical or fall-detection device (ADR-0003) -- treat it as a prompt to check in, never a diagnosis."
   };
   function closeAlertsPop(){ if(alertsPopEl) alertsPopEl.hidden = true; }
   function openAlertsPop(){

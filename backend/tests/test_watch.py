@@ -138,6 +138,43 @@ def test_alerts_stream_omits_intrusion_when_unwired():
         assert client.get("/api/alerts").json() == {"alerts": []}
 
 
+def test_alerts_stream_house_level_intrusion_informational_by_default():
+    # merge_alerts filtering, via the router: a log holding BOTH a per-room ("sala")
+    # and a house-level (room=None) intrusion. By DEFAULT only the per-room signal
+    # rides /api/alerts; the house-level aggregate is informational (double-count risk)
+    # and filtered out. WAVR_WATCH_INTRUSION_LOUD (intrusion_house_loud=True) restores it.
+    from wavr.api_inventory import build_inventory_router
+
+    def _make_log():
+        log = IntrusionAlertLog(now_fn=lambda: "2026-07-10T00:00:00+00:00")
+        log.record("sala", True, 2, 1)     # per-room signal
+        log.record(None, True, 3, 2)       # house-level aggregate (room=None)
+        return log
+
+    # default (loud OFF): only the "sala" per-room intrusion is emitted.
+    app = FastAPI()
+    app.include_router(build_inventory_router(_FakeInvService(), intrusion_log=_make_log()))
+    with TestClient(app) as client:
+        intr = [a for a in client.get("/api/alerts").json()["alerts"]
+                if a.get("kind") == "intrusion"]
+    assert len(intr) == 1
+    assert intr[0]["room"] == "sala"
+    assert None not in {a["room"] for a in intr}
+
+    # loud ON: both the per-room and the house-level (room=None) intrusion are emitted,
+    # both count-only (no geometry ever rides either).
+    app2 = FastAPI()
+    app2.include_router(build_inventory_router(
+        _FakeInvService(), intrusion_log=_make_log(), intrusion_house_loud=True))
+    with TestClient(app2) as client:
+        intr = [a for a in client.get("/api/alerts").json()["alerts"]
+                if a.get("kind") == "intrusion"]
+    assert {a["room"] for a in intr} == {"sala", None}
+    for a in intr:
+        for leaked in ("x", "y", "targets", "identities", "vitals"):
+            assert leaked not in a
+
+
 # --------------------------------------------------------------------------- #
 # MCP read tool never exposes per-person geometry/identity/vitals -- Watch relies
 # on this being true regardless of mode (defense in depth for the MCP egress).
@@ -269,16 +306,21 @@ def test_watch_intrusion_alert_in_stream_and_edge_triggered():
         import time; time.sleep(0.2)
         alerts = [a for a in client.get("/api/alerts").json()["alerts"]
                   if a.get("kind") == "intrusion"]
-        # edge-triggered, fires ONCE each: the per-room "sala" signal AND the
-        # room-agnostic house-level aggregate (room=None), never a duplicate
-        assert len(alerts) == 2
-        by_room = {a["room"]: a for a in alerts}
-        assert set(by_room) == {"sala", None}
-        assert all(a["severity"] == "alert" for a in alerts)
-        # the house-level alert is room-agnostic + count-only: no geometry/identity
-        house = by_room[None]
+        # DEFAULT (WAVR_WATCH_INTRUSION_LOUD off): only the PER-ROOM "sala" signal
+        # rides the loud /api/alerts path, edge-triggered (fires ONCE, no dup spam).
+        # The house-level aggregate (room=None) has a double-count false-positive risk
+        # so it is informational-by-default and filtered out of /api/alerts here.
+        assert len(alerts) == 1
+        intr = alerts[0]
+        assert intr["room"] == "sala" and intr["severity"] == "alert"
+        # count-only: no geometry/identity/target ever rides the intrusion alert
         for leaked in ("x", "y", "targets", "identities", "vitals"):
-            assert leaked not in house
+            assert leaked not in intr
+        # the house-level (room=None) one is ABSENT from /api/alerts by default...
+        assert None not in {a["room"] for a in alerts}
+        # ...but it is still SURFACED (not hidden): /api/watch shows the house aggregate
+        w = client.get("/api/watch").json()
+        assert w["house_unrecognized"] is True
 
 
 def test_watch_on_but_identity_off_suppresses_without_false_alert():
@@ -387,11 +429,15 @@ def test_house_level_intrusion_caught_when_per_room_misses_and_leaks_nothing():
         assert w["known_present"] == 2
         # ...but the house-level aggregate (sum 3 > 2) catches the intruder
         assert w["house_unrecognized"] is True
-        # the alert stream carries ONE room-agnostic (room=None) intrusion, count-only
+        assert w["unrecognized_rooms"] == []
+        assert w["known_present"] == 2
+        # DEFAULT (loud OFF): the house-level (room=None) intrusion is informational --
+        # it does NOT ride the loud /api/alerts path (double-count false-positive risk),
+        # even though it is fully surfaced in /api/watch above. No per-room signal either
+        # (no single room's count exceeds known), so the intrusion alert list is EMPTY.
         alerts = [a for a in client.get("/api/alerts").json()["alerts"]
                   if a.get("kind") == "intrusion"]
-        assert len(alerts) == 1 and alerts[0]["room"] is None
-        assert alerts[0]["severity"] == "alert"
+        assert alerts == []
         # house-status physical layer sees it, one honest alert-tier reason, no room named
         hs = client.get("/api/house-status").json()
         intr = [x for x in hs["reasons"] if x["kind"] == "intrusion"]
@@ -410,3 +456,53 @@ def test_house_level_intrusion_caught_when_per_room_misses_and_leaks_nothing():
         for room in ("sala", "cozinha", "casa"):
             assert state[room]["targets"] == [] and state[room]["identities"] == []
             assert state[room]["vitals"] == {}
+
+
+def _build_loud(source_factory):
+    # Like _build(identity_enabled=True, ...) but ALSO turns on WAVR_WATCH_INTRUSION_LOUD
+    # so the house-level (room=None) intrusion rides the loud /api/alerts path.
+    prev_id = os.environ.get("WAVR_IDENTITY_ENABLED")
+    prev_loud = os.environ.get("WAVR_WATCH_INTRUSION_LOUD")
+    os.environ["WAVR_IDENTITY_ENABLED"] = "1"
+    os.environ["WAVR_WATCH_INTRUSION_LOUD"] = "1"
+    try:
+        app = create_app(
+            sources=[("watchsrc", source_factory, True)],
+            storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
+            camera_store=CameraStore(":memory:"),
+        )
+    finally:
+        for var, prev in (("WAVR_IDENTITY_ENABLED", prev_id),
+                          ("WAVR_WATCH_INTRUSION_LOUD", prev_loud)):
+            if prev is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = prev
+    return app
+
+
+def test_watch_house_level_intrusion_loud_rides_alerts_when_flag_on():
+    # WAVR_WATCH_INTRUSION_LOUD=1: the house-level (room=None) aggregate DOES ride the
+    # loud /api/alerts path, still count-only, and /api/watch reports intrusion_loud.
+    import json
+    import time
+    with TestClient(_build_loud(lambda: _SpreadSource())) as client:
+        _settle_rooms(client, ["casa", "sala", "cozinha"])
+        assert client.post("/api/watch", json={"on": True}, headers=LOCAL).status_code == 200
+        time.sleep(0.2)
+        w = client.get("/api/watch").json()
+        assert w["house_unrecognized"] is True
+        assert w["intrusion_loud"] is True
+        alerts = [a for a in client.get("/api/alerts").json()["alerts"]
+                  if a.get("kind") == "intrusion"]
+        house = [a for a in alerts if a["room"] is None]
+        assert len(house) == 1
+        assert house[0]["severity"] == "alert"
+        # still count-only even when loud: no geometry/identity leaks
+        for a in alerts:
+            for leaked in ("x", "y", "targets", "identities", "vitals"):
+                assert leaked not in a
+        blob = json.dumps({"watch": w, "alerts": alerts})
+        for leak in ("zoe", "kai", "breathing_bpm", "heart_bpm"):
+            assert leak not in blob, leak
+        assert '"x"' not in blob and '"y"' not in blob

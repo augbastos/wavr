@@ -1104,7 +1104,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _inventory, device_meta=_device_meta,
         name_deps=[Depends(require_local), Depends(require_scope("control"))],
         dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
-        known_store=_known_store, intrusion_log=_intrusion, fall_log=_fall),
+        known_store=_known_store, intrusion_log=_intrusion, fall_log=_fall,
+        intrusion_house_loud=cfg.watch_intrusion_loud),
         dependencies=[Depends(require_scope("network:read"))])
 
     # Consent-first identity registry routes. Router-level require_central keeps the
@@ -1257,6 +1258,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             "known_present": known,
             "unrecognized_rooms": rooms,
             "house_unrecognized": house_unrec,
+            # The house-level intrusion is surfaced here regardless; intrusion_loud tells
+            # the UI whether it ALSO emits a loud /api/alerts alert (WAVR_WATCH_INTRUSION_LOUD).
+            "intrusion_loud": cfg.watch_intrusion_loud,
         }
 
     @app.get("/api/watch")
