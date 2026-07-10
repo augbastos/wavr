@@ -868,6 +868,13 @@
   .overlay-content{flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;
                    gap:var(--gap);max-width:1100px;width:100%;margin:0 auto;}
 
+  /* Settings left rail + right pane (findings #6/#7/#8): base = invisible/pass-through, so
+     desktop/non-panel Settings keeps today's single scrolling column byte-identical. The
+     real 2-pane grid + single-section visibility only apply under the panel MQ below. */
+  .gear-rail{display:none;}
+  #gearRightPane,.settings-section{display:contents;}
+  .settings-section-h{display:none;}
+
   /* companion pairing state: only the pairing card matters — hide nav chrome */
   .pairing-mode .sidenav{display:none !important;}
   .pairing-mode .topbar-gear{display:none !important;}
@@ -1341,6 +1348,28 @@
     .conn-card{max-width:none;}
     .conn-desc,.conn-scope,.conn-state{font-size:.9rem;}
     .conn-group-h{font-size:1rem;}
+
+    /* -------- SETTINGS: two-pane instrument (200px rail + 1fr), single-section visibility —
+       no marathon scroll, no eager floor-plan mount (findings #6/#7/#8). Scoped to
+       #gearOverlay only so the Add-device overlay's #setupContent (also .overlay-content)
+       keeps its centered column, untouched. -------- */
+    #gearOverlay .overlay-content{max-width:none;height:100%;min-height:0;padding:0;
+        display:grid;grid-template-columns:200px minmax(0,1fr);}
+    .gear-rail{display:flex;flex-direction:column;gap:2px;padding:12px 8px;min-height:0;
+        overflow-y:auto;border-right:1px solid var(--line);background:var(--surface);}
+    .gear-rail-item{position:relative;display:flex;align-items:center;min-height:44px;
+        padding:0 14px;border-radius:8px;border:none;background:transparent;color:var(--dim);
+        font-size:.9rem;font-weight:560;text-align:left;cursor:pointer;}
+    .gear-rail-item:hover{background:var(--elevated);color:var(--text);}
+    .gear-rail-item.active{background:var(--elevated);color:var(--text);}
+    .gear-rail-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;
+        width:2px;border-radius:2px;background:var(--accent);}
+    #gearRightPane{display:flex;flex-direction:column;min-height:0;overflow-y:auto;}
+    .settings-section{display:none;flex-direction:column;gap:var(--gap);padding:0 16px 16px;}
+    .settings-section.active{display:flex;}
+    .settings-section-h{display:block;position:sticky;top:0;margin:0 -16px 4px;
+        padding:14px 16px 10px;background:var(--bg);font-size:1rem;font-weight:600;
+        border-bottom:1px solid var(--line);z-index:1;}
 
     /* -------- Touch-target floor, asserted directly in this form-factor MQ — NOT gated
        on @media(pointer:coarse) (a kiosk WebView may not report it). Covers every source
@@ -2001,11 +2030,6 @@
               <span id="camKillState" class="kill-state" aria-live="polite"></span>
             </div>
           </div>
-          <div id="ativosFontes" class="tile" hidden>
-            <div class="tile-head"><h2>Data sources</h2><span class="hint">turn each source on/off</span></div>
-            <div id="srcToggles" class="src-toggles"></div>
-            <div id="srcHealth" class="src-health" hidden aria-live="polite"></div>
-          </div>
           <div id="cameras" class="cams tile" hidden>
             <div class="tile-head"><h2 id="cams-h">Cameras</h2></div>
             <p class="cams-hint">IP cameras feed detection. Paste the RTSP address (found in the camera's app/manual).</p>
@@ -2029,9 +2053,9 @@
            (CSS grid, no DOM move for any EXISTING tile's children — only these two new
            wrapper divs were added, so every getElementById lookup below is unaffected).
            Desktop/tablet keep today's flat vertical stack (wrappers are plain block divs
-           outside the panel MQ). NOTE: #srcToggles (per-source toggles) lives on the
-           Devices→Active sub-tab, not here — that placement predates this dispatch and is
-           left as-is (see report); "System power" below is the master switch only. -->
+           outside the panel MQ). Panel-review finding #16: #srcToggles (per-source
+           toggles) now lives here in card B ("System power"), matching the layout spec —
+           moved out of the Devices→Active sub-tab where it previously sat. -->
       <section class="tab-panel" id="panel-sistema" data-tab="sistema" role="tabpanel" aria-labelledby="tab-sistema">
         <div id="sysColLeft" class="sys-col">
           <!-- Core Panel lock (admin, live/loopback only) + Core camera: sets/changes the PIN
@@ -2046,9 +2070,13 @@
             <div id="coreLockModeChooser" class="viewToggle corelock-mode" role="group" aria-label="Core Panel lock mode">
               <button type="button" id="lockModeNone" class="ctl small" data-mode="none" aria-pressed="false">No lock</button>
               <button type="button" id="lockModePin" class="ctl small" data-mode="pin" aria-pressed="false">PIN</button>
-              <button type="button" id="lockModeBiometric" class="ctl small off" data-mode="biometric" aria-pressed="false" disabled hidden
-                      data-tip="This device's biometric unlock runs automatically before any PIN — nothing to configure here">Device unlock (automatic)</button>
             </div>
+            <!-- Finding #19: "Device unlock" is never a selectable/settable mode — the wake gate
+                 already tries biometric BEFORE any PIN whenever WavrNative.hasBiometric() is true,
+                 regardless of the No-lock/PIN choice above, so there is no backend mode for a tap
+                 to set. A hover-only data-tip on a disabled button is unreachable on a touch panel;
+                 a plain always-legible hint line (shown only when hasBiometric()) is honest instead. -->
+            <p class="panel-note" id="lockModeBiomNote" hidden>Device unlock (biometric) runs automatically before any PIN on this device — nothing to configure here.</p>
             <form id="coreLockAdminForm" class="corelock-form" aria-labelledby="corelock-h" hidden>
               <input id="coreLockAdminPin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,12}"
                      minlength="4" maxlength="12" placeholder="new PIN (4–12 digits)" aria-label="new PIN" required>
@@ -2060,13 +2088,17 @@
               <span id="coreCamStatus" class="action-fb" aria-live="polite">camera: unknown</span>
             </div>
           </div>
-          <!-- Card B: "System power" — the global switch only (per-source toggles live on
-               Devices→Active, see the section-level note above). -->
+          <!-- Card B: "System power" — the master switch + per-source .ctl.switch list
+               (finding #16: #srcToggles/#srcHealth moved in from the old Devices→Active
+               #ativosFontes tile, see the section-level note above). -->
           <div id="controls" class="controls tile" hidden>
-            <div class="tile-head"><h2>System power</h2><span class="hint">global switch — pauses all sources</span></div>
+            <div class="tile-head"><h2>System power</h2><span class="hint">global switch + per-source controls</span></div>
             <div class="controls-row">
               <button id="sysToggle" class="ctl" data-tip="Master switch — pauses every presence source at once"></button>
+              <span id="sysFb" class="action-fb" aria-live="polite"></span>
             </div>
+            <div id="srcToggles" class="src-toggles"></div>
+            <div id="srcHealth" class="src-health" hidden aria-live="polite"></div>
           </div>
         </div>
         <div id="sysColRight" class="sys-col">
@@ -2178,6 +2210,30 @@
     <h2 id="gear-h">Settings</h2>
   </div>
   <div class="overlay-content">
+    <!-- Findings #6/#7/#8: left section rail + single-section-visible right pane, panel-MQ
+         only (base CSS keeps every .settings-section as display:contents, so desktop stays
+         the pre-existing single scrolling column, byte-identical). -->
+    <nav id="gearRail" class="gear-rail" aria-label="Settings sections">
+      <button type="button" class="gear-rail-item" data-section="gearSecLayout" aria-pressed="false">Layout</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecDevices" aria-pressed="false">Devices</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecConnectors" aria-pressed="false">Connectors</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecPrivacy" aria-pressed="false">Privacy</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecPanelLock" aria-pressed="false">Panel lock</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecAbout" aria-pressed="false">About</button>
+    </nav>
+    <div id="gearRightPane">
+    <div class="settings-section" id="gearSecLayout" aria-labelledby="gearSecLayout-h">
+    <h3 id="gearSecLayout-h" class="settings-section-h">Layout</h3>
+    <!-- Finding #8: the heavy OrbitControls canvas mounts only when this disclosure is
+         opened, at the panel form factor. Desktop keeps the original eager-mount (see
+         openGear() below) so non-panel Settings stays behavior-identical. -->
+    <button type="button" id="gearMapToggle" class="map-panel-toggle" aria-expanded="false"
+            aria-controls="gearMapHost houseEditor">
+      <svg aria-hidden="true"><use href="#ic-grid"/></svg>
+      <span class="mpt-open-label">Edit floor plan</span>
+      <span class="mpt-close-label">Hide floor plan</span>
+      <span class="mpt-chevron" aria-hidden="true">&rsaquo;</span>
+    </button>
     <p class="panel-note" id="gearMapHint" hidden>Edit your home's layout right on the map below — in <b>3D</b> or in the precise <b>Floor plan</b> view (same plan, two views).</p>
     <div id="gearMapHost" class="gear-map-host"></div>
     <section id="houseEditor" class="hed tile" hidden aria-labelledby="hed-h">
@@ -2207,6 +2263,9 @@
       </div>
       <p class="hed-hint" id="hedHint">Select: click a room/wall/stairs to mark and delete it · + Room/+ Wall: drag on the plan · + Stairs: click on the plan.</p>
     </section>
+    </div><!-- /#gearSecLayout -->
+    <div class="settings-section active" id="gearSecDevices" aria-labelledby="gearSecDevices-h">
+    <h3 id="gearSecDevices-h" class="settings-section-h">Devices</h3>
     <div id="pairing" class="pair tile" hidden>
       <div class="tile-head"><h2 id="pair-h">Pair device</h2></div>
       <form id="pairForm" class="pair-form" aria-labelledby="pair-h">
@@ -2294,6 +2353,9 @@
       <h4 class="pair-sub">Registered devices</h4>
       <div id="idDevList" class="pair-dev-list" aria-live="polite"></div>
     </div>
+    </div><!-- /#gearSecDevices -->
+    <div class="settings-section" id="gearSecConnectors" aria-labelledby="gearSecConnectors-h">
+    <h3 id="gearSecConnectors-h" class="settings-section-h">Connectors</h3>
     <!-- Connectors & services — the SINGLE outward-facing surface (project_wavr_connectors_vision).
          Wavr is local and MUTE by default; this is the ONLY screen that manages anything reaching
          OUTWARD, and everything is OFF by default. Live/central only: GET /api/connectors is
@@ -2310,6 +2372,9 @@
       <p id="connSummary" class="conn-summary" aria-live="polite"></p>
       <div id="connList" class="conn-list" aria-live="polite"></div>
     </div>
+    </div><!-- /#gearSecConnectors -->
+    <div class="settings-section" id="gearSecPrivacy" aria-labelledby="gearSecPrivacy-h">
+    <h3 id="gearSecPrivacy-h" class="settings-section-h">Privacy</h3>
     <!-- Stage 3b (§2.6/§7#6/#10 + §9): Privacy & security — the brand's trust screen,
          visible in EVERY mode (demo included). Invariants are static truth; the kill-switch
          shortcut and the export act on live/loaded data where available. -->
@@ -2342,6 +2407,23 @@
       </div>
       <p class="panel-note">Exports, right here on this device, what this panel has already loaded: presence history, house floor plan, and zones. Deleting data on the hub (“right to be forgotten”) needs a backend route — not in this version yet.</p>
     </div>
+    </div><!-- /#gearSecPrivacy -->
+    <!-- Finding #6: Panel lock (PIN) + camera admin already live on the System tab's
+         "Panel & admin" card (card A). Spec open question 2 (single place vs duplicated)
+         is unresolved, so this rail item stays a light, honest pointer instead of
+         duplicating the live admin controls into a second place. -->
+    <div class="settings-section" id="gearSecPanelLock" aria-labelledby="gearSecPanelLock-h">
+    <h3 id="gearSecPanelLock-h" class="settings-section-h">Panel lock</h3>
+    <div class="tile" aria-labelledby="gearPanelLockInfo-h">
+      <div class="tile-head"><h2 id="gearPanelLockInfo-h">Core Panel lock</h2><span class="hint">PIN + camera admin</span></div>
+      <p class="panel-note">The Core Panel lock (PIN) and camera controls live on the <b>System</b> tab, under &ldquo;Panel &amp; admin&rdquo; — right next to the hub's other live controls.</p>
+      <div class="controls-row">
+        <button type="button" id="gearPanelLockLink" class="ctl small">Open Panel &amp; admin on System</button>
+      </div>
+    </div>
+    </div><!-- /#gearSecPanelLock -->
+    <div class="settings-section" id="gearSecAbout" aria-labelledby="gearSecAbout-h">
+    <h3 id="gearSecAbout-h" class="settings-section-h">About</h3>
     <!-- What's New: the release notes shown once as a takeover on the Core panel are kept
          permanently re-readable here (filled by initWhatsNewSettings() from WAVR_WHATS_NEW). -->
     <div class="tile" id="gearWhatsNew" aria-labelledby="whatsnew-h">
@@ -2358,6 +2440,8 @@
         <button id="pwaDismissBtn" type="button" class="ctl small off">not now</button>
       </div>
     </div>
+    </div><!-- /#gearSecAbout -->
+    </div><!-- /#gearRightPane -->
   </div>
 </div>
 
@@ -2916,19 +3000,32 @@ async function renderControls(){
     .catch(()=>null);
   // Fix #3 (honest unavailable state): /api/system already returns {enabled,active} per
   // source (sourcemanager.py) — active=false while enabled=true means the source's task
-  // isn't actually running (e.g. a privileged bind failed under a non-root proot). A
-  // source only paints as the calm "unavailable" chip once that reading has been STABLE
-  // for 2 consecutive 3s polls (never on a source merely mid-restart), or immediately for
-  // a source name known to be privilege-gated on the current build (PROOT_BLOCKED) — never
-  // hardcoded to always-unavailable, since the same name legitimately binds and runs
-  // enabled&&active on a host with real network capabilities (e.g. the G9 Core's proot
-  // under Magisk su).
+  // isn't actually running (e.g. a privileged bind failed under a non-root proot, or the
+  // task crashed and self-terminated). A source only paints as the calm "unavailable"
+  // chip once that reading has been STABLE for 2 consecutive 3s polls (never on a source
+  // merely mid-restart).
+  // Fix #1 (CRITICAL): the same {enabled:true, active:false} reading ALSO happens for
+  // EVERY enabled source the instant the master switch pauses the whole system —
+  // SourceManager.stop() kills all tasks but leaves _enabled untouched. So "stuck" must
+  // also require s.running, or a deliberate pause falsely paints every source as
+  // "unavailable — needs privileged mode" and the user loses the ability to pre-stage
+  // sources while paused.
+  // Fix #12: the old PROOT_BLOCKED instant-unavailable map is removed — dhcp_fp/
+  // rogue_dhcp are netinventory collectors, never SourceManager sources, so they can
+  // never appear in s.sources; the map was dead code. The env-unavailable signal for
+  // those two now comes from GET /api/status's "availability" field (consumed by
+  // renderSensing, not here).
   const unavailStreak = {};
-  const PROOT_BLOCKED = {dhcp_fp: 1, rogue_dhcp: 1};
+  // Fix #3/#11: per-source POST-failure messages, persisted across the 3s
+  // wrap.innerHTML rebuild below — without this, a failure either writes into a node
+  // that's about to be detached, or gets wiped by the next poll tick before the user
+  // can read it (the exact "toggles silently fail" complaint this is meant to fix).
+  const srcError = {};
   async function refresh(){
     let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
     window.__wavrSystem?.(s);   // Stage-2 hook: Dispositivos→Ativos badge/rows share this payload
     const sys = document.getElementById("sysToggle");
+    const sysFb = document.getElementById("sysFb");
     // Item 7: a real switch affordance ("System" + on/off track) instead of an ambiguous
     // "System: ON" state label — role=switch + aria-checked keep it accessible.
     sys.textContent = "System";
@@ -2936,27 +3033,54 @@ async function renderControls(){
     sys.setAttribute("role", "switch");
     sys.setAttribute("aria-checked", s.running ? "true" : "false");
     sys.setAttribute("aria-label", "System: " + (s.running ? "on" : "off"));
-    sys.onclick = async ()=>{ const r = await post("/api/system/toggle",{on:!s.running}); if(r && r.ok) refresh(); };
+    // Fix #10/#13: the master switch now surfaces its own POST failures instead of doing
+    // nothing (it was the one control the per-source failure-surfacing fix skipped).
+    // #sysToggle is a fixed element (restyled every refresh() but never recreated, and
+    // .disabled is never reset elsewhere) so BOTH branches must re-enable it, or one
+    // failed POST leaves the master switch permanently disabled until page reload.
+    sys.onclick = async ()=>{
+      sys.disabled = true;
+      const r = await post("/api/system/toggle",{on:!s.running});
+      sys.disabled = false;
+      if(r && r.ok){ refresh(); }
+      else { actionFeedback(sysFb, false, "Couldn't change — this control needs local admin access"); }
+    };
     const wrap = document.getElementById("srcToggles"); wrap.innerHTML = "";
     s.sources.forEach(src=>{
       const label = MODALITY_LABEL[src.name] || src.name;
       const row = document.createElement("div"); row.className = "src-toggle-row";
-      const stuck = src.enabled && !src.active;
+      const stuck = s.running && src.enabled && !src.active;
       const streak = stuck ? (unavailStreak[src.name] || 0) + 1 : 0;
       unavailStreak[src.name] = streak;
-      const unavailable = stuck && (streak >= 2 || (src.name in PROOT_BLOCKED));
+      const unavailable = stuck && streak >= 2;
       if(unavailable){
-        // Non-interactive by design — this is NOT a dead toggle, it's an honest status
-        // chip. Distinct from both the live switch above and a plain read-only pill.
-        const chip = document.createElement("span");
-        chip.className = "ctl small src-unavail";
-        chip.setAttribute("role", "status");
-        chip.textContent = label + ": unavailable";
-        chip.setAttribute("data-tip", "Unavailable on this device — needs privileged mode (not an error)");
-        row.appendChild(chip);
+        // Fix #4: enabled-but-not-running is NOT necessarily a privilege issue — a
+        // crashed source (task self-terminated, e.g. a camera feed dying or a serial
+        // device unplugged) looks identical from {enabled,active} alone, so the copy
+        // stays cause-neutral rather than asserting a specific cause. This is a REAL
+        // button, not a dead status chip: it keeps the recovery affordance a plain
+        // toggle used to provide (an off/on cycle re-spawns the task via
+        // SourceManager.set_enabled -> _spawn).
+        const b = document.createElement("button"); b.type = "button";
+        b.className = "ctl small src-unavail"; b.style.cursor = "pointer";
+        b.textContent = label + ": restart";
+        b.setAttribute("data-tip", "Enabled but not running — tap to restart (may need privileged mode on this device)");
         const note = document.createElement("span"); note.className = "src-unavail-note";
-        note.textContent = "Unavailable on this device — needs privileged mode (not an error)";
-        row.appendChild(note);
+        note.textContent = "Enabled but not running — tap to restart (may need privileged mode on this device)";
+        const fb = document.createElement("span"); fb.className = "action-fb"; fb.setAttribute("aria-live", "polite");
+        if(srcError[src.name]){ fb.className = "action-fb err"; fb.textContent = srcError[src.name]; }
+        b.onclick = async ()=>{
+          b.disabled = true;
+          await post(`/api/sources/${src.name}/toggle`, {enabled: false});
+          const r = await post(`/api/sources/${src.name}/toggle`, {enabled: true});
+          if(r && r.ok){ delete srcError[src.name]; refresh(); }
+          else {
+            b.disabled = false;
+            srcError[src.name] = "Couldn't restart — this control needs local admin access";
+            actionFeedback(fb, false, srcError[src.name]);
+          }
+        };
+        row.appendChild(b); row.appendChild(note); row.appendChild(fb);
       } else {
         const b = document.createElement("button"); b.type = "button";
         // Item 2 (Changes list): the same .ctl.switch track/knob grammar as #sysToggle —
@@ -2970,13 +3094,20 @@ async function renderControls(){
         // its fallback string guarantees an unmapped name is never tooltip-less)
         b.setAttribute("data-tip", typeof window.__wavrSourceTip==="function" ? window.__wavrSourceTip(src.name) : "");
         const fb = document.createElement("span"); fb.className = "action-fb"; fb.setAttribute("aria-live", "polite");
+        // Fix #3/#11: re-render any error persisted from a prior tick so the "couldn't
+        // change" message survives the 3s wrap.innerHTML rebuild instead of vanishing
+        // before the user reads it. Plain re-render (no actionFeedback call here) so
+        // screen readers aren't re-announced every 3s — the onclick handler's own
+        // actionFeedback call below handles the live announcement on the attempt itself.
+        if(srcError[src.name]){ fb.className = "action-fb err"; fb.textContent = srcError[src.name]; }
         b.onclick = async ()=>{
           b.disabled = true;
           const r = await post(`/api/sources/${src.name}/toggle`, {enabled: !src.enabled});
-          if(r && r.ok){ refresh(); }
+          if(r && r.ok){ delete srcError[src.name]; refresh(); }
           else {
             b.disabled = false;
-            actionFeedback(fb, false, "Couldn't change — this control needs local admin access");
+            srcError[src.name] = "Couldn't change — this control needs local admin access";
+            actionFeedback(fb, false, srcError[src.name]);
           }
         };
         row.appendChild(b); row.appendChild(fb);
@@ -3512,19 +3643,25 @@ async function renderCoreLockAdmin(){
   const form = document.getElementById("coreLockAdminForm");
   const pinInput = document.getElementById("coreLockAdminPin");
   const fb = document.getElementById("coreLockAdminFb");
-  // Fix #3 (lock-mode chooser): [No lock] / [PIN] / [Device unlock]. "Device unlock" is
-  // shown (never fabricated) only when the native bridge reports biometric hardware, and
-  // is intentionally NON-interactive here: the ambient wake() gate already tries biometric
-  // BEFORE any PIN whenever WavrNative.hasBiometric() is true (see the lock module near the
-  // end of this file), so it isn't a third exclusive admin-settable mode competing with
-  // PIN — presenting it as one would overclaim a choice that doesn't exist in the wake
-  // path. [No lock]/[PIN] are the two real, mutually-exclusive backend-controlled states.
+  // Fix #3 / finding #19 (lock-mode chooser): [No lock] / [PIN] are the two real,
+  // mutually-exclusive backend-controlled states. "Device unlock" is surfaced separately as
+  // a non-interactive hint line (#lockModeBiomNote), shown only when the native bridge
+  // reports biometric hardware — never as a selectable third mode, because the ambient
+  // wake() gate already tries biometric BEFORE any PIN whenever WavrNative.hasBiometric()
+  // is true (see the lock module near the end of this file), regardless of the No-lock/PIN
+  // choice here; there is no backend state for a tap on "Device unlock" to set, so
+  // presenting it as a selectable mode would show a mode that can't work.
   const modeNoneBtn = document.getElementById("lockModeNone");
   const modePinBtn  = document.getElementById("lockModePin");
-  const modeBiomBtn = document.getElementById("lockModeBiometric");
+  const modeBiomNote = document.getElementById("lockModeBiomNote");
   const hasBiometric = !!(window.WavrNative && typeof window.WavrNative.hasBiometric === "function"
                           && window.WavrNative.hasBiometric());
-  if(modeBiomBtn) modeBiomBtn.hidden = !hasBiometric;
+  if(modeBiomNote) modeBiomNote.hidden = !hasBiometric;
+  // Finding #14: track the last CONFIRMED backend state so the chooser can't keep showing
+  // "PIN" selected (or fire a spurious DELETE) once the user taps a button without ever
+  // submitting/completing the change — only refresh() (GET /api/core/pin/status) is allowed
+  // to assert this is what the backend actually has.
+  let backendPinSet = false;
   function setMode(mode){
     [modeNoneBtn, modePinBtn].forEach(b=>{
       if(!b) return;
@@ -3539,12 +3676,14 @@ async function renderCoreLockAdmin(){
     try{ s = await (await fetch(location.origin+"/api/core/pin/status", {headers:{"X-Wavr-Local":"1"}})).json(); }
     catch{ if(statusEl) statusEl.textContent = "couldn't reach the hub — try again"; return; }
     const pinSet = !!(s && s.pin_set);
+    backendPinSet = pinSet;
     if(statusEl) statusEl.textContent = pinSet
       ? "A PIN is set for the Core Panel touchscreen."
       : "No PIN set — the Core Panel touchscreen wakes straight to the dashboard.";
     setMode(pinSet ? "pin" : "none");   // default-selected from GET /api/core/pin/status
   }
   if(modeNoneBtn) modeNoneBtn.onclick = async ()=>{
+    if(!backendPinSet){ setMode("none"); return; }   // already unlocked — no DELETE needed, no spurious "✓ lock removed"
     modeNoneBtn.disabled = true;
     let r;
     try{ r = await fetch(location.origin+"/api/core/pin", {method:"DELETE", headers:{"X-Wavr-Local":"1"}}); }catch{}
@@ -3552,7 +3691,13 @@ async function renderCoreLockAdmin(){
     if(r && r.ok){ actionFeedback(fb, true, null, "✓ lock removed"); refresh(); }
     else actionFeedback(fb, false, "couldn't remove the lock — try again");
   };
-  if(modePinBtn) modePinBtn.onclick = ()=>{ setMode("pin"); pinInput?.focus(); };
+  if(modePinBtn) modePinBtn.onclick = ()=>{
+    setMode("pin");
+    pinInput?.focus();
+    // Selecting PIN client-side doesn't set one — keep the status line honest about the
+    // pending transition instead of contradicting reality until Save actually completes it.
+    if(!backendPinSet && statusEl) statusEl.textContent = "Enter a 4–12 digit PIN and save it to turn the lock on.";
+  };
   form.onsubmit = async (e)=>{
     e.preventDefault();
     const pin = pinInput.value;
@@ -4369,8 +4514,20 @@ async function renderConnectors(){
       };
       foot.appendChild(tog);
       const stch = document.createElement("span"); stch.className = "conn-state " + st.cls;
-      stch.textContent = (st.word === "ready" && c.env_flag) ? ("ready · set " + c.env_flag) : st.word;
+      stch.textContent = st.word;
       foot.appendChild(stch);
+      // Finding #21 (registry/registry-overlay branch): demote the WAVR_* var + restart
+      // instruction behind a Details disclosure, same treatment as the enforcement==='env'
+      // branch above — jargon never sits in primary card text.
+      if(st.word === "ready" && c.env_flag){
+        const det = document.createElement("details"); det.className = "conn-env-details";
+        const sum = document.createElement("summary"); sum.textContent = "Details";
+        det.appendChild(sum);
+        const p = document.createElement("p");
+        p.textContent = "Set " + c.env_flag + " and restart the hub to turn this on.";
+        det.appendChild(p);
+        foot.appendChild(det);
+      }
     }
     card.appendChild(foot);
     return card;
@@ -6861,6 +7018,59 @@ try {
   window.__wavrTrapFocus = trapFocus;
   if(overlay) trapFocus(overlay);
 
+  // ---- Settings left rail (findings #6/#7/#8): single-section visibility, panel-MQ only —
+  // outside that MQ every .settings-section is display:contents (base CSS), so .active never
+  // gates anything on desktop and this whole block is a harmless no-op there. HOME_PANEL_MQ
+  // (defined earlier in this file) is the exact same media query as the panel CSS block. ----
+  var gearRailItems = Array.prototype.slice.call(document.querySelectorAll(".gear-rail-item"));
+  var gearRightPane = document.getElementById("gearRightPane");
+  var gearSections = {};
+  gearRailItems.forEach(function(btn){
+    var id = btn.getAttribute("data-section");
+    if(id) gearSections[id] = document.getElementById(id);
+  });
+  function showGearSection(id){
+    if(!gearSections[id]) return;
+    gearRailItems.forEach(function(btn){
+      var on = btn.getAttribute("data-section") === id;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    Object.keys(gearSections).forEach(function(k){
+      if(gearSections[k]) gearSections[k].classList.toggle("active", k === id);
+    });
+    if(gearRightPane) gearRightPane.scrollTop = 0;
+  }
+  gearRailItems.forEach(function(btn){
+    btn.addEventListener("click", function(){ showGearSection(btn.getAttribute("data-section")); });
+  });
+  // finding #6: "Panel lock" is a light pointer, not a duplicated admin control (OQ2 open) —
+  // closing Settings and landing on System's real "Panel & admin" card mirrors gearEgressLink.
+  var gearPanelLockLink = document.getElementById("gearPanelLockLink");
+  if(gearPanelLockLink) gearPanelLockLink.addEventListener("click", function(){
+    closeGear();
+    if(typeof window.switchTab === "function") window.switchTab("sistema");
+    var cl = document.getElementById("coreLockPanel");
+    if(cl) cl.scrollIntoView({ block: "start" });
+  });
+
+  // finding #8: the heavy OrbitControls canvas mounts only when this disclosure is opened —
+  // at the panel form factor the map otherwise never mounts on Settings open at all (desktop
+  // keeps the original eager-mount in openGear() below, untouched).
+  var gearMapToggle = document.getElementById("gearMapToggle");
+  function mountGearMap(){
+    if(typeof MODE === "undefined" || MODE !== "live") return;
+    var rw = document.getElementById("radarWrap");
+    if(rw && gearMapHost && rw.parentNode !== gearMapHost) gearMapHost.appendChild(rw);
+    if(gearMapHint) gearMapHint.hidden = false;
+  }
+  if(gearMapToggle) gearMapToggle.addEventListener("click", function(){
+    var open = gearMapToggle.getAttribute("aria-expanded") !== "true";
+    gearMapToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if(open) mountGearMap();
+    syncMapLoop();
+  });
+
   function openGear(trigger){
     if(overlayOpen || !overlay) return;
     overlayOpen = true;
@@ -6868,14 +7078,19 @@ try {
     overlay.hidden = false;
     setAppInert(true);
     document.body.classList.add("gear-open");
+    // Default landing = a light section (Devices), never the floor-plan editor (finding #6).
+    // Only meaningful under the panel-MQ rail — a no-op elsewhere (sections are
+    // display:contents on desktop, so .active never gates visibility there).
+    showGearSection("gearSecDevices");
     // Live/central only: bring the map tile (the house editor's drawing surface) into the
     // overlay so drawing/zone editing works here; it returns to Home on close. The node
     // itself moves, so every id still exists exactly once (same move-a-panel technique
-    // initCompanion() already uses).
-    if(typeof MODE !== "undefined" && MODE === "live"){
-      var rw = document.getElementById("radarWrap");
-      if(rw && gearMapHost && rw.parentNode !== gearMapHost) gearMapHost.appendChild(rw);
-      if(gearMapHint) gearMapHint.hidden = false;
+    // initCompanion() already uses). Finding #8: at the panel form factor this eager mount
+    // is skipped — the map mounts only when the Layout section's "Edit floor plan" disclosure
+    // is opened; desktop keeps this exact eager-mount so non-panel Settings stays
+    // behavior-identical.
+    if(!HOME_PANEL_MQ.matches){
+      mountGearMap();
     }
     syncMapLoop();
     if(gearBack) gearBack.focus();
@@ -6888,6 +7103,7 @@ try {
     document.body.classList.remove("gear-open");
     var rw = document.getElementById("radarWrap");
     if(rw && mapHome && rw.parentNode !== mapHome) mapHome.appendChild(rw);
+    if(gearMapToggle) gearMapToggle.setAttribute("aria-expanded", "false");   // collapse for next open
     syncMapLoop();
     if(lastGearTrigger && lastGearTrigger.focus) lastGearTrigger.focus();
   }
@@ -8325,8 +8541,10 @@ try {
     return tile;
   }
 
-  // ---------- Active: sources tile (live) + per-modality health via RoomState ----------
-  if(M === "live"){ var af = $("ativosFontes"); if(af) af.hidden = false; }
+  // ---------- Active: per-modality health via RoomState ----------
+  // Panel-review finding #16: the "Data sources" tile (#srcToggles/#srcHealth) moved
+  // into System card B (#controls, unhidden by renderControls itself) — the #ativosFontes
+  // wrapper it used to live in is gone, so there is nothing left to unhide here.
 
   function renderHealth(){
     var box = $("srcHealth");
@@ -8713,13 +8931,13 @@ try {
       off: "off — enable with WAVR_NET_SNMP=1 on the hub (restart required)" },
     // dhcp_fp/rogue_dhcp bind a raw socket on UDP/68, which a non-root proot/container
     // build can't do even after the env flag is set + restarted (works fine on a host
-    // with real network capabilities, e.g. the G9 Core's proot under Magisk su). The
-    // backend has no per-collector bind-success signal today (features.* is a config
-    // flag only, not a runtime "did it actually bind" state — see sourcemanager.py vs.
-    // netinventory_service.py: these two are NOT SourceManager sources and carry no
-    // {enabled,active} pair) so the frontend can't render a verified "unavailable"
-    // chip here the way it can for real sources below. Being honest with what IS
-    // knowable: the off-copy states the real caveat instead of a bare restart promise.
+    // with real network capabilities, e.g. the G9 Core's proot under Magisk su). These
+    // two are NOT SourceManager sources and carry no {enabled,active} pair, but GET
+    // /api/status's "availability" key (Fix #9/#17) now carries a real per-collector
+    // bind-success signal (renderSensing's 4th "unavailable" branch, below), so a
+    // failed bind renders honestly instead of the misleading on-copy. The off-copy
+    // below still states the raw-socket caveat for the (off, never-attempted) case,
+    // where availability is null and there is genuinely no signal yet.
     { k:"dhcp_fp", label:"DHCP fingerprint", icon:"ic-radar", active:false,
       on:  "reads the DHCP requests devices already broadcast on your network to guess OS/hostname — passive, local only",
       off: "off — enable with WAVR_NET_DHCP_FP=1 on the hub (restart required; needs a raw-socket network capability some restricted environments, like a non-root container, can't grant)" },
@@ -8759,11 +8977,30 @@ try {
     if(!list) return;
     var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
       ? statusInfo.features : null;
+    // Fix #9/#17: GET /api/status's additive "availability" key -- tri-state per
+    // privileged-bind collector (dhcp_fp/rogue_dhcp are netinventory collectors, not
+    // SourceManager sources, so they carry no {enabled,active} pair of their own).
+    // available===null: feature off, or no collect()/check_once() cycle has run yet
+    // since startup -- no signal either way, treated exactly like today (silent).
+    // available===false: the raw socket bind itself failed on the most recent
+    // attempt (e.g. non-root proot lacking CAP_NET_BIND_SERVICE) -- distinct from a
+    // quiet LAN, which is available===true with zero devices seen.
+    var avail = (M === "live" && statusInfo && statusInfo.availability && typeof statusInfo.availability === "object")
+      ? statusInfo.availability : null;
     list.textContent = "";
     SENSING_ITEMS.forEach(function(it){
       var on = feats ? !!feats[it.k] : null;
+      var a = avail ? avail[it.k] : null;
       var tagTxt, txt, iconOn;
       if(on === null){ iconOn = false; tagTxt = "inactive"; txt = "no hub connected — feature inactive (not an error)"; }
+      else if(on && a && a.available === false){
+        // 4th branch: enabled, but the bind itself failed -- calm/non-alarming,
+        // and does NOT repeat the "enable with WAVR_*=1" instruction from it.off,
+        // since the flag is already set and restarting won't fix an environment
+        // that can't grant the capability.
+        iconOn = false; tagTxt = "unavailable";
+        txt = "unavailable on this device — not an error" + (a.reason ? " (" + a.reason + ")" : "");
+      }
       else if(!on){ iconOn = false; tagTxt = "off"; txt = it.off; }
       else { iconOn = true; tagTxt = it.active ? "active probe" : "passive listen"; txt = it.on; }
       var tagCls = iconOn ? (it.active ? "probe" : "on") : "";
@@ -9515,6 +9752,11 @@ try {
     major: "gateway OK — the internet looks down",
     critical: "gateway unreachable — no LAN routing",
   };
+  // Severity vocabularies (OQ4 decision — keep two domain ladders): this ok/minor/degraded/
+  // major/critical scale is the canonical HEALTH ladder. The Network-alerts ladder (info/note/
+  // watch/alert/critical, see :427) is a deliberately separate domain vocabulary (per-alert-kind
+  // badge, backend-driven string) and stays as-is — they are not force-merged. No shared-severity
+  // consumer needs a cross-map today, so none is defined (avoids dead code).
   // =====================================================================
   // System regroup — persistent, PASSIVE Health status line (card C): fed
   // ONLY from signals already polled elsewhere (sysInfo from /api/system,
@@ -9528,6 +9770,11 @@ try {
   // =====================================================================
   function computePassiveHealthSeverity(){
     if(M !== "live") return null;   // no hub connected — the line stays hidden, not "ok"
+    // Deliberately paused (master System switch off): nothing is sensing, so this line has
+    // no health signal to assert. Hide it rather than count enabled-but-inactive sources as
+    // "degraded" — that would false-alarm on the exact case the switch describes (paused,
+    // not failing), contradicting the honest "not an error" chips on the same tab.
+    if(sysInfo && sysInfo.running === false) return null;
     var unavailN = 0;
     if(sysInfo && Array.isArray(sysInfo.sources)){
       sysInfo.sources.forEach(function(s){ if(s && s.enabled && !s.active) unavailN++; });
