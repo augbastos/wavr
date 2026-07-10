@@ -79,6 +79,23 @@ def test_intrusion_accepts_plain_dicts_too():
     assert out["reasons"][0]["what"] == "unrecognized person in cozinha"
 
 
+def test_fall_reason_is_physical_layer_alert_with_disclaimer_language():
+    # A9 (RESEARCH-GRADE, ADR-0003): callers pass plain dicts (FallAlert.to_dict() shape).
+    out = compose_house_status(fall_alerts=[{"kind": "fall_suspected", "room": "quarto",
+                                             "duration_s": 75.0, "severity": SEVERITY_ALERT,
+                                             "ts": _ts(1)}], now=NOW)
+    assert out["status"] == "alert" and out["score"] == 4
+    r = out["reasons"][0]
+    assert r["layer"] == "physical" and r["kind"] == "fall_suspected"
+    assert "quarto" in r["what"] and "research demonstration" in r["what"]
+    assert "not a medical device" in r["what"]
+
+
+def test_fall_alerts_omitted_when_none():
+    out = compose_house_status(now=NOW)
+    assert not [r for r in out["reasons"] if r["kind"] == "fall_suspected"]
+
+
 def test_routine_anomaly_is_physical_layer_note_never_urgent():
     out = compose_house_status(routine_flags=[{"room": "quarto", "ts": _ts(1)}], now=NOW)
     assert out["status"] == "notice"                 # note-tier, below alert

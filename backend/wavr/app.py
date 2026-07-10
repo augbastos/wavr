@@ -48,6 +48,7 @@ from wavr.api_inventory import build_inventory_router, merge_alerts
 from wavr.house_status import compose_house_status, DEFAULT_NETWORK_WINDOW_MINUTES
 from wavr.watch import (WatchMode, IntrusionAlertLog, known_present_persons,
                         project_state, room_unrecognized, house_unrecognized)
+from wavr.fall_detect import FallDetector, lying_outside_zone
 from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
 from wavr.occupancy_log import OccupancyLog
 from wavr.known_store import KnownStore
@@ -289,6 +290,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # internal truth; the suppression is applied by wavr.watch.project_state at each egress.
     _watch = WatchMode()
     _intrusion = IntrusionAlertLog()  # edge-triggered "unrecognized person in <room>" alerts
+    # A9 fall/no-motion suspicion (RESEARCH-GRADE, ADR-0003) -- default OFF
+    # (cfg.fall_detect_enabled). None means the feature is fully inert: `_publish` below
+    # never even evaluates `lying_outside_zone`, so an operator who never opted in pays
+    # zero extra cost and sees it nowhere (same "None => skip" idiom as `_occupancy_log`).
+    _fall = FallDetector(dwell_s=cfg.fall_dwell_s) if cfg.fall_detect_enabled else None
     # deepcopy: load_house_map returns the module-level housemap.DEFAULT_MAP object
     # itself on any fallback (missing/invalid file), and put_house below mutates _house
     # in place (clear/update). Without this copy, the first PUT on a fresh install --
@@ -544,6 +550,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                      house_count, known, d["ts"])
             if hhit is not None and _notify:
                 _notify("Wavr Vigia: pessoa nao reconhecida em casa")
+        # A9 fall/no-motion suspicion (RESEARCH-GRADE, ADR-0003): independent of Watch/
+        # identity -- posture is not family geometry/PII, so it is evaluated unconditionally
+        # once opted in (`_fall` is None otherwise). Reads `d["targets"]` -- the FULL
+        # internal truth, same as the intrusion check above -- so a Watch-suppressed egress
+        # never blinds this rule. The alert itself carries only room + duration (see
+        # wavr.fall_detect.FallAlert); it reaches GET /api/alerts via merge_alerts, never
+        # through the (possibly-suppressed) hub/WS/MQTT state fan-out below.
+        if _fall is not None:
+            at_risk = lying_outside_zone(_house, d["room"], d.get("targets") or [])
+            fhit = _fall.record(d["room"], at_risk, d["ts"])
+            if fhit is not None and _notify:
+                _notify("Wavr: possivel queda em " + str(d["room"]) +
+                        " (deteccao experimental, nao e um dispositivo medico -- ADR-0003)")
         await _hub.publish(project_state(d, _watch.on, unrecognized))
         return d
 
@@ -1035,7 +1054,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _inventory, device_meta=_device_meta,
         name_deps=[Depends(require_local), Depends(require_scope("control"))],
         dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
-        known_store=_known_store, intrusion_log=_intrusion),
+        known_store=_known_store, intrusion_log=_intrusion, fall_log=_fall),
         dependencies=[Depends(require_scope("network:read"))])
 
     # Consent-first identity registry routes. Router-level require_central keeps the
@@ -1671,6 +1690,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         network_alerts = merge_alerts(_inventory, dhcp_monitor=_dhcp_monitor,
                                       gateway_monitor=_gateway_monitor)
         intrusion_alerts = _intrusion.active_alerts()
+        fall_alerts = _fall.active_alerts() if _fall is not None else None
         routine_flags = []
         if _occupancy_log is not None:
             now = datetime.now(timezone.utc)
@@ -1689,6 +1709,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             ]
         return compose_house_status(network_alerts=network_alerts,
                                     intrusion_alerts=intrusion_alerts,
+                                    fall_alerts=fall_alerts,
                                     routine_flags=routine_flags,
                                     window_minutes=window_minutes)
 

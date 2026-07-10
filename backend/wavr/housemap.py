@@ -24,6 +24,7 @@ DEFAULT_MAP = {
             ],
             "walls": [],
             "features": [],
+            "zones": [],
             "backdrop": None,
         }
     ],
@@ -44,7 +45,8 @@ def _migrate_v1(m: dict) -> dict:
             continue
         rooms.append({"id": r.get("id") or f"r{i}", "name": str(r.get("name", f"cômodo {i}")), "polygon": poly})
     return {"version": 2, "units": "m", "floors": [
-        {"id": "f0", "name": "Térreo", "level": 0, "rooms": rooms, "walls": [], "features": [], "backdrop": None}
+        {"id": "f0", "name": "Térreo", "level": 0, "rooms": rooms, "walls": [], "features": [],
+         "zones": [], "backdrop": None}
     ]}
 
 
@@ -83,6 +85,13 @@ MAX_ROOMS_PER_FLOOR = 512
 MAX_WALLS_PER_FLOOR = 4096
 MAX_VERTICES = 512
 _FEATURE_TYPES = {"stairs", "door", "window"}
+# A9 (fall/no-motion, ADR-0003): named polygon sub-areas per floor, geometrically the same
+# shape as a room but purely a MARKER consumed by wavr.fall_detect.in_rest_zone -- today the
+# only kind is "rest" (a bed/rest area a lying posture inside never trips a fall-suspected
+# alert). Open `kind` vocabulary (like `posture`) so a future zone type never needs a schema
+# migration; validated against a fixed allowlist for now, same pattern as `_FEATURE_TYPES`.
+MAX_ZONES_PER_FLOOR = 512
+_ZONE_KINDS = {"rest"}
 
 # Bound id/name-shaped strings (audit MEDIUM: unbounded strings let a single small
 # doc smuggle an oversized field even while staying under the whole-doc cap below).
@@ -106,10 +115,11 @@ MAX_DOC_BYTES = 5 * 1024 * 1024   # a few MB
 # editor's DEMO_HOUSE/save path, DEFAULT_MAP, _migrate_v1, and the test fixtures, so a
 # real, valid doc is never broken by this whitelist.
 _TOP_KEYS = {"version", "units", "floors"}
-_FLOOR_KEYS = {"id", "name", "level", "rooms", "walls", "features", "backdrop"}
+_FLOOR_KEYS = {"id", "name", "level", "rooms", "walls", "features", "zones", "backdrop"}
 _ROOM_KEYS = {"id", "name", "polygon"}
 _WALL_KEYS = {"id", "a", "b"}
 _FEATURE_KEYS = {"id", "type", "at", "to_level"}
+_ZONE_KEYS = {"id", "name", "kind", "polygon"}
 
 
 class HouseMapError(ValueError):
@@ -231,6 +241,26 @@ def validate_house_map(doc: dict) -> None:
             at = feat.get("at")
             if at is not None and not _point(at):
                 raise HouseMapError("feature 'at' must be a finite point")
+        zones = f.get("zones", [])
+        if not isinstance(zones, list) or len(zones) > MAX_ZONES_PER_FLOOR:
+            raise HouseMapError(f"zones must be a list (<= {MAX_ZONES_PER_FLOOR})")
+        for z in zones:
+            if not isinstance(z, dict):
+                raise HouseMapError("each zone must be an object")
+            _no_unknown_keys(z, _ZONE_KEYS, "zone")
+            if "id" in z and not _bounded_str(z.get("id")):
+                raise HouseMapError(f"zone id must be a string (<= {MAX_STR_LEN} chars)")
+            if "name" in z and not _bounded_str(z.get("name")):
+                raise HouseMapError(f"zone name must be a string (<= {MAX_STR_LEN} chars)")
+            if z.get("kind") not in _ZONE_KINDS:
+                raise HouseMapError(f"zone kind must be one of {sorted(_ZONE_KINDS)}")
+            zpoly = z.get("polygon")
+            if not isinstance(zpoly, list) or len(zpoly) < 3:
+                raise HouseMapError("zone polygon must have >= 3 vertices")
+            if len(zpoly) > MAX_VERTICES:
+                raise HouseMapError(f"zone polygon too large (> {MAX_VERTICES} vertices)")
+            if not all(_point(p) for p in zpoly):
+                raise HouseMapError("zone polygon vertices must be finite [x, y] pairs")
 
 
 def _point_in_polygon(x: float, y: float, poly: list) -> bool:
@@ -275,6 +305,41 @@ def room_polygon(house: dict, name: str, level: int | None = None) -> list | Non
     return None
 
 
+def in_rest_zone(house: dict, room: str, x: float, y: float) -> bool:
+    """A9 (fall/no-motion, ADR-0003): True when a ROOM-LOCAL point (metres, origin = the
+    room's own top-left -- the exact frame `wavr.events.Target.x/y` already uses) falls
+    inside a kind='rest' zone polygon on the SAME FLOOR as `room` -- so a person lying in
+    their marked bed/rest area never trips wavr.fall_detect's fall-suspected alert.
+
+    Deterministic first-match on `room` (mirrors `room_polygon`): the room-local point is
+    converted to that floor's absolute coordinates using the room polygon's own bounding-box
+    top-left (the same convention the map editor/localizer already use for room-local
+    frames), then tested against every 'rest' zone on that floor.
+
+    Pure geometry -- never reads a frame, never needs calibration beyond the position the
+    camera already produced. False whenever the room is unknown/unpositioned or has no
+    matching zone -- the safe default (an unmarked room protects nothing, so ordinary lying
+    there is honestly reported as 'outside any rest zone')."""
+    for f in house.get("floors", []):
+        for r in f.get("rooms", []):
+            if r.get("name") != room:
+                continue
+            poly = r.get("polygon") or []
+            if len(poly) < 3:
+                return False
+            xs = [p[0] for p in poly]
+            ys = [p[1] for p in poly]
+            abs_x, abs_y = min(xs) + x, min(ys) + y
+            for z in f.get("zones", []):
+                if z.get("kind") != "rest":
+                    continue
+                zpoly = z.get("polygon") or []
+                if len(zpoly) >= 3 and _point_in_polygon(abs_x, abs_y, zpoly):
+                    return True
+            return False   # room found on this floor -- zone check conclusively negative
+    return False           # room not found anywhere -- honest "no zone protects it"
+
+
 def _unique_id(prefix: str, taken: set) -> str:
     """Smallest `<prefix><n>` (n>=1) not already in `taken`. Deterministic + collision-
     free -- used for a generated floor/room id so it never clashes with a hand-edited one."""
@@ -309,7 +374,8 @@ def upsert_room(house: dict, level: int, room: dict) -> dict:
     if floor is None:
         taken_ids = {f.get("id") for f in floors if isinstance(f, dict)}
         floor = {"id": _unique_id(f"f{level}", taken_ids), "name": f"Nível {level}",
-                 "level": level, "rooms": [], "walls": [], "features": [], "backdrop": None}
+                 "level": level, "rooms": [], "walls": [], "features": [], "zones": [],
+                 "backdrop": None}
         floors.append(floor)
 
     rooms = floor.setdefault("rooms", [])

@@ -127,6 +127,29 @@ def _intrusion_reasons(intrusion_alerts) -> list[dict]:
     return reasons
 
 
+def _fall_reasons(fall_alerts) -> list[dict]:
+    """Physical A9 (RESEARCH-GRADE, ADR-0003). Callers pass ONLY currently-active
+    fall-suspected episodes (mirrors `_intrusion_reasons`' "active, not historical-ring"
+    contract). Room + how-long only -- never a posture, position, or identity. The `what`
+    caption folds in the honest disclaimer inline so a house-status consumer can never
+    render this as a confirmed fall."""
+    reasons = []
+    for a in fall_alerts or []:
+        d = a.to_dict() if hasattr(a, "to_dict") else dict(a)
+        room = d.get("room")
+        dur = d.get("duration_s")
+        what = (f"possible fall/no-motion in {room}" + (f" (~{int(dur)}s)" if dur else "")
+                + " -- research demonstration, not a medical device")
+        reasons.append({
+            "layer": LAYER_PHYSICAL,
+            "kind": "fall_suspected",
+            "what": what,
+            "severity": d.get("severity", SEVERITY_ALERT),
+            "ts": d.get("ts"),
+        })
+    return reasons
+
+
 def _routine_reasons(routine_flags) -> list[dict]:
     """Physical A4. Callers pass ONLY rooms already confirmed
     `is_unusual()["unusual"] is True` (never the `None`/insufficient-data or
@@ -147,18 +170,20 @@ def _routine_reasons(routine_flags) -> list[dict]:
     return reasons
 
 
-def compose_house_status(*, network_alerts=None, intrusion_alerts=None, routine_flags=None,
-                          now: datetime | None = None,
+def compose_house_status(*, network_alerts=None, intrusion_alerts=None, fall_alerts=None,
+                          routine_flags=None, now: datetime | None = None,
                           window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES) -> dict:
-    """Fuse the three already-existing signal sources into one
-    `{status, score, reasons, ts}` verdict. Pure function -- no I/O, no
-    background state; app.py gathers the three inputs from the live
-    monitors/logs and calls this on every GET /api/house-status. See the
-    module docstring for the recency-window and score semantics."""
+    """Fuse the already-existing signal sources into one `{status, score, reasons, ts}`
+    verdict. Pure function -- no I/O, no background state; app.py gathers the inputs from
+    the live monitors/logs and calls this on every GET /api/house-status. `fall_alerts`
+    (A9, RESEARCH-GRADE) is additive/optional -- omitted entirely (unchanged shape) when
+    None, same rule as every other optional input here. See the module docstring for the
+    recency-window and score semantics."""
     now = now or datetime.now(timezone.utc)
     reasons = (
         _network_reasons(network_alerts, now=now, window_minutes=window_minutes)
         + _intrusion_reasons(intrusion_alerts)
+        + _fall_reasons(fall_alerts)
         + _routine_reasons(routine_flags)
     )
     reasons.sort(key=lambda r: r["ts"] or "")
