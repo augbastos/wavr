@@ -16,7 +16,7 @@ still bounded by the pairing code's ~2-min one-time window.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException, Request
 
 from wavr.auth import parse_bearer
 
@@ -28,12 +28,15 @@ def build_pair_router(store, pairing) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/pair")
-    async def pair(code: str = Body(...), device_name: str = Body(...)):
+    async def pair(request: Request, code: str = Body(...), device_name: str = Body(...)):
         code = code.strip()
         device_name = device_name.strip()
         if not code or not device_name:
             raise HTTPException(status_code=400, detail="code and device_name are required")
-        result = pairing.redeem(code, device_name)
+        # Pass the caller's IP so the failed-attempt rate-limiter is keyed per host
+        # (sweep [4]/[13]): a junk-flooding host throttles only itself, not everyone.
+        source_ip = request.client.host if request.client else None
+        result = pairing.redeem(code, device_name, source_ip=source_ip)
         if result is None:
             raise HTTPException(status_code=403, detail="invalid or expired pairing code")
         device_id, token = result
