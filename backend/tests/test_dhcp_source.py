@@ -11,12 +11,25 @@ import struct
 import pytest
 
 from wavr.sources import _dhcp_raw, dhcp
+from wavr.sources._dhcp_raw import reset_open_guards
 from wavr.sources.dhcp import (
     MAGIC_COOKIE,
     DHCPCollector,
     build_discover_packet,
     parse_dhcp_packet,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_open_guards():
+    # Two tests below deliberately make `_open_client_socket` genuinely time out
+    # through `_dhcp_raw.open_with_timeout` -- that guard is a module global that
+    # otherwise persists for the rest of the test session and would poison any
+    # later test reusing the same "UDP/68 bind" `what` label. See
+    # tests/test_dhcp_raw.py for the guard's own unit tests.
+    reset_open_guards()
+    yield
+    reset_open_guards()
 
 
 def _dhcp_packet(msg_type: int, server_id: str | None = None,
@@ -239,6 +252,30 @@ async def test_udp_listen_bind_stall_surfaces_as_oserror_not_a_hang(monkeypatch)
     agen = dhcp._udp_listen(probe=False)
     with pytest.raises(OSError):
         await agen.__anext__()
+
+
+async def test_udp_listen_does_not_retry_after_a_genuine_timeout(monkeypatch):
+    # The gap the generalized `_timed_out_openers` guard closes: unlike the raw
+    # AF_PACKET path (which had its own sticky `_raw_open_timed_out` flag from the
+    # start), the UDP-bind fallback previously had NO guard at all -- a stalled
+    # bind() would leak one more unreclaimable executor thread every single
+    # collect() cycle forever. It must now fail fast on a second attempt too,
+    # WITHOUT calling `_open_client_socket` again.
+    import time as _time
+
+    monkeypatch.setattr(_dhcp_raw, "OPEN_TIMEOUT", 0.05)
+    monkeypatch.setattr(dhcp, "_open_client_socket", lambda: _time.sleep(0.4))
+
+    agen1 = dhcp._udp_listen(probe=False)
+    with pytest.raises(OSError):
+        await agen1.__anext__()
+
+    called = []
+    monkeypatch.setattr(dhcp, "_open_client_socket", lambda: called.append(1))
+    agen2 = dhcp._udp_listen(probe=False)
+    with pytest.raises(OSError):
+        await agen2.__anext__()
+    assert called == []
 
 
 async def test_collector_never_hangs_when_default_transport_bind_stalls(monkeypatch):

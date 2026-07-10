@@ -22,10 +22,13 @@ WHY IT IS NOT IMPLEMENTED (researched, not guessed):
     protocol TP-Link could change at any firmware update without notice.
 
 DECISION: ship detection (feature 1) fully; leave control OFF and honestly stubbed here.
-`set_privacy_mode()` below always raises `PrivacyControlNotImplemented` -- it is wired to
-nothing in `app.py` (no route calls it) and nothing in the frontend. This module exists
-so the gap is documented in code, not silently absent, and so a future implementation has
-a single, obvious place to land (with real-hardware validation as a hard prerequisite --
+`set_privacy_mode()` below always raises `PrivacyControlNotImplemented` -- it IS wired to
+`app.py`'s `POST /api/cameras/{name}/privacy-mode` route (gated identically to `/rebind`:
+require_local CSRF + "control" scope), which calls straight into this stub and turns the
+raised exception into an honest `501 Not Implemented` response. Nothing in the frontend
+calls that route yet. This module exists so the gap is documented in code (and reachable/
+discoverable via the API, not silently absent), and so a future implementation has a
+single, obvious place to land (with real-hardware validation as a hard prerequisite --
 see the module docstring of `wavr.sources.camera.CameraPrivacySignal`).
 
 If this is ever implemented: it MUST stay local-only (no cloud egress), MUST reuse only

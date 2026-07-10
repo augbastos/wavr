@@ -17,7 +17,19 @@ from wavr.sources._dhcp_raw import (
     open_with_timeout,
     raw_af_packet_supported,
     raw_dhcp_listen,
+    reset_open_guards,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_open_guards():
+    # `_timed_out_openers`/`_raw_open_timed_out` are module globals that persist for
+    # the whole test session by design (that's the point in production) -- several
+    # tests below deliberately trigger a genuine timeout, which would otherwise
+    # permanently poison a later, unrelated test that reuses the same `what` label.
+    reset_open_guards()
+    yield
+    reset_open_guards()
 
 
 def _eth_ipv4_udp_frame(payload: bytes, src_port: int = 67, dst_port: int = 68,
