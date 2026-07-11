@@ -166,7 +166,16 @@ def homography_from_points(image_pts, floor_pts) -> np.ndarray:
     a = np.asarray(rows, dtype=float)
     # SVD: the homography is the right-singular vector of the smallest singular value.
     _, s, vh = np.linalg.svd(a)
-    if s[0] == 0 or (s[-1] / s[0]) < _DEGENERATE_SVAL_RATIO:
+    # Degeneracy = rank-deficiency, NOT "the solution direction has a small singular
+    # value". For an over-determined set (5+ points -> 9 singular values) that HAS an
+    # exact/near-exact homography, the smallest singular value s[-1] IS ~0 -- it is the
+    # solution/residual direction (vh[-1]) -- so testing s[-1] falsely rejects a perfect
+    # correspondence set as "degenerate". Rank-deficiency (collinear/coincident) instead
+    # drives the SECOND-smallest singular value to zero too. With exactly 4 points
+    # (2N=8 rows -> 8 singular values) the solution is the un-scored 9th right-vector, so
+    # s[-1] is the correct conditioning measure there.
+    deg_sval = s[-2] if len(s) >= 9 else s[-1]
+    if s[0] == 0 or (deg_sval / s[0]) < _DEGENERATE_SVAL_RATIO:
         raise ValueError("degenerate correspondences (collinear/coincident)")
     h = vh[-1].reshape(3, 3)
     if h[2, 2] == 0 or not math.isfinite(h[2, 2]):

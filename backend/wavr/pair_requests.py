@@ -223,7 +223,9 @@ class PairApprovalManager:
         if rec is None or rec.status != "pending":
             return None
         if not confirm_code or not secrets.compare_digest(
-                str(confirm_code), rec.compare_code):
+                str(confirm_code).encode("utf-8"), rec.compare_code.encode("utf-8")):
+            # encode both operands: a non-ASCII operator-typed confirm_code would
+            # otherwise raise TypeError -> uncaught 500 instead of a clean no-match.
             return None
         device_id, token = self._store.add(rec.requester_name, role)
         rec.status = "approved"
