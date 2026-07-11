@@ -831,6 +831,14 @@
   .pa-icon{font-size:1.3rem;line-height:1;}
   .pa-h{margin:0;font-size:.95rem;font-weight:700;color:var(--text);overflow-wrap:anywhere;}
   .pa-meta{margin:0 0 12px;font-size:.8rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  /* The compare code is the PRIMARY per-request anchor — large, spaced, unmistakable, distinct
+     from the secondary (identical-every-time) fingerprint box below it. */
+  .pair-code-box{border:1px solid var(--line);border-radius:8px;padding:11px 13px;margin:0 0 14px;
+    max-width:52ch;}
+  .pa-code-box{background:var(--bg);}
+  .pair-compare-code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:2rem;font-weight:700;letter-spacing:.25em;color:var(--accent);
+    font-variant-numeric:tabular-nums;user-select:all;}
   .pa-fp-box{background:var(--bg);}
   .pa-role{margin:0 0 14px;}
   .pa-confirm{margin:0 0 4px;}
@@ -844,6 +852,9 @@
   .pa-more-row{display:flex;justify-content:space-between;align-items:center;gap:10px;
     font-size:.82rem;padding:6px 0;flex-wrap:wrap;}
   .pa-more-row>span:first-child{overflow-wrap:anywhere;min-width:0;}
+  /* Rows are click-to-promote: pick the request whose number matches YOUR phone. */
+  .pa-more-row-btn{cursor:pointer;border-radius:6px;}
+  .pa-more-row-btn:hover,.pa-more-row-btn:focus-visible{background:rgba(255,255,255,.05);}
   .pair-sub{margin:8px 0 4px;font-size:.72rem;color:var(--dim);font-weight:600;
             text-transform:uppercase;letter-spacing:.05em;}
   .pair-dev-list{display:flex;flex-direction:column;max-height:250px;overflow:auto;}
@@ -2010,18 +2021,25 @@
            (renderPairApprove()); a 404 on this hub (feature absent / multidevice off) leaves it
            hidden forever — byte-identical to today. The existing 8-digit /api/pair-code flow
            (Settings → Devices → Pair device) is UNTOUCHED and remains the fallback.
-           Fingerprint shown is THIS hub's own live cert (same source as the Settings pairing
-           tile) — never the phone's self-reported value; the operator compares hub-screen vs
-           phone-screen before approving (out-of-band MitM defense). Approve is two-tap: the
-           first tap swaps in an explicit "does this match?" confirm so the operator looks at the
-           fingerprint again at the moment of decision. Every name/ip/platform below is untrusted
-           server/network data rendered via textContent only — never innerHTML. -->
+           The compare CODE (#paCode) is the PRIMARY per-request anchor: a unique random number
+           minted for this one request only, shown on the phone too — Bluetooth-SSP style. Unlike
+           the fingerprint below (this hub's own live cert, identical for every pending request —
+           a transport-MitM check only), the code is what tells the operator THIS is the device in
+           their hand versus any other request waiting in the list. Approve is two-tap: the first
+           tap swaps in an explicit "do these numbers match?" confirm, and the server itself
+           refuses to mint a token unless the exact code is echoed back — approving without
+           confirming the match cannot pair a device. Every name/ip/platform/code below is
+           untrusted server/network data rendered via textContent only — never innerHTML. -->
       <div id="pairApprove" class="pair-approve" role="alert" aria-live="assertive" hidden>
         <div class="pa-head">
           <span class="pa-icon" aria-hidden="true">📱</span>
           <h2 id="paH" class="pa-h"></h2>
         </div>
         <p id="paMeta" class="pa-meta"></p>
+        <div class="pair-code-box pa-code-box">
+          <span class="pair-fp-label">Check this number matches the one on the phone</span>
+          <code id="paCode" class="pair-compare-code" aria-live="polite"></code>
+        </div>
         <div class="pair-fp-box pa-fp-box">
           <span class="pair-fp-label">Check this matches the fingerprint on the phone</span>
           <code id="paFp" class="pair-fp" aria-live="polite"></code>
@@ -2035,10 +2053,10 @@
           </select>
         </label>
         <div id="paConfirmBox" class="pa-confirm" hidden>
-          <p class="pa-confirm-q">Does this exact fingerprint show on the phone?</p>
+          <p class="pa-confirm-q">Does this number match the number on the phone?</p>
           <div class="controls-row">
-            <button type="button" id="paYes" class="ctl primary">Yes — they match, pair</button>
-            <button type="button" id="paNo" class="ctl off">No, cancel</button>
+            <button type="button" id="paYes" class="ctl primary">Yes — the numbers match, pair</button>
+            <button type="button" id="paNo" class="ctl off">No, deny</button>
           </div>
         </div>
         <div id="paActions" class="controls-row pa-actions">
@@ -5518,6 +5536,192 @@ async function renderPairing(){
   refresh(seed);                            // seed the list from the probe response we already read
 }
 renderPairing();
+
+// ---- Approve-on-Core pairing banner (live only, multidevice-gated, design 2026-07-11) ----
+// A companion that hasn't got a code yet asks the Core to let it in (POST /api/pair-request,
+// unauth/in-subnet, companion-side — not built here). This banner polls the loopback-root list
+// and lets the LOCAL operator Approve/Deny, with an explicit two-tap "does this fingerprint
+// match?" confirm — the out-of-band MitM defense (reuses .pair-fp-box/.pair-fp-label/.pair-fp/
+// .pair-fp-warn verbatim, same as the pairing-code fingerprint box above). The fingerprint shown
+// is THIS hub's own live cert (server-provided by /api/pending-pairings), never the companion's
+// self-reported value. /api/pending-pairings only exists when multidevice is on; a 404 (or
+// unreachable backend) leaves the banner and its header pill hidden forever — byte-identical to
+// today. The 8-digit /api/pair + /api/pair-code flow (Pairing panel, above) is completely
+// untouched and remains the fallback. Every name/ip/platform below is untrusted network data
+// rendered via textContent only, never innerHTML.
+async function renderPairApprove(){
+  if(MODE!=="live") return;                 // live-only; never Plano B (demo) or companion
+  if(await _wavrMultideviceOff) return;     // proven off via /api/status — skip the doomed probe
+  const hdr = {"X-Wavr-Local":"1"};
+  // Probe the pending list first. A 404 means the feature is off; a thrown fetch means the
+  // backend is momentarily unreachable. Either way: leave the banner/pill hidden.
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/pending-pairings",{headers:hdr}); }
+  catch{ return; }                          // backend unreachable — stay hidden
+  if(!probe.ok) return;                     // 404 → feature off → stay hidden forever
+  let seed; try{ seed = await probe.json(); }catch{ seed = {}; }
+
+  const banner  = document.getElementById("pairApprove");
+  const pill    = document.getElementById("pairApprovePill");
+  const pillTxt = document.getElementById("pairApprovePillTxt");
+  const paH     = document.getElementById("paH");
+  const paMeta  = document.getElementById("paMeta");
+  const paCode  = document.getElementById("paCode");
+  const paFp    = document.getElementById("paFp");
+  const paRole  = document.getElementById("paRole");
+  const confirmBox = document.getElementById("paConfirmBox");
+  const actionsBox = document.getElementById("paActions");
+  const paYes   = document.getElementById("paYes");
+  const paNo    = document.getElementById("paNo");
+  const paDeny  = document.getElementById("paDeny");
+  const paApprove = document.getElementById("paApprove");
+  const paFb    = document.getElementById("paFb");
+  const paMore  = document.getElementById("paMore");
+  if(!banner || !pill || !pillTxt || !paH || !paMeta || !paCode || !paFp || !confirmBox || !actionsBox ||
+     !paYes || !paNo || !paDeny || !paApprove || !paMore) return;
+
+  let requests = [];        // last-polled pending list, oldest-first (server insertion order)
+  let heroId   = null;      // request_id currently shown as the full-ceremony hero card
+  let coreFp   = "";        // this hub's own live cert fp — the operator's compare anchor
+
+  function relTime(iso){
+    const t = Date.parse(iso);
+    if(!isFinite(t)) return "just now";
+    const s = Math.max(0, Math.round((Date.now()-t)/1000));
+    if(s < 60) return s + "s ago";
+    return Math.round(s/60) + "m ago";
+  }
+  function metaText(rec){
+    const bits = [];
+    if(rec.platform) bits.push(String(rec.platform));
+    if(rec.source_ip) bits.push(String(rec.source_ip));
+    bits.push("asked " + relTime(rec.created_at));
+    return bits.join(" · ");
+  }
+  function renderHero(rec){
+    heroId = rec.request_id;
+    paH.textContent = (rec.requester_name || "(unnamed device)") + " wants to connect";  // textContent — untrusted
+    paMeta.textContent = metaText(rec);
+    paCode.textContent = rec.compare_code || "——————"; // per-request anchor — unique, shown on the phone too
+    paFp.textContent = coreFp || "—";       // THIS hub's own cert fp — never the companion's reported_fp
+    if(paRole) paRole.value = "user";       // least-privilege default on every fresh hero
+    confirmBox.hidden = true;
+    actionsBox.hidden = false;
+  }
+  function renderMore(rest){
+    paMore.textContent = "";
+    if(!rest.length){ paMore.hidden = true; return; }
+    paMore.hidden = false;
+    const h = document.createElement("p"); h.className = "pa-more-head";
+    h.textContent = rest.length===1 ? "1 more device waiting — decide one at a time"
+                                     : (rest.length + " more devices waiting — decide one at a time");
+    paMore.appendChild(h);
+    // Capped so a flood (backend bounds at 20 global / 3 per IP) can't blow up the DOM — the
+    // hero above is always the oldest; this is a heads-up list, decided one at a time. Rows are
+    // clickable so the operator can promote the request matching the number on THEIR phone into
+    // the hero slot, whatever its position in the queue.
+    rest.slice(0,5).forEach(r=>{
+      const row = document.createElement("div"); row.className = "pa-more-row pa-more-row-btn";
+      row.tabIndex = 0; row.setAttribute("role","button");
+      const left = document.createElement("span");
+      const name = document.createElement("b"); name.textContent = r.requester_name || "(unnamed device)";
+      const meta = document.createElement("span"); meta.className = "pair-dev-meta";
+      meta.textContent = " · " + (r.source_ip || "?") + " · " + (r.compare_code || "——————");
+      left.appendChild(name); left.appendChild(meta);
+      row.appendChild(left);
+      const pick = ()=>{ heroId = r.request_id; render(); };
+      row.onclick = pick;
+      row.onkeydown = (e)=>{ if(e.key==="Enter" || e.key===" "){ e.preventDefault(); pick(); } };
+      paMore.appendChild(row);
+    });
+  }
+  function render(){
+    if(!requests.length){
+      banner.hidden = true;
+      pill.hidden = true;
+      heroId = null;
+      return;
+    }
+    const hero = requests.find(r=>r.request_id===heroId) || requests[0];
+    // Never yank the two-tap confirm out from under the operator mid-decision: only reset to
+    // the hero's full Approve/Deny view when the hero actually changed (new device, or the
+    // previous one expired/was decided elsewhere) — otherwise just refresh the "asked Ns ago".
+    if(hero.request_id === heroId && !confirmBox.hidden){
+      paMeta.textContent = metaText(hero);
+    } else {
+      renderHero(hero);
+    }
+    renderMore(requests.filter(r=>r.request_id!==hero.request_id));
+    banner.hidden = false;
+    pill.hidden = false;
+    pillTxt.textContent = requests.length===1 ? "1 waiting" : (requests.length + " waiting");
+  }
+  async function poll(){
+    let r;
+    try{ r = await fetch(location.origin+"/api/pending-pairings",{headers:hdr}); }
+    catch{ return; }                        // backend momentarily unreachable — keep last view
+    if(!r.ok) return;
+    let d; try{ d = await r.json(); }catch{ return; }
+    requests = Array.isArray(d && d.requests) ? d.requests : [];
+    if(typeof (d && d.cert_fingerprint) === "string") coreFp = d.cert_fingerprint;
+    render();
+  }
+
+  paApprove.onclick = ()=>{
+    if(!heroId) return;
+    actionsBox.hidden = true;
+    confirmBox.hidden = false;              // second look at the number (and fingerprint) before minting anything
+  };
+  paNo.onclick = ()=>{
+    confirmBox.hidden = true;
+    actionsBox.hidden = false;
+  };
+  paYes.onclick = async ()=>{
+    if(!heroId) return;
+    const id = heroId;
+    const rec = requests.find(r=>r.request_id===id);
+    const code = rec && rec.compare_code;
+    if(!code){ actionFeedback(paFb, false, "That request expired — ask the device to try again."); confirmBox.hidden = true; poll(); return; }
+    const role = (paRole && paRole.value==="central") ? "central" : "user";
+    paYes.disabled = true; paNo.disabled = true;
+    let r;
+    try{
+      // confirm_code echoes the number the operator just confirmed matches the phone — the
+      // server refuses to mint a token unless it matches this exact pending request.
+      r = await fetch(location.origin+"/api/pending-pairings/"+encodeURIComponent(id)+"/approve",
+        {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+         body:JSON.stringify({role:role, confirm_code:code})});
+    }catch{}
+    paYes.disabled = false; paNo.disabled = false;
+    if(r && r.ok) actionFeedback(paFb, true, null, "Paired — the device is connecting now.");
+    else if(r && r.status===404) actionFeedback(paFb, false, "That request expired, or the numbers didn't match — ask the device to try again.");
+    else actionFeedback(paFb, false, "Couldn't pair — try again.");
+    confirmBox.hidden = true;
+    poll();                                 // re-sync: the decided request drops off the list
+  };
+  paDeny.onclick = async ()=>{
+    if(!heroId) return;
+    const id = heroId;
+    paDeny.disabled = true;
+    let r;
+    try{
+      r = await fetch(location.origin+"/api/pending-pairings/"+encodeURIComponent(id)+"/deny",
+        {method:"POST", headers:hdr});
+    }catch{}
+    paDeny.disabled = false;
+    if(r && r.ok) actionFeedback(paFb, true, null, "Declined.");
+    else actionFeedback(paFb, false, "Couldn't decline — try again.");
+    confirmBox.hidden = true; actionsBox.hidden = false;
+    poll();
+  };
+  pill.onclick = ()=>{ banner.scrollIntoView({block:"center"}); };
+
+  requests = Array.isArray(seed && seed.requests) ? seed.requests : [];
+  coreFp = (typeof (seed && seed.cert_fingerprint) === "string") ? seed.cert_fingerprint : "";
+  render();                                 // seed the view from the probe response we already read
+  setInterval(poll, 2000);                  // devices can ask to pair at any time this tab is open
+}
+renderPairApprove();
 
 // ---- My devices — consent-first identity registry (live only, 2026-07-06 ethics) ----
 // The registry holds ONLY admin-confirmed devices. Three surfaces: (1) "Detect my paired
