@@ -5,36 +5,69 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Wavr Desktop</title>
     <style>
+      /* Aligned to frontend/index.html's canonical design tokens (only the ones this
+         placeholder needs) so there is no re-theme flash on navigate to the live
+         dashboard. */
+      :root {
+        --bg: #0B0E12; --text: #EAECEE; --dim: #9AA4AD;
+        --accent: #3db54a; --accent-rgb: 61, 181, 74;
+        --warn: #e8a13a;
+      }
       html, body {
         height: 100%; margin: 0;
-        background: #0b0f0e; color: #d7e0dc;
+        background: var(--bg); color: var(--text);
         font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       }
       .wrap {
         height: 100%; display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 1.1rem;
+        text-align: center; padding: 0 2rem;
       }
       .dot {
         width: 12px; height: 12px; border-radius: 50%;
-        background: #34d399; box-shadow: 0 0 0 0 rgba(52,211,153,.7);
+        background: var(--accent); box-shadow: 0 0 0 0 rgba(var(--accent-rgb), .7);
         animation: pulse 1.6s infinite;
       }
       @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(52,211,153,.55); }
-        70% { box-shadow: 0 0 0 14px rgba(52,211,153,0); }
-        100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+        0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), .55); }
+        70% { box-shadow: 0 0 0 14px rgba(var(--accent-rgb), 0); }
+        100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); }
+      }
+      /* Jump-cut instead of a tween/pulse for anyone who asked the OS for less motion --
+         same posture as frontend/index.html's own reduced-motion block. */
+      @media (prefers-reduced-motion: reduce) {
+        .dot { animation: none; }
       }
       h1 { font-size: 1.15rem; font-weight: 600; margin: 0; letter-spacing: .01em; }
-      p { margin: 0; color: #8fa39c; font-size: .9rem; }
+      p { margin: 0; color: var(--dim); font-size: .9rem; max-width: 32rem; }
+      /* Startup-timeout state (item 3): the backend never answered its readiness probe.
+         Rust calls window.wavrShowStartupError(detail) instead of leaving this screen
+         spinning forever with no recourse. */
+      body.err .dot { animation: none; background: var(--warn); box-shadow: none; }
+      body.err p { color: var(--text); }
     </style>
   </head>
   <body>
     <!-- Shown for ~1-2s while the shell starts the backend, then the Rust navigates this
-         window to http://127.0.0.1:8000 (the live dashboard). See src/main.rs. -->
+         window to http://127.0.0.1:8000 (the live dashboard). See src/main.rs. If the
+         backend never becomes healthy, src/main.rs calls wavrShowStartupError() below
+         instead (item 3). -->
     <div class="wrap">
       <div class="dot"></div>
-      <h1>Starting Wavr…</h1>
-      <p>Bringing the central online.</p>
+      <h1 id="wavr-title">Starting Wavr…</h1>
+      <p id="wavr-sub">Bringing the central online.</p>
     </div>
+    <script>
+      // Invoked from Rust (src-tauri/src/main.rs) via WebviewWindow::eval() only when
+      // wait_healthy() gives up -- never called from anywhere else, so this placeholder
+      // otherwise just sits on the pulsing "Starting…" state above until Rust navigates
+      // it away to the live dashboard.
+      window.wavrShowStartupError = function (detail) {
+        document.body.classList.add("err");
+        document.getElementById("wavr-title").textContent = "Wavr didn't start";
+        document.getElementById("wavr-sub").textContent =
+          detail || "The backend never became healthy.";
+      };
+    </script>
   </body>
 </html>
