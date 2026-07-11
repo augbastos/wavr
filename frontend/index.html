@@ -3088,9 +3088,12 @@ function isPrivateLanHost(h){        // RFC1918 literals only; names like lvh.me
       || /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(h);
 }
 const COMPANION_TOKEN_KEY = "wavr.token." + location.origin;   // per-origin (works under http & https)
-function companionToken(){ try{ return localStorage.getItem(COMPANION_TOKEN_KEY) || null; }catch{ return null; } }
-function companionSetToken(t){ try{ localStorage.setItem(COMPANION_TOKEN_KEY, t); }catch{} }
-function companionClearToken(){ try{ localStorage.removeItem(COMPANION_TOKEN_KEY); }catch{} }
+// Mobile (Capacitor) opt-in: when window.WAVR_MOBILE is present the token lives in native
+// Keystore-backed storage (never localStorage), read via a synchronous in-memory cache the shim
+// populated during WAVR_MOBILE.ready. When the hook is ABSENT the original localStorage path runs.
+function companionToken(){ if(window.WAVR_MOBILE) return window.WAVR_MOBILE.tokenGet(); try{ return localStorage.getItem(COMPANION_TOKEN_KEY) || null; }catch{ return null; } }
+function companionSetToken(t){ if(window.WAVR_MOBILE){ window.WAVR_MOBILE.tokenSet(t); return; } try{ localStorage.setItem(COMPANION_TOKEN_KEY, t); }catch{} }
+function companionClearToken(){ if(window.WAVR_MOBILE){ window.WAVR_MOBILE.tokenSet(null); return; } try{ localStorage.removeItem(COMPANION_TOKEN_KEY); }catch{} }
 function companionDeviceName(){ try{ return "Companion · " + (navigator.platform || "web"); }catch{ return "Companion"; } }
 let companionAuthFailedOnce = false;
 function companionAuthFailed(){        // token revoked/expired (401/403) -> clear token + drop back to pairing
@@ -3101,12 +3104,16 @@ function companionAuthFailed(){        // token revoked/expired (401/403) -> cle
 }
 // Companion data provider: Bearer-authed history + ticketed WS (same contract as WebSocketProvider).
 function CompanionProvider(token){
-  const base = location.origin;
+  // Mobile: base = stored central, fetch = native pinned fetch, WS = native pinned socket (the
+  // WebView cannot validate a self-signed wss). Absent the hook, every branch below is unchanged.
+  const __m = window.WAVR_MOBILE || null;
+  const base = __m ? __m.base : location.origin;
+  const __fetch = (u,o)=> __m ? __m.netFetch(u,o) : fetch(u,o);
   const auth = { "Authorization": "Bearer " + token };
   return {
     async history(){
       try{
-        const r = await fetch(base+"/api/history?limit=100",{headers:auth});
+        const r = await __fetch(base+"/api/history?limit=100",{headers:auth});
         if(r.status===401||r.status===403){ companionAuthFailed(); return []; }
         return await r.json();
       }catch{ return []; }
@@ -3114,13 +3121,14 @@ function CompanionProvider(token){
     async start(onEvent){
       let ticket;
       try{
-        const r = await fetch(base+"/api/ws-ticket",{method:"POST",headers:auth});   // mint a short-lived WS ticket
+        const r = await __fetch(base+"/api/ws-ticket",{method:"POST",headers:auth});   // mint a short-lived WS ticket
         if(r.status===401||r.status===403){ companionAuthFailed(); return; }
         if(!r.ok){ setTimeout(()=>this.start(onEvent), 2000); return; }
         ticket = (await r.json()).ticket;
       }catch{ setTimeout(()=>this.start(onEvent), 2000); return; }
       const proto = location.protocol==="https:" ? "wss://" : "ws://";     // ws/wss chosen from page protocol
-      const ws = new WebSocket(proto + location.host + "/ws/live?ticket=" + encodeURIComponent(ticket));
+      const ws = __m ? __m.netWebSocket(__m.base.replace(/^http/,"ws") + "/ws/live?ticket=" + encodeURIComponent(ticket))
+                     : new WebSocket(proto + location.host + "/ws/live?ticket=" + encodeURIComponent(ticket));
       ws.onmessage = (m)=> onEvent(JSON.parse(m.data));
       ws.onclose = ()=> { if(!companionAuthFailedOnce){ setReconnecting(true); setTimeout(()=> this.start(onEvent), 1500); } };
     },
@@ -3159,9 +3167,13 @@ function initCompanion(){
       msg.className="cpair-msg"; msg.textContent="pairing…";
       let r;
       try{
-        r = await fetch(location.origin+"/api/pair",{method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({code, device_name: companionDeviceName()})});
+        r = await (window.WAVR_MOBILE
+          ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base+"/api/pair",{method:"POST",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({code, device_name: companionDeviceName()})})
+          : fetch(location.origin+"/api/pair",{method:"POST",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({code, device_name: companionDeviceName()})}));
       }catch{ msg.className="cpair-msg err"; msg.textContent="connection failed"; return; }
       if(!r.ok){
         msg.className="cpair-msg err";
@@ -3188,12 +3200,21 @@ function initCompanion(){
   // removed — renderNetwork()'s own MODE gating and hidden-toggling are untouched.
 }
 
-const MODE = isLoopbackHost(location.hostname) ? "live"
-           : isPrivateLanHost(location.hostname) ? "companion"
-           : "simulated";
-const provider = MODE==="live" ? WebSocketProvider()
-               : MODE==="companion" ? (companionToken() ? CompanionProvider(companionToken()) : NullProvider())
-               : SimulatorProvider();
+const MODE = (window.WAVR_MOBILE && window.WAVR_MOBILE.mode)
+           || (isLoopbackHost(location.hostname) ? "live"
+              : isPrivateLanHost(location.hostname) ? "companion"
+              : "simulated");
+// Provider construction is factored into __wavrMakeProvider() so the mobile BOOT GATE can defer
+// it until after WAVR_MOBILE.ready (the Keystore-backed token is not readable synchronously at
+// parse time). Absent the hook, it is built here immediately, exactly as before.
+let provider;
+function __wavrMakeProvider(){
+  provider = MODE==="live" ? WebSocketProvider()
+           : MODE==="companion" ? (companionToken() ? CompanionProvider(companionToken()) : NullProvider())
+           : SimulatorProvider();
+  return provider;
+}
+if(!window.WAVR_MOBILE) __wavrMakeProvider();
 document.getElementById("mode").innerHTML =
     MODE==="live"      ? "source: <b>real home</b> (local)"
   : MODE==="companion" ? (companionToken() ? "source: <b>real home</b> (viewer)" : "source: <b>pairing</b>")
@@ -4385,9 +4406,15 @@ function renderNetwork(){
   let editingMac = null, editingValue = "", editingJustOpened = false;
   async function refresh(){
     let inv, al;
+    // Mobile: route the central reads through the native pinned fetch (base = stored central) so the
+    // Bearer token never reaches the app's own https://localhost; the `auth` header logic is unchanged.
+    // Absent the hook, __nf is exactly fetch(location.origin+path, opt) — original behavior verbatim.
+    const __nf = (path, opt)=> window.WAVR_MOBILE
+      ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+      : fetch(location.origin + path, opt);
     try{
-      const ri = await fetch(location.origin+"/api/inventory", auth?{headers:auth}:undefined);
-      const ra = await fetch(location.origin+"/api/alerts", auth?{headers:auth}:undefined);
+      const ri = await __nf("/api/inventory", auth?{headers:auth}:undefined);
+      const ra = await __nf("/api/alerts", auth?{headers:auth}:undefined);
       if(auth && (ri.status===401||ri.status===403||ra.status===401||ra.status===403)){ companionAuthFailed(); return; }
       inv = await ri.json();
       al  = await ra.json();
@@ -4646,7 +4673,7 @@ function renderNetwork(){
   window.__wavrNetRefresh = refresh;   // v2: the drill-down type-pin re-renders through this same poll path
   refresh(); setInterval(refresh, 15000);
 }
-renderNetwork();
+if(!window.WAVR_MOBILE) renderNetwork();   // mobile: deferred to the post-ready boot (token cache is empty at parse time)
 
 // ---- Build A10: House status (unified network+physical "is everything OK?" signal) ----
 // GET /api/house-status: derived-only composition of signals already rendered elsewhere
@@ -6134,7 +6161,11 @@ async function loadHouse(){
     try{ const r = await fetch(location.origin+"/api/house"); if(r.ok) HOUSE = await r.json(); }catch{}
   } else if(MODE === "companion" && companionToken()){        // companion viewer: real house map, Bearer-authed
     try{
-      const r = await fetch(location.origin+"/api/house", {headers:{"Authorization":"Bearer "+companionToken()}});
+      // Mobile: route to the stored central via the native pinned fetch so the Bearer token never
+      // reaches the app's own https://localhost. Absent the hook, the original same-origin fetch runs.
+      const r = await (window.WAVR_MOBILE
+        ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base+"/api/house", {headers:{"Authorization":"Bearer "+companionToken()}})
+        : fetch(location.origin+"/api/house", {headers:{"Authorization":"Bearer "+companionToken()}}));
       if(r.status===401||r.status===403){ companionAuthFailed(); }
       else if(r.ok) HOUSE = await r.json();
     }catch{}
@@ -8158,7 +8189,7 @@ async function renderRadar(){
   };
   try{ window.__wavrShellSync?.(); }catch{}
 }
-renderRadar();
+if(!window.WAVR_MOBILE) renderRadar();   // mobile: deferred to the post-ready boot below (token cache empty at parse time)
 // ---- Map liveness poll (fake-presence-on-disconnect fix) ----
 // Keep the house map's tri-state honest by refreshing per-camera liveness from
 // /api/cameras. Live-only (loopback), same-origin, read-only — reads name/room/liveness
@@ -8175,7 +8206,8 @@ if(MODE === "live"){
   pollMapCams();
   setInterval(pollMapCams, 5000);
 }
-initCompanion();   // companion (private-LAN) only: pairing screen OR read-only viewer chrome
+if(!window.WAVR_MOBILE) initCompanion();   // mobile: deferred to the post-ready boot below
+                                           // (companion pairing screen OR read-only viewer chrome)
 
 // ---- Rendering (RoomState) ----
 const roomsEl = document.getElementById("rooms");
@@ -8494,7 +8526,19 @@ if(MODE==="live"){
 }
 
 const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); updateHouse(rs); radarUpdate?.(rs); window.__wavrRS?.(rs); };
-(async ()=>{ (await provider.history()).forEach(handle); provider.start(handle); })();
+(async ()=>{
+  if(window.WAVR_MOBILE){
+    // BOOT GATE: token/base/house are read synchronously but the shim loads them from async
+    // Keystore-backed storage. Wait for the caches, THEN build the provider and run the init we
+    // deferred above (mode label, renderNetwork, renderRadar, initCompanion) in document order.
+    await window.WAVR_MOBILE.ready;
+    __wavrMakeProvider();
+    try{ document.getElementById("mode").innerHTML =
+         companionToken() ? "source: <b>real home</b> (viewer)" : "source: <b>pairing</b>"; }catch{}
+    renderNetwork(); renderRadar(); initCompanion();
+  }
+  (await provider.history()).forEach(handle); provider.start(handle);
+})();
 </script>
 <script>
 // ---- PWA: register the shell service worker (offline launch + installable) ----
