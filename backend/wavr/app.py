@@ -44,7 +44,7 @@ from wavr.mqtt_publisher import make_publisher
 from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
-from wavr.api_inventory import build_inventory_router, merge_alerts
+from wavr.api_inventory import build_inventory_router, inventory_view, merge_alerts
 from wavr.house_status import compose_house_status, DEFAULT_NETWORK_WINDOW_MINUTES
 from wavr.watch import (WatchMode, IntrusionAlertLog, known_present_persons,
                         project_state, room_unrecognized, house_unrecognized)
@@ -72,7 +72,7 @@ from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
-from wavr.auth import access_for, parse_bearer, can_change_state, can_view, in_subnet, has_scope
+from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.peers import PeerStore
 from wavr.api_peers import build_peers_public_router, build_peers_admin_router
@@ -810,6 +810,42 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _block_local_ip = _local_ipv4() or ""
     _blocker = arp_block.ArpBlocker(send=arp_send)
 
+    async def _compute_house_status(window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES) -> dict:
+        # Build A10 v0: the unified "esta tudo bem em casa?" answer, fusing the NETWORK
+        # layer (rogue-device/rogue-DHCP/gateway-identity -- the SAME `merge_alerts()`
+        # GET /api/alerts uses, so the two views can never disagree on what a network
+        # alert IS) with the PHYSICAL layer (Watch's A2 currently-ACTIVE intrusion rooms
+        # + A4's current-hour occupancy anomaly). Derived-only composition of signals
+        # that already exist -- see wavr.house_status's module docstring for the
+        # recency-window/score honesty rules. Factored out (mirrors merge_alerts's one-
+        # function-many-callers precedent) so GET /api/house-status AND the
+        # get_house_status MCP tool (wavr.mcp, via mcp_http_route wiring below) share
+        # this EXACT composition and can never drift.
+        network_alerts = merge_alerts(_inventory, dhcp_monitor=_dhcp_monitor,
+                                      gateway_monitor=_gateway_monitor)
+        intrusion_alerts = _intrusion.active_alerts()
+        fall_alerts = _fall.active_alerts() if _fall is not None else None
+        routine_flags = []
+        if _occupancy_log is not None:
+            now = datetime.now(timezone.utc)
+            rooms = list(latest.items())
+            # Concurrent, off the event loop -- one sqlite read per currently-fused
+            # room, never a blocking serial loop.
+            checks = await asyncio.gather(*(
+                asyncio.to_thread(_occupancy_log.is_unusual, room, d.get("occupied"), at=now)
+                for room, d in rooms
+            ))
+            routine_flags = [
+                {"room": room, "ts": now.isoformat()}
+                for (room, _d), verdict in zip(rooms, checks)
+                if verdict.get("unusual") is True
+            ]
+        return compose_house_status(network_alerts=network_alerts,
+                                    intrusion_alerts=intrusion_alerts,
+                                    fall_alerts=fall_alerts,
+                                    routine_flags=routine_flags,
+                                    window_minutes=window_minutes)
+
     # MCP-over-streamable-HTTP (ADR-0008, Slice 1): mount the READ-ONLY MCP transport
     # in-process at /mcp so it inherits loopback_or_authed + TrustedHostMiddleware + TLS +
     # DeviceStore. Wired ONLY when multidevice is ON (TLS present) AND the [mcp] extra is
@@ -825,7 +861,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _mcp_http_route, _mcp_http_sm = build_mcp_http_mount(
                 FusionStateProvider(_fusion, _house),
                 is_enabled=lambda: _connectors.is_enabled("mcp-http"),
-                local_ip=_local_ip, ha_client=client_from_config(cfg))
+                local_ip=_local_ip, ha_client=client_from_config(cfg),
+                # Phase 2A / B1-B3: read the WHOLE house, not just rooms. Every one
+                # reuses the SAME already-scanned/already-composed data sources the
+                # equivalent HTTP route reads -- none of these trigger a rescan or a
+                # new detection pass.
+                network_inventory_fn=lambda: inventory_view(_inventory, _device_meta),
+                alerts_fn=lambda: merge_alerts(
+                    _inventory, dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
+                    intrusion_log=_intrusion, fall_log=_fall,
+                    intrusion_house_loud=cfg.watch_intrusion_loud),
+                occupancy_provider=_occupancy_log,
+                house_status_fn=_compute_house_status)
         except ImportError:
             logging.info("MCP-over-HTTP mount skipped: [mcp] extra not installed")
 
@@ -1035,6 +1082,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # loopback return, so the "root has no explicit scopes to read" invariant
             # holds everywhere, not just through access_for.
             request.state.scopes = None
+            # Wavr Pass (Phase 2A / B4): root is never tool-scope-limited either --
+            # None mirrors auth.effective_tool_scopes's "not restricted by this axis"
+            # return for every non-agent role.
+            request.state.tool_scopes = None
             return await call_next(request)
         if not cfg.multidevice:                      # off: strict loopback-only, as before
             return JSONResponse({"detail": "loopback only"}, status_code=403)
@@ -1051,6 +1102,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 request.state.scopes = None
+                request.state.tool_scopes = None
                 return await call_next(request)
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         # Static shell (index + PWA manifest/sw/icon + vendored three.js): reachable by an
@@ -1065,19 +1117,25 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 request.state.scopes = None
+                request.state.tool_scopes = None
                 return await call_next(request)
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         token = parse_bearer(request.headers.get("authorization"))
-        # Wavr Pass: access_for is authorize()'s one-verify replacement that ALSO
-        # resolves the caller's effective scopes (auth.effective_scopes) in the same
-        # pass -- a NULL Device.scopes (every pre-existing/default-paired device)
-        # resolves to its role's DEFAULT_SCOPES, so this is byte-identical to the old
-        # authorize()-only role decision for every already-paired device.
-        role, scopes = access_for(host, _local_ip, token, _devices)
+        # Wavr Pass: access_for_scoped is access_for's three-way sibling (Phase 2A /
+        # B4) -- it ALSO resolves the caller's effective scopes (auth.effective_
+        # scopes) AND, new here, its MCP tool-name allow-list (auth.effective_
+        # tool_scopes) in the SAME one-verify pass. A NULL Device.scopes (every
+        # pre-existing/default-paired device) resolves to its role's DEFAULT_SCOPES,
+        # so `role`/`scopes` are byte-identical to the old access_for()-only
+        # decision for every already-paired device; `tool_scopes` is a brand-new
+        # third value that resolves to None (unrestricted) for every role except
+        # the new 'agent' principal, so this is additive-only for root/central/user.
+        role, scopes, tool_scopes = access_for_scoped(host, _local_ip, token, _devices)
         if role is None:
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         request.state.role = role
         request.state.scopes = scopes
+        request.state.tool_scopes = tool_scopes
         return await call_next(request)
 
     _allowed_hosts = ["localhost", "127.0.0.1", "testserver"]
@@ -1268,7 +1326,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
              "active": mcph_active, "suppressed": _connectors.is_suppressed("mcp-http"),
              "override": _connectors.override("mcp-http"), "env_active": False,
              "needs": mcph_needs, "enforcement": "registry-overlay",
-             "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp: RoomState incl. room-level person_count (a bare count -- no identity/geometry) + house map (no Wavr vitals/targets/presence-identities, no secrets) + HA entity list incl. entity names (which may name people/devices)",
+             "scope": "read-only over LAN (paired, cert-pinned), in-app /mcp. DEFAULT agent reach = "
+                      "coarse current state only: rooms, room context (bare person_count -- no "
+                      "identity/geometry/vitals), house map, house status. Network inventory (minimized "
+                      "-- vendor/type/ip/make/model only; no name/hostname/timing/open-ports), occupancy "
+                      "history (clamped <=24h, room-level, no identity), the alert stream (kind/severity/"
+                      "room/ts only) and the HA entity list each require an EXPLICIT per-agent grant. "
+                      "Central/root (local dashboard) unrestricted; 'user'-role devices are denied /mcp",
              "env_flag": None},
         ]
 
@@ -1812,40 +1876,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/api/house-status")
     async def house_status(window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES,
                            _=Depends(require_scope("presence:read"))):
-        # Build A10 v0: the unified "esta tudo bem em casa?" answer, fusing the NETWORK
-        # layer (rogue-device/rogue-DHCP/gateway-identity -- the SAME `merge_alerts()`
-        # GET /api/alerts uses, so the two views can never disagree on what a network
-        # alert IS) with the PHYSICAL layer (Watch's A2 currently-ACTIVE intrusion rooms
-        # + A4's current-hour occupancy anomaly). Derived-only composition of signals
-        # that already exist -- see wavr.house_status's module docstring for the
-        # recency-window/score honesty rules. `window_minutes` overrides the default
-        # network-alert recency window (same override-friendly convention as
-        # /api/occupancy/routine's `weeks`).
-        network_alerts = merge_alerts(_inventory, dhcp_monitor=_dhcp_monitor,
-                                      gateway_monitor=_gateway_monitor)
-        intrusion_alerts = _intrusion.active_alerts()
-        fall_alerts = _fall.active_alerts() if _fall is not None else None
-        routine_flags = []
-        if _occupancy_log is not None:
-            now = datetime.now(timezone.utc)
-            rooms = list(latest.items())
-            # Concurrent, off the event loop (mirrors the single-room /api/occupancy/unusual
-            # call above) -- one sqlite read per currently-fused room, never in a blocking
-            # serial loop.
-            checks = await asyncio.gather(*(
-                asyncio.to_thread(_occupancy_log.is_unusual, room, d.get("occupied"), at=now)
-                for room, d in rooms
-            ))
-            routine_flags = [
-                {"room": room, "ts": now.isoformat()}
-                for (room, _d), verdict in zip(rooms, checks)
-                if verdict.get("unusual") is True
-            ]
-        return compose_house_status(network_alerts=network_alerts,
-                                    intrusion_alerts=intrusion_alerts,
-                                    fall_alerts=fall_alerts,
-                                    routine_flags=routine_flags,
-                                    window_minutes=window_minutes)
+        # `window_minutes` overrides the default network-alert recency window (same
+        # override-friendly convention as /api/occupancy/routine's `weeks`). The
+        # composition itself lives in `_compute_house_status` above, shared byte-for-
+        # byte with the get_house_status MCP tool (wavr.mcp) -- see its docstring.
+        return await _compute_house_status(window_minutes)
 
     @app.post("/api/presence/register-companion")
     async def register_companion(request: Request, label: str = Body(..., embed=True),

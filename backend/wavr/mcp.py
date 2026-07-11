@@ -42,9 +42,13 @@ Design, matching the camera/mmwave modules:
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
+
+from wavr.house_status import DEFAULT_NETWORK_WINDOW_MINUTES
 
 _log = logging.getLogger("wavr.mcp.control")
 
@@ -64,6 +68,23 @@ class HAEntitiesProvider(Protocol):
     tests. `None` (not this shape) means HA is not configured -> the tool returns []."""
 
     def get_entities(self) -> list[dict]: ...
+
+
+class OccupancyHistoryProvider(Protocol):
+    """The minimal READ-ONLY view `query_occupancy_history` depends on: anything shaped
+    like `wavr.occupancy_log.OccupancyLog`'s read surface -- the real `OccupancyLog`
+    already satisfies this structurally (passed straight through, no adapter needed),
+    as does the stdio bridge's loopback-GET stand-in (`mcp_serve.LocalApiStateProvider`).
+    `None` means occupancy history isn't enabled (`WAVR_OCCUPANCY_LOG=0`, no rows ever
+    logged) -> `query_occupancy_history` degrades to an honest disabled shape, never a
+    crash. `is_unusual`'s `occupied_now` is caller-supplied (mirrors GET
+    /api/occupancy/unusual comparing the room's OWN current live reading, never a
+    second source of truth)."""
+
+    def timeline(self, room: str | None = None, *, start: str | None = None,
+                 end: str | None = None, limit: int = 1000) -> list[dict]: ...
+    def routine(self, room: str, *, weeks: float = 4.0) -> dict: ...
+    def is_unusual(self, room: str, occupied_now: bool, *, weeks: float = 4.0) -> dict: ...
 
 
 class HAServiceCaller(Protocol):
@@ -209,6 +230,167 @@ def get_ha_entities(ha_client: HAEntitiesProvider | None) -> list[dict]:
     return ha_client.get_entities() or []
 
 
+# --- Whole-house read tools (Phase 2A / B1-B3) --------------------------------------
+# Same discipline as the room tools above: plain, injectable functions; each degrades
+# to a clear, honest empty/disabled shape when its data source isn't wired -- NEVER a
+# raise, so a caller's missing feature (occupancy log off, no network inventory) can
+# never crash the MCP server. Inputs are callables/duck-typed objects, not app.py
+# internals, so these stay trivially mockable in tests (mirrors `ha_client` above).
+
+# Phase-2A verify FIX 1 (HIGH): unlike GET /api/inventory (the human dashboard, which
+# stays fully rich -- untouched), the MCP tool must NOT hand an agent per-device name
+# (a friendly label, often a person's name), hostname (embeds the owner's own name),
+# first_seen/last_seen (a "who is home" timing profile), or open_ports (LAN attack
+# surface). `sources` is dropped for the SAME reason as hostname: recog's evidence
+# trail can itself embed a self-reported hostname/friendly-name string (wavr.recog's
+# "hostname" signal literally records `f"{hostname} -> {dtype}"`), so passing it
+# through would leak the very PII the hostname drop is trying to close. `mac` is
+# dropped too -- it is a more persistent per-device tracking identifier than `ip`
+# (which is DHCP-mutable); `ip` is kept only because a tool caller needs SOME way to
+# refer back to a specific device. This mirrors the discipline `get_room_context`
+# already uses (strip `identities`/`vitals`/`targets`) -- an EXPLICIT allowlist, not a
+# blocklist, so a future field added to `_device_view` is excluded by default rather
+# than silently leaking through.
+_INVENTORY_AGENT_CORE_FIELDS = ("ip", "vendor", "device_type", "type_confidence", "known")
+_INVENTORY_AGENT_OPTIONAL_FIELDS = ("make", "model", "os")
+
+
+def _minimize_device_for_agent(device: dict) -> dict:
+    """One device dict (the `GET /api/inventory` / `_device_view` shape) -> the
+    coarse MCP-agent projection. See `get_network_inventory`'s docstring for the
+    field-by-field rationale. Optional fields are included only when populated,
+    mirroring `_device_view`'s own additive-field convention."""
+    out = {k: device.get(k) for k in _INVENTORY_AGENT_CORE_FIELDS}
+    for k in _INVENTORY_AGENT_OPTIONAL_FIELDS:
+        if device.get(k):
+            out[k] = device[k]
+    if device.get("is_gateway"):
+        out["is_gateway"] = True
+    return out
+
+
+def get_network_inventory(inventory_fn) -> dict:
+    """The current LAN device inventory, MINIMIZED for the agent-facing MCP surface
+    (Phase-2A verify FIX 1 -- HIGH): coarse identity only -- `ip` (to reference a
+    device), `vendor`/`device_type`/`type_confidence`/`known`, and `make`/`model`/
+    `os`/`is_gateway` when populated -- plus a `count`. `mac`, `name`, `hostname`,
+    `first_seen`, `last_seen`, `open_ports`, and `sources` are DROPPED; see
+    `_minimize_device_for_agent`'s docstring for why each one is PII/tracking
+    surface an agent must never see. This does NOT reuse `wavr.api_inventory.
+    inventory_view()`'s rich output verbatim -- it is this tool's OWN, stricter
+    projection (`GET /api/inventory`, the human dashboard, is UNCHANGED and stays
+    fully rich). `inventory_fn` is a zero-arg callable returning the same list of
+    device dicts `inventory_view` produces (this tool never triggers a scan itself,
+    only reads the current cache). `None` (not wired) -> `{"devices": [], "count":
+    0}`, never a crash."""
+    if inventory_fn is None:
+        return {"devices": [], "count": 0}
+    devices = [_minimize_device_for_agent(d) for d in (inventory_fn() or [])]
+    return {"devices": devices, "count": len(devices)}
+
+
+# Phase-2A verify FIX 3 (LOW): unlike GET /api/alerts (the human dashboard, which
+# stays fully rich -- untouched), the MCP tool must NOT hand an agent the live
+# `known_present` family headcount (an intrusion alert's compare-against count),
+# gateway/rogue MAC+IP fields (`gateway_ip`/`trusted_mac`/`observed_mac`/`mac`/
+# `extra_server` = LAN topology), or `vendor`/`hostname`/`device_type` (the same
+# per-device PII class FIX 1 drops from inventory). An EXPLICIT allowlist (mirrors
+# FIX 1): only `kind`/`severity`/`room`/`ts` survive -- `room` is `None` for the
+# network-layer alert kinds (rogue_device/rogue_dhcp/gateway_identity), which carry
+# no room at all, so every projected alert has the SAME stable four-key shape.
+_ALERT_AGENT_FIELDS = ("kind", "severity", "room", "ts")
+
+
+def _minimize_alert_for_agent(alert: dict) -> dict:
+    """One merged alert dict (`wavr.api_inventory.merge_alerts`'s shape) -> the
+    coarse MCP-agent projection. See `get_alerts`'s docstring for the rationale."""
+    return {k: alert.get(k) for k in _ALERT_AGENT_FIELDS}
+
+
+def get_alerts(alerts_fn) -> dict:
+    """Current active alerts/notifications, MINIMIZED for the agent-facing MCP
+    surface (Phase-2A verify FIX 3 -- LOW): only `kind`/`severity`/`room`/`ts` --
+    enough for an agent to know THAT something is alerting, where, and how
+    severely, without the live family headcount (`known_present`) or LAN-topology
+    identifiers (gateway/rogue MAC+IP, vendor, hostname). `alerts_fn` is a zero-arg
+    callable returning the same merged, chronologically-sorted list `GET
+    /api/alerts` returns (`wavr.api_inventory.merge_alerts`) -- this tool builds
+    its OWN stricter projection from it rather than reusing it verbatim; `GET
+    /api/alerts` (the human dashboard) is UNCHANGED and stays fully rich. `None`
+    (not wired) -> `{"alerts": []}`, never a crash."""
+    if alerts_fn is None:
+        return {"alerts": []}
+    alerts = list(alerts_fn() or [])
+    return {"alerts": [_minimize_alert_for_agent(a) for a in alerts]}
+
+
+_OCCUPANCY_HISTORY_LIMIT = 1000
+_OCCUPANCY_MAX_HOURS = 24 * 365  # defensive clamp -- never an unbounded query
+
+# Phase-2A verify FIX 2 (HIGH): a SEPARATE, much stricter clamp than the defensive
+# backstop above. `_OCCUPANCY_MAX_HOURS` (~1yr) only guards against a genuinely
+# unbounded query; it says nothing about privacy. A multi-week per-room
+# occupancy + person_count timeline (plus the routine() baseline) is a "when is
+# the house empty" profile -- exactly the kind of surface that must be STRICTER
+# for the agent-facing MCP tool than for the human /api/occupancy/history route
+# (which keeps its own 60-day retention, UNCHANGED). Enforced at the MCP TOOL
+# WRAPPER (`build_mcp_server`'s `_tool_query_occupancy_history`), not inside this
+# shared plain function, so a future non-MCP caller of `query_occupancy_history`
+# would be unaffected by the agent-specific clamp.
+_AGENT_OCCUPANCY_MAX_HOURS = 24
+
+
+def query_occupancy_history(provider: StateProvider,
+                            occupancy_provider: OccupancyHistoryProvider | None,
+                            room: str | None = None, hours: int = 24) -> dict:
+    """The Phase-1 house memory (`wavr.occupancy_log`), bundled into one call: the raw
+    timeline over the trailing `hours` (mirrors `GET /api/occupancy/history`), plus --
+    ONLY when `room` is given, since both are inherently per-room -- that room's hourly
+    routine baseline (`GET /api/occupancy/routine`) and whether its CURRENT reading is
+    unusual for this hour (`GET /api/occupancy/unusual`, via `provider.room_state`, the
+    SAME live reading `list_rooms`/`get_room_context` already expose -- never a second
+    source of truth for "occupied now").
+
+    PRIVACY: identical allowlist to the three HTTP endpoints this wraps -- room,
+    occupied, person_count, confidence, ts only (occupancy_log.py never stores
+    geometry, vitals, or per-person identity -- see its module docstring). Respects the
+    same Watch-mode suppression every other egress point does; this tool adds no new
+    disclosure beyond what those three endpoints already return.
+
+    Gracefully DISABLED (`enabled: False`, empty history, no routine/unusual) when
+    `WAVR_OCCUPANCY_LOG` is off (`occupancy_provider is None`) -- never a crash."""
+    if occupancy_provider is None:
+        return {"enabled": False, "history": [], "routine": None, "unusual": None}
+    hours = max(1, min(int(hours), _OCCUPANCY_MAX_HOURS))
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(hours=hours)).isoformat()
+    history = occupancy_provider.timeline(room, start=start, limit=_OCCUPANCY_HISTORY_LIMIT)
+    result: dict = {"enabled": True, "history": history, "routine": None, "unusual": None}
+    if room is not None:
+        result["routine"] = occupancy_provider.routine(room)
+        current = provider.room_state(room)
+        if current is not None:
+            result["unusual"] = occupancy_provider.is_unusual(room, bool(current.get("occupied")))
+    return result
+
+
+async def get_house_status(house_status_fn, window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES) -> dict:
+    """The unified "is everything OK at home" verdict, in the EXACT shape
+    `GET /api/house-status` returns (`wavr.house_status.compose_house_status`, fusing
+    network + physical signals that already exist elsewhere -- no new detection here).
+    `house_status_fn` is a `callable(window_minutes) -> dict | Awaitable[dict]`: either
+    a sync bridge (the stdio loopback GET) or an async in-process composer (app.py,
+    which fans out concurrent per-room reads) satisfies it -- awaited only if it
+    actually returns an awaitable, so both work with no adapter. `None` (not wired) ->
+    an honest `{"status": "unknown", ...}` verdict, never a crash."""
+    if house_status_fn is None:
+        return {"status": "unknown", "score": 0, "reasons": [], "ts": None}
+    result = house_status_fn(window_minutes)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
+
 def _refused(status: str, message: str) -> dict:
     """A uniform, non-raising refusal result. The control tool NEVER errors the server;
     it returns `{"ok": False, ...}` so the agent gets a clear, machine-readable reason."""
@@ -350,7 +532,11 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
                      expose_control: bool = True,
                      stateless_http: bool = False,
                      json_response: bool = False,
-                     transport_security=None):
+                     transport_security=None,
+                     network_inventory_fn=None,
+                     alerts_fn=None,
+                     occupancy_provider: OccupancyHistoryProvider | None = None,
+                     house_status_fn=None):
     """Build the MCP server: the always-on read tools + the opt-in control tool.
 
     The MCP SDK is imported HERE, lazily: importing `wavr.mcp` never needs the [mcp]
@@ -364,6 +550,20 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
     `ha_client` is an optional injected Home Assistant client. When None (HA not
     configured), `get_ha_entities` degrades to `[]` and `call_ha_service` degrades to a
     clean refusal. It is LOCAL-ONLY (own HA on the LAN).
+
+    Whole-house read tools (Phase 2A / B1-B3) -- each optional, each degrades to a
+    clear empty/disabled shape (never a crash) when its source isn't wired:
+      * `network_inventory_fn` -- zero-arg callable -> the current LAN inventory (same
+        shape as `GET /api/inventory`; the tool never scans, only reads).
+      * `alerts_fn` -- zero-arg callable -> the current merged alert list (same shape
+        as `GET /api/alerts`).
+      * `occupancy_provider` -- an `OccupancyHistoryProvider` (the real
+        `wavr.occupancy_log.OccupancyLog` already satisfies it) -> the house's
+        occupancy memory (`query_occupancy_history`, wrapping `/api/occupancy/
+        {history,routine,unusual}`). `None` when `WAVR_OCCUPANCY_LOG` is off.
+      * `house_status_fn` -- `callable(window_minutes) -> dict | Awaitable[dict]` ->
+        the composed "is everything OK at home" verdict (same shape as
+        `GET /api/house-status`).
 
     Control gating (ADR-0005), passed in from config so this stays free of env lookups:
       * `control_enabled` (default False -> `WAVR_MCP_CONTROL` off): the control tool is
@@ -430,6 +630,52 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
         import anyio
         return await anyio.to_thread.run_sync(get_ha_entities, ha_client)
 
+    @server.tool(name="get_network_inventory")
+    def _tool_get_network_inventory() -> dict:
+        """List every device Wavr currently sees on the LAN, MINIMIZED for the
+        agent-facing MCP surface (Phase-2A verify FIX 1): ip/vendor/device_type/
+        type_confidence/known + make/model/os/is_gateway when populated, plus a
+        count. NEVER mac/name/hostname/first_seen/last_seen/open_ports/sources --
+        see `get_network_inventory`'s docstring. Read-only: reads the
+        already-scanned inventory, never triggers a new scan. Empty devices list
+        when network inventory isn't wired/enabled."""
+        return get_network_inventory(network_inventory_fn)
+
+    @server.tool(name="get_alerts")
+    def _tool_get_alerts() -> dict:
+        """Current active alerts/notifications, MINIMIZED for the agent-facing MCP
+        surface (Phase-2A verify FIX 3): kind/severity/room/ts only -- NEVER the
+        live known_present headcount or gateway/rogue MAC+IP/vendor/hostname --
+        see `get_alerts`'s docstring. Read-only. Empty alerts list when not wired."""
+        return get_alerts(alerts_fn)
+
+    @server.tool(name="query_occupancy_history")
+    def _tool_query_occupancy_history(room: str | None = None, hours: int = 24) -> dict:
+        """The house's occupancy memory: raw history over the trailing `hours`
+        (optionally filtered to one `room`), plus -- when `room` is given -- that
+        room's hourly routine baseline and whether its current reading is unusual for
+        this hour. Room-level occupancy/person_count/confidence only, never geometry
+        or identity. Disabled shape (`enabled: False`) when occupancy history isn't
+        enabled (WAVR_OCCUPANCY_LOG=0).
+
+        Phase-2A verify FIX 2 (HIGH): `hours` is clamped to
+        `_AGENT_OCCUPANCY_MAX_HOURS` (24h) HERE, at the MCP tool wrapper -- a
+        multi-week per-room timeline is a "when is the house empty" profile, so
+        the agent-facing surface is bounded far tighter than the ~1yr defensive
+        backstop inside the shared `query_occupancy_history` function (which
+        itself wraps the 60-day-retention `/api/occupancy/*` routes, UNCHANGED)."""
+        hours = min(int(hours), _AGENT_OCCUPANCY_MAX_HOURS)
+        return query_occupancy_history(provider, occupancy_provider, room=room, hours=hours)
+
+    @server.tool(name="get_house_status")
+    async def _tool_get_house_status(window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES) -> dict:
+        """The composed "is everything OK at home" verdict, fusing the network layer
+        (rogue-device/rogue-DHCP/gateway-identity) with the physical layer
+        (intrusion/fall-suspected/occupancy-anomaly) that already exist elsewhere --
+        no new detection here, just the same ranked verdict GET /api/house-status
+        returns. `window_minutes` overrides the network-alert recency window."""
+        return await get_house_status(house_status_fn, window_minutes)
+
     # CONTROL/WRITE tool -- registered ONLY when expose_control is True. The HTTP transport
     # passes expose_control=False so this tool is ABSENT from list_tools (not merely inert):
     # mcp.py's control gate is process-global, not per-caller, so control must never be
@@ -449,13 +695,6 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
                                    control_enabled=control_enabled,
                                    allowed_services=allowed_services)
 
-    # EXTENSION POINT (future slice -- NOT implemented here): a separate network slice
-    # will add a read-only `get_network_inventory()` tool listing devices seen on the
-    # LAN. It plugs in right here as another `@server.tool()`, reading from an injected
-    # inventory provider (extend StateProvider, or inject a second provider). It MUST
-    # stay READ-ONLY/LOCAL like the tools above -- observe the network, never
-    # scan/probe/deploy. Do not implement it in slice D.
-    #
     # PERMANENT EXCLUSION (A5.2): device blocking / ARP spoofing / deauth is an ACTIVE
     # LAN-ATTACK primitive and is PERMANENTLY OUT OF MCP SCOPE. Never add a block/arp/
     # spoof/deauth @server.tool() here or anywhere -- MCP is read-only-by-construction and
@@ -468,7 +707,11 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
 def make_server_from_app_state(fusion, house_map: dict | None = None, name: str = "wavr",
                                ha_client: HAEntitiesProvider | None = None,
                                control_enabled: bool = False,
-                               allowed_services=frozenset()):
+                               allowed_services=frozenset(), *,
+                               network_inventory_fn=None,
+                               alerts_fn=None,
+                               occupancy_provider: OccupancyHistoryProvider | None = None,
+                               house_status_fn=None):
     """Convenience wiring for the app: wrap a live FusionEngine + house map and build
     the server. Kept tiny and lazy so `import wavr.mcp` stays dependency-free. Pass an
     `ha_client` (e.g. `wavr.ha_client.client_from_config(cfg)`, which is None when HA is
@@ -476,7 +719,16 @@ def make_server_from_app_state(fusion, house_map: dict | None = None, name: str 
 
     Control is DEFAULT-OFF: pass `control_enabled=cfg.mcp_control` and
     `allowed_services=cfg.ha_allowed_services` to opt the gated `call_ha_service` write
-    tool in (ADR-0005). With the defaults, the server stays read-only exactly as before."""
+    tool in (ADR-0005). With the defaults, the server stays read-only exactly as before.
+
+    The whole-house read tools (Phase 2A / B1-B3) are pass-through -- see
+    `build_mcp_server`'s docstring for what each of `network_inventory_fn` /
+    `alerts_fn` / `occupancy_provider` / `house_status_fn` expects. All default to
+    None (each tool degrades to its honest empty/disabled shape), so an existing
+    caller of this function is unaffected until it opts in."""
     return build_mcp_server(FusionStateProvider(fusion, house_map), name=name,
                             ha_client=ha_client, control_enabled=control_enabled,
-                            allowed_services=allowed_services)
+                            allowed_services=allowed_services,
+                            network_inventory_fn=network_inventory_fn, alerts_fn=alerts_fn,
+                            occupancy_provider=occupancy_provider,
+                            house_status_fn=house_status_fn)

@@ -106,6 +106,60 @@ class LocalApiStateProvider:
     def house_map(self) -> dict:
         return self._json("/api/house") or {}
 
+    # --- Phase 2A / B1-B3: whole-house read tools, same loopback-bridge pattern ---
+    # These satisfy mcp.py's duck-typed contracts directly (network_inventory_fn/
+    # alerts_fn as bound methods, occupancy_provider/house_status_fn as `self`) so
+    # `make_server` below wires ONE object for every role -- no extra adapter class.
+
+    def _json_safe(self, path: str, *, default):
+        # Non-2xx (e.g. 503 "occupancy log disabled") must degrade to `default`, NEVER
+        # crash the MCP server -- the running app is the authority on whether a feature
+        # is enabled; this bridge only relays it.
+        try:
+            result = self._json(path)
+        except Exception:
+            return default
+        return default if result is None else result
+
+    def inventory(self) -> list[dict]:
+        return self._json_safe("/api/inventory", default={}).get("devices", [])
+
+    def alerts(self) -> list[dict]:
+        return self._json_safe("/api/alerts", default={}).get("alerts", [])
+
+    def timeline(self, room: str | None = None, *, start: str | None = None,
+                 end: str | None = None, limit: int = 1000) -> list[dict]:
+        path = "/api/occupancy/history" + _query({
+            "room": room, "start": start, "end": end, "limit": limit})
+        return self._json_safe(path, default=[])
+
+    def routine(self, room: str, *, weeks: float = 4.0) -> dict:
+        path = "/api/occupancy/routine" + _query({"room": room, "weeks": weeks})
+        return self._json_safe(path, default={"room": room, "weeks": weeks, "hours": []})
+
+    def is_unusual(self, room: str, occupied_now: bool, *, weeks: float = 4.0) -> dict:
+        # `occupied_now` is intentionally NOT forwarded: /api/occupancy/unusual
+        # recomputes "current" from the live server's own state (the same
+        # authoritative source `room_state()` above already reads), so the bridge
+        # never ships a second, possibly-stale copy of "occupied now" off-box.
+        path = "/api/occupancy/unusual" + _query({"room": room, "weeks": weeks})
+        return self._json_safe(
+            path, default={"unusual": None, "baseline_probability": None,
+                          "samples": 0, "hour": None})
+
+    def house_status(self, window_minutes: float = 60.0) -> dict:
+        path = "/api/house-status" + _query({"window_minutes": window_minutes})
+        return self._json_safe(
+            path, default={"status": "unknown", "score": 0, "reasons": [], "ts": None})
+
+
+def _query(params: dict) -> str:
+    """Build a `?k=v&...` query string, dropping None values so an omitted optional
+    param (e.g. no `room`) is never sent as the literal string 'None'. Empty -> ''."""
+    from urllib.parse import urlencode
+    items = [(k, v) for k, v in params.items() if v is not None]
+    return ("?" + urlencode(items)) if items else ""
+
 
 def make_server(cfg=None):
     """Wire a LIVE MCP server from config: the loopback bridge provider + the LOCAL HA
@@ -127,9 +181,13 @@ def make_server(cfg=None):
     token = resolve_local_token(cfg.local_token, cfg.db_path)
     provider = LocalApiStateProvider(base, token)
     ha = client_from_config(cfg)     # LOCAL HA on the LAN; None => get_ha_entities -> []
+    # `provider` also satisfies the whole-house read tools' contracts (Phase 2A /
+    # B1-B3) -- same loopback-bridge object, one instance for every role.
     return build_mcp_server(
         provider, name="wavr", ha_client=ha,
-        control_enabled=cfg.mcp_control, allowed_services=cfg.ha_allowed_services)
+        control_enabled=cfg.mcp_control, allowed_services=cfg.ha_allowed_services,
+        network_inventory_fn=provider.inventory, alerts_fn=provider.alerts,
+        occupancy_provider=provider, house_status_fn=provider.house_status)
 
 
 def main() -> None:

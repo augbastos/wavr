@@ -155,6 +155,16 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     return view
 
 
+def inventory_view(service: NetworkInventoryService,
+                   device_meta: DeviceMeta | None = None) -> list[dict]:
+    """The SAME per-device view GET /api/inventory returns -- factored out (mirrors
+    merge_alerts's one-function-many-callers precedent) so the MCP
+    get_network_inventory tool (wavr.mcp, via app.py's closure) and this route can
+    never drift. Reads whatever `service`'s already-scanned/cached inventory
+    currently holds -- NEVER triggers a rescan."""
+    return [_device_view(d, device_meta) for d in service.latest_inventory()]
+
+
 def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
                             name_deps=None, dhcp_monitor=None,
@@ -165,7 +175,7 @@ def build_inventory_router(service: NetworkInventoryService,
 
     @router.get("/api/inventory")
     async def inventory():
-        return {"devices": [_device_view(d, device_meta) for d in service.latest_inventory()]}
+        return {"devices": inventory_view(service, device_meta)}
 
     @router.get("/api/alerts")
     async def alerts():

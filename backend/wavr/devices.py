@@ -21,8 +21,14 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-# The two grantable device roles (the loopback root central needs no token/row).
-VALID_ROLES = frozenset({"central", "user"})
+# The three grantable device roles (the loopback root central needs no token/row).
+# 'agent' (Phase 2A / B4) is the bounded MCP-client principal: it gets NOTHING from
+# can_view/can_change_state (both fail closed -- 'agent' is absent from both role
+# tuples in auth.py by construction, unchanged by adding it here) and reaches the
+# API surface ONLY via /mcp, further bounded there by its per-tool allow-list (see
+# `tool_scopes` below + auth.effective_tool_scopes) -- "a bounded capability set,
+# not the whole API" by design, not by convention.
+VALID_ROLES = frozenset({"central", "user", "agent"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
@@ -54,6 +60,12 @@ class Device:
     # `scopes=`, is None here. An explicit (even empty) frozenset means a P2
     # consent flow has actually narrowed/widened this device's grant.
     scopes: frozenset[str] | None = None
+    # Wavr Pass (Phase 2A / B4): the device's OWN explicit MCP TOOL-NAME allow-list
+    # -- a SEPARATE axis from `scopes` above (route scopes vs. individual tool
+    # names). `None` means "derive from role" (auth.effective_tool_scopes); only
+    # meaningful for role == "agent" -- every other role resolves this axis to
+    # None ("not restricted by it at all"), unchanged pre-existing behaviour.
+    tool_scopes: frozenset[str] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -109,6 +121,7 @@ class DeviceStore:
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
         self._migrate_scopes_column()
+        self._migrate_tool_scopes_column()
 
     def _migrate_scopes_column(self) -> None:
         """Wavr Pass (Phase 1), additive: add the nullable `scopes` column to an
@@ -121,7 +134,22 @@ class DeviceStore:
             self._conn.execute("ALTER TABLE devices ADD COLUMN scopes TEXT")
             self._conn.commit()
 
-    def add(self, name: str, role: str, scopes: frozenset[str] | None = None) -> tuple[str, str]:
+    def _migrate_tool_scopes_column(self) -> None:
+        """Wavr Pass (Phase 2A / B4), additive: add the nullable `tool_scopes`
+        column -- the AGENT principal's MCP tool-name allow-list, a SEPARATE axis
+        from `scopes` (route scopes). Same PRAGMA-guarded, idempotent, no-backfill
+        pattern as `_migrate_scopes_column` (and run right after it), so a
+        pre-existing db (with or without `scopes` already) gains this column
+        exactly once, with every existing row reading back `tool_scopes=None`
+        ("derive from role" -- meaningless for non-agent roles, the sane
+        READ-ONLY default for 'agent', see auth.effective_tool_scopes)."""
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(devices)")}
+        if "tool_scopes" not in cols:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN tool_scopes TEXT")
+            self._conn.commit()
+
+    def add(self, name: str, role: str, scopes: frozenset[str] | None = None,
+            tool_scopes: frozenset[str] | None = None) -> tuple[str, str]:
         """Create a device and return (device_id, token). The token is generated
         here, stored hashed, and returned exactly once — the caller must hand it to
         the device now; it can never be recovered later.
@@ -129,7 +157,10 @@ class DeviceStore:
         `scopes` defaults to None (NULL column -- "derive from role", auth.
         effective_scopes) so every EXISTING caller of `add(name, role)` keeps its
         current behaviour byte-for-byte; pass an explicit frozenset only for a
-        future consent-granted device (P2)."""
+        future consent-granted device (P2). `tool_scopes` (Phase 2A / B4) is the
+        SAME NULL-derives-from-role idiom for the MCP tool-name axis -- meaningful
+        only for role="agent" (auth.effective_tool_scopes); every other caller
+        passing neither kwarg is unaffected."""
         if role not in VALID_ROLES:
             raise ValueError(f"invalid role: {role!r} (expected one of {sorted(VALID_ROLES)})")
         device_id = secrets.token_hex(16)          # 128-bit opaque id
@@ -139,8 +170,9 @@ class DeviceStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO devices (device_id, name, role, token_hash, created_ts,"
-                " last_seen_ts, revoked, scopes) VALUES (?, ?, ?, ?, ?, NULL, 0, ?)",
-                (device_id, name, role, token_hash, ts, _serialize_scopes(scopes)),
+                " last_seen_ts, revoked, scopes, tool_scopes) VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)",
+                (device_id, name, role, token_hash, ts, _serialize_scopes(scopes),
+                 _serialize_scopes(tool_scopes)),
             )
             self._conn.commit()
         return device_id, token
@@ -155,8 +187,8 @@ class DeviceStore:
         ts = self._now()
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, revoked, scopes FROM devices"
-                " WHERE token_hash = ?",
+                "SELECT device_id, name, role, created_ts, revoked, scopes, tool_scopes"
+                " FROM devices WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()
             if row is None or row["revoked"]:
@@ -170,6 +202,7 @@ class DeviceStore:
             device_id=row["device_id"], name=row["name"], role=row["role"],
             created_ts=row["created_ts"], last_seen_ts=ts, revoked=False,
             scopes=_parse_scopes(row["scopes"]),
+            tool_scopes=_parse_scopes(row["tool_scopes"]),
         )
 
     def list(self) -> list[Device]:
@@ -177,7 +210,7 @@ class DeviceStore:
         includes token material."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes, tool_scopes"
                 " FROM devices ORDER BY created_ts, device_id"
             ).fetchall()
         return [self._to_device(r) for r in rows]
@@ -185,7 +218,7 @@ class DeviceStore:
     def get(self, device_id: str) -> Device | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes, tool_scopes"
                 " FROM devices WHERE device_id = ?",
                 (device_id,),
             ).fetchone()
@@ -223,6 +256,7 @@ class DeviceStore:
             device_id=r["device_id"], name=r["name"], role=r["role"],
             created_ts=r["created_ts"], last_seen_ts=r["last_seen_ts"],
             revoked=bool(r["revoked"]), scopes=_parse_scopes(r["scopes"]),
+            tool_scopes=_parse_scopes(r["tool_scopes"]),
         )
 
     def close(self) -> None:
