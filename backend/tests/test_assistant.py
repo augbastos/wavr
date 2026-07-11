@@ -971,6 +971,34 @@ def test_adversarial_manual_non_loopback_is_cloud_and_gated(tmp_path, monkeypatc
     assert r.status_code == 503
 
 
+def test_ask_cloud_engine_blocked_by_system_toggles_egress_master(tmp_path, monkeypatch):
+    # Feature "system-toggles": the operator-level System-tab egress switch
+    # ANDs on top of the assistant-cloud connector's own kill switch -- a
+    # cloud engine stays refused even when assistant-cloud is enabled.
+    monkeypatch.setenv("WAVR_ASSISTANT_LOCAL_LLM_URL", "https://remote.example.com/v1")
+    c, a, cn = _client(tmp_path, monkeypatch)
+    a.select("local_llm")
+    assert c.post("/api/connectors/assistant-cloud/enable",
+                  json={"enabled": True}).status_code == 200
+
+    def _local_llm_descriptor():
+        engines = c.get("/api/assistant/engines").json()["engines"]
+        return next(e for e in engines if e["id"] == "local_llm")
+
+    # Sanity: cloud engine is reachable while the egress master stays on (default).
+    assert _local_llm_descriptor()["needs"] is None
+    # System-tab operator block.
+    assert c.post("/api/system/toggles/egress", json={"enabled": False}).status_code == 200
+    assert _local_llm_descriptor()["needs"] == "connector"   # honestly reflects the master too
+    r = c.post("/api/assistant/ask", json={"question": "hi"})
+    assert r.status_code == 503
+    # A LOCAL (loopback) engine (zero egress) must stay completely unaffected.
+    a.select("wavr_assistant")
+    wavr = next(e for e in c.get("/api/assistant/engines").json()["engines"]
+               if e["id"] == "wavr_assistant")
+    assert wavr["local"] is True and wavr["needs"] is None
+
+
 # --------------------------------------------------------------------------- #
 # GET /api/assistant/log: bounded limit clamp.
 # --------------------------------------------------------------------------- #

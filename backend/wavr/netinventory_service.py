@@ -173,7 +173,8 @@ class NetworkInventoryService:
                  hostname_resolve_enabled: bool = False, hostname_resolver=None,
                  latency_enabled: bool = False, ping=None,
                  gateway_detect_enabled: bool = False, gateway_detector=None,
-                 gateway_monitor=None, ha_store=None, known_provider=None):
+                 gateway_monitor=None, ha_store=None, known_provider=None,
+                 sensing_allowed=None):
         self._known = _norm_macs(known_macs)
         # Runtime known-MAC provider (wavr.known_store.KnownStore.known_macs) --
         # see the class docstring; None -> unchanged, static-allowlist-only
@@ -255,14 +256,33 @@ class NetworkInventoryService:
                 "hosts outside the known-MAC allowlist; set "
                 "WAVR_NET_SNMP_SCOPE=known (the default) to avoid this"
             )
+        # system-toggles sensing master (feature "system-toggles"): an OPTIONAL
+        # () -> bool callable (app.py wires ConnectorStore.sensing_allowed, read
+        # fresh every scan -- same "no restart, revocable" contract as
+        # known_provider/ha_store above). None -> always on (today's default,
+        # byte-identical, and every test double that doesn't pass this kwarg).
+        self._sensing_allowed = sensing_allowed
         self._inventory: list[Device] = []
+        # ISO-8601 UTC of the most recent completed scan_once() (None before the
+        # first scan). Feeds net_doctor's inventory-freshness check; not
+        # otherwise consumed by this service.
+        self._last_scan_ts: str | None = None
         self._alerts: list[RogueAlert] = []
         self._alerted: set[str] = set()   # MACs already alerted (edge-triggered)
         self._task: asyncio.Task | None = None
 
+    def _sensing_on(self) -> bool:
+        """system-toggles sensing master: True (on) unless the operator has
+        explicitly blocked network sensing from the System tab. Gates the
+        OPTIONAL active/passive collectors only (port scan, mDNS/SSDP/NetBIOS/
+        SNMP/DHCP-fp, latency) -- never the base ARP inventory scan itself."""
+        return self._sensing_allowed is None or self._sensing_allowed()
+
     def _port_scan_on(self) -> bool:
-        """OFF unless explicitly overridden (tests) or WAVR_NET_PORTSCAN is set."""
-        return port_scan_enabled() if self._port_scan is None else self._port_scan
+        """OFF unless explicitly overridden (tests) or WAVR_NET_PORTSCAN is set --
+        AND the system-toggles sensing master is on (see `_sensing_on`)."""
+        base = port_scan_enabled() if self._port_scan is None else self._port_scan
+        return base and self._sensing_on()
 
     def _port_scan_known_only_on(self) -> bool:
         """OFF unless explicitly overridden (tests) or WAVR_NET_PORTSCAN_SCOPE=known."""
@@ -321,9 +341,12 @@ class NetworkInventoryService:
                 )
                 for d in devices
             ]
-        if self._latency_enabled:
+        # system-toggles sensing master: latency actively TCP-connects each host
+        # (like the port pass), so it is gated the same way -- see `_sensing_on`.
+        if self._latency_enabled and self._sensing_on():
             devices = await self._annotate_latency(devices)
         self._inventory = devices
+        self._last_scan_ts = datetime.now(timezone.utc).isoformat()
         self._observe_gateway(devices)
         self._record_rogues(devices)
         await self._record_seen(devices)
@@ -452,6 +475,11 @@ class NetworkInventoryService:
         Tolerant: a collector raising is logged (never its arguments -- the
         SNMP community string in particular is never logged) and simply
         contributes nothing, never aborts the scan."""
+        # system-toggles sensing master: suppresses every passive/active protocol
+        # collector below when the operator has blocked sensing from the System
+        # tab -- checked before the per-collector enabled flags, see `_sensing_on`.
+        if not self._sensing_on():
+            return {}
         if not (self._mdns_enabled or self._ssdp_enabled or self._netbios_enabled
                 or self._snmp_enabled or self._dhcp_fp_enabled):
             return {}
@@ -643,6 +671,11 @@ class NetworkInventoryService:
     def latest_inventory(self) -> list[Device]:
         """The devices from the most recent scan (empty before the first)."""
         return list(self._inventory)
+
+    def last_scan_ts(self) -> str | None:
+        """ISO-8601 UTC of the most recent completed scan, or None if no scan
+        has run yet since startup."""
+        return self._last_scan_ts
 
     def recent_alerts(self, limit: int = 50) -> list[RogueAlert]:
         """The most recent rogue-device alerts, newest last."""

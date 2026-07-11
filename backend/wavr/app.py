@@ -33,9 +33,10 @@ from wavr.sources.camera import CameraSource, yolo_pose_detect
 from wavr.sources.mmwave import MmWaveSource
 from wavr.camera_store import CameraStore
 from wavr.calib_store import CalibrationStore, validate_mount, CalibrationError
-from wavr.localize import (make_localizer, homography_from_points, floor_spots_for_room,
-                           homography_reprojection_error, homography_quality)
+from wavr.localize import make_localizer, floor_spots_for_room
 from wavr.calib_sample import CalibSampleStore
+from wavr.calib_refine import solve_progressive
+from wavr.calib_session import CalibSessionStore, CalibSessionError, SessionState
 from wavr.camera_health import CameraHealthMonitor
 from wavr.camera_url import rebind_rtsp_host, rtsp_host
 from wavr.camera_privacy import PrivacyControlNotImplemented, set_privacy_mode
@@ -62,6 +63,7 @@ from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
 from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
 from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
+from wavr.net_doctor import diagnose, apply_fixes, DoctorLog
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
@@ -149,7 +151,7 @@ def _is_token_exempt(path: str) -> bool:
     return path in _TOKEN_EXEMPT_PATHS or path.startswith("/vendor/")
 
 
-def _default_sources(cfg, ble_provider=None, net_provider=None):
+def _default_sources(cfg, ble_provider=None, net_provider=None, net_detail_provider=None):
     """Plano A real-source set: network always-on ($0), ruview always-on (harmless
     reconnect loop when the container is absent), sim off by default (toggle it on
     from the dashboard to populate the view when no real data is flowing). mmwave is
@@ -167,7 +169,7 @@ def _default_sources(cfg, ble_provider=None, net_provider=None):
         ("network", lambda: NetworkSource(
             cfg.net_known_macs, interval=cfg.net_interval, grace=cfg.net_grace,
             known=cfg.net_known, emit_identity=cfg.identity_enabled,
-            known_provider=net_provider), True),
+            known_provider=net_provider, detail_provider=net_detail_provider), True),
         ("ruview", lambda: RuViewSource(
             cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
         ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
@@ -235,6 +237,22 @@ def _rebind_ip_ok(ip: str) -> bool:
         return False
 
 
+# Walk-to-calibrate feet-pixel extraction reuses the SAME pose pass as normal operation
+# (no 2nd model -- still yolo_pose_detect / _pose_model) but needs its OWN confidence
+# floor, independent of the camera's day-to-day `confidence` setting. That setting is a
+# per-camera product-exposed tunable an operator may deliberately lower (see
+# computer-vision-engineer domain notes) to catch partially-occluded people during normal
+# operation -- fine there, because a weak Target still only feeds a discounted signal into
+# fusion. Left unmodified during a calibration walk, that same low floor would let a
+# marginal/noisy feet pixel become a homography CORRESPONDENCE POINT, permanently
+# distorting every future localization from that camera. A walk-to-calibrate session is a
+# few seconds with the operator standing in full view on purpose, so raising the floor
+# costs nothing in practice -- GET calib-sample just reads `person: false` until a
+# confident detection lands, exactly like "no person yet". No frame is read or kept either
+# way (ADR-0002); this only changes which detections are trusted enough to sample.
+_CALIB_SAMPLE_MIN_CONFIDENCE = 0.5
+
+
 def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
                     sample_store=None, sampling=False, on_privacy=None):
     # F3: pass the camera name + the health monitor's report callback + the unhealthy
@@ -287,8 +305,14 @@ def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
         if on_feet is not None:
             kwargs["on_feet"] = on_feet
         pose_detect = functools.partial(yolo_pose_detect, **kwargs)
+    # Sampling (an active walk-to-calibrate session) overrides the effective confidence
+    # with the dedicated calibration floor -- never LOWERS it below the operator's own
+    # setting, only ever raises it, so a camera already tuned strict keeps its own,
+    # stricter number. See `_CALIB_SAMPLE_MIN_CONFIDENCE` for the reasoning.
+    effective_confidence = (max(cam["confidence"], _CALIB_SAMPLE_MIN_CONFIDENCE)
+                            if sampling else cam["confidence"])
     return lambda: CameraSource(cam["room"], cam["rtsp_url"], name=cam["name"],
-                                interval=cfg.cam_interval, confidence=cam["confidence"],
+                                interval=cfg.cam_interval, confidence=effective_confidence,
                                 on_health=on_health,
                                 unhealthy_secs=cfg.cam_unhealthy_secs,
                                 pose=pose, pose_detect=pose_detect,
@@ -540,7 +564,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # device_meta/ha_store above) and unioned with the static
         # WAVR_NET_MACS allowlist -- a POST /api/inventory/known mark-known
         # takes effect on the very next scan with no restart.
-        known_provider=_known_store.known_macs)
+        known_provider=_known_store.known_macs,
+        # system-toggles sensing master (feature "system-toggles"): read fresh
+        # every scan cycle -- a System-tab block/unblock takes effect on the
+        # very next scan_once(), no restart. Gates the OPTIONAL active/passive
+        # collectors (port scan, mDNS/SSDP/NetBIOS/SNMP/DHCP-fp, latency); the
+        # base zero-egress ARP inventory (scan_inventory) is core LAN-read
+        # presence, not an optional collector, and stays unaffected.
+        sensing_allowed=_connectors.sensing_allowed)
 
     # Internet/gateway monitor (Feature B): opt-in via injected `internet_monitor`
     # (tests) or WAVR_INTERNET_MONITOR (real gateway ping, lazily built). Off by
@@ -904,7 +935,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     manager = SourceManager(_ingest)
     for name, factory, enabled in (
             sources if sources is not None
-            else _default_sources(cfg, _ble_known_provider, _net_known_provider)):
+            else _default_sources(cfg, _ble_known_provider, _net_known_provider,
+                                  _identity_store.detailed_net_addresses)):
         manager.register(name, factory, enabled)
 
     def _ensure_ble_source() -> None:
@@ -931,12 +963,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # (see POST /api/cameras/{name}/calib-session); read by GET calib-sample. Inert and
     # empty out of the box, so it costs nothing until an operator starts a walk.
     _calib_sample = CalibSampleStore()
+    # Guided-calibration session state machine (Tier 1's session half): the
+    # server-side 'stand here -> capture -> repeat -> solve' walk bookkeeping, so the
+    # quest survives a frontend reload and a non-browser driver (MCP/voice) can run
+    # it. In-memory, ephemeral, coordinate-only (ADR-0002) -- same lifecycle class as
+    # _calib_sample; nothing here reaches CalibrationStore/disk until an explicit,
+    # successful solve (change-gated write, SD-wear).
+    _calib_session = CalibSessionStore()
     # F3 camera IP-drift monitor: always available (like _device_meta), inert until a
     # camera reports down AND a stored MAC drifts. Reads camera defs from _cameras and
     # the current LAN devices from _inventory (opt-in WAVR_NET_INVENTORY -- when off,
     # latest_inventory() is empty and suggestions stay honestly empty).
     _camera_health = CameraHealthMonitor(
         get_camera=_cameras.get, latest_inventory=_inventory.latest_inventory)
+    # network-doctor (GET /api/health/doctor): bounded in-memory log of executed
+    # auto-fixes -- always built (like _camera_health), inert until the route is
+    # actually called with auto_fix=true AND WAVR_NET_DOCTOR_AUTOFIX is on.
+    _doctor_log = DoctorLog()
     for cam in _cameras.list():                       # persisted cameras -> boot-OFF sources
         manager.register(cam["name"],
                          _camera_factory(cam, cfg, _camera_health.report, _calib, _house,
@@ -1149,6 +1192,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         except ImportError:
             logging.info("MCP-over-HTTP mount skipped: [mcp] extra not installed")
 
+    # Mutable single-slot holder for the mDNS self-advertise handle (Phase 1 peer
+    # discovery). A bare local inside `lifespan()` below is NOT visible to route
+    # closures (different nested-function scope) -- network-doctor's mdns_advertise
+    # check/fix needs to read AND replace the live handle from a route, so it lives
+    # here in create_app's own scope instead. `lifespan()` and the route below both
+    # read/write `_mdns_state["handle"]`; None means "not currently advertising".
+    _mdns_state: dict = {"handle": None}
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # MCP-over-HTTP session manager (once per process) when the read-only mount is
@@ -1164,11 +1215,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # and the whole start is wrapped so a missing dep or a registration failure LOGS
         # and continues instead of crashing startup: peer discovery is a convenience,
         # never load-bearing for the app booting. Handle stopped in the finally.
-        _mdns_handle = None
         if cfg.peers_enabled:
             try:
                 from wavr.mdns_peers import advertise_self
-                _mdns_handle = advertise_self(cfg.instance_name, cfg.port, role="desktop")
+                _mdns_state["handle"] = advertise_self(cfg.instance_name, cfg.port, role="desktop")
             except Exception:
                 logging.warning("peer mDNS self-advertise unavailable "
                                 "(zeroconf missing or registration failed)", exc_info=True)
@@ -1254,9 +1304,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_gateway_store and _gateway_store is not None:
                 with suppress(Exception):
                     _gateway_store.close()
-            if _mdns_handle is not None:
+            if _mdns_state["handle"] is not None:
                 with suppress(Exception):
-                    _mdns_handle.stop()   # unregister `_wavr._tcp` + close zeroconf
+                    _mdns_state["handle"].stop()   # unregister `_wavr._tcp` + close zeroconf
             if _peer_store is not None:
                 with suppress(Exception):
                     _peer_store.close()
@@ -1284,6 +1334,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * calib_sample: the walk-to-calibrate feet-pixel sink, so a test can record a
     #    coordinate and assert GET calib-sample surfaces it (never a frame -- ADR-0002).
     app.state.calib_sample = _calib_sample
+    #  * calib_session: the guided-calibration session state machine, so a test can
+    #    drive/inspect a walk's server-side state directly (never a frame -- ADR-0002).
+    app.state.calib_session = _calib_session
     #  * ingest: the fusion event-ingest path (SourceManager's on_event), so a test can
     #    drive one deterministic SensingEvent through fusion + the SD-wear persist=
     #    changed write-gate without needing a real/timed source or a node bearer token.
@@ -1567,7 +1620,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         build_identity_router(
             _identity_store, bonded_reader=_bonded_reader,
             ensure_source=_ensure_ble_source,
-            write_deps=[Depends(require_local), Depends(require_scope("control"))]),
+            write_deps=[Depends(require_local), Depends(require_scope("control"))],
+            casa_state_provider=lambda: latest.get("casa"),
+            device_meta=_device_meta),
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     def _connector_catalog() -> list[dict]:
@@ -1850,6 +1905,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if narr_ov == "off":
             raise HTTPException(status_code=503,
                                 detail="narrator revoked in Connectors screen")
+        # system-toggles egress master: local (ollama) narration is zero-egress and
+        # stays unaffected; any cloud provider ANDs in the operator's System-tab
+        # egress switch (see /api/system/toggles) on top of the narrator's own gate.
+        if cfg.narrate_provider != "ollama" and not _connectors.egress_allowed():
+            raise HTTPException(status_code=503,
+                                detail="egress disabled by operator (System tab)")
         if _narrator is None:
             # Enabled in the Connectors screen but the provider client isn't built yet:
             # be HONEST about what is missing rather than pretend it's live -- and, crucially,
@@ -1971,6 +2032,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if not speedtest_mod.speedtest_enabled():
             raise HTTPException(status_code=503,
                                 detail="speed test disabled (set WAVR_NET_SPEEDTEST=1)")
+        # system-toggles egress master: ANDs on top of the WAVR_NET_SPEEDTEST opt-in
+        # (see /api/system/toggles) -- an operator-level block even when speedtest
+        # itself stays enabled.
+        if not _connectors.egress_allowed():
+            raise HTTPException(status_code=503,
+                                detail="egress disabled by operator (System tab)")
         if confirm is not True:
             raise HTTPException(
                 status_code=409,
@@ -2097,6 +2164,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # here that is ON by default (zero-egress, on-box); surfaced so
                 # the Privacy & Egress view stays honest about what is live.
                 "gateway_monitor": cfg.net_gateway_monitor,
+                # network-doctor auto-fix (WAVR_NET_DOCTOR_AUTOFIX) -- opt-in,
+                # default OFF, two-factor with the route's own auto_fix=true
+                # query param (see GET /api/health/doctor). Surfaced here so
+                # the Privacy & Egress view stays honest that an auto-fix path
+                # exists at all (diagnose-only is the default install).
+                "net_doctor_autofix": cfg.net_doctor_autofix,
                 # Audit fix #1: the ONLY egress path in this dict that isn't a
                 # dedicated background collector -- GET /api/health's public-
                 # DNS-resolver legs, opt-in via WAVR_HEALTH_RESOLVERS. Surfaced
@@ -2162,6 +2235,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # actual call to happen -- this flag mirrors mcp_http's own
                 # "wired AND enabled" honesty, not "a call just happened").
                 "assistant_cloud": _connectors.is_enabled("assistant-cloud"),
+                # system-toggles: the two System-tab master switches (see
+                # GET/POST /api/system/toggles). True = allowed (default,
+                # byte-identical to before this feature); False = the operator
+                # deliberately blocked that whole class from the System tab.
+                "egress_allowed": _connectors.egress_allowed(),
+                "sensing_allowed": _connectors.sensing_allowed(),
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
@@ -2193,6 +2272,43 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 ),
             },
         }
+
+    # System toggles (feature "system-toggles"): the two System-tab master
+    # switches (Egress / Network sensing) the receipt-only #egressList/
+    # #sensingList cards used to only DESCRIBE ("needs a hub restart -- no
+    # in-app switch yet"). Persisted as reserved rows (kind='system') in the
+    # SAME ConnectorStore that already backs Connectors & Services --
+    # kind='system' rows are excluded from both api_connectors.py's list
+    # (`kind == 'generic'` only) and its enable route (`row["kind"] !=
+    # "generic"` -> 404), so a paired central peer holding that router's
+    # weaker require_local+control tier can never reach these ids there.
+    # Default-ABSENT => egress_allowed()/sensing_allowed() => True =>
+    # byte-identical to today until an operator deliberately flips one. Write
+    # gate is the SAME tier as the ARP-block/nodes-admin primitives
+    # (require_local CSRF + require_root): loopback-operator only, a paired
+    # central peer 403s (M1).
+    _SYS_TOGGLES = {"egress": "sys:egress", "network_sensing": "sys:sensing"}
+
+    def _sys_toggles_state() -> dict:
+        return {"egress": _connectors.egress_allowed(),
+                "network_sensing": _connectors.sensing_allowed()}
+
+    @app.get("/api/system/toggles")
+    async def system_toggles():
+        return _sys_toggles_state()
+
+    @app.post("/api/system/toggles/{name}")
+    async def set_system_toggle(name: str, enabled: bool = Body(..., embed=True),
+                                _=Depends(require_local), __=Depends(require_root)):
+        key = _SYS_TOGGLES.get(name)
+        if key is None:
+            raise HTTPException(status_code=404, detail=f"unknown toggle: {name}")
+        # upsert() preserves `enabled` on conflict (never silently re-arms a
+        # kill-switch) -- the row starts at enabled=0 only on first insert, then
+        # set_enabled immediately writes the actual requested value.
+        _connectors.upsert(key, "system", name)
+        _connectors.set_enabled(key, enabled)
+        return _sys_toggles_state()
 
     @app.get("/api/presence/report")
     async def presence_report(_=Depends(require_scope("network:read"))):
@@ -2351,12 +2467,85 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # LOCAL-ONLY rationale). 5-tier severity ladder (defensive-inventory #12):
         # gateway + public-resolver reachability + optional operator-extra
         # targets, rolled into one severity verdict (wavr.health_check).
+        # system-toggles egress master: the gateway leg stays LAN-only regardless
+        # (guess_gateway/internet_check_host, zero egress); only the resolver legs
+        # (the one real public-internet egress in this route) fall back to {} when
+        # the operator has blocked egress from the System tab -- same {} shape as
+        # the existing WAVR_HEALTH_RESOLVERS-off default, so severity is computed
+        # from gateway + extra targets only, honestly.
+        resolver_checks = _health_resolvers if _connectors.egress_allowed() else {}
+        result = await check_health(
+            gateway_check=_health_check, gateway_host=_health_host,
+            resolver_checks=resolver_checks, extra_checks=_health_extra,
+        )
+        result["internet_monitor"] = _internet.status() if _internet else None
+        return result
+
+    # network-doctor (GET /api/health/doctor): read-only diagnosis by default,
+    # a narrow auto-fix layer only when BOTH WAVR_NET_DOCTOR_AUTOFIX is set AND
+    # the caller passes auto_fix=true. Every fix dispatched below is a call to
+    # an already-existing, already-authenticated-route-reachable primitive
+    # (set_enabled, scan_once, advertise_self) -- this module adds no new
+    # low-level capability. See wavr.net_doctor's module docstring for the
+    # SAFE-AUTO allowlist enforced in code.
+    async def _doctor_restart_source(name: str) -> None:
+        # Only ever CYCLES a source SourceManager already reports enabled=True
+        # (net_doctor.diagnose only proposes this for such sources) -- never
+        # flips a disabled/privacy-off camera on. Mirrors POST
+        # /api/sources/{name}/toggle called twice.
+        await manager.set_enabled(name, False)
+        await manager.set_enabled(name, True)
+
+    async def _doctor_reprobe_inventory() -> None:
+        if cfg.net_inventory:
+            await _inventory.scan_once()
+
+    def _doctor_reannounce_mdns() -> None:
+        if not cfg.peers_enabled:
+            return
+        from wavr.mdns_peers import advertise_self
+        old = _mdns_state.get("handle")
+        if old is not None:
+            with suppress(Exception):
+                old.stop()
+        try:
+            _mdns_state["handle"] = advertise_self(cfg.instance_name, cfg.port, role="desktop")
+        except Exception:
+            logging.warning("doctor: mDNS re-announce failed", exc_info=True)
+            _mdns_state["handle"] = None
+
+    @app.get("/api/health/doctor")
+    async def health_doctor(auto_fix: bool = False,
+                            _=Depends(require_local), __=Depends(require_scope("control"))):
         result = await check_health(
             gateway_check=_health_check, gateway_host=_health_host,
             resolver_checks=_health_resolvers, extra_checks=_health_extra,
         )
-        result["internet_monitor"] = _internet.status() if _internet else None
-        return result
+        room_sources = {r: ((s.sources if (s := _fusion.state(r)) else []))
+                        for r in _fusion.rooms()}
+        checks, fixable = diagnose(
+            health=result,
+            gateway_status=_gateway_monitor.status() if _gateway_monitor else None,
+            gateway_alerts=[a.to_dict() for a in
+                           (_gateway_monitor.recent_alerts(5) if _gateway_monitor else [])],
+            dhcp_status=_dhcp_monitor.status() if _dhcp_monitor else None,
+            dhcp_alerts=[a.to_dict() for a in
+                        (_dhcp_monitor.recent_alerts(5) if _dhcp_monitor else [])],
+            source_status=manager.status(),
+            camera_down=_camera_health.down(), camera_privacy=_camera_health.privacy(),
+            room_sources=room_sources,
+            last_inventory_scan_ts=_inventory.last_scan_ts(), net_scan_interval=cfg.net_scan_interval,
+            mdns_expected=cfg.peers_enabled, mdns_alive=_mdns_state.get("handle") is not None,
+        )
+        fixed, suggestions = await apply_fixes(
+            fixable, enabled=(auto_fix and cfg.net_doctor_autofix),
+            restart_source=_doctor_restart_source, reprobe_inventory=_doctor_reprobe_inventory,
+            reannounce_mdns=_doctor_reannounce_mdns, log=_doctor_log,
+        )
+        return {"checks": [c.to_dict() for c in checks],
+                "auto_fixed": [a.to_dict() for a in fixed],
+                "suggestions": [s.to_dict() for s in suggestions],
+                "recent_auto_fixes": [a.to_dict() for a in _doctor_log.recent(20)]}
 
     @app.get("/api/system")
     async def system():
@@ -2527,20 +2716,41 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         floor_points: list | None = Body(None),
         img_w: int | None = Body(None),
         img_h: int | None = Body(None),
+        use_session: bool = Body(False),
         _=Depends(require_local), __=Depends(require_scope("control")),
     ):
         # Spec A. Two independent, composable calibrations, both state-changing
         # (require_local / CSRF): a MONOCULAR mount prior (approximate immediate
         # estimate) and/or an accurate 4-POINT homography. The homography is ALWAYS
         # solved server-side from image<->floor correspondences via
-        # localize.homography_from_points, so the degeneracy guard (collinear/coincident)
-        # runs before anything is persisted -- the client never hands us a raw matrix.
-        # No frame is involved: image_points are the operator's marks (pixels), never a
-        # stored image (ADR-0002).
+        # localize.homography_from_points (via calib_refine.solve_progressive), so the
+        # degeneracy guard (collinear/coincident) runs before anything is persisted --
+        # the client never hands us a raw matrix. No frame is involved: image_points
+        # are the operator's marks (pixels), never a stored image (ADR-0002).
+        #
+        # `use_session=true` (guided-calib, server-driven session): when the caller
+        # supplies NO explicit image_points/floor_points, pull them from this camera's
+        # completed CalibSession instead (409 if there is none, or it isn't READY --
+        # every spot must be captured first). The EXPLICIT image_points/floor_points
+        # body path below is completely UNCHANGED either way -- full backward
+        # compatibility with the browser wizard, which still posts its own points.
+        used_session = False
+        sess = None
         if not _NAME_RE.match(name):
             raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
         if not _cameras.get(name):
             raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        if use_session and image_points is None and floor_points is None:
+            sess = _calib_session.get(name)
+            if sess is None or sess.state != SessionState.READY:
+                raise HTTPException(
+                    status_code=409,
+                    detail="no completed calibration walk for this camera -- "
+                           "capture every spot first")
+            image_points = [list(p[0]) for p in sess.pairs]
+            floor_points = [list(p[1]) for p in sess.pairs]
+            img_w, img_h = sess.img_size
+            used_session = True
         wrote = False
         if mount is not None:
             try:
@@ -2568,31 +2778,27 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     and 0 < img_w <= 100_000 and 0 < img_h <= 100_000):
                 raise HTTPException(status_code=422,
                                     detail="img_w and img_h must be positive integers")
+            # calib_refine.solve_progressive merges these points with any PRIOR walk's
+            # stored correspondences (same camera, same pixel size) before solving --
+            # a camera calibrated for the first time (or at a new resolution) sees
+            # merge_points return its points unchanged, so this is byte-identical to
+            # the old inline one-shot solve for every existing caller/test.
+            # CalibrationError is a ValueError subclass (calib_store.py), so this one
+            # except also catches the store's own persistence-shape guards.
             try:
-                h = homography_from_points(image_points, floor_points)
+                solve_progressive(_calib, name, image_points, floor_points, img_w, img_h)
             except ValueError as exc:
-                # Degenerate / non-finite / malformed correspondences -> 422, never a
-                # silently near-singular matrix that mislocates every later projection.
-                raise HTTPException(status_code=422, detail=f"homography: {exc}")
-            # Geometry fix (HIGH-3): a REAL, measured quality -- the RMS reprojection
-            # residual (floor metres) against the SAME correspondences the homography
-            # was solved from, decayed to a 0..1 score -- replaces the flat
-            # Q_HOMOGRAPHY constant for THIS camera. Honesty caveat (see
-            # localize.homography_reprojection_error's own docstring): exactly 4
-            # points make DLT an exact interpolant (residual ~0 regardless of marking
-            # accuracy) -- meaningful once >4 points are given, which the walk-to-
-            # calibrate wizard already supplies.
-            residual_m = homography_reprojection_error(h, image_points, floor_points)
-            quality = homography_quality(residual_m)
-            try:
-                _calib.set_homography(name, [float(v) for v in h.flatten()], img_w, img_h,
-                                      quality=quality)
-            except CalibrationError as exc:
+                # Degenerate / non-finite / malformed correspondences, or an
+                # out-of-range persisted size -> 422, never a silently near-singular
+                # matrix that mislocates every later projection.
                 raise HTTPException(status_code=422, detail=f"homography: {exc}")
             wrote = True
         if not wrote:
             raise HTTPException(status_code=400,
                                 detail="provide a mount and/or image_points+floor_points")
+        if used_session and sess is not None:
+            sess.mark_solved()
+            _calib_session.end(name)
         await _reregister_camera(name)
         return _calib_view(name)
 
@@ -2666,18 +2872,90 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         with suppress(KeyError):
             await manager.unregister(name)   # kill before re-register (mirror rebind)
         if active:
+            # Guided-calib session: also start the server-side CalibSession so the
+            # 'stand here -> capture -> repeat -> solve' walk survives a frontend
+            # reload and a non-browser driver (MCP/voice) can run it. Reuses the
+            # existing "needs 4+ corner floor plan" guard -- today only enforced
+            # client-side (index.html) -- server-side too, so a non-browser caller
+            # gets the same honest refusal instead of a session with too few spots
+            # to ever solve.
+            poly = room_polygon(_house, cam["room"], level=cam.get("level"))
+            spots = floor_spots_for_room(poly) if poly else []
+            if len(spots) < 4:
+                manager.register(name, _camera_factory(
+                    cam, cfg, _camera_health.report, _calib, _house,
+                    on_privacy=_camera_health.report_privacy), False)  # leave camera OFF
+                raise HTTPException(
+                    status_code=422,
+                    detail="camera's room needs a 4+ corner floor plan first")
+            _calib_session.start(name, spots)
             manager.register(name, _camera_factory(
                 cam, cfg, _camera_health.report, _calib, _house,
                 sample_store=_calib_sample, sampling=True,
                 on_privacy=_camera_health.report_privacy), True)   # boots ON to walk
         else:
             _calib_sample.clear(name)         # drop any lingering feet pixel
+            _calib_session.end(name)          # drop any in-progress/finished walk state
             manager.register(name, _camera_factory(
                 cam, cfg, _camera_health.report, _calib, _house,
                 on_privacy=_camera_health.report_privacy), False)  # back OFF
         active_now = {s["name"]: s["active"] for s in manager.status()["sources"]}
         return {"camera": name, "sampling": active,
                 "active": bool(active_now.get(name))}
+
+    @app.post("/api/cameras/{name}/calib-capture")
+    async def calib_capture(name: str, _=Depends(require_local),
+                            __=Depends(require_scope("control"))):
+        # Guided-calib: pair the session's CURRENT known floor spot with the camera's
+        # latest FEET PIXEL (a coordinate, ADR-0002) and advance the walk. 409 mirrors
+        # the browser wizard's own "no active session" / "no person detected" states --
+        # a session-state conflict, never a 500. Nothing is written to CalibrationStore
+        # here (change-gated: only a completed PUT .../calibration solve ever touches
+        # disk -- an aborted or abandoned walk leaves zero trace, SD-wear).
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        if not _cameras.get(name):
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        sess = _calib_session.get(name)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no active calibration session")
+        s = _calib_sample.latest(name)
+        if s is None:
+            raise HTTPException(
+                status_code=409,
+                detail="no person detected -- stand where the camera can see you, "
+                       "then capture")
+        try:
+            sess.capture(s["feet_px"], s["img_w"], s["img_h"])
+        except CalibSessionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        current = sess.spots[sess.spot_idx] if sess.spot_idx < len(sess.spots) else None
+        return {"camera": name, "state": sess.state.value, "spot_idx": sess.spot_idx,
+                "spots_total": len(sess.spots),
+                "current_spot": (list(current) if current is not None else None)}
+
+    @app.post("/api/cameras/{name}/calib-retry")
+    async def calib_retry(name: str, _=Depends(require_local),
+                          __=Depends(require_scope("control"))):
+        # Guided-calib: undo the last capture and step back to re-try that spot -- a
+        # capability the browser-only wizard doesn't have today (it only ever cancels
+        # the whole walk). Nothing is persisted either way (same change-gated write
+        # boundary as calib-capture).
+        if not _NAME_RE.match(name):
+            raise HTTPException(status_code=400, detail="camera name must be alphanumeric/_/-")
+        if not _cameras.get(name):
+            raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
+        sess = _calib_session.get(name)
+        if sess is None:
+            raise HTTPException(status_code=409, detail="no active calibration session")
+        try:
+            sess.retry_current()
+        except CalibSessionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        current = sess.spots[sess.spot_idx] if sess.spot_idx < len(sess.spots) else None
+        return {"camera": name, "state": sess.state.value, "spot_idx": sess.spot_idx,
+                "spots_total": len(sess.spots),
+                "current_spot": (list(current) if current is not None else None)}
 
     @app.get("/api/cameras/suggestions")
     async def camera_suggestions(_=Depends(require_scope("network:read"))):

@@ -749,3 +749,50 @@ async def test_dhcp_fp_status_reflects_real_collector_after_bind_failure():
     status = svc.dhcp_fp_status()
     assert status["available"] is False
     assert "PermissionError" in status["reason"]
+
+
+# ---- system-toggles sensing master: suppresses the OPTIONAL collectors only ---
+
+async def test_sensing_master_off_suppresses_mdns_and_port_scan_but_not_base_inventory():
+    # Both an enabled passive collector (mdns) and the active port pass would
+    # normally run -- injecting sensing_allowed=lambda: False must suppress
+    # both while the base ARP inventory (a device for every WINDOWS_ARP row)
+    # still populates untouched.
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera", "make": "Wyze"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake, port_scan=True,
+                                   sensing_allowed=lambda: False)
+    devices = await svc.scan_once()
+    assert fake.calls == 0                                  # collector never invoked
+    assert len(devices) == 3                                # base inventory unaffected
+    dev = next(d for d in devices if d.mac == "24:0a:c4:aa:bb:cc")
+    assert dev.device_type != "camera"                      # mdns signal never applied
+    assert dev.open_ports == ()                              # port pass never ran
+
+
+async def test_sensing_master_on_by_default_never_regresses_existing_behaviour():
+    # No sensing_allowed kwarg passed (every pre-existing test/call site) ->
+    # byte-identical to before this feature: the collector still runs.
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera", "make": "Wyze"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake)
+    await svc.scan_once()
+    assert fake.calls == 1
+
+
+async def test_sensing_master_flips_live_no_restart_needed():
+    # Read fresh every scan_once() -- a toggle takes effect on the very next
+    # cycle, exactly like known_provider/ha_store (no restart, revocable).
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera", "make": "Wyze"}})
+    state = {"on": True}
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake,
+                                   sensing_allowed=lambda: state["on"])
+    await svc.scan_once()
+    assert fake.calls == 1                 # sensing on -> collector ran
+    state["on"] = False
+    await svc.scan_once()
+    assert fake.calls == 1                 # sensing off on the very next cycle -> not called again
+    state["on"] = True
+    await svc.scan_once()
+    assert fake.calls == 2                 # flips back on with no restart

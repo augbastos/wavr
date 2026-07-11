@@ -95,12 +95,19 @@ def _read_capped(resp, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
 
 def guarded_call(store, connector_id: str, fn: Callable[[], dict],
                   disabled_result: dict | None = None) -> dict:
-    """Run fn() only if store.is_enabled(connector_id) is True right now.
-    Returns disabled_result (default {"ok": False, "status": "disabled"})
-    with NO call to fn at all when the connector is off -- fail-closed,
-    zero network attempted. store needs only an is_enabled(id) -> bool
-    method (the real ConnectorStore or a test double both satisfy this)."""
+    """Run fn() only if store.is_enabled(connector_id) is True right now AND the
+    system-toggles egress master (store.egress_allowed()) is on. Returns
+    disabled_result (default {"ok": False, "status": "disabled"}) with NO call
+    to fn at all when either gate is off -- fail-closed, zero network attempted.
+    store needs only an is_enabled(id) -> bool method (the real ConnectorStore
+    or a test double both satisfy this); `egress_allowed` is read via getattr
+    with a True default so every existing test double lacking that method
+    (pre-dating the system-toggles feature) keeps behaving exactly as before --
+    only the real ConnectorStore's actual master switch can ever block here."""
     if not store.is_enabled(connector_id):
+        return dict(disabled_result) if disabled_result is not None else dict(_DISABLED_RESULT)
+    gate = getattr(store, "egress_allowed", None)
+    if gate is not None and not gate():
         return dict(disabled_result) if disabled_result is not None else dict(_DISABLED_RESULT)
     return fn()
 

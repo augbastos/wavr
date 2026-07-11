@@ -284,11 +284,14 @@ def _descriptor(engine_id: str, cfg, manual_cfg: dict | None, selected: bool,
 def engine_catalog(cfg, store, connectors) -> list[dict]:
     """Live descriptor list for all 6 fixed engines. Never touches the network.
     `store` -- AssistantEngineStore. `connectors` -- ConnectorStore (read-only
-    here; only `is_enabled("assistant-cloud")` is consulted, the cloud-egress
-    kill switch -- see wavr.api_assistant / app.py wiring)."""
+    here; `is_enabled("assistant-cloud")` -- the assistant's own cloud-egress
+    kill switch -- see wavr.api_assistant / app.py wiring) ANDed with the
+    system-toggles egress master (`egress_allowed()`, see /api/system/toggles):
+    an operator-level egress block also disables cloud engines even when the
+    assistant-cloud connector itself stays enabled."""
     selected_id = store.selected(cfg.assistant_engine_default)
     manual_cfg = store.get_manual_config()
-    cloud_gate_on = connectors.is_enabled("assistant-cloud")
+    cloud_gate_on = connectors.is_enabled("assistant-cloud") and connectors.egress_allowed()
     return [_descriptor(eid, cfg, manual_cfg, eid == selected_id, cloud_gate_on)
             for eid in ENGINE_IDS]
 
