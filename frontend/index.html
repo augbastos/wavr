@@ -2053,10 +2053,12 @@
           </select>
         </label>
         <div id="paConfirmBox" class="pa-confirm" hidden>
-          <p class="pa-confirm-q">Does this number match the number on the phone?</p>
+          <p class="pa-confirm-q">Type the number shown on the device to confirm it is really yours:</p>
+          <input id="paConfirmInput" class="cpair-input" type="text" inputmode="numeric" autocomplete="off"
+                 maxlength="8" placeholder="——————" aria-label="Number shown on the device" />
           <div class="controls-row">
-            <button type="button" id="paYes" class="ctl primary">Yes — the numbers match, pair</button>
-            <button type="button" id="paNo" class="ctl off">No, deny</button>
+            <button type="button" id="paYes" class="ctl primary">Pair this device</button>
+            <button type="button" id="paNo" class="ctl off">Cancel</button>
           </div>
         </div>
         <div id="paActions" class="controls-row pa-actions">
@@ -5572,13 +5574,14 @@ async function renderPairApprove(){
   const confirmBox = document.getElementById("paConfirmBox");
   const actionsBox = document.getElementById("paActions");
   const paYes   = document.getElementById("paYes");
+  const paConfirmInput = document.getElementById("paConfirmInput");
   const paNo    = document.getElementById("paNo");
   const paDeny  = document.getElementById("paDeny");
   const paApprove = document.getElementById("paApprove");
   const paFb    = document.getElementById("paFb");
   const paMore  = document.getElementById("paMore");
   if(!banner || !pill || !pillTxt || !paH || !paMeta || !paCode || !paFp || !confirmBox || !actionsBox ||
-     !paYes || !paNo || !paDeny || !paApprove || !paMore) return;
+     !paYes || !paNo || !paDeny || !paApprove || !paMore || !paConfirmInput) return;
 
   let requests = [];        // last-polled pending list, oldest-first (server insertion order)
   let heroId   = null;      // request_id currently shown as the full-ceremony hero card
@@ -5670,7 +5673,9 @@ async function renderPairApprove(){
   paApprove.onclick = ()=>{
     if(!heroId) return;
     actionsBox.hidden = true;
-    confirmBox.hidden = false;              // second look at the number (and fingerprint) before minting anything
+    confirmBox.hidden = false;              // operator now TYPES the number shown on the device
+    paConfirmInput.value = "";
+    try{ paConfirmInput.focus(); }catch{}
   };
   paNo.onclick = ()=>{
     confirmBox.hidden = true;
@@ -5680,14 +5685,17 @@ async function renderPairApprove(){
     if(!heroId) return;
     const id = heroId;
     const rec = requests.find(r=>r.request_id===id);
-    const code = rec && rec.compare_code;
-    if(!code){ actionFeedback(paFb, false, "That request expired — ask the device to try again."); confirmBox.hidden = true; poll(); return; }
+    if(!rec){ actionFeedback(paFb, false, "That request expired — ask the device to try again."); confirmBox.hidden = true; poll(); return; }
+    // SECURITY (Stage-4 #1): send exactly the digits the operator TYPED off the phone — NEVER
+    // rec.compare_code. The server's constant-time match then fails closed unless the operator
+    // truly read the number off the right device; auto-filling the record's own code would make
+    // the numeric comparison cosmetic and let an inattentive Approve admit a LAN impostor.
+    const code = (paConfirmInput.value || "").replace(/\s+/g,"");
+    if(!code){ actionFeedback(paFb, false, "Type the number shown on the device first."); try{ paConfirmInput.focus(); }catch{}; return; }
     const role = (paRole && paRole.value==="central") ? "central" : "user";
     paYes.disabled = true; paNo.disabled = true;
     let r;
     try{
-      // confirm_code echoes the number the operator just confirmed matches the phone — the
-      // server refuses to mint a token unless it matches this exact pending request.
       r = await fetch(location.origin+"/api/pending-pairings/"+encodeURIComponent(id)+"/approve",
         {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
          body:JSON.stringify({role:role, confirm_code:code})});

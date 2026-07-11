@@ -311,6 +311,9 @@ def test_status_shape_and_no_secrets():
             # fact -- true only when an admin has enabled it in Connectors.
             # Default install -> False.
             "assistant_cloud",
+            # system-toggles egress/sensing masters (default-ON, operator-actuatable from
+            # the local loopback UI) + the network-doctor auto-fix flag (default-OFF).
+            "egress_allowed", "sensing_allowed", "net_doctor_autofix",
         }
         assert set(body["features"]) == expected_features
         # Every feature is a bool flag EXCEPT connectors_active, an int count.
@@ -357,6 +360,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "tls": False, "ntfy": False, "internet_monitor": False,
             "mdns": False, "ssdp": False, "netbios": False, "snmp": False,
             "dhcp_fp": False, "rogue_dhcp": False, "health_resolvers": False,
+            # system-toggles + net-doctor: egress/sensing default-ON, autofix default-OFF.
+            "egress_allowed": True, "sensing_allowed": True, "net_doctor_autofix": False,
             # gateway-MAC-identity tracker is the one default-ON feature
             # (zero-egress, on-box -- inventory feature #2).
             "gateway_monitor": True,
