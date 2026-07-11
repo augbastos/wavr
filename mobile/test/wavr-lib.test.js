@@ -23,6 +23,14 @@ test("parseCoreService keeps role=core with valid host/port", () => {
   assert.deepEqual(parseCoreService(r), { name: "Wavr Core", host: "192.168.1.50", port: 8000 });
 });
 
+test("parseCoreService prefers the routable ipv4 over the unresolvable .local hostname", () => {
+  // Real capacitor-zeroconf "resolved" shape: hostname is the mDNS SRV target (.local., not
+  // resolvable by native TLS), ipv4Addresses carries the concrete address to actually connect to.
+  const r = { name: "Wavr Core", hostname: "android-abcd.local.", ipv4Addresses: ["192.168.1.57"],
+              port: 8000, txtRecord: { v: "1", role: "core", path: "/?core" } };
+  assert.deepEqual(parseCoreService(r), { name: "Wavr Core", host: "192.168.1.57", port: 8000 });
+});
+
 test("parseCoreService rejects non-core / invalid", () => {
   assert.equal(parseCoreService({ name: "x", hostname: "192.168.1.50", port: 8000, txtRecord: { role: "printer" } }), null);
   assert.equal(parseCoreService({ name: "x", hostname: "bad host", port: 8000, txtRecord: { role: "core" } }), null);

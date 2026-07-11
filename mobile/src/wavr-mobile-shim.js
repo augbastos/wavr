@@ -144,8 +144,15 @@
   }
 
   // ---------- ready gate ----------
-  var _resolveReady;
+  // CONTRACT: `ready` resolves after the Keystore read SETTLES (success OR failure) and NEVER waits on
+  // discovery/network — discovery/connection state is expressed by shim OVERLAYS on top of the inert
+  // NullProvider page, never by hanging the gate. resolveReady() is idempotent (a _readyDone latch), and
+  // a defensive 4s timer force-resolves it so that even if the SecureStorage plugin itself WEDGES (the
+  // Promise.all at the bottom never settling) index.html's boot is never blocked on a broken plugin.
+  var _resolveReady, _readyDone = false;
   var ready = new Promise(function(res){ _resolveReady = res; });
+  function resolveReady(){ if(_readyDone) return; _readyDone = true; try{ _resolveReady(); }catch(_){} }
+  setTimeout(resolveReady, 4000);
 
   // ================= NET BRIDGE (CONTRACT A: netFetch / netWebSocket) =================
   function headersView(h){
@@ -529,36 +536,90 @@
   function showChooseCore(){
     var card = ensureOverlay("chooseCore");
     card.appendChild(el("h2", "wavrm-h", "Find your Wavr hub"));
-    card.appendChild(el("p", "wavrm-sub", "Looking for hubs on your Wi-Fi…"));
+    var sub = el("p", "wavrm-sub", "Looking for hubs on your Wi-Fi…"); card.appendChild(sub);
+    var spin = el("div", "wavrm-spin", ""); card.appendChild(spin);
     var list = el("div", "wavrm-field"); card.appendChild(list);
-    var msg = el("p", "wavrm-msg", "");
-    var manual = el("button", "wavrm-btn ghost", "Enter address manually"); manual.type = "button";
-    manual.onclick = function(){ stopCoreWatch(); showSetup(); };
-    var seen = {};
-    function addCore(svc){
-      var core = WavrLib.parseCoreService(svc); if(!core) return;
-      var key = core.host + ":" + core.port; if(seen[key]) return; seen[key] = true;
+
+    // Manual entry is always a LAST-RESORT secondary, never a co-equal primary.
+    function appendManual(label){
+      var m = el("button", "wavrm-btn ghost", label || "Enter address manually"); m.type = "button";
+      m.onclick = function(){ stopCoreWatch(); showSetup(); };
+      card.appendChild(m);
+    }
+    // Pick a Core -> straight to the out-of-band fingerprint verify (the SHA-256 is shown there after a
+    // probe; mDNS TXT carries NO fingerprint so we never print an unverified fp on a discovery card).
+    function connectTo(core){
+      stopCoreWatch();
+      _base = "https://" + core.host + ":" + core.port;
+      _pendingCoreName = core.name;
+      showVerify();
+    }
+    function coreRow(core){
       var b = el("button", "wavrm-choice primary"); b.type = "button";
       b.appendChild(el("span", "wavrm-choice-mark", ""));
       b.appendChild(el("div", "wavrm-choice-t", core.name));
       b.appendChild(el("div", "wavrm-choice-s", core.host + ":" + core.port));
-      b.onclick = function(){
-        stopCoreWatch();
-        _base = "https://" + core.host + ":" + core.port;
-        _pendingCoreName = core.name;
-        showVerify();
-      };
-      list.appendChild(b);
+      b.onclick = function(){ connectTo(core); };
+      return b;
     }
-    card.appendChild(manual); card.appendChild(msg);
+
     if(!zeroconfAvailable()){
-      msg.className = "wavrm-msg err";
-      msg.textContent = "Automatic discovery isn't available on this device — enter the address.";
+      try{ spin.remove(); }catch(_){}
+      sub.textContent = "Automatic discovery isn't available on this device.";
+      appendManual("Enter address manually");
       return;
     }
-    startCoreWatch(addCore, function(){
-      msg.className = "wavrm-msg err";
-      msg.textContent = "Couldn't search for hubs on this network — enter the address.";
+
+    var found = [], seen = {}, decideTimer = null, noHubTimer = null, settled = false;
+
+    // EXACTLY ONE hub -> a prominent 1-tap hero row. MULTIPLE -> the tappable list. Rendered ONCE after
+    // a short debounce, then the watch is stopped so no late arrival can duplicate the UI.
+    function decide(){
+      if(settled || !found.length) return;
+      settled = true; stopCoreWatch();
+      clearTimeout(noHubTimer);
+      try{ spin.remove(); }catch(_){}
+      if(found.length === 1){
+        sub.textContent = "Found your Wavr hub.";
+        list.appendChild(coreRow(found[0]));
+        appendManual("Enter a different address");
+      } else {
+        sub.textContent = "Choose your Wavr hub.";
+        found.forEach(function(core){ list.appendChild(coreRow(core)); });
+        appendManual("Enter address manually");
+      }
+    }
+    function onFound(svc){
+      if(settled) return;
+      var core = WavrLib.parseCoreService(svc); if(!core) return;
+      var key = core.host + ":" + core.port; if(seen[key]) return; seen[key] = true;
+      found.push(core);
+      clearTimeout(noHubTimer);           // at least one hub -> cancel the terminal no-hub timeout
+      clearTimeout(decideTimer);
+      decideTimer = setTimeout(decide, 1500);   // debounce ~1.5s after the latest hit, then render
+    }
+
+    // Terminal "no hub found yet" state -> NEVER an infinite "Looking…". Offer Search again + manual.
+    noHubTimer = setTimeout(function(){
+      if(settled || found.length) return;
+      settled = true; stopCoreWatch();
+      try{ spin.remove(); }catch(_){}
+      sub.textContent = "";
+      card.appendChild(el("p", "wavrm-sub",
+        "We couldn't find a Wavr hub on this Wi-Fi yet. Make sure your hub is on and this phone is on " +
+        "the same network."));
+      var again = el("button", "wavrm-btn", "Search again"); again.type = "button";
+      again.onclick = function(){ showChooseCore(); };
+      card.appendChild(again);
+      appendManual("Enter address manually");
+    }, 7000);
+
+    startCoreWatch(onFound, function(){
+      clearTimeout(noHubTimer); clearTimeout(decideTimer);
+      if(settled) return; settled = true;
+      try{ spin.remove(); }catch(_){}
+      sub.textContent = "Couldn't search for hubs on this network.";
+      appendManual("Enter address manually");
     });
   }
   // Only "resolved" events carry a usable address (jmdns fires "added" before resolution completes);
@@ -790,6 +851,79 @@
     }).catch(function(){
       newEl.textContent = "(unreachable)"; msg.className = "wavrm-msg err"; msg.textContent = "Could not reach the hub.";
     });
+  }
+
+  // ================= SILENT RECONNECT of a remembered hub (mobile auto-connect) =================
+  // Replaces the old blind "show Connecting… for 1200ms then hideOverlay unconditionally" for a PAIRED
+  // viewer. The overlay stays up until a base is CONFIRMED reachable, so index.html's empty default house
+  // is NEVER shown as a dead end while CompanionProvider silently retries a dead address.
+  //   connectPinned(): probe the STORED base first.
+  //     * reachable + cert byte-identical to the pinned fp -> hand off to CompanionProvider (silent, today).
+  //     * reachable + DIFFERENT cert -> hard-fail (onPinMismatch). Never silent, never "trust anyway".
+  //     * unreachable (network / no cert) -> the hub likely MOVED (DHCP) -> rediscoverPinned().
+  //   rediscoverPinned(): browse _wavr._tcp, probe each candidate, and reconnect ONLY to a FULL-fp match
+  //     (same out-of-band-verified cert at a new IP: changing only the address is NOT a trust decision, so
+  //     it is legitimately silent). Bounded by a candidate cap + timeout to avoid a probe storm.
+  // Never logs base/fp. A non-matching candidate is simply "not our hub" (we keep looking) — mDNS names
+  // are unauthenticated/spoofable, so a same-name-different-cert node is NOT treated as an attack on our
+  // pin (that would let anyone advertising our Core name DoS us into the scary mismatch screen); only the
+  // STORED base presenting a changed cert is a genuine interception signal, and that hard-fails above.
+  var _reconnecting = false;
+  function connectPinned(onConnected){
+    if(!WavrNet || typeof WavrNet.probe !== "function"){ onConnected(); return; }   // no probe -> today's blind handoff
+    showConnecting("Connecting to " + (_coreName || "your home") + "…");
+    WavrNet.probe({ url: _base }).then(function(r){
+      var fp = (r && r.fingerprint) || null;
+      if(fp && _pinnedFp && normHex(fp) === normHex(_pinnedFp)){ onConnected(); return; }   // same verified cert -> silent
+      if(fp){ onPinMismatch(fp); return; }                    // reachable but DIFFERENT cert -> hard-fail
+      rediscoverPinned(onConnected);                          // no cert presented -> treat as moved/unreachable
+    }).catch(function(){
+      rediscoverPinned(onConnected);                          // network error -> hub may have moved
+    });
+  }
+  function rediscoverPinned(onConnected){
+    if(_reconnecting) return; _reconnecting = true;
+    if(!zeroconfAvailable() || !WavrNet || typeof WavrNet.probe !== "function"){
+      _reconnecting = false; showUnreachable(onConnected); return;
+    }
+    showConnecting("Reconnecting to " + (_coreName || "your home") + "…");
+    var done = false, probed = {}, cap = 12;
+    function finish(fn){ if(done) return; done = true; _reconnecting = false; clearTimeout(to); stopCoreWatch(); fn(); }
+    var to = setTimeout(function(){ finish(function(){ showUnreachable(onConnected); }); }, 8000);
+    startCoreWatch(function(svc){
+      if(done) return;
+      var core = WavrLib.parseCoreService(svc); if(!core) return;
+      var key = core.host + ":" + core.port; if(probed[key]) return;
+      if(Object.keys(probed).length >= cap) return;           // probe-storm guard: bound candidates probed
+      probed[key] = true;
+      var cand = "https://" + core.host + ":" + core.port;
+      WavrNet.probe({ url: cand }).then(function(r){
+        if(done) return;
+        var fp = (r && r.fingerprint) || null;
+        if(fp && _pinnedFp && normHex(fp) === normHex(_pinnedFp)){
+          _base = cand;                                        // same verified cert, new address -> silent
+          secureSet(K_URL, cand).then(function(){ finish(function(){ onConnected(); }); },
+                                        function(){ finish(function(){ onConnected(); }); });   // persist best-effort; reconnect either way
+        }
+        // else: not our pinned cert -> keep looking (see header note on why this is not a hard-fail)
+      }, function(){ /* candidate unreachable -> ignore, keep looking */ });
+    }, function(){
+      finish(function(){ showUnreachable(onConnected); });     // watch failed
+    });
+  }
+  // Actionable terminal state when a remembered hub can't be reached or re-found. NEVER the frozen default
+  // house: the overlay stays up with Search again + manual entry so the dead end is always recoverable.
+  function showUnreachable(onConnected){
+    var card = ensureOverlay("unreachable");
+    card.appendChild(el("h2", "wavrm-h", "Can't reach " + (_coreName || "your hub")));
+    card.appendChild(el("p", "wavrm-sub",
+      "Your Wavr hub isn't answering at its last address, and we couldn't find it on this Wi-Fi. It may " +
+      "be off, on a different network, or its address may have changed."));
+    var again = el("button", "wavrm-btn", "Search again"); again.type = "button";
+    again.onclick = function(){ connectPinned(onConnected); };
+    var manual = el("button", "wavrm-btn ghost", "Enter address manually"); manual.type = "button";
+    manual.onclick = function(){ showSetup(); };
+    card.appendChild(again); card.appendChild(manual);
   }
 
   // ================= SENSOR-NODE UX (blueprint §3; shim overlay chrome only, ZERO index.html edits) ====
@@ -1436,17 +1570,21 @@
           // sensor + viewer/admin: the dashboard is PRIMARY (boots exactly as the viewer path below);
           // inject the compact "this device" sensor pill into the header chrome. The wizard is deferred
           // to the pill's first Start (ensureOnboardedThen) so viewing is never blocked.
-          showConnecting("Connecting to your home…");
-          setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
+          // connectPinned confirms the stored hub is REACHABLE (silently re-finding it by pinned fp if its
+          // DHCP address moved) before revealing the dashboard; the overlay stays up on failure instead of
+          // showing the empty default house. Falls back to today's blind handoff when WavrNet.probe is absent.
+          connectPinned(function(){ hideOverlay(); });
           injectSensorPill();
           injectConsentPill();   // consent toggle in the header chrome (combo device)
           injectStatusChip();    // Task 6: attachment + presence chip in the header chrome
         } else {
-          // viewer / admin / migrated (token, no caps): EXACTLY today's boot, byte-for-byte UNCHANGED,
-          // plus the consent toggle injected into the header chrome (participation != permission -- a
-          // viewer/admin/central device shows it too).
-          showConnecting("Connecting to your home…");
-          setTimeout(function(){ if(_screen === "connecting") hideOverlay(); }, 1200);
+          // viewer / admin / migrated (token, no caps): the dashboard boots exactly as today once the hub is
+          // CONFIRMED reachable. connectPinned probes the stored base (silently re-discovering it by pinned
+          // fingerprint if the address moved) and only then hideOverlay reveals the dashboard; an unreachable
+          // hub keeps an actionable overlay instead of the frozen default map. Absent WavrNet.probe it is
+          // today's immediate handoff. Plus the consent toggle in the header chrome (participation !=
+          // permission -- a viewer/admin/central device shows it too).
+          connectPinned(function(){ hideOverlay(); });
           injectConsentPill();
           injectStatusChip();   // Task 6: attachment + presence chip in the header chrome
         }
@@ -1476,7 +1614,7 @@
     _presenceLabel = v[8] || ""; _coreName = v[9] || "";   // Task 6: label + Core name for the status chip
     _attached = WavrLib.consentToActions(_consent).attached;   // Task 4: stored RED => boot DETACHED (fail-closed: tokenGet hides the token, netWebSocket refuses). Task 7 completes the boot-detached UX (showOut).
   }).catch(function(){}).then(function(){
-    _resolveReady();   // caches populated: index.html's deferred boot may run now
+    resolveReady();   // caches populated (or read failed): index.html's deferred boot may run now
     // detectRole drives the DASHBOARD admin surface only; a sensor-ONLY node has no dashboard and its
     // token 403s /api/devices, so skip it there. Viewer/admin/combo/migrated behave exactly as before.
     if(_token && !capsSensorOnly()){
