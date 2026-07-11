@@ -12,7 +12,13 @@ from wavr.roomstate import RoomState
 # `ble` (Bluetooth presence) sits between wifi_csi and network: room-ish, coarser
 # than CSI but tighter than house-wide ARP.
 DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
-                   "network": 0.5, "sim": 0.6}
+                   "network": 0.5, "sim": 0.6,
+                   # Sensor nodes (design 2026-07-11): a node's declared sensor_type maps
+                   # to one of these two NEW modalities (wavr.nodes.SENSOR_MODALITY) when
+                   # it isn't an existing one (ld2450/mmwave nodes fuse as "mmwave" above,
+                   # unchanged). `pir` (passive-IR, presence-only, coarser than mmwave) and
+                   # `node` (unknown/generic presence sensor, most conservative weight).
+                   "pir": 0.6, "node": 0.5}
 
 # Modalities that can honestly COUNT people (not just detect presence). Camera runs
 # person-detection (Detection.count); mmwave resolves discrete targets (len(targets)).

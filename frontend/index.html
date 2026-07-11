@@ -812,6 +812,14 @@
   .peer-badge{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:6px;
     border:1px solid var(--line);font-size:.66rem;font-weight:600;letter-spacing:.4px;
     text-transform:uppercase;color:var(--dim);vertical-align:baseline;}
+  /* Nodes panel — kill-switch state chip (active/disabled/revoked). Same pill shape as
+     .peer-badge; the colour is set inline per state (active=--accent green, disabled=--warn
+     amber, revoked=--dim grey), mirroring the camera liveness badge's textContent+inline-style
+     idiom just below. Never a background fill — colour-only, so it reads calmly next to the
+     tabular-nums timestamps rather than shouting. */
+  .node-chip{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:6px;
+    border:1px solid var(--line);font-size:.66rem;font-weight:600;letter-spacing:.4px;
+    text-transform:uppercase;vertical-align:baseline;}
 
   /* ---------------- Connectors & services — the single egress surface (gear) ----------------
      project_wavr_connectors_vision: the ONLY screen that manages anything reaching outward;
@@ -2589,6 +2597,61 @@
 
       <h4 class="pair-sub">Paired</h4>
       <div id="peerPairedList" class="pair-dev-list" aria-live="polite"></div>
+    </div>
+    <!-- Nodes — headless sensor boxes (design 2026-07-11): a node is a small sensor the
+         operator flashes/owns (e.g. an ESP32 + LD2450 mmWave radar) that PUSHES presence
+         readings to this hub over the LAN using its own per-node bearer token. It is NOT a
+         companion device and NOT a peer hub. Live/central only: hidden until GET /api/nodes
+         answers 200 (nodes feature off => 404 => panel absent, byte-identical to today).
+         REMOTE-OFF-NEVER-ON (kill-switch invariant): Disable is remote-reachable, but there
+         is deliberately NO Enable control anywhere in this panel and NO enable endpoint —
+         re-enabling a disabled node requires a physical button press on the device itself.
+         Every name/room/modality/transport/state/timestamp below is server data rendered
+         via textContent — NEVER innerHTML. -->
+    <div id="nodes" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="nodes-h">Nodes</h2><span class="hint">headless sensor boxes on your network</span></div>
+      <p class="pair-hint" style="margin:-2px 0 12px">A node is a small sensor box (e.g. a
+        flashed ESP32 + mmWave radar) that pushes presence readings to this hub over the local
+        network using its own token — never a companion device or a peer hub.
+        <span id="nodesFb" class="action-fb" aria-live="polite"></span></p>
+
+      <h4 class="pair-sub">Add a node</h4>
+      <form id="nodeAddForm" class="pair-form" aria-labelledby="nodes-h">
+        <label class="pair-role">Name
+          <input type="text" name="name" maxlength="64" placeholder="e.g. hallway radar"
+                 aria-label="node name" autocomplete="off">
+        </label>
+        <label class="pair-role">Sensor type
+          <select name="sensor_type" aria-label="sensor type">
+            <option value="ld2450">LD2450 mmWave radar</option>
+            <option value="mmwave">Other mmWave radar</option>
+            <option value="pir">Passive-IR motion</option>
+            <option value="ble_beacon">Bluetooth beacon</option>
+            <option value="generic">Other presence sensor</option>
+            <option value="environmental">Environmental (no presence)</option>
+          </select>
+        </label>
+        <label class="pair-role">Room
+          <input type="text" name="room" maxlength="64" placeholder="e.g. hallway"
+                 aria-label="node room" autocomplete="off">
+        </label>
+        <label class="pair-role">Transport
+          <select name="transport" aria-label="transport">
+            <option value="native">Native (Wavr firmware)</option>
+            <option value="mqtt">MQTT (shared broker)</option>
+          </select>
+        </label>
+        <button type="submit" class="ctl small">Get enrollment code</button>
+        <span id="nodeAddFb" class="action-fb" aria-live="polite"></span>
+      </form>
+      <div id="nodeCodeBox" class="pair-code-box" hidden>
+        <span id="nodeCode" class="pair-code" aria-live="polite"></span>
+        <span class="pair-hint">enter this code on the node's setup page · valid ~5 min ·
+          local network only</span>
+      </div>
+
+      <h4 class="pair-sub">Nodes</h4>
+      <div id="nodeList" class="pair-dev-list" aria-live="polite"></div>
     </div>
     </div><!-- /#gearSecDevices -->
     <div class="settings-section" id="gearSecConnectors" aria-labelledby="gearSecConnectors-h">
@@ -5155,6 +5218,153 @@ async function renderPeers(){
   refreshDiscoveredPeers();                    // one immediate discovered fetch
 }
 renderPeers();
+
+// ---- Nodes — headless sensor boxes (live/central only, nodes-gated) ----
+// A node PUSHES presence telemetry over the LAN using its OWN per-node bearer token — it is
+// NOT a companion device (DeviceStore) and NOT a peer hub (PeerStore). The /api/nodes* routes
+// only exist when the nodes feature is on; when GET /api/nodes 404s (or the backend is
+// momentarily unreachable) the whole panel stays hidden — same probe-gate as Peers/My devices.
+// REMOTE-OFF-NEVER-ON (kill-switch invariant): Disable is remote-reachable; there is NO Enable
+// control anywhere in this panel and NO enable endpoint — a disabled node can only be
+// re-enabled by a physical button press on the device itself, which this UI cannot do and does
+// not pretend to. Every node field (name/room/modality/transport/state/timestamp) is server
+// data rendered via textContent — NEVER innerHTML.
+async function renderNodes(){
+  if(MODE!=="live") return;                 // live/central only; never Plano B (demo) or companion
+  const hdr = {"X-Wavr-Local":"1"};          // same local-only guard the other admin panels use
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/nodes",{headers:hdr}); }
+  catch{ return; }                           // backend unreachable — stay hidden
+  if(!probe.ok) return;                      // 404 → nodes feature off → stay hidden
+  let seed; try{ seed = (await probe.json()).nodes; }catch{ seed = []; }
+  document.getElementById("nodes").hidden = false;
+
+  const list    = document.getElementById("nodeList");
+  const fb      = document.getElementById("nodesFb");
+  const addFb   = document.getElementById("nodeAddFb");
+  const codeBox = document.getElementById("nodeCodeBox");
+  const codeEl  = document.getElementById("nodeCode");
+
+  // Chip colour per kill-switch state — the design tokens, not an ad-hoc palette.
+  const NODE_STATE_COLOR = {active:"#3db54a", disabled:"#e8a13a", revoked:"#9AA4AD"};
+
+  function renderList(nodesArr){
+    const arr = Array.isArray(nodesArr) ? nodesArr : [];
+    list.textContent = "";
+    if(!arr.length){
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "No nodes enrolled yet";
+      list.appendChild(e); return;
+    }
+    arr.forEach(n => {
+      const row = document.createElement("div"); row.className = "pair-dev-row";
+      const left = document.createElement("span");
+      const name = document.createElement("b"); name.textContent = n.name || "(unnamed node)"; // textContent — server data
+      const meta = document.createElement("span"); meta.className = "pair-dev-meta";
+      const room = n.room != null ? String(n.room) : "";
+      const modality = n.modality != null ? String(n.modality) : "";
+      const transport = n.transport != null ? String(n.transport) : "";
+      const seenRel = fmtRelative(n.last_seen_ts);
+      meta.textContent = " · " + [room, modality, transport].filter(Boolean).join(" · ")
+        + (seenRel ? " · last seen " + seenRel : " · never seen");           // textContent — server data
+      left.appendChild(name); left.appendChild(meta);
+      const chip = document.createElement("span"); chip.className = "node-chip";
+      const state = n.state != null ? String(n.state) : "";
+      chip.textContent = state;                                             // textContent — never innerHTML
+      chip.style.color = NODE_STATE_COLOR[state] || "var(--dim)";
+      left.appendChild(chip);
+      row.appendChild(left);
+
+      const ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
+      if(state === "disabled"){
+        // KILL-SWITCH INVARIANT (remote-OFF-never-ON): there is deliberately NO Enable
+        // button anywhere in this panel. Re-enabling requires a physical button press on
+        // the node itself — the absence of a remote control IS the invariant.
+        const note = document.createElement("span"); note.className = "pair-dev-meta";
+        note.textContent = "Press the button on the device to re-enable";
+        ctl.appendChild(note);
+      } else if(state === "active"){
+        const disableBtn = document.createElement("button"); disableBtn.type = "button";
+        disableBtn.className = "ctl small"; disableBtn.textContent = "Disable";
+        disableBtn.setAttribute("aria-label", "disable " + (n.name || "node"));
+        disableBtn.onclick = async ()=>{
+          disableBtn.disabled = true;
+          let r;
+          try{ r = await fetch(location.origin+"/api/nodes/"+encodeURIComponent(n.node_id)+"/disable",
+            {method:"POST", headers:hdr}); }catch{}
+          if(r && r.ok){ actionFeedback(fb, true, null, "✓ disabled"); refreshNodes(); }
+          else { actionFeedback(fb, false, "couldn't disable"); disableBtn.disabled = false; }
+        };
+        ctl.appendChild(disableBtn);
+      }
+      if(state !== "revoked"){
+        // Two-step reveal-then-confirm — never a native confirm(), mirrors the Peers "Unpair"
+        // affordance: the first click swaps in a Confirm/Cancel pair; only Confirm DELETEs.
+        const rmBtn = document.createElement("button"); rmBtn.type = "button"; rmBtn.className = "rm";
+        rmBtn.textContent = "Remove";
+        rmBtn.setAttribute("aria-label", "remove " + (n.name || "node"));
+        rmBtn.onclick = ()=>{
+          ctl.textContent = "";
+          const warn = document.createElement("span"); warn.className = "pair-dev-meta"; warn.textContent = "Remove? ";
+          const yes = document.createElement("button"); yes.type = "button"; yes.className = "rm"; yes.textContent = "Confirm";
+          const no  = document.createElement("button"); no.type = "button"; no.className = "ctl small off"; no.textContent = "Cancel";
+          no.onclick = ()=>{ renderList(arr); };
+          yes.onclick = async ()=>{
+            yes.disabled = true; no.disabled = true;
+            let r;
+            try{ r = await fetch(location.origin+"/api/nodes/"+encodeURIComponent(n.node_id),
+              {method:"DELETE", headers:hdr}); }catch{}
+            if(r && r.ok){ actionFeedback(fb, true, null, "✓ removed"); refreshNodes(); }
+            else { actionFeedback(fb, false, "couldn't remove"); renderList(arr); }
+          };
+          ctl.appendChild(warn); ctl.appendChild(yes); ctl.appendChild(no);
+        };
+        ctl.appendChild(rmBtn);
+      }
+      row.appendChild(ctl);
+      list.appendChild(row);
+    });
+  }
+
+  async function refreshNodes(){
+    let r; try{ r = await fetch(location.origin+"/api/nodes",{headers:hdr}); }catch{ return; }
+    if(!r.ok) return;
+    let j; try{ j = (await r.json()).nodes; }catch{ return; }
+    renderList(j);
+  }
+
+  document.getElementById("nodeAddForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const f = e.target;
+    const body = {
+      name: f.name.value.trim(),
+      sensor_type: f.sensor_type.value,
+      room: f.room.value.trim(),
+      transport: f.transport.value,
+    };
+    const submitBtn = f.querySelector('button[type="submit"]');
+    if(submitBtn) submitBtn.disabled = true;
+    let r;
+    try{
+      r = await fetch(location.origin+"/api/nodes/enroll-code",{method:"POST",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)});
+    }catch{}
+    if(submitBtn) submitBtn.disabled = false;
+    if(r && r.ok){
+      let j; try{ j = await r.json(); }catch{ j = {}; }
+      codeEl.textContent = (j && typeof j.code==="string") ? j.code : "—";   // textContent — server data
+      codeBox.hidden = false;
+      actionFeedback(addFb, true, null, "✓ code minted");
+      f.reset();
+    } else {
+      let detail=""; try{ detail=(await r.json()).detail||""; }catch{}
+      actionFeedback(addFb, false, detail || "couldn't mint a code");
+    }
+  };
+
+  renderList(seed);                            // seed the list from the probe we already read
+}
+renderNodes();
 
 // ---- Connectors & services: the single outward-facing surface ----
 // (project_wavr_connectors_vision) Wavr is local and MUTE by default; this is the ONLY screen

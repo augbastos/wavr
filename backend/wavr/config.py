@@ -120,6 +120,12 @@ class Config:
     # + peer-reachable reverse-leg (link-back) peer routers and starts this instance's
     # own mDNS `_wavr._tcp` self-advertise (C1-fix reshape).
     peers_enabled: bool
+    # Sensor NODES (design 2026-07-11) -- opt-in, default OFF, and REQUIRES multidevice
+    # (same rationale as peers_enabled: a node is a LAN device that needs multidevice's
+    # LAN bind + local TLS, not a loopback-only concept). When on, app.py mounts the
+    # public (enroll) + node-authed data-plane (telemetry/heartbeat/reactivate) + the
+    # loopback-root admin (mint-code/list/disable/revoke) node routers.
+    nodes_enabled: bool
     # Human-readable name this instance presents to peers: the mDNS TXT display name and
     # the `name` this instance sends as `requester_name`/`peer_name` during pairing.
     # Default "Wavr"; set WAVR_INSTANCE_NAME to distinguish e.g. "Desktop" from "Core".
@@ -399,6 +405,9 @@ def load_config() -> Config:
         # Peer pairing (Phase 1): default OFF. create_app additionally refuses to start
         # if this is on without multidevice (peer identity IS a central identity).
         peers_enabled=os.getenv("WAVR_PEERS_ENABLED", "").lower() in ("1", "true", "yes"),
+        # Sensor nodes (design 2026-07-11): default OFF. create_app additionally refuses
+        # to start if this is on without multidevice (mirrors peers_enabled above).
+        nodes_enabled=os.getenv("WAVR_NODES_ENABLED", "").lower() in ("1", "true", "yes"),
         instance_name=os.getenv("WAVR_INSTANCE_NAME", "Wavr"),
         bind_host=os.getenv("WAVR_BIND", "127.0.0.1"),
         tls_cert=os.getenv("WAVR_TLS_CERT", ""),
