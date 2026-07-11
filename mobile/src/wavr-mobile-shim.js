@@ -396,6 +396,13 @@
   // post-re-pin "Reconnecting..." on success) clears it, letting future legitimate mismatches show.
   var _mismatchActive = false;
 
+  // Approve-on-Core pairing poll state. Every screen mount (ensureOverlay) calls stopPairPoll(), so
+  // navigating anywhere INVALIDATES an in-flight approval poll via the generation bump -- no orphan
+  // timers, no stale terminal transitions. The request_id and the minted token stay in closures only:
+  // never module-global, never rendered, never localStorage, never console.log'd.
+  var _pairGen = 0, _pairTimer = null;
+  function stopPairPoll(){ _pairGen++; if(_pairTimer){ clearTimeout(_pairTimer); _pairTimer = null; } }
+
   function el(tag, cls, text){
     var e = document.createElement(tag);
     if(cls) e.className = cls;
@@ -492,6 +499,7 @@
 
   function ensureOverlay(screen){
     injectStyle();
+    stopPairPoll();   // any screen switch cancels an in-flight approve-on-Core poll (waiting-screen re-arms after)
     if(!overlay){
       overlay = el("div"); overlay.id = "wavrm-overlay";
       overlay.setAttribute("role", "dialog"); overlay.setAttribute("aria-modal", "true");
@@ -742,7 +750,10 @@
       Promise.all([ persistPairing(_base, fp, null),
                     secureSet(K_PRESENCE_LABEL, _presenceLabel),
                     secureSet(K_CORE_NAME, _coreName) ]).then(function(){
-        revealCodeEntry(); hideOverlay();
+        // Gate A done (cert pinned via the out-of-band last-6). Gate B (authorization) is now the
+        // approve-on-Core flow -- the operator taps Approve on the hub instead of the user typing a code.
+        // The 8-digit code path stays one tap away inside showRequestPairing() as a fallback.
+        showRequestPairing();
       }, function(){
         _pinnedFp = null;                                    // durable write failed: do NOT pretend paired
         msg.className = "wavrm-msg err";
@@ -772,6 +783,189 @@
     var card = ensureOverlay("connecting");
     card.appendChild(el("div", "wavrm-spin", ""));
     card.appendChild(el("p", "wavrm-sub", text || "Connecting to your home…"));
+  }
+
+  // ================= APPROVE-ON-CORE PAIRING (Gate B: authorization) =================
+  // Reached AFTER showVerify() has pinned the hub's certificate (Gate A: the out-of-band last-6 compare).
+  // This step only changes how the token is DELIVERED: instead of the user typing an 8-digit code, the
+  // hub's operator taps Approve on the hub's own screen and the phone picks up the minted token by polling.
+  //   POST /api/pair-request  -> opens a PENDING record, mints NOTHING (unauth, in-subnet, over the pinned
+  //                              transport so a mid-flow cert swap hard-fails on PIN_MISMATCH).
+  //   POST /api/pair-request/status -> pending | approved{device_id,token} | denied | expired.
+  // The token arrives ONLY on the already-pinned channel, so a MitM that failed Gate A can never read it.
+  // The manual 8-digit /api/pair path stays reachable here as a fallback. request_id/token live in closures
+  // only, never rendered, never logged. NEVER hangs: bounded by the request TTL, with clean deny/timeout.
+
+  // ----- Screen 3: ask the hub to approve this device (PRIMARY; replaces the 8-digit entry) -----
+  function showRequestPairing(){
+    var card = ensureOverlay("requestPairing");   // ensureOverlay() cancels any prior poll
+    card.appendChild(el("h2", "wavrm-h", "Ask your hub to let this device in"));
+    card.appendChild(el("p", "wavrm-sub",
+      "The hub's owner will see this request on the hub's own screen and tap Approve. No code to type."));
+    var f = el("label", "wavrm-field");
+    f.appendChild(el("span", "wavrm-lab", "Your name on this device (shown as your presence at home)"));
+    var nameIn = el("input", "wavrm-input"); nameIn.type = "text"; nameIn.autocomplete = "off";
+    nameIn.maxLength = 48;   // display label only; textContent + JSON.stringify keep it injection-safe
+    nameIn.placeholder = "e.g., Augusto"; nameIn.value = _presenceLabel || "";
+    nameIn.setAttribute("aria-label", "your name on this device");
+    f.appendChild(nameIn); card.appendChild(f);
+    var msg = el("p", "wavrm-msg", "");
+    var askBtn = el("button", "wavrm-btn", "Ask to connect"); askBtn.type = "button";
+    askBtn.onclick = function(){
+      var name = (nameIn.value || "").trim();
+      if(!name){ msg.className = "wavrm-msg err"; msg.textContent = "Enter your name on this device."; return; }
+      if(!WavrNet || typeof WavrNet.request !== "function"){
+        msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available."; return;
+      }
+      askBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Contacting your hub…";
+      _presenceLabel = name;
+      secureSet(K_PRESENCE_LABEL, name).catch(function(){});   // best-effort; display-only, not a credential
+      // POST over the PINNED transport (netFetch uses _pinnedFp set by showVerify). A cert swap since the
+      // pin rejects with PIN_MISMATCH -> netFetch raises the hard-fail card and re-throws (handled below).
+      netFetch(_base + "/api/pair-request", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requester_name: name, platform: "Android" })
+      }).then(function(r){
+        if(!r || !r.ok) throw new Error("pair-request status " + (r ? r.status : "?"));
+        return r.json();
+      }).then(function(body){
+        var reqId = body && body.request_id;                       // 192-bit id, kept in the closure only
+        var compareCode = body && body.compare_code;               // per-request numeric-compare value, closure only
+        var pollMs = (body && +body.poll_after_ms) || 1500;
+        if(!reqId) throw new Error("no request_id");
+        // NB: body.cert_fingerprint is DELIBERATELY IGNORED as a trust anchor (F1) -- over a MitM'd channel
+        // the attacker controls that body. The pin anchor is the probed cert already verified at showVerify.
+        // compare_code is likewise NOT a trust anchor and NOT a credential: it's the number the operator
+        // eyeballs against the hub's screen to pick THIS request. It's authenticated by the PINNED channel
+        // (a MitM that failed Gate A can't read/alter it), so it composes with the TOFU pin.
+        showWaitingApproval(reqId, pollMs, name, compareCode);
+      }).catch(function(err){
+        if(err && err.code === "PIN_MISMATCH") return;             // hard-fail card already raised by netFetch
+        askBtn.disabled = false; msg.className = "wavrm-msg err";
+        msg.textContent = "Couldn't reach " + _base + ". Check the hub is on and try again.";
+      });
+    };
+    card.appendChild(askBtn);
+    var fb = el("button", "wavrm-btn ghost", "Enter an 8-digit code instead"); fb.type = "button";
+    fb.onclick = function(){ revealCodeEntry(); hideOverlay(); };   // fallback: index.html's #companionPair
+    card.appendChild(fb);
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ showChooseCore(); };
+    card.appendChild(back);
+    card.appendChild(msg);
+  }
+
+  // ----- Screen 4: waiting for the hub operator to approve. Shows the pinned fingerprint for a 1-time
+  // eyeball against the hub's screen, polls status until a clean terminal state. NEVER hangs. -----
+  function showWaitingApproval(requestId, pollMs, name, compareCode){
+    var card = ensureOverlay("waitingApproval");   // cancels the prior poll; we re-arm a fresh gen below
+    var gen = ++_pairGen;
+    var started = Date.now();
+    var TTL_MS = 180000;   // mirrors backend REQUEST_TTL (180s); client-side hard stop so we never hang
+    card.appendChild(el("div", "wavrm-spin", ""));
+    card.appendChild(el("h2", "wavrm-h", "Approve this device on your Wavr hub"));
+    card.appendChild(el("p", "wavrm-sub",
+      "On your Wavr hub's screen you'll see a request from “" + name + "”. Check the number below " +
+      "matches the one shown on the hub, then tap Approve there."));
+    // PRIMARY match target: the per-request number the operator compares to pick THIS request out of any
+    // racing ones. Numeric string -> fpBlock uses textContent (XSS-safe). Never logged, never persisted.
+    card.appendChild(el("span", "wavrm-lab", "Confirmation number — check it matches your Wavr hub's screen"));
+    card.appendChild(fpBlock(compareCode || "——————"));
+    // SECONDARY transport-MitM check: the pinned/probed cert fingerprint (the hub shows the same value).
+    card.appendChild(el("span", "wavrm-lab", "This device's certificate fingerprint"));
+    card.appendChild(fpBlock(fpDisplay(_pinnedFp)));   // the pinned/probed cert; the hub shows the same value
+    card.appendChild(el("p", "wavrm-warn",
+      "If the hub shows a different number or fingerprint, someone may be intercepting your network. Tap Deny on the hub."));
+    var msg = el("p", "wavrm-msg", "Waiting for approval…");
+    card.appendChild(msg);
+    var fb = el("button", "wavrm-btn ghost", "Enter an 8-digit code instead"); fb.type = "button";
+    fb.onclick = function(){ revealCodeEntry(); hideOverlay(); };
+    card.appendChild(fb);
+    var cancel = el("button", "wavrm-btn ghost", "Cancel"); cancel.type = "button";
+    cancel.onclick = function(){ showRequestPairing(); };
+    card.appendChild(cancel);
+
+    function onApproved(body){
+      stopPairPoll();   // no further polls; commit exactly once
+      var token = body && body.token, deviceId = body && body.device_id;
+      if(!token){ msg.className = "wavrm-msg err"; msg.textContent = "The hub approved but sent no token. Try again."; return; }
+      msg.className = "wavrm-msg"; msg.textContent = "Approved. Saving…";
+      // Persist base+fp+token atomically (fp already pinned at showVerify; the re-write is idempotent). The
+      // token is never rendered/logged. onPaired captures our device_id. A durable-write FAILURE surfaces an
+      // error and does NOT pretend paired (mirrors showVerify / showReVerify).
+      persistPairing(_base, _pinnedFp, token).then(function(){
+        _token = token;                                     // sync cache; the reload re-reads it from Keystore
+        try{ onPaired({ device_id: deviceId }); }catch(_){}
+        showConnecting("Connecting to " + (_coreName || "your home") + "…");
+        try{ location.reload(); }catch(_){}                 // reboot straight into the dashboard viewer
+      }, function(){
+        msg.className = "wavrm-msg err";
+        msg.textContent = "Couldn't save the pairing securely. Try again.";   // Cancel -> Ask to connect retries
+      });
+    }
+    function handle(res){
+      if(gen !== _pairGen) return;                          // superseded by a newer screen/flow
+      res.json().then(function(body){
+        if(gen !== _pairGen) return;
+        var status = body && body.status;
+        if(status === "approved"){ onApproved(body); return; }
+        if(status === "denied"){ showDeclined(); return; }
+        if(status === "expired"){ showTimedOut(false); return; }
+        scheduleNext();                                     // pending / unknown -> keep polling within the TTL
+      }, function(){ scheduleNext(); });                    // parse failure -> transient, keep polling
+    }
+    function netErr(err){
+      if(gen !== _pairGen) return;
+      if(err && err.code === "PIN_MISMATCH"){ stopPairPoll(); return; }   // hard-fail already shown; stop polling
+      scheduleNext();                                       // transient network -> keep trying until the TTL
+    }
+    function poll(){
+      if(gen !== _pairGen) return;
+      if(Date.now() - started > TTL_MS){ showTimedOut(true); return; }
+      netFetch(_base + "/api/pair-request/status", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId })
+      }).then(handle, netErr);
+    }
+    function scheduleNext(){
+      if(gen !== _pairGen) return;
+      if(Date.now() - started > TTL_MS){ showTimedOut(true); return; }
+      _pairTimer = setTimeout(poll, pollMs);
+    }
+    scheduleNext();
+  }
+
+  // ----- Screen 5: the hub declined (operator tapped Deny). Never hangs -- always an actionable exit. -----
+  function showDeclined(){
+    var card = ensureOverlay("declined");
+    card.appendChild(el("h2", "wavrm-h", "Your hub declined this device"));
+    card.appendChild(el("p", "wavrm-sub",
+      "The request was denied on the hub. If that wasn't expected, check you asked the right person, then " +
+      "try again."));
+    var again = el("button", "wavrm-btn", "Ask again"); again.type = "button";
+    again.onclick = function(){ showRequestPairing(); };
+    card.appendChild(again);
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ showChooseCore(); };
+    card.appendChild(back);
+  }
+
+  // ----- Screen 6: timed out (no approval within the TTL, or the hub stopped answering). -----
+  function showTimedOut(networkFailed){
+    var card = ensureOverlay("timedOut");
+    card.appendChild(el("h2", "wavrm-h", "The request timed out"));
+    card.appendChild(el("p", "wavrm-sub", networkFailed
+      ? "We couldn't reach your hub while waiting. Check it's on and on the same Wi-Fi, then try again."
+      : "No one approved this device in time (about three minutes). You can ask again."));
+    var again = el("button", "wavrm-btn", "Ask again"); again.type = "button";
+    again.onclick = function(){ showRequestPairing(); };
+    card.appendChild(again);
+    var fb = el("button", "wavrm-btn ghost", "Enter an 8-digit code instead"); fb.type = "button";
+    fb.onclick = function(){ revealCodeEntry(); hideOverlay(); };
+    card.appendChild(fb);
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ showChooseCore(); };
+    card.appendChild(back);
   }
 
   // ----- PIN-MISMATCH hard-fail. Only exit is a deliberate re-verify. NEVER a one-tap trust. -----
@@ -1593,8 +1787,9 @@
         showChooser();
       } else if(_base && _pinnedFp){
         // Verified central but no token (resume after verify, a 401/403 revoke, or a pre-caps mid-pair
-        // upgrade): jump straight to the 8-digit code entry. No setup/verify re-prompt.
-        revealCodeEntry(); hideOverlay();
+        // upgrade): the cert is already pinned, so resume the approve-on-Core request as PRIMARY (the pin
+        // ceremony is not re-run). The 8-digit code entry stays one tap away inside showRequestPairing().
+        showRequestPairing();
       } else {
         // caps chosen but not yet verified, or verify incomplete: an already-entered address resumes
         // straight to verify; otherwise offer discovery first (manual entry stays one tap away).
