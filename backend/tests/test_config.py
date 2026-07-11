@@ -262,6 +262,49 @@ def test_config_cam_unhealthy_secs_default_and_override(monkeypatch):
     assert load_config().cam_unhealthy_secs == 5.0
 
 
+def test_config_has_assistant_defaults(monkeypatch):
+    # Wavr Assistant engine picker (Phase 2B) -- small, fixed, env-only defaults
+    # (no dedicated UI for these in v1): local built-in engine, a 4-step tool-loop
+    # cap, a 10s per-tool timeout, and the local_llm slot pointed at Ollama's own
+    # OpenAI-compat /v1 on loopback (zero egress by construction).
+    for v in ("WAVR_ASSISTANT_ENGINE", "WAVR_ASSISTANT_MAX_STEPS",
+              "WAVR_ASSISTANT_TOOL_TIMEOUT_S", "WAVR_ASSISTANT_LOCAL_LLM_URL",
+              "WAVR_ASSISTANT_LOCAL_LLM_MODEL"):
+        monkeypatch.delenv(v, raising=False)
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.assistant_engine_default == "wavr_assistant"
+    assert cfg.assistant_max_tool_steps == 4
+    assert cfg.assistant_tool_timeout == 10.0
+    assert cfg.assistant_local_llm_base_url == "http://localhost:11434/v1"
+    assert cfg.assistant_local_llm_model == "llama3.2"
+
+
+def test_config_reads_assistant_env(monkeypatch):
+    monkeypatch.setenv("WAVR_ASSISTANT_ENGINE", "OpenAI")   # case-insensitive
+    monkeypatch.setenv("WAVR_ASSISTANT_MAX_STEPS", "6")
+    monkeypatch.setenv("WAVR_ASSISTANT_TOOL_TIMEOUT_S", "2.5")
+    monkeypatch.setenv("WAVR_ASSISTANT_LOCAL_LLM_URL", "http://127.0.0.1:9999/v1")
+    monkeypatch.setenv("WAVR_ASSISTANT_LOCAL_LLM_MODEL", "mistral")
+    from wavr.config import load_config
+    cfg = load_config()
+    assert cfg.assistant_engine_default == "openai"
+    assert cfg.assistant_max_tool_steps == 6
+    assert cfg.assistant_tool_timeout == 2.5
+    assert cfg.assistant_local_llm_base_url == "http://127.0.0.1:9999/v1"
+    assert cfg.assistant_local_llm_model == "mistral"
+
+
+def test_config_assistant_engine_bad_value_falls_back_to_wavr_assistant(monkeypatch):
+    # A typo / an id from a future build this repo doesn't know yet must never
+    # crash config load or silently pick something unexpected -- it falls back to
+    # the safe local/zero-egress default (same fail-safe precedent as
+    # speedtest_provider's bad-value fallback above).
+    monkeypatch.setenv("WAVR_ASSISTANT_ENGINE", "some-future-engine-id")
+    from wavr.config import load_config
+    assert load_config().assistant_engine_default == "wavr_assistant"
+
+
 def test_config_watch_intrusion_loud_defaults_off_and_parses(monkeypatch):
     # House-level Watch intrusion is informational-by-default (double-count false-positive
     # risk): the loud /api/alerts emission is opt-in, off unless WAVR_WATCH_INTRUSION_LOUD.

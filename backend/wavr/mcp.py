@@ -208,9 +208,54 @@ def get_room_context(provider: StateProvider, room: str) -> dict | None:
             if k not in ("vitals", "targets", "identities")}
 
 
+# verify FIX C (MEDIUM): unlike GET/PUT /api/house(/room) (the human dashboard's
+# house-map editor, which stays fully rich -- untouched), the agent-facing MCP tool
+# must NOT hand house.json's floor plan VERBATIM. house.json is treated as
+# home-layout PII (git-ignored for the same class of reason wavr.db is): floor/room
+# `name` is a free-text label the user typed (often descriptive of who/what lives
+# there, e.g. "quarto-1"/"escritorio"), and `zones[].name` carries the same risk;
+# `walls`/`features`/`backdrop` are floor-level detail this tool's room-geometry
+# contract never promised either. An EXPLICIT allowlist (mirrors get_alerts/
+# get_network_inventory, Phase-2A verify FIX 1/3): only room `id` + `polygon`
+# survive, grouped by floor `id`/`level` (structural identifiers, not a label the
+# user wrote) so a multi-floor house's room geometry stays attributable to a floor
+# without exposing any name/label/note/free-text field.
+_HOUSE_MAP_ROOM_FIELDS = ("id", "polygon")
+
+
+def _minimize_room_for_agent(room: dict) -> dict:
+    """One room dict (house.json v2 `_ROOM_KEYS` shape: id/name/polygon) -> the
+    coarse MCP-agent projection. See `get_house_map`'s docstring for the rationale."""
+    return {k: room.get(k) for k in _HOUSE_MAP_ROOM_FIELDS}
+
+
+def _minimize_floor_for_agent(floor: dict) -> dict:
+    """One floor dict -> id/level (structural) + its minimized rooms. Drops `name`
+    (a free-text floor label) and `walls`/`features`/`zones`/`backdrop` entirely --
+    see `get_house_map`'s docstring."""
+    rooms = floor.get("rooms")
+    rooms = rooms if isinstance(rooms, list) else []
+    return {
+        "id": floor.get("id"),
+        "level": floor.get("level"),
+        "rooms": [_minimize_room_for_agent(r) for r in rooms if isinstance(r, dict)],
+    }
+
+
 def get_house_map(provider: StateProvider) -> dict:
-    """The house map (house.json / DEFAULT_MAP): room geometry only, no live state."""
-    return provider.house_map()
+    """The house map (house.json / DEFAULT_MAP), MINIMIZED for the agent-facing MCP
+    surface (verify FIX C -- MEDIUM): room id + polygon/geometry only, grouped by
+    floor id/level -- NEVER a floor/room/zone `name` or any other free-text field,
+    and never `walls`/`features`/`backdrop` -- see the module-level rationale above
+    `_minimize_room_for_agent`. This does NOT reuse `provider.house_map()`'s verbatim
+    v2 doc -- it is this tool's OWN, stricter projection (GET/PUT /api/house(/room),
+    the human dashboard's house-map editor, are UNCHANGED and stay fully rich). A
+    non-dict house or a missing/malformed `floors` list degrades to `{"floors": []}`,
+    never a crash."""
+    house = provider.house_map()
+    floors = house.get("floors") if isinstance(house, dict) else None
+    floors = floors if isinstance(floors, list) else []
+    return {"floors": [_minimize_floor_for_agent(f) for f in floors if isinstance(f, dict)]}
 
 
 def get_ha_entities(ha_client: HAEntitiesProvider | None) -> list[dict]:
@@ -374,21 +419,66 @@ def query_occupancy_history(provider: StateProvider,
     return result
 
 
+# verify FIX B (MEDIUM): `wavr.house_status._network_what` embeds LIVE network
+# identifiers (vendor / extra_server / gateway_ip) into `reasons[].what`'s free-text
+# caption for network-layer reasons -- get_house_status sits in the CLOUD-reachable
+# coarse scope (AGENT_DEFAULT_TOOL_SCOPE), so those identifiers must never reach an
+# agent, cloud or local. An EXPLICIT allowlist (mirrors get_alerts/
+# get_network_inventory, Phase-2A verify FIX 1/3): only `layer`/`kind`/`severity`/
+# `ts` survive per reason -- the free-text `what` caption is dropped ENTIRELY (not
+# only for the network layer) so a future caption change can never silently
+# reintroduce a leak through this same field. The top-level `status`/`score`/`ts`
+# verdict is its own allowlist too (already coarse, no raw identifier): an agent can
+# still say "everything's fine" / "there's a notice-level network reason" without
+# ever seeing WHICH device/gateway/DHCP server it names.
+_HOUSE_STATUS_REASON_FIELDS = ("layer", "kind", "severity", "ts")
+
+
+def _minimize_house_status_reason_for_agent(reason: dict) -> dict:
+    """One reason dict (`wavr.house_status.compose_house_status`'s shape) -> the
+    coarse MCP-agent projection. See `get_house_status`'s docstring for the
+    rationale."""
+    return {k: reason.get(k) for k in _HOUSE_STATUS_REASON_FIELDS}
+
+
+def _minimize_house_status_for_agent(status: dict) -> dict:
+    reasons = status.get("reasons")
+    reasons = reasons if isinstance(reasons, list) else []
+    return {
+        "status": status.get("status"),
+        "score": status.get("score"),
+        "reasons": [_minimize_house_status_reason_for_agent(r)
+                   for r in reasons if isinstance(r, dict)],
+        "ts": status.get("ts"),
+    }
+
+
 async def get_house_status(house_status_fn, window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES) -> dict:
-    """The unified "is everything OK at home" verdict, in the EXACT shape
+    """The unified "is everything OK at home" verdict, MINIMIZED for the
+    agent-facing MCP surface (verify FIX B -- MEDIUM) from the EXACT composition
     `GET /api/house-status` returns (`wavr.house_status.compose_house_status`, fusing
-    network + physical signals that already exist elsewhere -- no new detection here).
-    `house_status_fn` is a `callable(window_minutes) -> dict | Awaitable[dict]`: either
-    a sync bridge (the stdio loopback GET) or an async in-process composer (app.py,
-    which fans out concurrent per-room reads) satisfies it -- awaited only if it
-    actually returns an awaitable, so both work with no adapter. `None` (not wired) ->
-    an honest `{"status": "unknown", ...}` verdict, never a crash."""
+    network + physical signals that already exist elsewhere -- no new detection
+    here): `status`/`score`/`ts` are kept (already coarse), but each `reasons[]`
+    entry is reduced to `layer`/`kind`/`severity`/`ts` -- the free-text `what`
+    caption is dropped entirely, because `_network_what` embeds live network
+    identifiers (vendor / extra_server / gateway_ip) for network-layer reasons and
+    this tool is reachable from the CLOUD-scoped default tool set. This is this
+    tool's OWN, stricter projection; `GET /api/house-status` (the human dashboard)
+    is UNCHANGED and stays fully rich. `house_status_fn` is a
+    `callable(window_minutes) -> dict | Awaitable[dict]`: either a sync bridge (the
+    stdio loopback GET) or an async in-process composer (app.py, which fans out
+    concurrent per-room reads) satisfies it -- awaited only if it actually returns
+    an awaitable, so both work with no adapter. `None` (not wired), or a malformed
+    (non-dict) result, degrades to an honest `{"status": "unknown", ...}` verdict,
+    never a crash."""
     if house_status_fn is None:
         return {"status": "unknown", "score": 0, "reasons": [], "ts": None}
     result = house_status_fn(window_minutes)
     if inspect.isawaitable(result):
         result = await result
-    return result
+    if not isinstance(result, dict):
+        return {"status": "unknown", "score": 0, "reasons": [], "ts": None}
+    return _minimize_house_status_for_agent(result)
 
 
 def _refused(status: str, message: str) -> dict:
@@ -613,7 +703,10 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
 
     @server.tool(name="get_house_map")
     def _tool_get_house_map() -> dict:
-        """The house map / floor plan (room geometry)."""
+        """The house map / floor plan, MINIMIZED for the agent-facing MCP surface
+        (verify FIX C): room id + polygon only, grouped by floor id/level -- NEVER
+        a floor/room/zone name/label/note or walls/features/backdrop -- see
+        `get_house_map`'s docstring."""
         return get_house_map(provider)
 
     @server.tool(name="get_ha_entities")
@@ -672,8 +765,12 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
         """The composed "is everything OK at home" verdict, fusing the network layer
         (rogue-device/rogue-DHCP/gateway-identity) with the physical layer
         (intrusion/fall-suspected/occupancy-anomaly) that already exist elsewhere --
-        no new detection here, just the same ranked verdict GET /api/house-status
-        returns. `window_minutes` overrides the network-alert recency window."""
+        no new detection here, just the same ranked status/score GET /api/house-status
+        returns. MINIMIZED for the agent-facing MCP surface (verify FIX B): each
+        `reasons[]` entry is layer/kind/severity/ts only -- NEVER the free-text `what`
+        caption, which can embed live network identifiers (vendor/gateway/DHCP-server)
+        -- see `get_house_status`'s docstring. `window_minutes` overrides the
+        network-alert recency window."""
         return await get_house_status(house_status_fn, window_minutes)
 
     # CONTROL/WRITE tool -- registered ONLY when expose_control is True. The HTTP transport

@@ -130,8 +130,49 @@ def test_get_room_context_strips_vitals_and_targets_from_real_fusion():
     assert "targets" not in ctx
 
 
-def test_get_house_map_passthrough():
-    assert get_house_map(FakeProvider([], {}, HOUSE)) == HOUSE
+def test_get_house_map_no_floors_key_degrades_to_empty_floors():
+    # verify FIX C (MEDIUM): a malformed/legacy-shaped house dict (HOUSE here has
+    # no top-level "floors", the v1 shape) degrades honestly to an empty floors
+    # list -- never a crash, and never the raw dict verbatim.
+    assert get_house_map(FakeProvider([], {}, HOUSE)) == {"floors": []}
+
+
+def test_get_house_map_minimizes_to_room_id_and_polygon():
+    # verify FIX C (MEDIUM): house.json is home-layout PII -- get_house_map must
+    # NOT hand an agent the floor plan verbatim. Only room id + polygon survive,
+    # grouped by floor id/level; every name/label/note/free-text field (floor
+    # name, room name, zone name/kind, walls, features, backdrop) is dropped.
+    house = {
+        "version": 2, "units": "m",
+        "floors": [{
+            "id": "f0", "name": "Térreo", "level": 0,
+            "rooms": [{"id": "r1", "name": "quarto-do-augusto",
+                       "polygon": [[0, 0], [4, 0], [4, 3], [0, 3]]}],
+            "walls": [{"id": "w1", "a": [0, 0], "b": [4, 0]}],
+            "features": [{"id": "d1", "type": "door", "at": [2, 0]}],
+            "zones": [{"id": "z1", "name": "bed", "kind": "rest",
+                      "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}],
+            "backdrop": None,
+        }],
+    }
+    out = get_house_map(FakeProvider([], {}, house))
+    assert out == {"floors": [{
+        "id": "f0", "level": 0,
+        "rooms": [{"id": "r1", "polygon": [[0, 0], [4, 0], [4, 3], [0, 3]]}],
+    }]}
+    assert "quarto-do-augusto" not in str(out)   # room NAME (free-text label) dropped
+    assert "Térreo" not in str(out)              # floor NAME dropped
+    assert "bed" not in str(out)                 # zone NAME dropped (zones[] gone entirely)
+
+
+def test_get_house_map_tolerates_malformed_floors_and_rooms():
+    # Defensive: a non-list `floors`, a non-dict floor/room entry, or a missing
+    # `rooms` key must never crash the tool -- degrade to empty, honestly.
+    house = {"floors": "not-a-list"}
+    assert get_house_map(FakeProvider([], {}, house)) == {"floors": []}
+    house2 = {"floors": [{"id": "f0", "level": 0}, "not-a-dict"]}
+    assert get_house_map(FakeProvider([], {}, house2)) == {
+        "floors": [{"id": "f0", "level": 0, "rooms": []}]}
 
 
 # --- Whole-house read tools (Phase 2A / B1-B3): plain function tests --------------
@@ -327,12 +368,18 @@ def test_get_house_status_none_fn_is_unknown_shape():
 def test_get_house_status_awaits_async_fn():
     import anyio
 
+    # `window_minutes` is captured via the closure (not round-tripped through the
+    # returned dict) because verify FIX B now projects the result down to an
+    # explicit {status, score, reasons, ts} allowlist -- an extra top-level key
+    # like the old test's "window_minutes" would be silently dropped, by design.
+    captured = {}
+
     async def fake_house_status(window_minutes):
-        return {"status": "ok", "score": 0, "reasons": [], "ts": "2026-07-10T10:00:00+00:00",
-                "window_minutes": window_minutes}
+        captured["window_minutes"] = window_minutes
+        return {"status": "ok", "score": 0, "reasons": [], "ts": "2026-07-10T10:00:00+00:00"}
 
     out = anyio.run(get_house_status, fake_house_status, 30.0)
-    assert out["status"] == "ok" and out["window_minutes"] == 30.0
+    assert out["status"] == "ok" and captured["window_minutes"] == 30.0
 
 
 def test_get_house_status_supports_sync_fn():
@@ -345,6 +392,55 @@ def test_get_house_status_supports_sync_fn():
 
     out = anyio.run(get_house_status, fake_house_status)
     assert out["status"] == "notice"
+
+
+def test_get_house_status_minimizes_network_identifiers_from_reasons():
+    # verify FIX B (MEDIUM): wavr.house_status._network_what embeds vendor/
+    # extra_server/gateway_ip into reasons[].what for network-layer reasons --
+    # this tool is reachable from the CLOUD-scoped default tool set, so those
+    # identifiers must never reach an agent, even though GET /api/house-status
+    # (the human dashboard, unaffected) shows the same caption unminimized.
+    import anyio
+
+    async def fake_house_status(window_minutes):
+        return {
+            "status": "alert", "score": 5,
+            "reasons": [
+                {"layer": "network", "kind": "rogue_device",
+                 "what": "unrecognized device on the network (TP-Link)",
+                 "severity": "alert", "ts": "2026-07-10T10:00:00+00:00"},
+                {"layer": "network", "kind": "gateway_identity",
+                 "what": "router (gateway) identity changed (192.168.1.1)",
+                 "severity": "alert", "ts": "2026-07-10T10:01:00+00:00"},
+            ],
+            "ts": "2026-07-10T10:01:00+00:00",
+        }
+
+    out = anyio.run(get_house_status, fake_house_status)
+    assert out["status"] == "alert" and out["score"] == 5
+    assert out["reasons"] == [
+        {"layer": "network", "kind": "rogue_device",
+         "severity": "alert", "ts": "2026-07-10T10:00:00+00:00"},
+        {"layer": "network", "kind": "gateway_identity",
+         "severity": "alert", "ts": "2026-07-10T10:01:00+00:00"},
+    ]
+    for r in out["reasons"]:
+        assert "what" not in r
+    assert "TP-Link" not in str(out)
+    assert "192.168.1.1" not in str(out)
+
+
+def test_get_house_status_malformed_result_degrades_honestly():
+    # A house_status_fn returning something that isn't a dict (a caller bug, or a
+    # future non-conforming source) must degrade to the honest "unknown" shape,
+    # never raise or pass a non-dict/list through to the caller.
+    import anyio
+
+    async def fake_house_status(window_minutes):
+        return "not a dict"
+
+    out = anyio.run(get_house_status, fake_house_status)
+    assert out == {"status": "unknown", "score": 0, "reasons": [], "ts": None}
 
 
 # --- FusionStateProvider adapter against a REAL FusionEngine ----------------------
@@ -366,7 +462,9 @@ def test_provider_lists_rooms_and_context_from_real_fusion():
     assert ctx["sources"][0]["modality"] == "camera"
     assert ctx.get("explanation")           # the explainable "why" is present
 
-    assert get_house_map(provider) == HOUSE
+    # HOUSE (v1-shaped, no top-level "floors") minimizes to an honest empty
+    # floors list -- see test_get_house_map_no_floors_key_degrades_to_empty_floors.
+    assert get_house_map(provider) == {"floors": []}
 
 
 def test_provider_unknown_room_returns_none():

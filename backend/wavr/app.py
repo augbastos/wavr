@@ -68,6 +68,8 @@ from wavr.sources.ble import BLESource
 from wavr.identity_store import IdentityStore
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
+from wavr.assistant_store import AssistantEngineStore
+from wavr.api_assistant import build_assistant_router
 from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore
@@ -274,7 +276,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
-               known_store=None, occupancy_log=None) -> FastAPI:
+               known_store=None, occupancy_log=None, assistant_store=None) -> FastAPI:
     cfg = load_config()
     # Peer pairing (Phase 1) is a strict superset of multidevice: a peer authenticates
     # as a `role=central` device, so the whole DeviceStore/PairingManager/middleware
@@ -679,6 +681,28 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _owns_connectors = connector_store is None
     _connectors = connector_store or ConnectorStore(cfg.db_path)
 
+    # Wavr Assistant engine picker (Phase 2B): the persisted selection + the one
+    # "manual" engine's non-secret config. Always built (like CameraStore/
+    # ConnectorStore), inert until the admin picks/asks something.
+    _owns_assistant = assistant_store is None
+    _assistant = assistant_store or AssistantEngineStore(cfg.db_path)
+    # The Wavr Assistant's cloud-egress kill switch: a SEPARATE connector row from
+    # "narrator" (a distinct feature -- the tool-using assistant picker, not the
+    # single-shot dashboard summarizer) so each has its own independent DEFAULT-OFF
+    # toggle, same granularity precedent as mcp-read vs mcp-http vs ha-import vs
+    # ha-control each being their own row. `kind="generic"` reuses the EXISTING
+    # single-egress-surface gate verbatim (ConnectorStore.is_enabled) -- no second,
+    # ungated egress path. Idempotent upsert: NEVER flips an already-persisted
+    # enabled bit (ConnectorStore.upsert's own contract), so re-wiring on every
+    # restart can't silently re-arm a kill-switched connector.
+    _connectors.upsert(
+        "assistant-cloud", "generic", "Wavr Assistant (cloud engine)",
+        scope=("outbound-cloud: OpenAI/Anthropic/Gemini, or ANY engine (including "
+              "Wavr Assistant/Local LLM) whose actual configured endpoint is not "
+              "loopback -- coarse current-state tool scope only (rooms/room-context/"
+              "house-status); never the floor-plan/house-map geometry, network "
+              "inventory, occupancy history, alerts, or Home Assistant entity names"))
+
     # Connectors override: an admin who turned the narrator ON in the Connectors screen
     # (a persisted enable override, WAVR_NARRATE_ENABLED unset) gets the provider client
     # built HERE, at startup, exactly like the env path above -- so the override actually
@@ -846,6 +870,28 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                     routine_flags=routine_flags,
                                     window_minutes=window_minutes)
 
+    def _assistant_tool_deps() -> dict:
+        # The SAME already-built, already-scanned data sources the MCP-HTTP mount
+        # below reuses -- built here UNCONDITIONALLY (not gated behind
+        # cfg.multidevice / the [mcp] extra), because the Wavr Assistant loop is an
+        # IN-PROCESS caller of the plain wavr.mcp functions, not the MCP-over-HTTP
+        # transport (Phase 2B design spec §4: "no [mcp] extra, no second transport,
+        # no network hop for a same-process tool call"). `ha_client` is rebuilt live
+        # per call (client_from_config is a cheap, pure constructor -- same
+        # precedent as its other inline per-request use at POST /api/ha/import).
+        return {
+            "fusion": _fusion,
+            "house_map": _house,
+            "ha_client": client_from_config(cfg),
+            "network_inventory_fn": lambda: inventory_view(_inventory, _device_meta),
+            "alerts_fn": lambda: merge_alerts(
+                _inventory, dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
+                intrusion_log=_intrusion, fall_log=_fall,
+                intrusion_house_loud=cfg.watch_intrusion_loud),
+            "occupancy_provider": _occupancy_log,
+            "house_status_fn": _compute_house_status,
+        }
+
     # MCP-over-streamable-HTTP (ADR-0008, Slice 1): mount the READ-ONLY MCP transport
     # in-process at /mcp so it inherits loopback_or_authed + TrustedHostMiddleware + TLS +
     # DeviceStore. Wired ONLY when multidevice is ON (TLS present) AND the [mcp] extra is
@@ -954,6 +1000,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_connectors:
                 with suppress(Exception):
                     _connectors.close()
+            if _owns_assistant:
+                with suppress(Exception):
+                    _assistant.close()
             if _owns_pin_store:
                 with suppress(Exception):
                     _pin_store.close()
@@ -1348,6 +1397,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(
         build_connectors_router(
             _connectors, _connector_catalog,
+            write_deps=[Depends(require_local), Depends(require_scope("control"))]),
+        dependencies=[Depends(require_central), Depends(require_scope("admin"))])
+
+    # Wavr Assistant engine picker + bounded ask (Phase 2B). Same router-level gate
+    # tier as identity/connectors (central + admin scope) -- this screen decides
+    # WHICH model gets to see the house, a bigger blast radius than toggling an
+    # existing feature on/off. The state-changing engine-select and ask additionally
+    # carry require_local CSRF + control scope, mirroring /api/narrate.
+    app.include_router(
+        build_assistant_router(
+            cfg, _assistant, _connectors, tool_deps=_assistant_tool_deps,
             write_deps=[Depends(require_local), Depends(require_scope("control"))]),
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
@@ -1797,6 +1857,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # (multidevice + [mcp]) AND enabled in the Connectors screen.
                 "mcp_http": bool(_mcp_http_route is not None
                                  and _connectors.is_enabled("mcp-http")),
+                # Phase-2B re-threat FIX 3 (UX HIGH #1 backend half): the Wavr
+                # Assistant's cloud-egress kill switch ("assistant-cloud", upserted
+                # above) was previously enumerable ONLY via GET /api/connectors --
+                # this trust receipt (GET /api/status.features, what EGRESS_ITEMS
+                # in the frontend reads) had no first-class fact for it at all, so
+                # it could never be listed there even though it is a genuine
+                # egress path (a cloud-classified assistant engine, gated by this
+                # same switch -- see engine_catalog's cloud_gate_on). Bool-only,
+                # same shape as every other row here: True iff the kill switch is
+                # ON, i.e. a cloud-classified engine is currently PERMITTED to
+                # answer (an engine still has to be selected + configured for an
+                # actual call to happen -- this flag mirrors mcp_http's own
+                # "wired AND enabled" honesty, not "a call just happened").
+                "assistant_cloud": _connectors.is_enabled("assistant-cloud"),
             },
             "house": {
                 "floors": len(_house.get("floors", [])),

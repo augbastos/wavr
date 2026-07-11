@@ -420,14 +420,17 @@ def test_effective_tool_scopes_agent_null_resolves_to_coarse_default():
     assert resolved == AGENT_DEFAULT_TOOL_SCOPE
     assert resolved == DEFAULT_AGENT_TOOL_SCOPES["agent"]
     assert resolved == frozenset({
-        "list_rooms", "get_room_context", "get_house_map", "get_house_status"})
+        "list_rooms", "get_room_context", "get_house_status"})
     assert "call_ha_service" not in resolved       # actuation opt-in, never default
     # The household PII/tracking crown jewels are opt-in ONLY -- excluded from
     # the default even though get_network_inventory/get_alerts/
     # query_occupancy_history are minimized (FIX 1/2/3) and get_ha_entities
     # never was (HA friendly_name can name a person or a device).
+    # Phase-2B re-threat FIX 1 (MEDIUM): get_house_map joins that excluded set
+    # too -- its room `id` encodes the room name and it ships polygon geometry
+    # (the floor plan itself), which a coarse cloud/default agent doesn't need.
     for excluded in ("get_alerts", "get_network_inventory",
-                     "query_occupancy_history", "get_ha_entities"):
+                     "query_occupancy_history", "get_ha_entities", "get_house_map"):
         assert excluded not in resolved
 
 

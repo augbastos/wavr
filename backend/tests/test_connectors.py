@@ -99,11 +99,20 @@ def test_empty_registry_lists_builtins_all_inactive(tmp_path, monkeypatch):
     c, _s = _client(tmp_path, monkeypatch)
     body = c.get("/api/connectors").json()
     by_id = {x["id"]: x for x in body["connectors"]}
-    assert set(by_id) == {"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http"}  # no generics
+    # 5 built-ins + the ONE generic row app.py always seeds: "assistant-cloud"
+    # (Phase 2B's Wavr Assistant cloud-egress kill switch, DEFAULT-OFF on first
+    # sight -- see app.py's ConnectorStore.upsert("assistant-cloud", ...) wiring).
+    assert set(by_id) == {"narrator", "ha-import", "ha-control", "mcp-read",
+                          "mcp-http", "assistant-cloud"}
     # DEFAULT-OFF: nothing is active with a bare env + empty registry.
     assert all(x["active"] is False for x in by_id.values())
-    # Empty store => no override anywhere and nothing "enabled but pending" => byte-identical.
-    assert all(x["override"] is None for x in by_id.values())
+    # Empty store => no override anywhere for the 5 BUILT-INS (byte-identical to
+    # before). The seeded "assistant-cloud" GENERIC row always reports a real
+    # override ("off" on first sight) -- a generic connector is never override=None
+    # (see api_connectors._generic_descriptor), unlike a not-yet-touched built-in.
+    builtins_only = {k: v for k, v in by_id.items() if k != "assistant-cloud"}
+    assert all(x["override"] is None for x in builtins_only.values())
+    assert by_id["assistant-cloud"]["override"] == "off"
     assert all(x["needs"] is None for x in by_id.values())
     assert by_id["narrator"]["available"] is False          # no provider configured
     assert by_id["narrator"]["enforcement"] == "registry-overlay"
