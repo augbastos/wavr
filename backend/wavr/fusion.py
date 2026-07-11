@@ -27,6 +27,30 @@ DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
 # counting-capable set is defined; keep in sync with the sources that set count.
 COUNTING_MODALITIES = frozenset({"camera", "mmwave"})
 
+# PRECISION / RESOLUTION ladder -- the SECOND axis (how DETAILED an answer the
+# present+fresh evidence can honestly support), orthogonal to confidence (how SURE
+# someone is present). Finest detail each modality can HONESTLY deliver:
+# house < room < count; the position rung is EARNED at runtime (a calibrated
+# positioned target), never granted by presence. network/sim are pinned to house --
+# one antenna localizes to the HOUSE, not a room (same rule as Identity, events.py).
+# The count-capable scopes here are kept == COUNTING_MODALITIES (camera/mmwave).
+RESOLUTION_SCOPE = {
+    "network": "house", "sim": "house",
+    "ble": "room", "wifi_csi": "room", "pir": "room", "node": "room",
+    "mmwave": "count", "camera": "count",
+}
+_SCOPE_RANK = {"none": 0, "house": 1, "room": 2, "count": 3, "position": 4}
+_RANK_SCOPE = {v: k for k, v in _SCOPE_RANK.items()}
+_RANK_PCT = {0: 0, 1: 25, 2: 50, 3: 75, 4: 100}
+# Capability-gap key -> the next rung to strive for; None when topped out (or vacant).
+_NEXT_BY_RANK = {0: None, 1: "add_room_sensor", 2: "add_counting_sensor",
+                 3: "calibrate_camera_position", 4: None}
+# Min per-target confidence to treat an (x, y) as a drawable exact POSITION rather
+# than a room-scope blob. Byte-shared intent with the frontend POS_EST_MAX
+# (index.html) -- ONE threshold, two surfaces: top rung reached (backend) equals
+# crisp dot drawn (frontend).
+_POSITION_QUALITY_MIN = 0.6
+
 # Freshness decay window (seconds). A source votes at full trust up to
 # FRESHNESS_S, then its trust decays linearly to zero at STALE_S — so a source
 # that stopped reporting gradually loses its vote instead of freezing the fused
@@ -339,6 +363,43 @@ class FusionEngine:
             # a contract change to RoomState/its consumers.
             explanation += ", contagem mantida"
 
+        # PRECISION / RESOLUTION ladder (additive axis, DISTINCT from confidence).
+        # Runs AFTER the FUSION-B latch has finalized person_count / best_targets, as
+        # a pure READ over already-fused values -- it never touches num/den/strength,
+        # so confidence is provably unchanged by this block. It reuses the EXACT
+        # (presence and decays>0) freshness gate the count/targets passes above use, so
+        # the ladder recedes honestly the same frame a source goes off/stale (camera
+        # boot-OFF is never in events; a stale source has decay==0 -> excluded).
+        best_rank = 0
+        if occupied:
+            for modality, e in events.items():
+                if e.presence and decays.get(modality, 0.0) > 0.0:
+                    best_rank = max(best_rank,
+                                    _SCOPE_RANK[RESOLUTION_SCOPE.get(modality, "house")])
+            # A count in hand (live OR honestly latched by FUSION-B) floors the rung
+            # at count: person_count is the honest carrier, so a still person whose
+            # counting source single-frame drops keeps the count rung via the latch.
+            if person_count is not None:
+                best_rank = max(best_rank, _SCOPE_RANK["count"])
+            # A counting-capable source present but NOT vouching a number caps at room
+            # -- never claim a headcount the evidence does not support.
+            elif best_rank >= _SCOPE_RANK["count"]:
+                best_rank = _SCOPE_RANK["room"]
+            # position is EARNED, never granted by presence: needs >=1 positioned
+            # target (x/y set) at calibrated quality (>= _POSITION_QUALITY_MIN) AND a
+            # count in hand. best_targets are dicts (t.to_dict()); FUSION-B-latched
+            # targets are included, so a latched still person keeps the position rung.
+            if person_count is not None and any(
+                    t.get("x") is not None and t.get("y") is not None
+                    and (t.get("confidence") or 0.0) >= _POSITION_QUALITY_MIN
+                    for t in best_targets):
+                best_rank = _SCOPE_RANK["position"]
+        # not occupied -> best_rank stays 0 -> none: the occupied-False-with-count>0
+        # incoherent state stays impossible on this axis too.
+        precision_level = _RANK_SCOPE[best_rank]
+        precision_pct = _RANK_PCT[best_rank]
+        precision_next = _NEXT_BY_RANK[best_rank]
+
         # Identity pass-through (non-biometric "who is home"). METADATA ONLY: this
         # rides the SAME present + fresh (decay>0) gate as targets and NEVER feeds
         # num/den/strength/agreement above — so `confidence` is provably unchanged
@@ -366,7 +427,9 @@ class FusionEngine:
         return RoomState(room=room, occupied=occupied, confidence=confidence,
                          vitals=vitals, sources=sources, targets=best_targets,
                          identities=identities, person_count=person_count,
-                         explanation=explanation, ts=ts)
+                         explanation=explanation, ts=ts,
+                         precision_level=precision_level, precision_pct=precision_pct,
+                         precision_next=precision_next)
 
 
 def house_person_count(states) -> int | None:
