@@ -80,8 +80,10 @@ from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
+from wavr.pair_requests import PairApprovalManager
 from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
+from wavr.api_pair_requests import build_pair_request_router, build_pending_pairings_router
 from wavr.peers import PeerStore
 from wavr.api_peers import build_peers_public_router, build_peers_admin_router
 from wavr.nodes import NodeStore, NodeEnroller
@@ -633,6 +635,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _local_ip = (_local_ipv4() or "127.0.0.1") if cfg.multidevice else "127.0.0.1"
     _devices = DeviceStore(cfg.db_path) if cfg.multidevice else None
     _pairing = PairingManager(_devices) if cfg.multidevice else None
+    # "Approve on the Core" (design 2026-07-11): SECOND, additive onboarding path
+    # alongside the 8-digit code above (PairingManager, unchanged, stays the
+    # fallback). In-memory, never-persisted, TTL'd request/approval bookkeeping --
+    # the only mint site is approve(), which calls the SAME _devices.add(name, role)
+    # /api/pair already uses. None when multidevice is off (route mounting below is
+    # itself gated on cfg.multidevice, so this stays inert either way).
+    _pair_approvals = PairApprovalManager(_devices) if cfg.multidevice else None
     # Peer pairing (Phase 1): OWN-direction peer bookkeeping (how WE reach THEM) +
     # ephemeral in-memory handshake state. Built ONLY when WAVR_PEERS_ENABLED (which
     # the check above guarantees implies multidevice). PeerStore shares cfg.db_path but
@@ -1452,10 +1461,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # never to authenticate it. The ADMIN routes (/api/nodes, /api/nodes/enroll-code,
         # /api/nodes/{id}/disable, DELETE /api/nodes/{id}) are deliberately NOT in this
         # tuple -- they stay loopback-root-only via admin_deps below.
+        # "Approve on the Core" (design 2026-07-11): the IDENTICAL in-subnet-bounded
+        # exemption as /api/pair, extended to the two companion-facing pair-request
+        # paths -- a companion has to reach these before it holds any token. Neither
+        # route mints anything (create() only opens a PENDING record; poll() only ever
+        # returns a token after a loopback-root Approve), and request_id/token travel
+        # in the body, never here in the URL. The admin surface (list/approve/deny at
+        # /api/pending-pairings) is deliberately NOT in this tuple -- it stays
+        # loopback-root-only via admin_deps below, same as the node/peer admin routes.
         if request.url.path in (
             "/api/pair", "/api/peers/redeem",
             "/api/nodes/enroll", "/api/nodes/telemetry",
             "/api/nodes/heartbeat", "/api/nodes/reactivate",
+            "/api/pair-request", "/api/pair-request/status",
         ):
             if in_subnet(host, _local_ip):
                 request.state.role = None
@@ -3116,6 +3134,31 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             from wavr.tls import cert_fingerprint, resolved_cert_path
             fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
             return {"code": _pairing.mint_code(role), "cert_fingerprint": fingerprint}
+
+        # "Approve on the Core" (design 2026-07-11). Two routers, two DIFFERENT auth
+        # boundaries -- the exact split api_peers.py/api_nodes.py already use:
+        #  * public (create/poll, mounted here as build_pair_request_router): NO deps --
+        #    the middleware exempts BOTH exact paths in-subnet, same deliberately-
+        #    unauthenticated onboarding surface as /api/pair above. Mints nothing.
+        #  * admin (list/approve/deny, build_pending_pairings_router): LOOPBACK-ROOT
+        #    ONLY -- require_local (X-Wavr-Local CSRF header) + require_root, the SAME
+        #    tier as the peers-admin/nodes-admin routers, so require_root rejects even
+        #    an authenticated remote 'central' peer -- a stolen/paired central token can
+        #    never approve its own (or any other) pending request. Approve is the ONLY
+        #    mint site and calls the SAME _devices.add(name, role) /api/pair-code does.
+        # _live_cert_fp reads the SAME live-cert source as pair_code above (never a
+        # companion-reported fp) -- injected so neither router touches TLS/filesystem
+        # itself, and reused for both the create() response and the admin list's fp
+        # (so the Core operator banner can show its own fingerprint for the eyeball
+        # compare without minting a pairing code as a side effect).
+        def _live_cert_fp() -> str:
+            from wavr.tls import cert_fingerprint, resolved_cert_path
+            return cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+
+        app.include_router(build_pair_request_router(_pair_approvals, _live_cert_fp))
+        app.include_router(build_pending_pairings_router(
+            _pair_approvals, _live_cert_fp,
+            admin_deps=[Depends(require_local), Depends(require_root)]))
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
