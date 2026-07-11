@@ -28,9 +28,37 @@ an intruder rather than declaring the whole family unknown.
 """
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime, timezone
 
 from wavr.alert_severity import SEVERITY_ALERT
+
+# Debounce threshold for edge-triggered intrusion alerts (the most privacy-
+# sensitive push Wavr sends -- "unrecognized person in <room>"/"in casa").
+# `IntrusionAlertLog.record` is called on EVERY fusion publish -- every camera
+# frame (~0.5s) or mmwave reading (~0.2s), see wavr.app._ingest -- so comparing
+# the raw per-frame verdict with ZERO dwell means one noisy frame (motion blur, a
+# miscount, a pet crossing the lens) fires the alert.
+#
+# RISING EDGE (audit fix -- was a strict consecutive-streak reset, too brittle for
+# the security path): this many "present" (`unrecognized=True`) observations must
+# accumulate within a LEAKY sliding window (`IntrusionAlertLog._window_size`, ~2x
+# this value -- mirrors `RogueDhcpMonitor`'s leaky N-of-M window, see
+# wavr.dhcp_monitor's module docstring) before the edge is allowed to fire. A
+# single absent (`unrecognized=False`) observation no longer wipes ALL prior
+# progress back to zero -- a real but FLICKERING intruder (partial occlusion, a
+# camera riding the detection threshold) still accumulates toward this count
+# instead of a strict consecutive-streak reset silently and permanently starving
+# it of a fire (a security false-negative). A single one-off blip still does not
+# alert: it never reaches this many "present" observations before falling out of
+# the window.
+#
+# CLEARING (decoupled from the rising edge -- audit fix): once CONFIRMED
+# (`_active`), this many CONSECUTIVE `unrecognized=False` observations are
+# required before the room de-arms -- a single recognized/false-negative frame
+# mid-intrusion must NOT immediately clear an ongoing, still-real intrusion and
+# let it double-alert on the very next flicker back to True.
+DEFAULT_INTRUSION_DEBOUNCE = 2
 
 # Per-person fields carrying geometry (targets x/y), identity (identities who-is-home
 # labels = PII) or biometrics (vitals breathing/heart): MUST NOT leave the box while
@@ -164,11 +192,44 @@ class IntrusionAlertLog:
     to_dict() shape of the rogue-device / rogue-DHCP / gateway-identity monitors so
     /api/alerts merges it with ZERO special-casing (one severity ladder, one stream).
     Per room an alert fires ONCE on the clear-to-flagged edge and re-arms only after
-    it clears, so a lingering person never spams the stream. Bounded ring."""
+    a SUSTAINED clear, so a lingering (or flickering) person never spams the stream.
+    Bounded ring.
 
-    def __init__(self, max_alerts: int = 50, now_fn=None):
+    DEBOUNCED (`debounce`, default `DEFAULT_INTRUSION_DEBOUNCE`) -- security-path
+    audit fix: a strict CONSECUTIVE streak (any single `unrecognized=False` wiping
+    all prior progress) was too brittle for this path, with two reproduced
+    consequences -- see the module-level comment on `DEFAULT_INTRUSION_DEBOUNCE`
+    for the full rationale:
+
+      * RISING edge (not-yet-`_active` rooms): a LEAKY N-of-M window (mirrors
+        `RogueDhcpMonitor`'s leaky window, see wavr.dhcp_monitor) -- `debounce`
+        "present" (`unrecognized=True`) observations must accumulate within the
+        last `_window_size` (~2x `debounce`) `record()` calls for the room. A
+        single absent observation no longer resets the count to zero, so a real
+        but FLICKERING intruder (partial occlusion, a camera riding the detection
+        threshold -- alternating True/False) still confirms instead of a strict
+        streak reset silently starving it of ever firing (a security
+        false-negative). A lone one-off blip still never alerts: it can't reach
+        `debounce` "present" observations before aging out of the window.
+      * CLEARING an already-`_active` (CONFIRMED) room is DECOUPLED from the
+        rising-edge window: it takes `debounce` CONSECUTIVE `unrecognized=False`
+        observations to de-arm -- any `unrecognized=True` in between resets the
+        clear attempt to zero (the intrusion is evidently still ongoing). A
+        single false-negative frame mid-confirmed-intrusion can therefore never
+        immediately de-arm and let the very next flicker back to True
+        double-alert an intrusion that never actually left."""
+
+    def __init__(self, max_alerts: int = 50, now_fn=None,
+                debounce: int = DEFAULT_INTRUSION_DEBOUNCE):
         self._alerts = []
-        self._active = set()   # rooms currently flagged (edge state)
+        self._active = set()   # rooms CONFIRMED (edge already fired, not yet de-armed)
+        self._debounce = max(1, int(debounce))   # never 0 -- that would mean "never fires"
+        # Leaky N-of-M window size for the rising edge (mirrors
+        # RogueDhcpMonitor._window_size) -- big enough that a 50%-duty-cycle
+        # flicker still accumulates `debounce` "present" observations within it.
+        self._window_size = max(2 * self._debounce, 2)
+        self._windows = {}       # room -> deque[bool] of recent unrecognized verdicts, not yet armed
+        self._clear_streak = {}  # room -> consecutive unrecognized=False count, only while active
         self._max = max_alerts
         self._now_fn = now_fn
 
@@ -179,12 +240,42 @@ class IntrusionAlertLog:
 
     def record(self, room, unrecognized, person_count, known_present, ts=None):
         """Fold one room current unrecognized verdict into the edge state. Returns a
-        NEW IntrusionAlert only on a clear-to-flagged transition (else None)."""
-        if not unrecognized:
-            self._active.discard(room)
-            return None
+        NEW IntrusionAlert only on a clear-to-flagged transition, AFTER `debounce`
+        "present" observations have accumulated in the room's leaky rising-edge
+        window (else None -- either genuinely clear, still accumulating, or already
+        confirmed so the edge already fired)."""
         if room in self._active:
-            return None   # already flagged -- edge already fired, no re-spam
+            # Already CONFIRMED: de-arming is decoupled from the rising-edge window
+            # (see class docstring) -- a single unrecognized=False must not clear an
+            # ongoing intrusion outright. Any unrecognized=True resets the in-progress
+            # clear attempt (still evidently ongoing); only `debounce` CONSECUTIVE
+            # unrecognized=False de-arms the room, ready for a fresh rising edge.
+            if unrecognized:
+                self._clear_streak.pop(room, None)
+                return None
+            streak = self._clear_streak.get(room, 0) + 1
+            if streak < self._debounce:
+                self._clear_streak[room] = streak
+                return None
+            self._clear_streak.pop(room, None)
+            self._active.discard(room)
+            self._windows.pop(room, None)   # fresh leaky window for the next rising edge
+            return None
+
+        # Not yet confirmed -- leaky N-of-M window: a `True` credits the window, a
+        # `False` does NOT wipe prior progress back to zero (unlike the old strict
+        # streak), so a sustained-but-flickering intruder still accumulates toward
+        # `debounce` instead of resetting on its very first missed frame.
+        window = self._windows.setdefault(room, deque(maxlen=self._window_size))
+        window.append(bool(unrecognized))
+        if not unrecognized and sum(window) == 0:
+            # Never made any progress and has now fallen fully quiet -- forget it
+            # (bounds memory for a one-off blip rather than tracking it forever).
+            del self._windows[room]
+            return None
+        if sum(window) < self._debounce:
+            return None   # sustained-but-not-yet-enough progress -- no alert yet
+        self._windows.pop(room, None)
         self._active.add(room)
         alert = IntrusionAlert(room, int(person_count) if person_count is not None else 0,
                                max(0, int(known_present)), ts or self._now_iso())
@@ -194,10 +285,14 @@ class IntrusionAlertLog:
         return alert
 
     def reset(self) -> None:
-        """Clear the per-room edge state (NOT the alert ring), so that after Watch is
-        turned off and on again a still-present intrusion re-fires rather than being
-        swallowed as already-flagged."""
+        """Clear the per-room edge state AND any in-progress rising/clearing
+        evidence (NOT the alert ring), so that after Watch is turned off and on
+        again a still-present intrusion is free to re-arm (and, once it rebuilds a
+        fresh window, re-fire) rather than being swallowed as already-flagged or
+        credited stale evidence from before Watch was off."""
         self._active.clear()
+        self._windows.clear()
+        self._clear_streak.clear()
 
     def recent_alerts(self, limit: int = 50):
         return self._alerts[-limit:]

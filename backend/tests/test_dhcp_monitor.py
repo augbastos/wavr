@@ -202,6 +202,45 @@ async def test_flood_of_spoofed_server_ids_is_capped_and_does_not_evict_genuine_
     assert len(m._windows) <= 10                   # cap held despite a 200-id flood
 
 
+async def test_flood_blinding_exploit_a_sustained_burst_cannot_permanently_hide_a_real_rogue():
+    # CRITICAL flood-blinding exploit (execution-verified): the OLD anti-
+    # flood cap only ever REFUSED brand-new ids once full and never freed a
+    # slot back up. A burst of ~max_tracked distinct spoofed option-54 ids
+    # that stays present every cycle legitimately crosses `alert_threshold`
+    # itself (they really are all "extra") and becomes `_alerted` -- and an
+    # `_alerted` id was only forgotten once it went quiet. An attacker who
+    # simply keeps every flood id present therefore pinned the ENTIRE cap
+    # with confirmed noise forever: room never reopened, so a genuinely new
+    # rogue server id introduced afterwards was dropped every single cycle,
+    # forever -- the anti-flood cap itself became the blind spot. This test
+    # proves the fix: even mid-flood, at full capacity, a real rogue that
+    # keeps showing up still eventually crosses the threshold and alerts.
+    max_tracked = 8
+    flood = [f"10.0.0.{i}" for i in range(max_tracked)]   # fills the cap exactly
+    real_rogue = "10.66.66.66"
+
+    cycles = [
+        _obs("192.168.1.1", *flood),   # cycle 1: flood fills every slot (1/2 each)
+        _obs("192.168.1.1", *flood),   # cycle 2: flood crosses threshold -> all `_alerted`
+    ]
+    # Flood keeps blasting EVERY subsequent cycle (sustained, not a one-shot
+    # burst) while the real rogue also shows up every cycle from here on --
+    # under the old code this real rogue would NEVER get a tracked slot.
+    cycles += [_obs("192.168.1.1", *flood, real_rogue) for _ in range(6)]
+
+    fired = []
+    m = RogueDhcpMonitor(
+        collect=_collector(cycles),
+        known_servers={"192.168.1.1"}, alert_threshold=2,
+        max_tracked_extras=max_tracked, on_rogue=fired.append)
+    for _ in range(len(cycles)):
+        await m.check_once()
+
+    real_rogue_alerts = [a for a in fired if real_rogue in a.extra_server]
+    assert real_rogue_alerts, "real rogue never alerted -- flood permanently blinded the detector"
+    assert len(m._windows) <= max_tracked   # cap invariant still held throughout
+
+
 # ---- recent_alerts() bounded ring -------------------------------------------
 
 async def test_recent_alerts_bounded_ring():

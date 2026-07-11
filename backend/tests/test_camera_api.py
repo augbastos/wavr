@@ -218,3 +218,81 @@ def test_privacy_mode_route_requires_csrf(tmp_path):
     with TestClient(create_app(sources=[], camera_store=store)) as c:   # no X-Wavr-Local
         r = c.post("/api/cameras/cam_q/privacy-mode", json={"enabled": True})
         assert r.status_code == 403
+
+
+# ---- Geometry fix (HIGH-1): optional per-camera `level` disambiguates a same-named
+# room across floors (see housemap.room_polygon's `level` param + app._camera_factory).
+# Two floors intentionally share the room name "quarto" at DIFFERENT polygons so a
+# passing test can only mean the level actually selected the right floor, not merely
+# that a number round-tripped through the store.
+# ------------------------------------------------------------------------------------
+
+_TWO_FLOOR_HOUSE = {"version": 2, "units": "m", "floors": [
+    {"id": "f0", "name": "Ground", "level": 0,
+     "rooms": [{"id": "r0", "name": "quarto", "polygon": [[0, 0], [4, 0], [4, 3], [0, 3]]}],
+     "walls": [], "features": [], "backdrop": None},
+    {"id": "f1", "name": "Upstairs", "level": 1,
+     "rooms": [{"id": "r1", "name": "quarto", "polygon": [[10, 10], [14, 10], [14, 13], [10, 13]]}],
+     "walls": [], "features": [], "backdrop": None},
+]}
+
+
+def _client_two_floor_house(tmp_path, monkeypatch):
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
+    store = CameraStore(str(tmp_path / "cams.db"))
+    app = create_app(sources=[], camera_store=store)
+    c = TestClient(app, headers={"X-Wavr-Local": "1"})
+    assert c.put("/api/house", json=_TWO_FLOOR_HOUSE, headers={"X-Wavr-Local": "1"}).status_code == 200
+    return c
+
+
+def test_post_camera_level_validated_against_house_floors(tmp_path, monkeypatch):
+    with _client_two_floor_house(tmp_path, monkeypatch) as c:
+        r = c.post("/api/cameras", json={"name": "cam_up", "room": "quarto",
+                                         "rtsp_url": "rtsp://x", "confidence": 0.5,
+                                         "level": 9})               # no floor at level 9
+        assert r.status_code == 400
+        assert "level" in r.json()["detail"]
+        assert c.get("/api/cameras").json() == []                  # never persisted
+
+
+def test_post_camera_level_persists_and_round_trips(tmp_path, monkeypatch):
+    with _client_two_floor_house(tmp_path, monkeypatch) as c:
+        r = c.post("/api/cameras", json={"name": "cam_up", "room": "quarto",
+                                         "rtsp_url": "rtsp://x", "confidence": 0.5, "level": 1})
+        assert r.status_code == 200
+        [cam] = c.get("/api/cameras").json()
+        assert cam["level"] == 1
+
+
+def test_post_camera_without_level_stores_null_out_of_box(tmp_path, monkeypatch):
+    with _client_two_floor_house(tmp_path, monkeypatch) as c:
+        c.post("/api/cameras", json={"name": "cam_any", "room": "quarto",
+                                     "rtsp_url": "rtsp://x", "confidence": 0.5})
+        [cam] = c.get("/api/cameras").json()
+        assert cam["level"] is None
+
+
+def test_calib_spots_disambiguates_same_named_room_by_level(tmp_path, monkeypatch):
+    # The real seam: room_polygon(house, room, level=cam.get("level")) must resolve
+    # EACH camera to its OWN floor's polygon, not deterministically the first match.
+    with _client_two_floor_house(tmp_path, monkeypatch) as c:
+        c.post("/api/cameras", json={"name": "cam_ground", "room": "quarto",
+                                     "rtsp_url": "rtsp://x", "confidence": 0.5, "level": 0})
+        c.post("/api/cameras", json={"name": "cam_up", "room": "quarto",
+                                     "rtsp_url": "rtsp://x", "confidence": 0.5, "level": 1})
+        ground = c.get("/api/cameras/cam_ground/calib-spots").json()["spots"]
+        up = c.get("/api/cameras/cam_up/calib-spots").json()["spots"]
+        assert ground != up
+        assert (ground[0]["x"], ground[0]["y"]) == pytest.approx((2.0, 1.5))   # ground centroid
+        assert (up[0]["x"], up[0]["y"]) == pytest.approx((12.0, 11.5))         # upstairs centroid
+
+
+def test_calib_spots_without_level_falls_back_to_first_matching_floor(tmp_path, monkeypatch):
+    # Old (pre-level) behaviour unchanged: no `level` -> room_polygon's documented
+    # deterministic first-match across floors in document order (the ground floor here).
+    with _client_two_floor_house(tmp_path, monkeypatch) as c:
+        c.post("/api/cameras", json={"name": "cam_any", "room": "quarto",
+                                     "rtsp_url": "rtsp://x", "confidence": 0.5})
+        spots = c.get("/api/cameras/cam_any/calib-spots").json()["spots"]
+        assert (spots[0]["x"], spots[0]["y"]) == pytest.approx((2.0, 1.5))

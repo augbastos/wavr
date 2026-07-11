@@ -9,6 +9,8 @@ from wavr.localize import (
     apply_h,
     default_mount_for_room,
     homography_from_points,
+    homography_quality,
+    homography_reprojection_error,
     localize,
     make_localizer,
     monocular_floor_point,
@@ -101,6 +103,53 @@ def test_apply_h_point_at_infinity_returns_none():
 
 
 # --------------------------------------------------------------------------- #
+# Homography quality -- a REAL measurement from the reprojection residual, not the
+# flat Q_HOMOGRAPHY constant.
+# --------------------------------------------------------------------------- #
+
+def test_reprojection_error_zero_for_exact_four_point_fit():
+    # Exactly 4 correspondences: DLT is an exact interpolant -> residual ~0 no matter
+    # how the points were chosen (the documented honesty caveat).
+    img = [(0, 0), (640, 0), (640, 480), (0, 480)]
+    flr = [(0, 0), (4, 0), (4, 3), (0, 3)]
+    h = homography_from_points(img, flr)
+    err = homography_reprojection_error(h, img, flr)
+    assert err == pytest.approx(0.0, abs=1e-9)
+
+
+def test_reprojection_error_positive_for_overdetermined_noisy_fit():
+    # 5 correspondences (identity-ish square + a slightly off centre point) -> the
+    # least-squares fit no longer passes through every point exactly.
+    img = [(0, 0), (10, 0), (10, 10), (0, 10), (5, 5)]
+    flr = [(0, 0), (10, 0), (10, 10), (0, 10), (5.5, 5.0)]   # centre point marked off
+    h = homography_from_points(img, flr)
+    err = homography_reprojection_error(h, img, flr)
+    assert err > 0.0
+
+
+def test_reprojection_error_infinite_on_empty_or_degenerate_projection():
+    assert homography_reprojection_error(np.eye(3), [], []) == math.inf
+    # A homography that sends this pixel's correspondence to infinity (w = 0).
+    h = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+    assert homography_reprojection_error(h, [(0.0, 5.0)], [(1.0, 1.0)]) == math.inf
+
+
+def test_homography_quality_monotonic_decay():
+    assert homography_quality(0.0) == pytest.approx(1.0)
+    assert homography_quality(0.10) == pytest.approx(0.5, abs=1e-9)   # one half-life
+    assert homography_quality(0.20) == pytest.approx(0.25, abs=1e-9)  # two half-lives
+    q_small = homography_quality(0.01)
+    q_big = homography_quality(0.50)
+    assert 0.0 < q_big < q_small < 1.0
+
+
+def test_homography_quality_rejects_nonfinite_and_negative():
+    assert homography_quality(math.inf) == 0.0
+    assert homography_quality(float("nan")) == 0.0
+    assert homography_quality(-0.01) == 0.0
+
+
+# --------------------------------------------------------------------------- #
 # Monocular (approximate path) -- derived-by-hand ground truth.
 # --------------------------------------------------------------------------- #
 
@@ -186,6 +235,70 @@ def test_localize_rejects_bad_feet_point():
     assert localize((float("nan"), 240), (640, 480), mount=mount) is None
 
 
+# --------------------------------------------------------------------------- #
+# Frame-size guard -- a homography solved at one resolution must never be applied to
+# a differently-sized live frame (a resolution change silently mislocates otherwise).
+# --------------------------------------------------------------------------- #
+
+def test_localize_rejects_homography_on_frame_size_mismatch_no_fallback():
+    img = [(0, 0), (640, 0), (640, 480), (0, 480)]
+    flr = [(0, 0), (4, 0), (4, 3), (0, 3)]
+    h = homography_from_points(img, flr)
+    # Calibrated at 640x480; live frame is 1280x720 -> reject, no mount fallback -> None.
+    res = localize((320, 240), (1280, 720), homography=h,
+                   homography_img_size=(640, 480))
+    assert res is None
+
+
+def test_localize_falls_back_to_mount_on_frame_size_mismatch():
+    img = [(0, 0), (640, 0), (640, 480), (0, 480)]
+    flr = [(0, 0), (4, 0), (4, 3), (0, 3)]
+    h = homography_from_points(img, flr)
+    mount = MountPose(pos_x=0.0, pos_y=0.0, height=2.0, tilt_deg=45.0, yaw_deg=0.0)
+    res = localize((320, 240), (1280, 720), homography=h, mount=mount,
+                   homography_img_size=(640, 480))
+    assert res is not None and res.method == "monocular"   # honest degrade, not a wrong homography point
+
+
+def test_localize_accepts_homography_on_matching_frame_size():
+    img = [(0, 0), (640, 0), (640, 480), (0, 480)]
+    flr = [(0, 0), (4, 0), (4, 3), (0, 3)]
+    h = homography_from_points(img, flr)
+    res = localize((320, 240), (640, 480), homography=h, homography_img_size=(640, 480))
+    assert res is not None and res.method == "homography"
+
+
+def test_localize_no_calib_size_known_back_compat_still_applies_homography():
+    # Back-compat: a homography with no stored calibration size (homography_img_size
+    # omitted, e.g. a pre-migration row or a test) is never rejected for "mismatch".
+    img = [(0, 0), (640, 0), (640, 480), (0, 480)]
+    flr = [(0, 0), (4, 0), (4, 3), (0, 3)]
+    h = homography_from_points(img, flr)
+    res = localize((320, 240), (99, 99), homography=h)   # wildly different img_size
+    assert res is not None and res.method == "homography"
+
+
+def test_localize_uses_measured_quality_when_given():
+    img = [(0, 0), (640, 0), (640, 480), (0, 480)]
+    flr = [(0, 0), (4, 0), (4, 3), (0, 3)]
+    h = homography_from_points(img, flr)
+    res = localize((320, 240), (640, 480), homography=h, homography_quality=0.42)
+    assert res is not None and res.confidence == pytest.approx(0.42)
+
+
+def test_make_localizer_rejects_stale_calib_size():
+    img = [[0, 0], [10, 0], [10, 10], [0, 10]]
+    h = homography_from_points(img, img)
+    mount = MountPose(pos_x=4.2, pos_y=0.0, height=2.4, tilt_deg=40.0, yaw_deg=45.0)
+    loc = make_localizer(_POLY, homography=h, mount=mount, calib_img_size=(10, 10))
+    # Live frame doesn't match the calibrated 10x10 -> falls back to the mount prior,
+    # never silently applying the (now invalid) homography.
+    res = loc((5.0, 5.0), (20, 20))
+    assert res is not None
+    x, y, conf = res
+    assert conf == pytest.approx(0.45)   # Q_MONOCULAR, not the homography path
+
+
 def test_default_mount_faces_room_centroid():
     poly = [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]   # sala
     m = default_mount_for_room(poly)
@@ -266,6 +379,14 @@ def test_make_localizer_monocular_in_room():
     assert conf == pytest.approx(0.45)       # monocular position-quality
     # floor point should land ahead of the mount (>= its corner) -> non-negative local
     assert x >= -1e-9 and y >= -1e-9
+
+
+def test_make_localizer_uses_measured_quality_when_given():
+    img = [[0, 0], [10, 0], [10, 10], [0, 10]]
+    h = homography_from_points(img, img)
+    loc = make_localizer(_POLY, homography=h, homography_quality=0.63)
+    x, y, conf = loc((5.2, 1.0), (10, 10))
+    assert conf == pytest.approx(0.63)         # measured quality, not the flat 0.85 default
 
 
 def test_make_localizer_none_when_no_calibration():

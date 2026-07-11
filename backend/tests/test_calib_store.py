@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from wavr.calib_store import (
@@ -131,3 +133,48 @@ def test_corrupt_blob_degrades_to_none(store):
     store._conn.commit()
     got = store.get("cam")
     assert got is not None and got["mount"] is None   # one bad row never raises
+
+
+# ---- geometry fix: quality column (real, measured homography accuracy) ----------
+
+def test_set_homography_without_quality_stores_null(store):
+    store.set_homography("cam", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480)
+    assert store.get("cam")["quality"] is None    # honest: caller supplied no measurement
+
+def test_set_homography_persists_quality(store):
+    store.set_homography("cam", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480, quality=0.93)
+    assert store.get("cam")["quality"] == pytest.approx(0.93)
+
+def test_set_homography_rejects_out_of_range_quality(store):
+    with pytest.raises(CalibrationError):
+        store.set_homography("cam", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480, quality=1.5)
+    with pytest.raises(CalibrationError):
+        store.set_homography("cam", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480, quality=-0.1)
+
+def test_set_homography_rejects_nonfinite_quality(store):
+    with pytest.raises(CalibrationError):
+        store.set_homography("cam", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480,
+                             quality=float("nan"))
+
+def test_set_homography_updates_quality_in_place(store):
+    store.set_homography("cam", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480, quality=0.2)
+    store.set_homography("cam", [1, 0, 0, 0, 2, 0, 0, 0, 1], 640, 480, quality=0.8)
+    assert store.get("cam")["quality"] == pytest.approx(0.8)
+
+def test_migrate_adds_quality_column_to_old_schema(tmp_path):
+    # A DB created before the `quality` column existed must gain it on open via
+    # _migrate(), not raise, and an old row degrades to quality=None.
+    p = str(tmp_path / "old.db")
+    conn = sqlite3.connect(p)
+    conn.executescript(
+        "CREATE TABLE camera_calib (name TEXT PRIMARY KEY, mount_json TEXT,"
+        " h_json TEXT, img_w INTEGER, img_h INTEGER, updated TEXT);"
+        " INSERT INTO camera_calib VALUES ('legacy', NULL, '[1,0,0,0,1,0,0,0,1]',"
+        " 640, 480, '2026-01-01');")
+    conn.commit(); conn.close()
+    s = CalibrationStore(p)                                  # __init__ -> _migrate()
+    got = s.get("legacy")
+    assert got["quality"] is None                            # column added, back-filled null
+    s.set_homography("legacy", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480, quality=0.5)
+    assert s.get("legacy")["quality"] == pytest.approx(0.5)
+    s.close()

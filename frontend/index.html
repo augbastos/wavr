@@ -4496,7 +4496,8 @@ function renderNetwork(){
       // the list re-renders (kind + timestamp + the strongest identity field the kind carries).
       row.dataset.kind = kind;
       row.dataset.alertKey = kind + "|" + (a.ts || "") + "|" +
-        (a.observed_mac || a.extra_server || a.mac || a.ip || a.gateway_ip || "");
+        (a.observed_mac || a.extra_server || a.mac || a.ip || a.gateway_ip ||
+         (typeof a.room === "string" ? a.room : ""));
       const badge = document.createElement("span");
       badge.className = "sev-badge sev-" + sev; badge.textContent = sev;   // textContent — untrusted
       const at = document.createElement("span"); at.className = "at";
@@ -4526,6 +4527,22 @@ function renderNetwork(){
         disc.textContent = a.disclaimer ||
           "Research demonstration, not a certified medical or fall-detection device (ADR-0003).";
         meta.appendChild(disc);
+      } else if(kind === "intrusion"){
+        // Watch/Vigia (A2) edge-triggered "unrecognized person" alert -- its OWN honest
+        // treatment, NEVER a phantom device sighting (it carries no mac/vendor/ip at
+        // all -- see wavr.watch.IntrusionAlert.to_dict). Count-only: a room name (or
+        // no room at all for the room-agnostic house-wide aggregate, room=null) plus
+        // the two integers that tripped it -- never a position, identity or geometry.
+        // Phrasing matches wavr.house_status._intrusion_reasons so the alert stream,
+        // the Watch panel note and the house-status card never disagree.
+        const room = (typeof a.room === "string" && a.room) ? a.room : null;
+        at.textContent = "unrecognized person detected" + (when ? " " + when : "");
+        meta.appendChild(document.createTextNode(
+          room ? ("unrecognized person in " + room) : "an unrecognized person is present in the house"));
+        if(typeof a.person_count === "number" && typeof a.known_present === "number"){
+          meta.appendChild(document.createTextNode(
+            " " + MIDDOT + " " + a.person_count + " counted, " + a.known_present + " known present"));
+        }
       } else {
         // Per-device rogue sighting (unknown MAC).
         at.textContent = "new device" + (when ? " " + when : "");
@@ -12458,7 +12475,8 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     gateway_identity: "Your router answered from a different hardware address. Usually a reboot or a swapped router — but it can also mean someone is impersonating your gateway.",
     rogue_dhcp: "Another device is handing out network addresses like a router. Usually a second router or a misconfiguration; occasionally an attack.",
     rogue_device: "A device we haven't seen on this network before just showed up.",
-    fall_suspected: "Someone may have been lying down outside a bed or rest area for a while. This is a research demonstration, not a certified medical or fall-detection device (ADR-0003) -- treat it as a prompt to check in, never a diagnosis."
+    fall_suspected: "Someone may have been lying down outside a bed or rest area for a while. This is a research demonstration, not a certified medical or fall-detection device (ADR-0003) -- treat it as a prompt to check in, never a diagnosis.",
+    intrusion: "Watch (Vigia) counted more people in a room, or in the house overall, than it knows are home. It never reveals who or exactly where in the room -- only that someone unaccounted-for is present."
   };
   function closeAlertsPop(){ if(alertsPopEl) alertsPopEl.hidden = true; }
   function openAlertsPop(){

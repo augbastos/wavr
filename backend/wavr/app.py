@@ -9,7 +9,7 @@ import logging
 import re
 import sqlite3
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -32,7 +32,8 @@ from wavr.sources.camera import CameraSource, yolo_pose_detect
 from wavr.sources.mmwave import MmWaveSource
 from wavr.camera_store import CameraStore
 from wavr.calib_store import CalibrationStore, validate_mount, CalibrationError
-from wavr.localize import make_localizer, homography_from_points, floor_spots_for_room
+from wavr.localize import (make_localizer, homography_from_points, floor_spots_for_room,
+                           homography_reprojection_error, homography_quality)
 from wavr.calib_sample import CalibSampleStore
 from wavr.camera_health import CameraHealthMonitor
 from wavr.camera_url import rebind_rtsp_host, rtsp_host
@@ -68,6 +69,8 @@ from wavr.sources.ble import BLESource
 from wavr.identity_store import IdentityStore
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
+from wavr.connectors.notify.telegram import make_telegram_send
+from wavr.connectors.notify.digest import compose_digest, send_digest
 from wavr.assistant_store import AssistantEngineStore
 from wavr.api_assistant import build_assistant_router
 from wavr.bonded import read_bonded
@@ -101,6 +104,13 @@ _CATALOG_PATH = _VENDOR_DIR / "device-catalog.json"
 # wavr.house_status's own "RECENCY, honestly" docstring), only the routine-anomaly
 # sweep (a soft, non-security signal) is cached.
 _HOUSE_STATUS_ROUTINE_TTL_S = 5.0
+
+# 2C: cadence of the opt-in daily-digest scheduler task (see _digest_loop below) --
+# one composition+send pass every 24h. Gated on the SEPARATE "digest" connector row
+# (default-OFF), so this constant only controls the wakeup cadence, never whether
+# anything is actually sent. A test drives one deterministic tick via the
+# app.state.digest_once seam instead of waiting on this interval.
+_DIGEST_INTERVAL_S = 24 * 3600.0
 
 
 def _load_device_catalog() -> list:
@@ -246,10 +256,15 @@ def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
         except Exception:
             c = None
         if c and (c.get("homography") or c.get("mount")):
-            poly = room_polygon(house, cam["room"])
+            poly = room_polygon(house, cam["room"], level=cam.get("level"))
             if poly:
+                calib_img_size = None
+                if c.get("img_w") is not None and c.get("img_h") is not None:
+                    calib_img_size = (c.get("img_w"), c.get("img_h"))
                 loc = make_localizer(poly, homography=c.get("homography"),
-                                     mount=c.get("mount"))
+                                     mount=c.get("mount"),
+                                     calib_img_size=calib_img_size,
+                                     homography_quality=c.get("quality"))
     # Walk-to-calibrate SAMPLING: when a calibration session is active, run the pose
     # pass to capture the walker's raw FEET PIXEL into the sample store so GET
     # calib-sample can pair it with the known floor spot. Turns pose ON even with NO
@@ -334,13 +349,50 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # would corrupt DEFAULT_MAP process-wide. Copy once so _house is always private.
     _house = copy.deepcopy(load_house_map(cfg.house_map))
 
+    # Connector registry (project_wavr_connectors_vision): the persistence for the
+    # single 'Connectors & Services' egress surface. Always built (like CameraStore /
+    # identity_store), inert until the admin toggles something -- an EMPTY registry is
+    # byte-identical to today (no built-in suppressed, no generic active). Shares
+    # wavr.db (git-ignored) so no connector metadata lands in this public repo. Built
+    # HERE (moved up from its original spot near identity_store) so the notify
+    # fan-out below can see the "telegram" connector's boot-time enabled state --
+    # see _notify_all's docstring for why.
+    _owns_connectors = connector_store is None
+    _connectors = connector_store or ConnectorStore(cfg.db_path)
+
     # Notifier: opt-in via injected `notify` (tests) or WAVR_NTFY_URL (self-hosted
     # ntfy, stdlib POST, lazily built). Off by default -- no notifier, no HTTP calls.
-    # Sends ONLY derived edge events (house arrived/left, rogue-device) -- never
+    # Sends ONLY derived edge events (house arrived/left, rogue-device, fall) -- never
     # targets/vitals/frames/MACs.
     _notify = notify
     if _notify is None and cfg.ntfy_url:
         _notify = make_notifier(cfg.ntfy_url)
+
+    # 2C notify fan-out: Telegram alongside the existing ntfy `_notify`, on its OWN
+    # "telegram" connector row (default-OFF, independent of WAVR_NTFY_URL). The
+    # factory itself is a bare closure (zero cost/network until called) -- always
+    # built so a live Connectors-screen enable takes effect with no restart for the
+    # rogue-device/fall callbacks below (they call `_notify_all` unconditionally).
+    _telegram_send = make_telegram_send(_connectors)
+
+    def _notify_all(msg: str, *, kind: str, severity: str = "alert",
+                    room: str | None = None) -> None:
+        """Fan a derived-only alert edge out to every opt-in sink: the existing
+        ntfy `_notify` (unchanged, sync fire) AND Telegram (`telegram` connector
+        row). `send()` is a blocking urllib POST (see connectors/notify/
+        telegram.py's own NON-BLOCKING note), so it is offloaded via
+        asyncio.to_thread rather than awaited inline -- this never stalls the
+        fusion/ingest path it is called from. Each sink is independently
+        opt-in: calling this unconditionally costs nothing when both are off
+        (ntfy: `_notify` is None -> skipped; Telegram: the is_enabled() check
+        below skips the thread dispatch entirely -- zero network attempted)."""
+        if _notify:
+            _notify(msg)
+        if _connectors.is_enabled("telegram"):
+            try:
+                asyncio.create_task(asyncio.to_thread(_telegram_send, kind, severity, room, msg))
+            except RuntimeError:
+                pass  # no running event loop (e.g. a sync test calling the callback directly)
 
     # Rules/MQTT engine: opt-in via injected `rules_publish` (tests) or WAVR_MQTT_ENABLED
     # (real paho publisher, lazily connected). Off by default -- no publisher, no engine.
@@ -348,13 +400,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     if _rules_publish is None and cfg.mqtt_enabled:
         _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port, cfg.mqtt_prefix)
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
-    # AwayMonitor runs whenever MQTT OR ntfy is opt-in'd -- both consumers need the
-    # SAME house-level arrived/left edge detection. `_rules_publish` stays optional
-    # (AwayMonitor no-ops its own `publish` when None) so an ntfy-only setup gets
-    # notified without also needing WAVR_MQTT_ENABLED.
+    # AwayMonitor runs whenever MQTT OR ntfy OR Telegram is opt-in'd -- all three
+    # consumers need the SAME house-level arrived/left edge detection. `_rules_publish`
+    # stays optional (AwayMonitor no-ops its own `publish` when None) so an ntfy/
+    # Telegram-only setup gets notified without also needing WAVR_MQTT_ENABLED. The
+    # `telegram` connector check here is a BOOT-TIME read (mirrors the narrator-
+    # override-at-startup precedent below): enabling Telegram live via the Connectors
+    # screen while nothing else is configured needs a restart before away-edge push
+    # starts (honest limitation, not a silent gap -- the away monitor object itself
+    # doesn't exist yet to fan out through).
     _away = (AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace,
-                         notify=_notify)
-             if (_rules_publish or _notify) else None)
+                         notify=lambda msg: _notify_all(msg, kind="away_edge", severity="note"))
+             if (_rules_publish or _notify or _connectors.is_enabled("telegram")) else None)
 
     # Narrator: opt-in via injected `narrator` (tests) or the two-factor gate below.
     # PROVIDER-AGNOSTIC (WAVR_NARRATE_PROVIDER=gemini|ollama|openai|anthropic); the
@@ -439,8 +496,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # inventory (e.g. exercise POST /api/block's 200 success path). None in production.
     _inventory = net_inventory or NetworkInventoryService(
         cfg.net_known_macs, interval=cfg.net_scan_interval,
-        on_rogue=(lambda a: _notify(f"Wavr: dispositivo desconhecido na rede ({a.vendor})"))
-        if _notify else None,
+        # 2C notify fan-out: always wired (not gated on `_notify` alone anymore) --
+        # `_notify_all` is a no-op-cost no-op when both ntfy and Telegram are off,
+        # and unconditional wiring means enabling the "telegram" connector live
+        # (no restart) actually takes effect on the very next rogue-device sighting.
+        on_rogue=lambda a: _notify_all(
+            f"Wavr: dispositivo desconhecido na rede ({a.vendor})",
+            kind="rogue_device", severity="alert"),
         device_meta=_device_meta,
         # Passive protocol collectors (defensive-inventory collectors) -- opt-in, default
         # OFF; only ever run when the operator sets WAVR_NET_MDNS/WAVR_NET_SSDP.
@@ -611,9 +673,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if _fall is not None:
             at_risk = lying_outside_zone(_house, d["room"], d.get("targets") or [])
             fhit = _fall.record(d["room"], at_risk, d["ts"])
-            if fhit is not None and _notify:
-                _notify("Wavr: possivel queda em " + str(d["room"]) +
-                        " (deteccao experimental, nao e um dispositivo medico -- ADR-0003)")
+            if fhit is not None:
+                # 2C notify fan-out: unconditional call (see on_rogue above for why) --
+                # _notify_all no-ops cleanly when both ntfy and Telegram are off.
+                _notify_all("Wavr: possivel queda em " + str(d["room"]) +
+                            " (deteccao experimental, nao e um dispositivo medico -- ADR-0003)",
+                            kind="fall_suspected", severity="alert", room=d["room"])
         await _hub.publish(project_state(d, _watch.on, unrecognized))
         return d
 
@@ -725,14 +790,6 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _identity_store = identity_store or IdentityStore(cfg.db_path)
     _bonded_reader = bonded_reader or read_bonded
 
-    # Connector registry (project_wavr_connectors_vision): the persistence for the
-    # single 'Connectors & Services' egress surface. Always built (like CameraStore /
-    # identity_store), inert until the admin toggles something -- an EMPTY registry is
-    # byte-identical to today (no built-in suppressed, no generic active). Shares
-    # wavr.db (git-ignored) so no connector metadata lands in this public repo.
-    _owns_connectors = connector_store is None
-    _connectors = connector_store or ConnectorStore(cfg.db_path)
-
     # Wavr Assistant engine picker (Phase 2B): the persisted selection + the one
     # "manual" engine's non-secret config. Always built (like CameraStore/
     # ConnectorStore), inert until the admin picks/asks something.
@@ -754,6 +811,59 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
               "loopback -- coarse current-state tool scope only (rooms/room-context/"
               "house-status); never the floor-plan/house-map geometry, network "
               "inventory, occupancy history, alerts, or Home Assistant entity names"))
+
+    # 2C first-wave external connectors (project_wavr_agentic_home_mission /
+    # DESIGN-external-connectors.md, backend/wavr/connectors/): each is its own
+    # `kind="generic"` row, DEFAULT-OFF, same idempotent-upsert contract as
+    # "assistant-cloud" above -- an upsert NEVER flips an already-persisted enabled
+    # bit, so re-running this on every restart can't silently re-arm a kill-switched
+    # connector. Scope strings are the HONEST, code-verified disclosure each module's
+    # own docstring documents (see connectors/enrich/*.py, connectors/notify/*.py) --
+    # copied here verbatim so the UI badge matches what the code actually does.
+    # None of these are called from anywhere yet except the notify fan-out
+    # (rogue-device/away-edge/fall -> "telegram") and the digest scheduler below
+    # ("digest") -- the enrich connectors (open-meteo/urlhaus/abuseipdb/wikipedia)
+    # are registered so an admin CAN opt in, but nothing in app.py calls their
+    # fetch()/lookup() closures yet (a separate, future wiring step, same as any
+    # other not-yet-consumed generic row).
+    _connectors.upsert(
+        "open-meteo", "generic", "Open-Meteo Weather",
+        scope=("outbound-location: house's own COARSE lat/lon (rounded to 2dp, ~1.1km "
+              "grid) to Open-Meteo, keyless. Requires WAVR_HOME_LAT/WAVR_HOME_LON "
+              "explicitly configured; no default coordinate. Weather-only response, "
+              "nothing else disclosed."))
+    _connectors.upsert(
+        "telegram", "generic", "Telegram Notify",
+        scope=("outbound-notify: kind/severity/room/summary only -- never a raw camera "
+              "frame, occupancy vitals/geometry, MAC, or credential. Summary is "
+              "runtime-sanitised (MAC-like/coordinate-like/rtsp/frame tokens redacted) "
+              "as defence-in-depth on top of the field allowlist. Requires "
+              "WAVR_TELEGRAM_TOKEN + WAVR_TELEGRAM_CHAT_ID; token never logged."))
+    _connectors.upsert(
+        "digest", "generic", "Daily Digest (proactive push)",
+        scope=("outbound-notify, PROACTIVE & UNPROMPTED (routes through Telegram/ntfy, "
+              "whichever is enabled+configured): once/day whole-house empty-window "
+              "schedule + alert/new-device counts + routine status -- never identity, "
+              "geometry, or room names. HONESTY: the empty-window schedule itself is "
+              "burglary-relevant even with no identity disclosed, and this pushes it "
+              "unprompted rather than waiting for a GET -- a SEPARATE opt-in from "
+              "\"telegram\"/ntfy alone, deliberately: enabling Telegram for occasional "
+              "alerts does NOT imply wanting this daily schedule push too."))
+    _connectors.upsert(
+        "urlhaus", "generic", "URLhaus (malware URL/host/hash lookup)",
+        scope=("outbound-enrich: exactly one URL/hostname/hash under investigation, "
+              "keyless. Nothing about the house (device inventory, MAC, the querier's "
+              "own IP) leaves."))
+    _connectors.upsert(
+        "abuseipdb", "generic", "AbuseIPDB (IP reputation lookup)",
+        scope=("outbound-enrich: a single remote peer IP the house's devices have "
+              "talked to -- never a house device's own IP/MAC. This IS genuine "
+              "third-party disclosure (the query itself is the leak); key sent in "
+              "header only via WAVR_ABUSEIPDB_KEY, rate-limit-aware."))
+    _connectors.upsert(
+        "wikipedia", "generic", "Wikipedia Lookup",
+        scope=("outbound-lookup: the user's own search-query text only, keyless. No "
+              "house/device/occupancy state is folded into the query."))
 
     # Connectors override: an admin who turned the narrator ON in the Connectors screen
     # (a persisted enable override, WAVR_NARRATE_ENABLED unset) gets the provider client
@@ -938,6 +1048,54 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                     routine_flags=routine_flags,
                                     window_minutes=window_minutes)
 
+    async def _digest_once() -> dict:
+        # One daily-digest composition+send pass (test seam: app.state.digest_once,
+        # mirrors _refuse_once -- a test drives one deterministic tick without
+        # waiting _DIGEST_INTERVAL_S). Gated on the "digest" connector's OWN row --
+        # SEPARATE from "telegram"/ntfy being merely configured for regular alerts,
+        # see connectors/notify/digest.py's HONESTY note: reads NOTHING (not even
+        # occupancy_log) when the gate is off, so a disabled digest is byte-identical
+        # to before this feature existed.
+        if not _connectors.is_enabled("digest"):
+            return {"ok": False, "status": "disabled", "via": None}
+        try:
+            now = datetime.now(timezone.utc)
+            start = now - timedelta(seconds=_DIGEST_INTERVAL_S)
+            house_status = await _compute_house_status()
+            # SAME merged alert list every alert-consuming surface reads (GET
+            # /api/alerts, _assistant_tool_deps, _compute_house_status's own
+            # network layer) -- never a second, divergent count.
+            alert_count = len(merge_alerts(
+                _inventory, dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
+                intrusion_log=_intrusion, fall_log=_fall,
+                intrusion_house_loud=cfg.watch_intrusion_loud))
+            start_iso = start.isoformat()
+            # new_device_count: DeviceMeta's own public first-seen field, counted
+            # over the SAME trailing window compose_digest reconstructs occupancy
+            # for -- always built/available (see _device_meta's own "always on"
+            # docstring), never a name/hostname, count only.
+            new_device_count = sum(
+                1 for d in _device_meta.all().values()
+                if d.get("first_seen") and d["first_seen"] >= start_iso)
+            digest = compose_digest(
+                occupancy_log=_occupancy_log, house_status=house_status,
+                alert_count=alert_count, new_device_count=new_device_count,
+                start=start, end=now, now=now)
+            # send_digest's own gate: telegram_send re-checks is_enabled("telegram")
+            # internally; ntfy_notify is `_notify` (None unless WAVR_NTFY_URL/an
+            # injected test notify is configured) -- a no-op with zero egress when
+            # neither sink is actually usable, even with "digest" enabled.
+            return await asyncio.to_thread(
+                send_digest, digest, telegram_send=_telegram_send, ntfy_notify=_notify)
+        except Exception:
+            logging.warning("daily digest tick failed", exc_info=True)
+            return {"ok": False, "status": "error", "via": None}
+
+    async def _digest_loop():
+        while True:
+            await asyncio.sleep(_DIGEST_INTERVAL_S)
+            await _digest_once()
+
     def _assistant_tool_deps() -> dict:
         # The SAME already-built, already-scanned data sources the MCP-HTTP mount
         # below reuses -- built here UNCONDITIONALLY (not gated behind
@@ -1034,6 +1192,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # unoccupied instead of freezing its last reading.
         refuse_task = (asyncio.create_task(_refuse_loop())
                        if cfg.refuse_interval > 0 else None)
+        # Daily-digest scheduler (2C): always created (a bare sleep-then-check loop,
+        # zero cost while asleep) -- _digest_once itself is the real gate (the
+        # "digest" connector row), so flipping that on via the Connectors screen
+        # takes effect on the NEXT tick with no restart, unlike AwayMonitor's
+        # Telegram wiring above.
+        digest_task = asyncio.create_task(_digest_loop())
         # Enter the MCP-over-HTTP session manager LAST: all fallible startup is done, so it
         # can't be orphaned by an earlier failure. Requests aren't served until after the
         # yield, so the transport is live before the first /mcp dispatch.
@@ -1044,7 +1208,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         finally:
             # Suppress CancelledError AND any error a caller-injected publisher
             # might raise, so shutdown always reaches manager.stop() + camera close.
-            for t in (rules_task, away_task, refuse_task):
+            for t in (rules_task, away_task, refuse_task, digest_task):
                 if t:
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -1123,6 +1287,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #    drive one deterministic SensingEvent through fusion + the SD-wear persist=
     #    changed write-gate without needing a real/timed source or a node bearer token.
     app.state.ingest = _ingest
+    #  * digest_once: the daily-digest composition+send body (2C), so a test can drive
+    #    one deterministic tick without waiting _DIGEST_INTERVAL_S -- mirrors refuse_once.
+    app.state.digest_once = _digest_once
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
@@ -2202,7 +2369,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def add_camera(
         name: str = Body(...), room: str = Body(...),
         rtsp_url: str = Body(...), confidence: float = Body(cfg.cam_confidence),
-        mac: str | None = Body(None),
+        mac: str | None = Body(None), level: int | None = Body(None),
         _=Depends(require_local), __=Depends(require_scope("control")),
     ):
         name = name.strip()
@@ -2230,10 +2397,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 raise HTTPException(status_code=400, detail="mac must be a 6-octet MAC address")
         else:
             clean_mac = _resolve_mac_for_url(rtsp_url)
+        # Geometry fix (HIGH-1): optional per-camera floor level, so a multi-floor
+        # house with a same-named room on two floors (e.g. two "quarto"s) can be
+        # disambiguated by housemap.room_polygon(..., level=...). Validated against
+        # the CURRENT house map's known levels -- never persisted if it doesn't
+        # exist, so a typo can't silently strand the camera room-centred forever.
+        if level is not None:
+            known_levels = {f.get("level") for f in _house.get("floors", [])}
+            if level not in known_levels:
+                raise HTTPException(status_code=400,
+                                    detail=f"level {level} does not exist in the house map")
         if name in {s["name"] for s in manager.status()["sources"]}:
             raise HTTPException(status_code=409, detail=f"source name in use: {name}")
         try:
-            _cameras.add(name, room, rtsp_url, confidence, mac=clean_mac)
+            _cameras.add(name, room, rtsp_url, confidence, mac=clean_mac, level=level)
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail=f"camera exists: {name}")
         manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house,
@@ -2290,12 +2467,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         c = _calib.get(name)
         if c is None:
             return {"camera": name, "mount": None, "homography": None,
-                    "img_w": None, "img_h": None, "updated": None, "localizes": False}
+                    "img_w": None, "img_h": None, "quality": None,
+                    "updated": None, "localizes": False}
         localizes = bool(c.get("homography") or c.get("mount"))
         return {"camera": name,
                 "mount": c["mount"].to_dict() if c.get("mount") else None,
                 "homography": c.get("homography"),
                 "img_w": c.get("img_w"), "img_h": c.get("img_h"),
+                "quality": c.get("quality"),
                 "updated": c.get("updated"), "localizes": localizes}
 
     async def _reregister_camera(name: str) -> None:
@@ -2379,8 +2558,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # Degenerate / non-finite / malformed correspondences -> 422, never a
                 # silently near-singular matrix that mislocates every later projection.
                 raise HTTPException(status_code=422, detail=f"homography: {exc}")
+            # Geometry fix (HIGH-3): a REAL, measured quality -- the RMS reprojection
+            # residual (floor metres) against the SAME correspondences the homography
+            # was solved from, decayed to a 0..1 score -- replaces the flat
+            # Q_HOMOGRAPHY constant for THIS camera. Honesty caveat (see
+            # localize.homography_reprojection_error's own docstring): exactly 4
+            # points make DLT an exact interpolant (residual ~0 regardless of marking
+            # accuracy) -- meaningful once >4 points are given, which the walk-to-
+            # calibrate wizard already supplies.
+            residual_m = homography_reprojection_error(h, image_points, floor_points)
+            quality = homography_quality(residual_m)
             try:
-                _calib.set_homography(name, [float(v) for v in h.flatten()], img_w, img_h)
+                _calib.set_homography(name, [float(v) for v in h.flatten()], img_w, img_h,
+                                      quality=quality)
             except CalibrationError as exc:
                 raise HTTPException(status_code=422, detail=f"homography: {exc}")
             wrote = True
@@ -2413,7 +2603,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         cam = _cameras.get(name)
         if not cam:
             raise HTTPException(status_code=404, detail=f"unknown camera: {name}")
-        poly = room_polygon(_house, cam["room"])
+        poly = room_polygon(_house, cam["room"], level=cam.get("level"))
         spots = floor_spots_for_room(poly) if poly else []
         out = [{"x": x, "y": y, "label": ("centre" if i == 0 else f"corner-{i}")}
                for i, (x, y) in enumerate(spots)]

@@ -76,9 +76,21 @@ def test_room_unrecognized_is_honest():
     assert room_unrecognized({"person_count": 1}, -5) is True     # negative known clamps to 0
 
 
-def test_intrusion_log_edge_triggers_rearms_and_carries_no_geometry():
+def test_intrusion_log_debounces_a_single_frame_blip():
+    # HIGH-severity, zero-grace push -- one noisy frame (default debounce=2) must
+    # NEVER fire it: the very first unrecognized=True check only builds the streak.
     log = IntrusionAlertLog(now_fn=lambda: "T")
-    a1 = log.record("sala", True, 2, 1)
+    assert log.record("sala", True, 2, 1) is None      # 1st consecutive check -- no fire
+    assert log.active_rooms() == set()
+    # the blip clears on the very next check -- the streak resets to zero, not armed
+    assert log.record("sala", False, 0, 1) is None
+    assert log.recent_alerts() == []
+
+
+def test_intrusion_log_fires_on_sustained_excess_edge_triggers_rearms_and_carries_no_geometry():
+    log = IntrusionAlertLog(now_fn=lambda: "T")
+    assert log.record("sala", True, 2, 1) is None       # 1st check -- building the rising window
+    a1 = log.record("sala", True, 2, 1)                 # 2nd check -- debounce met
     assert a1 is not None
     d = a1.to_dict()
     assert d["kind"] == "intrusion" and d["severity"] == "alert" and d["room"] == "sala"
@@ -86,18 +98,94 @@ def test_intrusion_log_edge_triggers_rearms_and_carries_no_geometry():
     assert set(d) == {"kind", "severity", "room", "person_count", "known_present", "ts"}
     # edge-triggered: still flagged -> no re-fire
     assert log.record("sala", True, 2, 1) is None
-    # clears, then re-arms -> a later intrusion fires again
+    # de-arming is decoupled from the rising edge: needs `debounce` (2) CONSECUTIVE
+    # unrecognized=False calls to clear -- a single one leaves it still active.
     assert log.record("sala", False, 0, 1) is None
+    assert log.active_rooms() == {"sala"}
+    assert log.record("sala", False, 0, 1) is None       # 2nd consecutive clear -- now de-arms
+    assert log.active_rooms() == set()
+    # re-arms -> a later SUSTAINED intrusion fires again (needs its own fresh window)
+    assert log.record("sala", True, 3, 1) is None         # re-arming needs a fresh window too
     a2 = log.record("sala", True, 3, 1)
     assert a2 is not None
     assert len(log.recent_alerts()) == 2
     assert log.active_rooms() == {"sala"}
 
 
-def test_intrusion_log_ring_is_bounded():
-    log = IntrusionAlertLog(max_alerts=3, now_fn=lambda: "T")
+def test_intrusion_log_single_frame_flicker_never_alerts():
+    # (a) A single 1-frame blip (one True observation surrounded by many False
+    # observations, well beyond the leaky window's span) never accumulates enough
+    # "present" evidence to fire -- it ages out of the window and is forgotten
+    # (bounding memory) rather than lingering as partial credit forever.
+    log = IntrusionAlertLog(now_fn=lambda: "T")
+    assert log.record("sala", True, 2, 1) is None
+    for _ in range(10):
+        assert log.record("sala", False, 0, 1) is None
+    assert log.active_rooms() == set()
+    assert log.recent_alerts() == []
+
+
+def test_intrusion_log_flickering_sustained_excess_still_eventually_alerts():
+    # (b) A REAL but flickering intruder (alternating True/False every other
+    # frame -- partial occlusion, a camera riding the detection threshold) must
+    # still confirm: the leaky N-of-M window credits each True without a single
+    # False wiping prior progress, so alternating observations still accumulate
+    # `debounce` "present" hits within the window instead of a strict consecutive
+    # streak resetting to zero on every other frame and never firing at all.
+    # debounce=3 -> window_size=6, so 3 True's spread across 6 alternating calls
+    # (one False between each) must accumulate to a fire -- proving the leak
+    # tolerates the gaps instead of resetting on the very first one.
+    log = IntrusionAlertLog(now_fn=lambda: "T", debounce=3)
+    verdicts = [True, False, True, False, True, False]
+    results = [log.record("sala", v, 2, 1) for v in verdicts]
+    # no fire before the 3rd True (index 4) has landed in the window
+    assert all(r is None for r in results[:4])
+    assert results[4] is not None, "a sustained-but-flickering intruder must eventually alert"
+    assert log.active_rooms() == {"sala"}
+
+
+def test_intrusion_log_single_false_negative_mid_intrusion_does_not_dearm_or_doublealert():
+    # (c) Once CONFIRMED, a single unrecognized=False frame (a momentary
+    # occlusion/miss) must NOT de-arm the room nor allow an immediate re-alert on
+    # the next flicker back to True.
+    log = IntrusionAlertLog(now_fn=lambda: "T")
+    log.record("sala", True, 2, 1)
+    a1 = log.record("sala", True, 2, 1)
+    assert a1 is not None
+    assert log.active_rooms() == {"sala"}
+    # single false-negative frame -- must stay armed, no alert, no de-arm
+    assert log.record("sala", False, 0, 1) is None
+    assert log.active_rooms() == {"sala"}
+    # flickers back to True mid-clear-attempt -- still no re-alert (edge already fired)
+    assert log.record("sala", True, 2, 1) is None
+    assert log.active_rooms() == {"sala"}
+    # only the ONE alert ever fired despite the flicker
+    assert len(log.recent_alerts()) == 1
+
+
+def test_intrusion_log_sustained_clear_dearms():
+    # (d) A genuinely sustained clear (`debounce` CONSECUTIVE unrecognized=False
+    # calls) DOES de-arm the room, freeing it to re-arm on a later fresh intrusion.
+    log = IntrusionAlertLog(now_fn=lambda: "T")
+    log.record("sala", True, 2, 1)
+    a1 = log.record("sala", True, 2, 1)
+    assert a1 is not None
+    assert log.active_rooms() == {"sala"}
+    assert log.record("sala", False, 0, 1) is None
+    assert log.record("sala", False, 0, 1) is None   # 2nd consecutive clear -- de-arms
+    assert log.active_rooms() == set()
+    # re-arms cleanly on a later fresh, sustained intrusion
+    log.record("sala", True, 4, 1)
+    a2 = log.record("sala", True, 4, 1)
+    assert a2 is not None
+    assert log.active_rooms() == {"sala"}
+    assert len(log.recent_alerts()) == 2
+
+
+def test_intrusion_log_custom_debounce_and_ring_is_bounded():
+    log = IntrusionAlertLog(max_alerts=3, now_fn=lambda: "T", debounce=1)
     for i in range(10):
-        log.record("r%d" % i, True, 2, 0)   # each new room fires once
+        log.record("r%d" % i, True, 2, 0)   # debounce=1 -- each new room fires on the 1st check
     assert len(log.recent_alerts()) == 3
 
 
@@ -116,7 +204,9 @@ class _FakeInvService:
 
 def test_alerts_stream_merges_intrusion():
     from wavr.api_inventory import build_inventory_router
-    log = IntrusionAlertLog(now_fn=lambda: "2026-07-10T00:00:00+00:00")
+    # debounce=1: this test is about the /api/alerts merge shape, not the debounce
+    # itself (covered separately above) -- a single sustained-enough check suffices.
+    log = IntrusionAlertLog(now_fn=lambda: "2026-07-10T00:00:00+00:00", debounce=1)
     log.record("sala", True, 2, 1)
     app = FastAPI()
     app.include_router(build_inventory_router(_FakeInvService(), intrusion_log=log))
@@ -146,7 +236,9 @@ def test_alerts_stream_house_level_intrusion_informational_by_default():
     from wavr.api_inventory import build_inventory_router
 
     def _make_log():
-        log = IntrusionAlertLog(now_fn=lambda: "2026-07-10T00:00:00+00:00")
+        # debounce=1: this test is about the loud-gate merge filter, not the
+        # debounce itself (covered separately above).
+        log = IntrusionAlertLog(now_fn=lambda: "2026-07-10T00:00:00+00:00", debounce=1)
         log.record("sala", True, 2, 1)     # per-room signal
         log.record(None, True, 3, 2)       # house-level aggregate (room=None)
         return log
@@ -215,9 +307,12 @@ LOCAL = {"X-Wavr-Local": "1"}
 
 
 class _WatchSource:
-    """Emits one house-level identity (ana on casa) + one camera room counting TWO
-    people in sala, then idles. So known-present = 1 but sala counts 2 -> sala holds
-    an unrecognized person."""
+    """Emits one house-level identity (ana on casa), then a camera room counting TWO
+    people in sala on a REPEATING ~0.05s cadence (mirrors real per-frame camera
+    publish, see wavr.app._ingest) -- so known-present = 1 but sala counts 2 -> sala
+    holds an unrecognized person on every check, letting IntrusionAlertLog's
+    consecutive-check debounce (DEFAULT_INTRUSION_DEBOUNCE) build its streak and fire
+    within a couple of ticks rather than needing the slow 5s re-fuse tick."""
 
     def __init__(self, count=2, person="ana"):
         self._count = count
@@ -228,12 +323,12 @@ class _WatchSource:
         yield SensingEvent(room="casa", modality="ble", presence=True, motion=0.0,
                            breathing_bpm=None, heart_bpm=None, confidence=0.7, ts=now,
                            identities=(Identity(self._person, "ble", -50),))
-        now2 = datetime.now(timezone.utc).isoformat()
         tgts = tuple(Target(id=i + 1, x=float(i), y=float(i) + 0.5) for i in range(self._count))
-        yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
-                           breathing_bpm=13.0, heart_bpm=60.0, confidence=0.95, ts=now2,
-                           targets=tgts, count=self._count)
         while True:
+            now2 = datetime.now(timezone.utc).isoformat()
+            yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                               breathing_bpm=13.0, heart_bpm=60.0, confidence=0.95, ts=now2,
+                               targets=tgts, count=self._count)
             await asyncio.sleep(0.05)
 
 
@@ -265,6 +360,19 @@ def _settle(client, tries=40):
     return client.get("/api/state").json()
 
 
+def _wait_until(predicate, tries=40, interval=0.05):
+    """Poll `predicate()` (no args, truthy return = done) instead of a single fixed
+    sleep -- the debounce now needs a couple of REPEATING source ticks (~0.05s
+    cadence) to build its streak before an edge alert fires, so tests must wait for
+    that streak rather than assert immediately after the toggle."""
+    import time
+    for _ in range(tries):
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
+
+
 def test_watch_off_by_default_state_unchanged():
     with TestClient(_build(True, lambda: _WatchSource())) as client:
         _settle(client)
@@ -294,16 +402,21 @@ def test_watch_on_suppresses_family_geometry_at_state_egress():
         assert "sala" in w["unrecognized_rooms"]
         # the house-level aggregate also fires (house total 2 > known 1)
         assert w["house_unrecognized"] is True
-        # a high-severity edge alert was pushed to the notifier
-        assert any("Vigia" in n for n in notes)
+        # a high-severity edge alert was pushed to the notifier, once the debounce
+        # streak (a couple of the source's repeating ~0.05s ticks) is satisfied
+        assert _wait_until(lambda: any("Vigia" in n for n in notes))
 
 
 def test_watch_intrusion_alert_in_stream_and_edge_triggered():
     with TestClient(_build(True, lambda: _WatchSource())) as client:
         _settle(client)
         client.post("/api/watch", json={"on": True}, headers=LOCAL)
-        # let a couple of refuse/ingest cycles run -- must NOT spam duplicates
-        import time; time.sleep(0.2)
+        # let a few repeating source ticks run so the debounce streak is satisfied --
+        # must fire exactly once, no dup spam despite the room staying flagged.
+        assert _wait_until(lambda: any(
+            a.get("kind") == "intrusion"
+            for a in client.get("/api/alerts").json()["alerts"]))
+        import time; time.sleep(0.2)   # a few more ticks -- prove no re-spam while active
         alerts = [a for a in client.get("/api/alerts").json()["alerts"]
                   if a.get("kind") == "intrusion"]
         # DEFAULT (WAVR_WATCH_INTRUSION_LOUD off): only the PER-ROOM "sala" signal
@@ -385,7 +498,11 @@ class _SpreadSource:
     """Two KNOWN people (zoe + kai) present house-wide via one BLE identity event on
     'casa'; two counting rooms hold 2 and 1 people -> house total 3 > known 2, yet
     NEITHER room's own count exceeds 2. The per-room check finds nothing; only the
-    house-level aggregate catches the spread-out unaccounted person."""
+    house-level aggregate catches the spread-out unaccounted person. sala/cozinha
+    REPEAT on a ~0.05s cadence (mirrors real per-frame camera publish) so the
+    house-level (room=None) check -- evaluated on every wavr.app._publish call
+    regardless of which room's event triggered it -- gets enough consecutive
+    checks to satisfy IntrusionAlertLog's debounce."""
 
     async def events(self):
         now = datetime.now(timezone.utc).isoformat()
@@ -393,16 +510,16 @@ class _SpreadSource:
                            breathing_bpm=None, heart_bpm=None, confidence=0.7, ts=now,
                            identities=(Identity("zoe", "ble", -50),
                                        Identity("kai", "ble", -55)))
-        n2 = datetime.now(timezone.utc).isoformat()
-        yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
-                           breathing_bpm=None, heart_bpm=None, confidence=0.95, ts=n2,
-                           targets=(Target(id=1, x=1.0, y=2.0), Target(id=2, x=3.0, y=0.5)),
-                           count=2)
-        n3 = datetime.now(timezone.utc).isoformat()
-        yield SensingEvent(room="cozinha", modality="camera", presence=True, motion=1.0,
-                           breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=n3,
-                           targets=(Target(id=3, x=2.0, y=1.0),), count=1)
         while True:
+            n2 = datetime.now(timezone.utc).isoformat()
+            yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                               breathing_bpm=None, heart_bpm=None, confidence=0.95, ts=n2,
+                               targets=(Target(id=1, x=1.0, y=2.0), Target(id=2, x=3.0, y=0.5)),
+                               count=2)
+            n3 = datetime.now(timezone.utc).isoformat()
+            yield SensingEvent(room="cozinha", modality="camera", presence=True, motion=1.0,
+                               breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=n3,
+                               targets=(Target(id=3, x=2.0, y=1.0),), count=1)
             await asyncio.sleep(0.05)
 
 
@@ -418,11 +535,16 @@ def _settle_rooms(client, rooms, tries=60):
 
 def test_house_level_intrusion_caught_when_per_room_misses_and_leaks_nothing():
     import json
-    import time
     with TestClient(_build(True, lambda: _SpreadSource())) as client:
         _settle_rooms(client, ["casa", "sala", "cozinha"])
         assert client.post("/api/watch", json={"on": True}, headers=LOCAL).status_code == 200
-        time.sleep(0.2)
+        # wait for the house-level (room=None) debounce streak (a couple of the
+        # source's repeating ~0.05s ticks) to arm the /api/house-status intrusion
+        # reason -- the LIVE w["house_unrecognized"] read below is not debounced
+        # (it recomputes fresh every call), only the edge-triggered alert log is.
+        assert _wait_until(lambda: any(
+            x["kind"] == "intrusion"
+            for x in client.get("/api/house-status").json()["reasons"]))
         w = client.get("/api/watch").json()
         # the per-room signal finds NOTHING (no single room's count > known=2)...
         assert w["unrecognized_rooms"] == []
@@ -485,11 +607,13 @@ def test_watch_house_level_intrusion_loud_rides_alerts_when_flag_on():
     # WAVR_WATCH_INTRUSION_LOUD=1: the house-level (room=None) aggregate DOES ride the
     # loud /api/alerts path, still count-only, and /api/watch reports intrusion_loud.
     import json
-    import time
     with TestClient(_build_loud(lambda: _SpreadSource())) as client:
         _settle_rooms(client, ["casa", "sala", "cozinha"])
         assert client.post("/api/watch", json={"on": True}, headers=LOCAL).status_code == 200
-        time.sleep(0.2)
+        # wait for the house-level debounce streak (repeating ~0.05s source ticks)
+        assert _wait_until(lambda: any(
+            a.get("kind") == "intrusion" and a.get("room") is None
+            for a in client.get("/api/alerts").json()["alerts"]))
         w = client.get("/api/watch").json()
         assert w["house_unrecognized"] is True
         assert w["intrusion_loud"] is True
