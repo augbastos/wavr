@@ -11,6 +11,7 @@ from wavr.fusion import FusionEngine
 from wavr.sources.simulated import SimulatedSource
 from wavr.camera_store import CameraStore
 from wavr.device_meta import DeviceMeta
+from wavr.events import SensingEvent
 
 
 def build_client(client=None, device_meta=None, health_check=None, health_resolvers=None):
@@ -668,6 +669,90 @@ def test_refuse_publishes_decayed_state():
         assert last["occupied"] is False                   # honestly unoccupied
 
     asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# PERF: SD-card write-wear gate (app.py's `_ingest`, `persist=changed`). Driven
+# deterministically via the `app.state.ingest` test seam (mirrors refuse_once
+# above) -- was previously completely untested; only a per-file diff-review
+# claim, no regression coverage.
+# ---------------------------------------------------------------------------
+
+def test_ingest_first_event_for_a_room_always_persists():
+    # No `prev` to compare against yet -- the very first fused reading for a room
+    # must always land in storage.
+    import asyncio
+    from datetime import datetime, timezone
+
+    storage = Storage(":memory:")
+    app = create_app(
+        sources=[], storage=storage, hub=Hub(),
+        fusion=FusionEngine(weights={"camera": 1.0}), camera_store=CameraStore(":memory:"),
+    )
+    ts = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+    ev = SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                      breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts)
+
+    asyncio.run(app.state.ingest(ev))
+    rows = [r for r in storage.recent(100) if r["room"] == "sala"]
+    assert len(rows) == 1
+
+
+def test_ingest_skips_persist_when_fused_state_is_unchanged():
+    # The whole point of the gate: a room re-asserting the SAME fused reading frame
+    # after frame must not INSERT a fresh sqlite row every time.
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    storage = Storage(":memory:")
+    app = create_app(
+        sources=[], storage=storage, hub=Hub(),
+        fusion=FusionEngine(weights={"camera": 1.0}), camera_store=CameraStore(":memory:"),
+    )
+    base = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _cam(ts):
+        return SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                            breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts)
+
+    async def drive():
+        await app.state.ingest(_cam(base.isoformat()))
+        await app.state.ingest(_cam((base + timedelta(seconds=1)).isoformat()))  # identical reading
+        await app.state.ingest(_cam((base + timedelta(seconds=2)).isoformat()))  # still identical
+
+    asyncio.run(drive())
+    rows = [r for r in storage.recent(100) if r["room"] == "sala"]
+    assert len(rows) == 1                                # 2nd/3rd identical frames NOT persisted
+
+
+def test_ingest_persists_when_person_count_changes_even_if_occupied_and_confidence_hold():
+    # The gate compares the FULL derived state, not just occupied/confidence (unlike
+    # the periodic re-fuse tick's narrower changed-check) -- a person_count-only
+    # change (2 -> 3, same presence/confidence) must still reach storage, or a real
+    # headcount change would silently vanish from /api/history.
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    storage = Storage(":memory:")
+    app = create_app(
+        sources=[], storage=storage, hub=Hub(),
+        fusion=FusionEngine(weights={"camera": 1.0}), camera_store=CameraStore(":memory:"),
+    )
+    base = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _cam(ts, count):
+        return SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                            breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts, count=count)
+
+    async def drive():
+        await app.state.ingest(_cam(base.isoformat(), 2))
+        await app.state.ingest(_cam((base + timedelta(seconds=1)).isoformat(), 3))
+
+    asyncio.run(drive())
+    rows = [r for r in storage.recent(100) if r["room"] == "sala"]
+    assert len(rows) == 2
+    assert rows[0]["sources"][0]["count"] == 2
+    assert rows[1]["sources"][0]["count"] == 3
 
 
 # ---------------------------------------------------------------------------

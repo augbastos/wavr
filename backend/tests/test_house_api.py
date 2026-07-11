@@ -36,6 +36,24 @@ def test_put_invalid_doc_is_422_and_writes_nothing(tmp_path, monkeypatch):
     assert r.status_code == 422
     assert not (tmp_path / "house.json").exists()
 
+
+def test_put_house_huge_int_literal_coordinate_is_422_not_500(tmp_path, monkeypatch):
+    # Audit HIGH regression: a raw `10**400`-shaped JSON int (json.loads decodes it as
+    # an arbitrary-precision Python int, not a float) used to raise an unhandled
+    # OverflowError deep in validate_house_map -> unhandled 500. Must be a clean 422.
+    c = TestClient(_app(tmp_path, monkeypatch))
+    bad = _valid(); bad["floors"][0]["rooms"][0]["polygon"][0] = [10**400, 0]
+    r = c.put("/api/house", json=bad, headers=CSRF)
+    assert r.status_code == 422
+    assert not (tmp_path / "house.json").exists()
+
+
+def test_put_house_room_huge_int_literal_coordinate_is_422_not_500(tmp_path, monkeypatch):
+    c = TestClient(_app(tmp_path, monkeypatch))
+    r = c.put("/api/house/room",
+              json=_room_body(polygon=[[10**400, 0], [1, 0], [1, 1]]), headers=CSRF)
+    assert r.status_code == 422
+
 def test_put_house_requires_csrf_on_loopback(tmp_path, monkeypatch):
     c = TestClient(_app(tmp_path, monkeypatch))
     assert c.put("/api/house", json=_valid()).status_code == 403   # no X-Wavr-Local

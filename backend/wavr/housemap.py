@@ -127,7 +127,19 @@ class HouseMapError(ValueError):
 
 
 def _finite(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return False
+    try:
+        return math.isfinite(v)
+    except OverflowError:
+        # A raw huge-magnitude JSON int (e.g. a `10**400`-shaped literal with no
+        # decimal point -- json.loads decodes THAT as an arbitrary-precision Python
+        # int, not a float) can't be widened to a C double: math.isfinite() raises
+        # OverflowError here instead of returning False. Same "attacker-shaped JSON"
+        # class wavr.nodes._num already guards (nodes.py); not finite, not a crash --
+        # every caller here (_point, wall/feature/zone coords) already treats a
+        # non-finite value as a clean HouseMapError (422), never a 500.
+        return False
 
 
 def _point(p) -> bool:

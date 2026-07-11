@@ -35,8 +35,19 @@ class Storage:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
+        # WAL + synchronous=NORMAL: commits no longer fsync the main db file
+        # on every insert_state(), only at WAL-checkpoint boundaries -- fewer/
+        # smaller flushes, the SD-card-wear/latency win on the G9. Acceptable
+        # durability trade for this table: room_states is a DERIVED history
+        # (the debounced occupancy verdict is computed live and is what the
+        # UI treats as source of truth -- this table is only ever read back
+        # for /api/history-style trends), so losing the last commit or two on
+        # an unclean shutdown costs a few seconds of trend history, never a
+        # live decision. :memory: databases (used throughout the test suite)
+        # don't support WAL; suppressed same as before.
         with suppress(sqlite3.OperationalError):
             self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
         self._migrate_drop_vitals()
         self._conn.commit()

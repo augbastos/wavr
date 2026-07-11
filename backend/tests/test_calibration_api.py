@@ -66,6 +66,26 @@ def test_put_mount_out_of_range_rejected(tmp_path, monkeypatch):
         assert c.get("/api/cameras/cam_q/calibration").json()["localizes"] is False
 
 
+def test_put_mount_huge_int_literal_is_422_not_500(tmp_path, monkeypatch):
+    # Audit HIGH regression: a raw `10**400`-shaped JSON int used to raise an
+    # unhandled OverflowError deep in validate_mount -- an unhandled 500. Must be a
+    # clean 422, same as any other malformed mount value.
+    with _client(tmp_path, monkeypatch) as c:
+        r = c.put("/api/cameras/cam_q/calibration",
+                  json={"mount": {"pos_x": 10**400, "pos_y": 0.0}})
+        assert r.status_code == 422
+        assert c.get("/api/cameras/cam_q/calibration").json()["localizes"] is False
+
+
+def test_put_homography_huge_int_literal_correspondence_is_422_not_500(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as c:
+        img_pts = [[10**400, 600.0]] + _IMG_PTS[1:]
+        r = c.put("/api/cameras/cam_q/calibration",
+                  json={"image_points": img_pts, "floor_points": _FLOOR_PTS,
+                        "img_w": 1280, "img_h": 720})
+        assert r.status_code == 422
+
+
 def test_put_four_point_homography_round_trips(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as c:
         r = c.put("/api/cameras/cam_q/calibration",

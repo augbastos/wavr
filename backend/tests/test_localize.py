@@ -82,6 +82,18 @@ def test_homography_rejects_nonfinite():
         homography_from_points(img, flr)
 
 
+def test_homography_rejects_huge_int_literal_not_overflowerror():
+    # Audit HIGH regression: a raw `10**400`-shaped JSON int (json.loads decodes it as
+    # an arbitrary-precision Python int, not a float) used to raise an unhandled
+    # OverflowError out of _finite_point's float() call -- an unhandled 500 via
+    # PUT /api/cameras/{name}/calibration -- instead of the clean ValueError every
+    # other malformed correspondence already gets.
+    img = [(0, 0), (1, 0), (1, 10**400), (0, 1)]
+    flr = [(0, 0), (1, 0), (1, 1), (0, 1)]
+    with pytest.raises(ValueError):
+        homography_from_points(img, flr)
+
+
 def test_apply_h_point_at_infinity_returns_none():
     # A homography whose bottom row sends this pixel's denominator to ~0.
     h = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])

@@ -88,6 +88,14 @@ _RATE_CAPACITY = 120          # burst size
 _RATE_REFILL_PER_SEC = 4.0    # sustained rate once the burst is spent
 _RATE_MAX_KEYS = 4096         # bound the per-IP table (evict oldest beyond this)
 
+# Cap on the body gate 4.5 (below) buffers to inspect a tool-scope-restricted agent's
+# JSON-RPC call. A real tools/call payload (name + a handful of args) is tiny; this is
+# generous headroom (mirrors wavr.sources.onvif._MAX_XML_BYTES's "reject oversized
+# before parsing" convention) so an unauthenticated-past-Gate-1 but restricted agent
+# principal can't force this ONE path (the only one that reads a full body up front,
+# see `_buffer_body`'s docstring) to buffer an unbounded amount (audit MEDIUM).
+_MAX_TOOL_CALL_BODY_BYTES = 1_000_000  # 1 MB
+
 # Origin host allowlist for /mcp (DNS-rebind defence). An Origin is `scheme://host[:port]`;
 # we compare the HOST only (the security identity), ignoring scheme/port. `local_ip` (the
 # central's own LAN IP) is added at guard-build time so a same-origin browser client
@@ -122,7 +130,13 @@ def _origin_ok(origin: str | None, local_ip: str) -> bool:
     return host in allowed
 
 
-async def _buffer_body(receive):
+class _BodyTooLarge(Exception):
+    """Raised by `_buffer_body` when the drained body exceeds `max_bytes`. Caught by
+    gate 4.5's caller ONLY (never allowed to propagate into FastMCP/Starlette's own
+    exception handling, which would send its own 500 before this could reply cleanly)."""
+
+
+async def _buffer_body(receive, max_bytes: int = _MAX_TOOL_CALL_BODY_BYTES):
     """Drain the ASGI request body into `bytes`, returning `(body, replay_receive)`.
     `replay_receive` is a `receive()` callable that replays the EXACT messages
     consumed here -- byte-identical to the original stream -- before forwarding
@@ -131,11 +145,20 @@ async def _buffer_body(receive):
     unmodified request. Only called when there's an actual tool-scope restriction
     to check (gate 4.5 below) -- an unrestricted principal (root/central/user)
     never pays this cost; dispatch reads the original `receive` untouched, exactly
-    as before this feature."""
+    as before this feature.
+
+    Raises `_BodyTooLarge` (audit MEDIUM) the instant the running total exceeds
+    `max_bytes`, WITHOUT reading any further -- this is the only path in the /mcp
+    guard that buffers a whole body up front, so it is also the only one an
+    unbounded body could exhaust memory through."""
     messages = []
+    total = 0
     while True:
         message = await receive()
         messages.append(message)
+        total += len(message.get("body", b"") or b"")
+        if total > max_bytes:
+            raise _BodyTooLarge()
         if message.get("type") != "http.request" or not message.get("more_body", False):
             break
     body = b"".join(m.get("body", b"") for m in messages if m.get("type") == "http.request")
@@ -285,7 +308,15 @@ class _McpHttpGuard:
         # (`state` was already read for Gate 1.5 above -- same dict, reused.)
         tool_scopes = state.get("tool_scopes")
         if tool_scopes is not None:
-            body, receive = await _buffer_body(receive)
+            try:
+                body, receive = await _buffer_body(receive)
+            except _BodyTooLarge:
+                # Fail-closed 413 (audit MEDIUM) -- caught HERE, before FastMCP/
+                # Starlette's own exception handling ever sees it, so this is a clean
+                # response, never a 500.
+                await JSONResponse({"detail": "request body too large"},
+                                   status_code=413)(scope, receive, send)
+                return
             for tool_name in _extract_tool_call_names(body):
                 if not tool_call_allowed(tool_scopes, tool_name):
                     _log.warning("mcp tool call refused: %r not in agent scope %s",

@@ -98,7 +98,7 @@ def test_on_feet_emits_highest_confidence_person(monkeypatch):
     # two people; on_feet must receive the more-confident one's FEET pixel + dims.
     boxes = [((100.0, 100.0, 300.0, 500.0), 0.6),
              ((600.0, 200.0, 800.0, 700.0), 0.95)]
-    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame: [_pose_result(boxes)]))
+    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame, **kw: [_pose_result(boxes)]))
     seen = []
     _cam.yolo_pose_detect(_Frame(), 0.0,
                           on_feet=lambda feet, size, conf: seen.append((feet, size, conf)))
@@ -112,7 +112,7 @@ def test_on_feet_emits_highest_confidence_person(monkeypatch):
 
 
 def test_on_feet_not_called_without_person(monkeypatch):
-    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame: [_pose_result([])]))
+    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame, **kw: [_pose_result([])]))
     seen = []
     _cam.yolo_pose_detect(_Frame(), 0.0, on_feet=lambda *a: seen.append(a))
     assert seen == []
@@ -120,7 +120,7 @@ def test_on_feet_not_called_without_person(monkeypatch):
 
 def test_on_feet_coexists_with_localizer(monkeypatch):
     boxes = [((100.0, 100.0, 300.0, 500.0), 0.9)]
-    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame: [_pose_result(boxes)]))
+    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame, **kw: [_pose_result(boxes)]))
     seen = []
     targets = _cam.yolo_pose_detect(
         _Frame(), 0.0,
@@ -184,7 +184,7 @@ def test_factory_sampling_records_feet_without_calibration(monkeypatch):
     # Drive the built pose_detect with a mocked detection and confirm the feet pixel
     # lands in the store (the on_feet closure fired). No frame involved.
     boxes = [((600.0, 300.0, 700.0, 700.0), 0.9)]
-    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame: [_pose_result(boxes)]))
+    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame, **kw: [_pose_result(boxes)]))
     src._pose_detect(_Frame(), 0.0)
     got = store.latest("cam_q")
     assert got is not None and got["feet_px"] == (650.0, 700.0)

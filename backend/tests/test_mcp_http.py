@@ -25,6 +25,7 @@ from wavr.mcp import FusionStateProvider, build_mcp_server
 from wavr.fusion import FusionEngine
 from wavr.mcp_http import (
     _origin_ok, _RateLimiter, _extract_tool_call_names, build_mcp_http_mount,
+    _buffer_body, _BodyTooLarge,
 )
 from wavr.auth import AGENT_ACTUATOR_TOOL_SCOPE, AGENT_READ_TOOL_SCOPE
 
@@ -348,6 +349,63 @@ def test_extract_tool_call_names_malformed_or_empty_body_is_empty():
     assert _extract_tool_call_names(b"") == []
     assert _extract_tool_call_names(b'"just a string"') == []
     assert _extract_tool_call_names(json.dumps({"method": "tools/call"}).encode()) == []
+
+
+# --------------------------------------------------------------------------- #
+# _buffer_body size cap (audit MEDIUM): gate 4.5 is the ONE path that reads a whole
+# body up front for a restricted agent principal -- must fail closed, not buffer
+# without limit.
+# --------------------------------------------------------------------------- #
+def test_buffer_body_within_cap_returns_body_and_replay():
+    chunks = [b'{"a":', b'1}']
+
+    async def fake_receive():
+        if chunks:
+            body = chunks.pop(0)
+            return {"type": "http.request", "body": body, "more_body": bool(chunks)}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def run():
+        body, replay = await _buffer_body(fake_receive, max_bytes=100)
+        assert body == b'{"a":1}'
+        # replay reproduces the SAME messages before falling through to fake_receive
+        first = await replay()
+        assert first["body"] == b'{"a":'
+
+    anyio.run(run)
+
+
+def test_buffer_body_over_cap_raises_body_too_large():
+    chunks = [b"x" * 50, b"y" * 60]   # 110 bytes total
+
+    async def fake_receive():
+        if chunks:
+            body = chunks.pop(0)
+            return {"type": "http.request", "body": body, "more_body": bool(chunks)}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def run():
+        with pytest.raises(_BodyTooLarge):
+            await _buffer_body(fake_receive, max_bytes=100)
+
+    anyio.run(run)
+
+
+def test_agent_oversized_tool_call_body_rejected_413_not_500(tmp_path, monkeypatch):
+    # Integration: a tool-scope-restricted agent posting an oversized JSON-RPC body
+    # (over the real production cap, _MAX_TOOL_CALL_BODY_BYTES) must get a clean 413
+    # from gate 4.5's own guard -- never a 500 from an unbounded buffer / an
+    # exception escaping into FastMCP/Starlette. (`_buffer_body`'s `max_bytes`
+    # default is bound at import time, so this exercises the REAL 1 MB cap rather
+    # than a monkeypatched one.)
+    app, auth = _agent_app(tmp_path, monkeypatch, tool_scopes=frozenset({"list_rooms"}))
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer = TestClient(app, client=("192.168.1.50", 12345))
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        big_call = _tool_call("list_rooms", arguments={"padding": "x" * 1_100_000})
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=big_call)
+        assert r.status_code == 413
 
 
 # --------------------------------------------------------------------------- #

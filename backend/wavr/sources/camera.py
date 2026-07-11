@@ -324,7 +324,11 @@ async def rtsp_frames(url: str) -> "AsyncIterator[object]":
 
 
 def yolo_detect(frame, conf_threshold: float = 0.0) -> Detection:
-    results = _model()(frame)
+    # verbose=False: ultralytics' DEFAULT_CFG.verbose is True, which logs a
+    # line (image size/detections/timing) to stdout on EVERY predict() call --
+    # per-frame spam at a 0.5s interval. This runs on every camera tick, so
+    # it's the only knob that matters here.
+    results = _model()(frame, verbose=False)
     persons = []
     for r in results:
         boxes = getattr(r, "boxes", None)
@@ -363,7 +367,9 @@ def yolo_pose_detect(frame, confidence: float = 0.0, localize=None,
 
     The frame is read ONLY for its pixel size (`frame.shape`); it is never stored
     (ADR-0002)."""
-    results = _pose_model()(frame)
+    # verbose=False -- see yolo_detect's comment; same per-frame log spam on
+    # the pose-predict path.
+    results = _pose_model()(frame, verbose=False)
     img_size = None
     if localize is not None or on_feet is not None:
         try:

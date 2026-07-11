@@ -110,6 +110,33 @@ def test_invalid_docs_raise(mutate, msg):
     assert msg in str(e.value).lower()
 
 
+# Audit HIGH (OverflowError -> unhandled 500, same class nodes.py's fix already
+# covers): a raw huge-magnitude JSON int literal (e.g. `10**400`, encoded with no
+# decimal point -> json.loads decodes it as an arbitrary-precision Python int) used
+# to blow up math.isfinite()'s C-double widening as an OverflowError, not a clean
+# HouseMapError -- reaching PUT /api/house / PUT /api/house/room as an unhandled 500.
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["floors"][0]["rooms"][0]["polygon"].__setitem__(0, [10**400, 0]),
+    lambda d: d["floors"][0]["walls"][0].update(a=[10**400, 0]),
+    lambda d: d["floors"][0]["features"][0].update(at=[10**400, 0]),
+])
+def test_huge_int_literal_coordinate_rejected_not_500(mutate):
+    d = _valid()
+    mutate(d)
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert "finite" in str(e.value).lower()
+
+
+def test_huge_int_literal_zone_polygon_rejected_not_500():
+    d = _valid()
+    d["floors"][0]["zones"] = [{"id": "z1", "name": "bed", "kind": "rest",
+                                "polygon": [[10**400, 0], [1, 0], [1, 1]]}]
+    with pytest.raises(HouseMapError) as e:
+        validate_house_map(d)
+    assert "finite" in str(e.value).lower()
+
+
 def test_over_cap_rooms_raise():
     d = _valid()
     d["floors"][0]["rooms"] = [{"id": f"r{i}", "name": str(i), "polygon": [[0,0],[1,0],[1,1]]} for i in range(513)]

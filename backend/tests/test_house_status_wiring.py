@@ -68,6 +68,22 @@ class _FakeOccupancyLog:
                                          "samples": 0, "hour": 0})
 
 
+class _CountingOccupancyLog(_FakeOccupancyLog):
+    """Same double as `_FakeOccupancyLog`, but counts `is_unusual` calls -- lets a
+    test prove the PERF TTL cache (app.py's `_HOUSE_STATUS_ROUTINE_TTL_S`/
+    `_routine_cache`) actually amortizes the sweep, not just returns the right
+    verdict once."""
+
+    def __init__(self, verdicts=None):
+        super().__init__(verdicts)
+        self.calls = 0
+
+    def is_unusual(self, room, occupied, at=None, weeks=4.0, min_samples=3, threshold=0.5):
+        self.calls += 1
+        return super().is_unusual(room, occupied, at=at, weeks=weeks,
+                                  min_samples=min_samples, threshold=threshold)
+
+
 class _OneRoomSource:
     """Publishes exactly one occupied 'sala' reading, no identities/targets --
     enough for A4's per-room is_unusual() sweep to have a room to check."""
@@ -195,3 +211,47 @@ def test_house_status_scope_gated_like_api_state():
                       net_inventory=_FakeInvService())
     with TestClient(app) as client:
         assert client.get("/api/house-status").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PERF: the routine/is_unusual sweep is amortized over a short TTL
+# (app.py's `_HOUSE_STATUS_ROUTINE_TTL_S`) -- was previously completely
+# untested; a call-count spy on `is_unusual` is the only way to actually prove
+# the sweep is being skipped rather than just re-returning the same verdict.
+# ---------------------------------------------------------------------------
+
+def test_house_status_routine_sweep_is_cached_within_ttl():
+    occ = _CountingOccupancyLog({"sala": {"unusual": True, "baseline_probability": 0.05,
+                                          "samples": 10, "hour": 3}})
+    app = create_app(sources=[("occsrc", lambda: _OneRoomSource(), True)],
+                      storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
+                      camera_store=CameraStore(":memory:"),
+                      net_inventory=_FakeInvService(), occupancy_log=occ)
+    with TestClient(app) as client:
+        _settle(client, ["sala"])
+        first = client.get("/api/house-status").json()
+        calls_after_first = occ.calls
+        assert calls_after_first >= 1                       # the sweep DID run once
+        second = client.get("/api/house-status").json()
+    assert occ.calls == calls_after_first                    # 2nd call within TTL: no re-sweep
+    reasons1 = [r for r in first["reasons"] if r["kind"] == "routine_anomaly"]
+    reasons2 = [r for r in second["reasons"] if r["kind"] == "routine_anomaly"]
+    assert reasons1 and reasons2                              # cached verdict still surfaced
+
+
+def test_house_status_routine_sweep_recomputes_after_ttl_expires(monkeypatch):
+    import wavr.app as app_module
+    monkeypatch.setattr(app_module, "_HOUSE_STATUS_ROUTINE_TTL_S", 0.05)
+    occ = _CountingOccupancyLog({"sala": {"unusual": True, "baseline_probability": 0.05,
+                                          "samples": 10, "hour": 3}})
+    app = create_app(sources=[("occsrc", lambda: _OneRoomSource(), True)],
+                      storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
+                      camera_store=CameraStore(":memory:"),
+                      net_inventory=_FakeInvService(), occupancy_log=occ)
+    with TestClient(app) as client:
+        _settle(client, ["sala"])
+        client.get("/api/house-status")
+        calls_after_first = occ.calls
+        time.sleep(0.1)                                       # past the (patched) TTL
+        client.get("/api/house-status")
+    assert occ.calls > calls_after_first                      # genuinely re-swept, not stuck stale

@@ -105,7 +105,7 @@ def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
     return merged
 
 
-def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
+def _device_view(d, meta: dict | None = None) -> dict:
     """Trim a Device to the fields the dashboard needs, merged with persisted
     metadata. `risks`/`open_ports`/`make`/`model`/`os`/`hostname`/`sources`
     are included only when populated -- i.e. only when the opt-in port pass
@@ -115,7 +115,13 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     Device but never reached this view before. A persisted user type-pin
     overrides device_type immediately (even between scans). `is_gateway` is
     included only when True and `latency_ms` only when the opt-in ping pass
-    measured one (both additive -- every existing field unchanged)."""
+    measured one (both additive -- every existing field unchanged).
+
+    `meta` is THIS device's already-looked-up {name, first_seen, last_seen,
+    device_type} dict (or None) -- the caller (`inventory_view`) fetches
+    every device's metadata in one batched `DeviceMeta.get_many()` call
+    instead of this function querying the store itself per device (that was
+    the N+1: one SELECT per device on GET /api/inventory, polled every 15s)."""
     view = {
         "mac": d.mac,
         "ip": d.ip,
@@ -142,7 +148,6 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
         view["is_gateway"] = True
     if d.latency_ms is not None:
         view["latency_ms"] = d.latency_ms
-    meta = device_meta.get(d.mac) if device_meta else None
     view["name"] = meta["name"] if meta else None
     view["first_seen"] = meta["first_seen"] if meta else None
     view["last_seen"] = meta["last_seen"] if meta else None
@@ -161,8 +166,14 @@ def inventory_view(service: NetworkInventoryService,
     merge_alerts's one-function-many-callers precedent) so the MCP
     get_network_inventory tool (wavr.mcp, via app.py's closure) and this route can
     never drift. Reads whatever `service`'s already-scanned/cached inventory
-    currently holds -- NEVER triggers a rescan."""
-    return [_device_view(d, device_meta) for d in service.latest_inventory()]
+    currently holds -- NEVER triggers a rescan.
+
+    Metadata is fetched for every device in ONE batched `device_meta.get_many()`
+    call rather than one `get()` per device (N+1 fix: GET /api/inventory is
+    polled every 15s by the dashboard)."""
+    devices = service.latest_inventory()
+    meta_by_mac = device_meta.get_many(d.mac for d in devices) if device_meta else {}
+    return [_device_view(d, meta_by_mac.get(d.mac)) for d in devices]
 
 
 def build_inventory_router(service: NetworkInventoryService,

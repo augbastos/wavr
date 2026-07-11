@@ -85,7 +85,7 @@ def test_yolo_detect_counts_persons(monkeypatch):
         conf = [0.9, 0.7]
     class _Result:
         boxes = _Boxes()
-    monkeypatch.setattr(camera, "_model", lambda: (lambda frame: [_Result()]))
+    monkeypatch.setattr(camera, "_model", lambda: (lambda frame, **kw: [_Result()]))
     det = camera.yolo_detect("frame")
     assert det.count == 1            # only the person box
     assert det.confidence == 0.9
@@ -98,13 +98,48 @@ def test_yolo_detect_filters_by_confidence_threshold(monkeypatch):
         conf = [0.9, 0.3]
     class _Result:
         boxes = _Boxes()
-    monkeypatch.setattr(camera, "_model", lambda: (lambda frame: [_Result()]))
+    monkeypatch.setattr(camera, "_model", lambda: (lambda frame, **kw: [_Result()]))
     det = camera.yolo_detect("frame", conf_threshold=0.5)
     assert det.count == 1             # only the 0.9 box clears the threshold
     assert det.confidence == 0.9
     det_default = camera.yolo_detect("frame")  # default 0.0 keeps all
     assert det_default.count == 2
     assert det_default.confidence == 0.9
+
+def test_yolo_detect_calls_model_with_verbose_false(monkeypatch):
+    # PERF/LOW fix: ultralytics DEFAULT_CFG.verbose is True -> a log line per
+    # predict() call, i.e. per camera frame at a 0.5s interval. yolo_detect
+    # must explicitly pass verbose=False to suppress that spam.
+    from wavr.sources import camera
+    calls = []
+    class _Boxes:
+        cls = []
+        conf = []
+    class _Result:
+        boxes = _Boxes()
+    def fake_model(frame, **kw):
+        calls.append(kw)
+        return [_Result()]
+    monkeypatch.setattr(camera, "_model", lambda: fake_model)
+    camera.yolo_detect("frame")
+    assert calls == [{"verbose": False}]
+
+def test_yolo_pose_detect_calls_model_with_verbose_false(monkeypatch):
+    # Same fix, pose-predict path.
+    from wavr.sources import camera
+    calls = []
+    class _Boxes:
+        cls = []
+        conf = []
+    class _Result:
+        boxes = _Boxes()
+        keypoints = None
+    def fake_model(frame, **kw):
+        calls.append(kw)
+        return [_Result()]
+    monkeypatch.setattr(camera, "_pose_model", lambda: fake_model)
+    camera.yolo_pose_detect("frame", 0.0)
+    assert calls == [{"verbose": False}]
 
 def _reset_active():
     _cam._ACTIVE = 0
@@ -228,7 +263,7 @@ def test_yolo_pose_detect_builds_posture_targets(monkeypatch):
         boxes = _Boxes()
         keypoints = _Keypoints()
 
-    monkeypatch.setattr(camera, "_pose_model", lambda: (lambda frame: [_Result()]))
+    monkeypatch.setattr(camera, "_pose_model", lambda: (lambda frame, **kw: [_Result()]))
     targets = camera.yolo_pose_detect("frame", 0.0)
     assert len(targets) == 1
     t = targets[0]
@@ -282,7 +317,7 @@ def _pose_result_with_box(xyxy, conf=0.9):
 
 def test_yolo_pose_detect_positions_target_with_localizer(monkeypatch):
     monkeypatch.setattr(_cam, "_pose_model",
-                        lambda: (lambda frame: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0))]))
+                        lambda: (lambda frame, **kw: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0))]))
     seen = {}
     def fake_localize(feet, img_size):
         seen["feet"] = feet
@@ -299,7 +334,7 @@ def test_yolo_pose_detect_positions_target_with_localizer(monkeypatch):
 
 def test_yolo_pose_detect_none_safe_when_localizer_returns_none(monkeypatch):
     monkeypatch.setattr(_cam, "_pose_model",
-                        lambda: (lambda frame: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0), conf=0.7)]))
+                        lambda: (lambda frame, **kw: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0), conf=0.7)]))
     targets = _cam.yolo_pose_detect(_Frame(), 0.0, localize=lambda feet, sz: None)
     assert len(targets) == 1
     t = targets[0]
@@ -309,7 +344,7 @@ def test_yolo_pose_detect_none_safe_when_localizer_returns_none(monkeypatch):
 
 def test_yolo_pose_detect_no_localizer_keeps_xy_none(monkeypatch):
     monkeypatch.setattr(_cam, "_pose_model",
-                        lambda: (lambda frame: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0))]))
+                        lambda: (lambda frame, **kw: [_pose_result_with_box((100.0, 100.0, 300.0, 500.0))]))
     targets = _cam.yolo_pose_detect(_Frame(), 0.0)   # no localizer at all
     assert targets[0].x is None and targets[0].y is None
 
@@ -318,7 +353,7 @@ async def test_camera_emits_positioned_target_end_to_end(monkeypatch):
     import functools
     from wavr.localize import make_localizer, MountPose
     monkeypatch.setattr(_cam, "_pose_model",
-                        lambda: (lambda frame: [_pose_result_with_box((600.0, 300.0, 700.0, 700.0))]))
+                        lambda: (lambda frame, **kw: [_pose_result_with_box((600.0, 300.0, 700.0, 700.0))]))
     # quarto polygon from DEFAULT_MAP; a mount prior -> monocular estimate.
     poly = [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]
     loc = make_localizer(poly, mount=MountPose(pos_x=4.2, pos_y=0.0, height=2.4,
