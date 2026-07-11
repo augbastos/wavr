@@ -422,6 +422,10 @@
   .net-cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
   .net-col h4{margin:0 0 6px;font-size:.72rem;color:var(--dim);font-weight:600;
               text-transform:uppercase;letter-spacing:.05em;}
+  /* Saliency fix (04 screen, 2026-07-10 DeepGaze pass): the Intrusion Alerts column is this
+     tab's reason to exist — its header reads full-text weight, not the dim micro-label the
+     purely informative Devices column keeps. Hypothesis to re-check with saliency_run.py. */
+  .net-col.net-col-alerts h4{color:var(--text);}
   .dev-list,.alert-list{display:flex;flex-direction:column;max-height:340px;overflow:auto;}
   .dev-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
            font-size:.82rem;padding:7px 0;border-top:1px dashed var(--line);}
@@ -463,6 +467,14 @@
   .sev-badge.sev-critical{background:var(--danger);color:#fff;box-shadow:0 0 0 2px var(--danger-soft);}
   .alert-row.sev-info .at,.alert-row.sev-note .at{color:var(--dim);font-weight:500;}
   .alert-row.sev-watch .at{color:var(--warn);}
+  /* Saliency fix (04 screen): count badge + a severity-keyed ring on the alert-list block
+     itself, so a non-empty Intrusion Alerts column reads as ONE salient object instead of
+     diffuse dashed rows — reuses the existing severity ladder colours, no new palette. */
+  .net-alert-count{font-variant-numeric:tabular-nums;}
+  .net-alert-count.has-alert{color:var(--danger);font-weight:700;}
+  .net-alert-count.has-watch{color:var(--warn);font-weight:700;}
+  .alert-list.has-alert{border-radius:8px;box-shadow:0 0 0 1px var(--danger-soft);}
+  .alert-list.has-watch{border-radius:8px;box-shadow:0 0 0 1px var(--warn-soft);}
 
   /* v2 device auto-ID: type icon badge + honest confidence cues (guessed = dashed/dim, low adds "?") */
   .dev-ico{flex:none;display:inline-flex;align-items:center;justify-content:center;
@@ -698,8 +710,12 @@
   .hdot-stale{background:var(--warn);}
   .hdot-dead{background:var(--danger);}
   /* setup overlay (rungs 2/3) */
-  .lockbadge{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;color:var(--accent);
-             border:1px solid rgba(61,181,74,.35);border-radius:999px;padding:4px 10px;
+  /* Saliency fix (18 screen, 2026-07-10 DeepGaze pass): this trust badge was the hottest pixel
+     on the whole setup overlay (top-right corner, accent-green), out-competing the actual
+     ladder steps and the Verify-connection CTA that finishes onboarding. It's reassurance
+     chrome, not the task — demoted to neutral so it reads as calm confirmation, not the star. */
+  .lockbadge{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;color:var(--dim);
+             border:1px solid var(--line);border-radius:999px;padding:4px 10px;
              margin-left:auto;white-space:nowrap;}
   .lockbadge svg{width:12px;height:12px;flex:none;}
   .ladder-steps{display:flex;flex-direction:column;}
@@ -753,6 +769,12 @@
   .status-internet.down{color:var(--danger);}
   .status-internet.off{color:var(--dim);font-weight:400;}
   #redeInternet .status-internet{margin-bottom:0;}
+  /* Saliency fix (04 screen): "Internet: OK" is a reassurance pill, not the tab's reason to
+     exist — it was the hottest pixel on this screen in the DeepGaze read, out-shouting the
+     actual Intrusion Alerts. Demoted here (Network tab only); System tab's summary line and
+     the topbar pill keep --accent — this is a scoped override, not a token change. The
+     .down/.off states are untouched (a real outage should still read loud). */
+  #redeInternet .status-internet.ok{color:var(--dim);font-weight:500;}
 
   /* ---------------- Pairing (gear) ---------------- */
   .pair-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;}
@@ -930,8 +952,11 @@
   /* fix 6: header network badge is tappable (opens the Network tab) */
   .tpill.chip-nav{cursor:pointer;}
   .tpill.chip-nav:hover{border-color:var(--line-strong);}
-  /* fix 3: on catalog cards, the REAL add/confirm action reads accent; the guide stays neutral */
-  .cap-cta .ctl.primary{border-color:var(--accent);color:var(--accent);}
+  /* fix 3: on catalog cards, the REAL add/confirm action reads accent; the guide stays neutral.
+     Saliency fix (18 screen): the setup ladder's "Verify connection" CTA gets the same
+     accent-primary treatment — it's the one action that completes onboarding, and used to be
+     plain-neutral while a decorative corner badge stole the peak. */
+  .cap-cta .ctl.primary,.ladder-steps .ctl.primary{border-color:var(--accent);color:var(--accent);}
   /* fix 6: illustrative example surfaces (Rede + Detectados) — dashed frame + amber
      "example" flags so mock data can never be mistaken for real data. */
   .tile-example{border-style:dashed;border-color:var(--line-strong);}
@@ -1004,7 +1029,13 @@
      The two "master switches" (System global + camera kill) share the switch grammar,
      the kill just carries more weight. "Off for privacy." reads CALM (neutral
      text), never error-red — off-by-choice is a feature state, not a failure (§2.4). */
-  .cam-privacy{border-color:rgba(61,181,74,.3);}
+  /* Saliency fix (07 screen, 2026-07-10 DeepGaze pass): DeepGaze found no dominant anchor on
+     this tab — gaze spread across the per-camera Calibrate/Remove buttons instead of
+     converging on the master control. A state-reflecting left accent bar makes this tile read
+     as the ONE object that matters; accent only while cameras are actually live — kept
+     neutral (never --danger) while off, per the invariant above. */
+  .cam-privacy{border-left:3px solid var(--line-strong);}
+  .cam-privacy.cp-live{border-left-color:var(--accent);}
   .cam-banner{display:flex;gap:10px;align-items:flex-start;margin:0 0 14px;
               font-size:.9rem;line-height:1.5;color:var(--text);}
   .cam-banner svg{width:16px;height:16px;flex:none;color:var(--accent);margin-top:3px;}
@@ -1195,9 +1226,18 @@
   /* gear → Privacy & security: the 4 invariants (trust screen, ALL modes) */
   .inv-list{list-style:none;margin:12px 0;padding:0;display:flex;flex-direction:column;}
   .inv-list li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;
-               border-top:1px dashed var(--line);font-size:.84rem;color:var(--dim);line-height:1.5;}
+               border-top:1px dashed var(--line);font-size:.84rem;color:var(--text);line-height:1.5;}
   .inv-list li svg{width:15px;height:15px;flex:none;color:var(--accent);margin-top:3px;}
   .inv-list li b{color:var(--text);font-weight:560;}
+  /* Saliency fix (15 screen, 2026-07-10 DeepGaze pass): these four commitments are the
+     verifiable "receipts" a privacy-minded visitor came to read, but sat in the coldest band
+     of the screen. Grouped into one card (reuses the .cap-fusion accent left-border idiom) +
+     text promoted from --dim to --text so it reads as ONE salient object, not four thin rows. */
+  .inv-card{border-left:2px solid var(--accent);padding:2px 0 2px 14px;margin:12px 0;}
+  .inv-card .inv-list{margin:0;}
+  /* ...and separated from the next settings section (Panel lock / What's New) so that block
+     doesn't blend into a second competing hot zone right below the promises. */
+  #gearSecPanelLock > .tile{margin-top:24px;padding-top:20px;border-top:1px solid var(--line);}
   /* the old Recursos chips column is superseded by the egress dashboard (renderStatus
      still writes #statusFeatures; nothing else reads it — same trick as #statusSources) */
   #statusFeaturesCol{display:none;}
@@ -1490,6 +1530,10 @@
     .settings-section-h{display:block;position:sticky;top:0;margin:0 -16px 4px;
         padding:14px 16px 10px;background:var(--bg);font-size:1rem;font-weight:600;
         border-bottom:1px solid var(--line);z-index:1;}
+    /* Saliency fix (15 screen) is a continuous-scroll-only concern — under panel/kiosk mode
+       each settings-section is already isolated one-at-a-time with its own sticky header
+       (directly above), so the extra top divider on Panel-lock would be redundant. */
+    #gearSecPanelLock > .tile{margin-top:0;padding-top:0;border-top:0;}
 
     /* -------- Touch-target floor, asserted directly in this form-factor MQ — NOT gated
        on @media(pointer:coarse) (a kiosk WebView may not report it). Covers every source
@@ -2051,20 +2095,24 @@
           <div class="tile-head"><h2>Network and devices</h2></div>
           <p class="net-sub">Devices connected to your Wi-Fi and alerts about unknown devices.</p>
           <div id="netHint" class="net-hint">No devices detected on the network yet.</div>
+          <!-- Saliency fix (04 screen, 2026-07-10 DeepGaze pass): Intrusion Alerts reordered
+               ahead of the purely informative Devices column — it's this tab's reason to
+               exist and was previously the cold second column. Pure DOM reorder, no id
+               changes, so search/filter/observer wiring below is unaffected. -->
           <div class="net-cols">
+            <div class="net-col net-col-alerts">
+              <h4>Intrusion alerts <span id="netAlertCount" class="net-alert-count"></span></h4>
+              <p class="net-hint alert-honesty">A device with a randomized MAC and no self-announced
+                name can't be auto-identified from the network alone — that's why it shows up here as
+                unfamiliar. If it's actually yours, use "this is mine" on its row to mark it known.</p>
+              <div id="alertList" class="alert-list" aria-live="polite"></div>
+            </div>
             <div class="net-col">
               <h4>Devices on the network <span id="devFb" class="action-fb" aria-live="polite"></span></h4>
               <!-- Stage 3b (§7#13): instant client-side filter over the rows below -->
               <input id="devSearch" class="cat-search dev-search" type="search"
                      placeholder="search device (name, IP, vendor…)" aria-label="search device on the network">
               <div id="devList" class="dev-list" aria-live="polite"></div>
-            </div>
-            <div class="net-col">
-              <h4>Intrusion alerts</h4>
-              <p class="net-hint alert-honesty">A device with a randomized MAC and no self-announced
-                name can't be auto-identified from the network alone — that's why it shows up here as
-                unfamiliar. If it's actually yours, use "this is mine" on its row to mark it known.</p>
-              <div id="alertList" class="alert-list" aria-live="polite"></div>
             </div>
           </div>
         </div>
@@ -2079,7 +2127,20 @@
           <p class="net-sub">With a Wavr hub on your network, this tab lists your Wi-Fi devices and alerts you
             the moment an <b>unknown</b> one joins — all inside your home, nothing goes to the cloud.
             Below, a sample of how it looks:</p>
+          <!-- Saliency fix (04 screen): same column reorder as the live tile above, kept
+               consistent so the example matches the real hierarchy a hub user will see. -->
           <div class="net-cols">
+            <div class="net-col net-col-alerts">
+              <h4>Intrusion alerts<span class="ex-badge">example</span></h4>
+              <div class="alert-list">
+                <div class="alert-row">
+                  <span class="at">intruder? — new device 03:12</span>
+                  <span class="ameta"><span class="dev-ico sm guessed"><svg aria-hidden="true"><use href="#ic-qmark"/></svg></span>unknown vendor · <span class="dtype-lbl guess" title="guessed from weak signals">Unknown device<span class="dtype-q" aria-hidden="true">?</span></span> · 192.168.1.77 · 5e:21:••:••:••:b0 · never seen on this network before</span>
+                </div>
+              </div>
+              <p class="net-hint">A never-before-seen device joined the Wi-Fi overnight — Wavr alerts you instantly,
+                locally, so you can decide if it's a guest… or an intruder.</p>
+            </div>
             <div class="net-col">
               <h4>Devices on the network<span class="ex-badge">example</span></h4>
               <div class="dev-list">
@@ -2108,17 +2169,6 @@
                   <span class="tag known">known</span>
                 </div>
               </div>
-            </div>
-            <div class="net-col">
-              <h4>Intrusion alerts<span class="ex-badge">example</span></h4>
-              <div class="alert-list">
-                <div class="alert-row">
-                  <span class="at">intruder? — new device 03:12</span>
-                  <span class="ameta"><span class="dev-ico sm guessed"><svg aria-hidden="true"><use href="#ic-qmark"/></svg></span>unknown vendor · <span class="dtype-lbl guess" title="guessed from weak signals">Unknown device<span class="dtype-q" aria-hidden="true">?</span></span> · 192.168.1.77 · 5e:21:••:••:••:b0 · never seen on this network before</span>
-                </div>
-              </div>
-              <p class="net-hint">A never-before-seen device joined the Wi-Fi overnight — Wavr alerts you instantly,
-                locally, so you can decide if it's a guest… or an intruder.</p>
             </div>
           </div>
         </div>
@@ -2759,6 +2809,7 @@
     <div class="tile" id="gearPrivacy" aria-labelledby="gpriv-h">
       <div class="tile-head"><h2 id="gpriv-h">Privacy &amp; security</h2><span class="hint">Wavr's contract with your home</span></div>
       <p class="privacy-copy"><b>Nothing leaves home by default.</b> Four commitments hold for every Wavr installation:</p>
+      <div class="inv-card">
       <ul class="inv-list">
         <li><svg aria-hidden="true"><use href="#ic-camera"/></svg><span><b>Frames stay in memory only.</b> Cameras process every frame in RAM and discard it — they never write to disk, never send video.</span></li>
         <li><svg aria-hidden="true"><use href="#ic-radar"/></svg><span><b>Vitals and positions exist live only.</b> Breathing, heart rate, and movement paths exist in the live stream and are not retained beyond your hub.</span></li>
@@ -2769,6 +2820,7 @@
         <li><svg aria-hidden="true"><use href="#ic-alert"/></svg><span><b>All egress is opt-in.</b> In the basic flow, only the narrator (History tab) sends data to the cloud — with confirmation, every time. Notifications (ntfy), MQTT, Home Assistant, MCP control, and a cloud Assistant engine are also optional egress paths from the hub: they ship off and only leave home if you turn them on.</span></li>
         <li><svg aria-hidden="true"><use href="#ic-lock"/></svg><span><b>Cameras start off.</b> Every new camera (and every hub restart) starts off — turning it on is always your action.</span></li>
       </ul>
+      </div>
       <!-- P5 fix 1 (+ resolves the "split trust story" finding): the two privacy surfaces now
            point at each other — this lands on Sistema's live egress dashboard. -->
       <div class="controls-row">
@@ -10035,7 +10087,10 @@ try {
     vbody.appendChild(elc("p", null, "After setting this up outside the app, tap here to confirm the source has appeared on the hub."));
     var vres = elc("p", "verify-res", "");
     vres.setAttribute("aria-live", "polite");
-    var vbtn = elc("button", "ctl small", "Verify connection");
+    // Saliency fix (18 screen): the one action that completes onboarding is now the one
+    // accent-primary control in the ladder (was plain "ctl small" — same weight-class as the
+    // step "Copy" buttons, so it never won the peak against the corner trust badge).
+    var vbtn = elc("button", "ctl small primary", "Verify connection");
     vbtn.type = "button";
     vbtn.setAttribute("data-setup-verify", "1");   // P4 fix 3: target of the "Mark as installed" button
     if(M !== "live"){
@@ -10642,6 +10697,12 @@ try {
     // as a labeled example (egKillDemoState) while the central-panel buttons hide.
     var btns = [$("camKillBtn"), $("gearKillBtn"), egKill];
     var states = [$("camKillState"), $("gearKillState"), egKillState];
+    // Saliency fix (07 screen): state-reflecting left accent bar on the master-control tile
+    // itself (see .cam-privacy.cp-live in the CSS) — accent only while cameras are live.
+    var camPrivacyTile = $("camPrivacy");
+    function setCamPrivacyState(live){
+      if(camPrivacyTile) camPrivacyTile.classList.toggle("cp-live", !!live);
+    }
     function say(t, calm){
       states.forEach(function(s){
         if(s){
@@ -10660,6 +10721,7 @@ try {
           s.className = "kill-state";
         }
       });
+      setCamPrivacyState(false);
       return;
     }
     var cs = cameraSourceList();
@@ -10667,6 +10729,7 @@ try {
       btns.forEach(function(b){ if(b) b.hidden = true; });
       say("No camera configured — when you add one, it starts off.");
       egKillState.textContent = "";   // the Cameras row's own state line already says this
+      setCamPrivacyState(false);
       return;
     }
     var on = cs.filter(function(s){ return s.enabled; });
@@ -10685,6 +10748,7 @@ try {
     });
     if(anyOn) say(on.length + " of " + cs.length + " camera(s) on — one tap turns them all off.");
     else say("Off for privacy.", true);
+    setCamPrivacyState(anyOn);
   }
   async function killToggle(){
     if(M !== "live" || killBusy || tierBusy) return;   // tierBusy: a Sensing-level change is mid-fan-out
@@ -12451,10 +12515,28 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
   function renderCoreAlerts(){
     if(!alertsEl) return;
     var list = document.getElementById("alertList");
-    var n = list ? list.querySelectorAll(".alert-row").length : 0;
+    var rows = list ? list.querySelectorAll(".alert-row") : [];
+    var n = rows.length;
     alertsEl.hidden = !n;
     alertsEl.textContent = n ? (n + (n > 1 ? " alerts" : " alert")) : "";
     updateWaveMood();
+    // Saliency fix (04 screen): count badge + severity-keyed ring on the Network tab's
+    // Intrusion Alerts column, mirroring #alertList — zero new fetches, same pattern as the
+    // coreAlerts count above. Hypothesis to re-check with saliency_run.py, not a proven fix.
+    var badge = document.getElementById("netAlertCount");
+    if(badge){
+      var hasCritical = false, hasWatch = false;
+      for(var i = 0; i < rows.length; i++){
+        if(rows[i].classList.contains("sev-critical") || rows[i].classList.contains("sev-alert")) hasCritical = true;
+        else if(rows[i].classList.contains("sev-watch")) hasWatch = true;
+      }
+      badge.textContent = n ? ("(" + n + ")") : "";
+      badge.className = "net-alert-count" + (hasCritical ? " has-alert" : hasWatch ? " has-watch" : "");
+      if(list){
+        list.classList.toggle("has-alert", hasCritical);
+        list.classList.toggle("has-watch", !hasCritical && hasWatch);
+      }
+    }
   }
   var alertListEl = document.getElementById("alertList");
   if(alertListEl) new MutationObserver(renderCoreAlerts).observe(alertListEl, {childList: true});
