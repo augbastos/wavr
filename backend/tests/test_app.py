@@ -75,7 +75,10 @@ def test_state_returns_latest_per_room():
         any_room = next(iter(state.values()))
         assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals",
                                         "sources", "targets", "identities", "person_count",
-                                        "explanation", "ts"}
+                                        "explanation", "ts",
+                                        # precision ladder (additive): the resolution axis,
+                                        # distinct from confidence — how DETAILED, not how SURE.
+                                        "precision_level", "precision_pct", "precision_next"}
 
 
 def test_state_exposes_identities_only_when_flag_on():
