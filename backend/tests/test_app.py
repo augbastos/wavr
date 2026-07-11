@@ -305,6 +305,11 @@ def test_status_shape_and_no_secrets():
             "occupancy_log",
             # Watch/Guard ("Vigia") -- in-memory toggle, default OFF.
             "watch",
+            # Phase-2B re-threat FIX 3: the Wavr Assistant's cloud-egress kill
+            # switch ("assistant-cloud" connector) as a first-class trust-receipt
+            # fact -- true only when an admin has enabled it in Connectors.
+            # Default install -> False.
+            "assistant_cloud",
         }
         assert set(body["features"]) == expected_features
         # Every feature is a bool flag EXCEPT connectors_active, an int count.
@@ -372,6 +377,9 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "occupancy_log": True,
             # Watch/Guard ("Vigia") -- in-memory toggle, default OFF.
             "watch": False,
+            # Phase-2B re-threat FIX 3: Wavr Assistant cloud-egress kill switch,
+            # default OFF.
+            "assistant_cloud": False,
         }
 
 

@@ -243,10 +243,10 @@ AGENT_READ_TOOL_SCOPE = MCP_TOOL_NAMES - {"call_ha_service"}
 AGENT_ACTUATOR_TOOL_SCOPE = MCP_TOOL_NAMES
 
 # Phase-2A verify FIX 4 (MEDIUM, least-privilege default): the DEFAULT agent grant
-# is COARSE, current-state-only -- current occupancy + house map + the explainable
-# room context + the composed house-status verdict. It deliberately EXCLUDES every
-# read tool that leaks a household PII/tracking crown-jewel, even after the mcp.py-
-# side minimization (FIX 1/2/3) narrows each one's OWN field set:
+# is COARSE, current-state-only -- current occupancy + the explainable room context
+# + the composed house-status verdict. It deliberately EXCLUDES every read tool
+# that leaks a household PII/tracking crown-jewel, even after the mcp.py-side
+# minimization (FIX 1/2/3) narrows each one's OWN field set:
 #   * query_occupancy_history -- a multi-week per-room timeline = "when is the
 #     house empty" (even clamped to 24h by FIX 2, still a live-presence signal a
 #     default cloud-relayed agent should not get for free).
@@ -256,14 +256,22 @@ AGENT_ACTUATOR_TOOL_SCOPE = MCP_TOOL_NAMES
 #     names a person or a specific device (see app.py's mcp-read Connectors
 #     disclosure: "HA entity list incl. entity names (which may name people/
 #     devices)") -- never minimized at all, so it stays out of the default too.
-# Each of these four requires an EXPLICIT admin Device.tool_scopes grant to
+#   * get_house_map            -- Phase-2B verify re-threat (MEDIUM): even
+#     mcp.py's own minimization (FIX C) only drops the floor/room/zone `name`
+#     label -- it still ships room `id` (which ENCODES the room name in every
+#     real house.json, e.g. "cozinha"/"quarto-1") plus the room's polygon
+#     GEOMETRY, i.e. the annotated floor plan. A cloud Q&A assistant does not
+#     need the floor plan to answer an occupancy question -- current occupancy
+#     via list_rooms/get_room_context/get_house_status is enough -- so this
+#     joins the crown-jewel set above, opt-in only.
+# Each of these five requires an EXPLICIT admin Device.tool_scopes grant to
 # reach -- exactly the same opt-in discipline call_ha_service already needs
 # (AGENT_ACTUATOR_TOOL_SCOPE). This matches the decision that a default
 # cloud-relayable agent gets current-occupancy only, not the history/inventory/
-# alerts/HA-entities crown jewels; an operator who wants more grants
+# alerts/HA-entities/floor-plan crown jewels; an operator who wants more grants
 # AGENT_READ_TOOL_SCOPE (every read tool) or a hand-picked subset explicitly.
 AGENT_DEFAULT_TOOL_SCOPE = frozenset({
-    "list_rooms", "get_room_context", "get_house_map", "get_house_status",
+    "list_rooms", "get_room_context", "get_house_status",
 })
 
 # Role -> default MCP tool-name allow-list (the tool-axis analog of DEFAULT_SCOPES).

@@ -76,6 +76,28 @@ class Config:
     # Anthropic Claude (/v1/messages) -- cloud.
     anthropic_api_key: str
     anthropic_model: str
+    # Wavr Assistant (Phase 2B): the bounded-MCP-tool-loop engine picker
+    # (backend.wavr.assistant_engine / assistant_store / api_assistant). The
+    # persisted selection lives in AssistantEngineStore (survives restart,
+    # admin-changeable without editing .env); this is only the FALLBACK when no
+    # selection row exists yet, mirroring how ConnectorStore's override falls back
+    # to an env flag. Default "wavr_assistant" -- the local/zero-egress built-in,
+    # same idiom as net_gateway_monitor defaulting ON.
+    assistant_engine_default: str
+    # Bounded agent-loop caps for the assistant's tool loop (ALL 6 engines run
+    # through this loop when asked a question -- only the underlying LLM call and
+    # the reachable MCP-tool scope differ per engine). Small, fixed defaults; no
+    # UI for these in v1, env-only, mirrors e.g. cam_unhealthy_secs being a plain
+    # float field with no dedicated screen.
+    assistant_max_tool_steps: int
+    assistant_tool_timeout: float
+    # `local_llm` engine (Phase 2B): a SEPARATE OpenAI-compatible endpoint from
+    # `openai_base_url` above -- deliberately independent config so pointing
+    # WAVR_OPENAI_BASE_URL at a cloud endpoint never silently also reclassifies
+    # this always-local picker entry. Defaults to Ollama's own OpenAI-compat `/v1`
+    # surface on loopback (zero egress by construction, no key needed).
+    assistant_local_llm_base_url: str
+    assistant_local_llm_model: str
     house_map: str
     mmwave_port: str
     mmwave_room: str
@@ -335,6 +357,20 @@ def load_config() -> Config:
         # Anthropic Claude (cloud).
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         anthropic_model=os.getenv("WAVR_ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+        # Wavr Assistant engine picker (Phase 2B) -- unknown values fall back to
+        # "wavr_assistant" (never crash on a typo; the picker/store still guard the
+        # actual gate). See assistant_engine.ENGINE_IDS for the fixed 6-id set.
+        assistant_engine_default=(
+            os.getenv("WAVR_ASSISTANT_ENGINE", "wavr_assistant").strip().lower()
+            if os.getenv("WAVR_ASSISTANT_ENGINE", "wavr_assistant").strip().lower()
+            in ("wavr_assistant", "local_llm", "openai", "anthropic", "gemini", "manual")
+            else "wavr_assistant"
+        ),
+        assistant_max_tool_steps=int(os.getenv("WAVR_ASSISTANT_MAX_STEPS", "4")),
+        assistant_tool_timeout=float(os.getenv("WAVR_ASSISTANT_TOOL_TIMEOUT_S", "10.0")),
+        assistant_local_llm_base_url=os.getenv(
+            "WAVR_ASSISTANT_LOCAL_LLM_URL", "http://localhost:11434/v1"),
+        assistant_local_llm_model=os.getenv("WAVR_ASSISTANT_LOCAL_LLM_MODEL", "llama3.2"),
         # F1: default to a bare cwd-relative "house.json" (mirrors db_path="wavr.db"
         # above) so PUT /api/house works out-of-the-box instead of 409-ing for every
         # fresh install. The env override is preserved; an operator who explicitly sets

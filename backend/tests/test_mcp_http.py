@@ -363,8 +363,9 @@ def _agent_app(tmp_path, monkeypatch, tool_scopes=None):
     create_app opens its own DeviceStore, mirroring test_wavr_pass_scopes.py's
     own seed-store pattern. `tool_scopes=None` -> the least-privilege coarse
     default (auth.AGENT_DEFAULT_TOOL_SCOPE = list_rooms/get_room_context/
-    get_house_map/get_house_status, via auth.effective_tool_scopes); the four
-    sensitive tools need an explicit grant. Returns `(app, bearer_headers)`."""
+    get_house_status, via auth.effective_tool_scopes); get_house_map plus the
+    four sensitive tools need an explicit grant (Phase-2B re-threat FIX 1).
+    Returns `(app, bearer_headers)`."""
     db_path = str(tmp_path / "agent.db")
     monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
     monkeypatch.setenv("WAVR_DB", db_path)
@@ -555,12 +556,14 @@ def test_mcp_get_house_status_live_round_trip(app):
 # --------------------------------------------------------------------------- #
 # Adversarial scope-refusal, extended (Phase-2A verify FIX 4 -- least-privilege
 # default agent scope): the DEFAULT agent grant is now COARSE/current-state-only
-# (list_rooms/get_room_context/get_house_map/get_house_status) -- it must reach
-# every one of those live, and must be REFUSED (gate 4.5, before FastMCP
-# dispatch) for the four tools that now require an explicit admin grant:
-# query_occupancy_history/get_network_inventory/get_alerts/get_ha_entities. A
-# regression lock against MCP_TOOL_NAMES (auth.py) drifting from the
-# @server.tool() names actually registered (mcp.py).
+# (list_rooms/get_room_context/get_house_status) -- it must reach every one of
+# those live, and must be REFUSED (gate 4.5, before FastMCP dispatch) for the
+# tools that now require an explicit admin grant: query_occupancy_history/
+# get_network_inventory/get_alerts/get_ha_entities, plus get_house_map
+# (Phase-2B re-threat FIX 1 -- MEDIUM: room `id` encodes the room name and it
+# ships polygon geometry, i.e. the floor plan itself). A regression lock
+# against MCP_TOOL_NAMES (auth.py) drifting from the @server.tool() names
+# actually registered (mcp.py).
 # --------------------------------------------------------------------------- #
 def test_agent_default_scope_can_call_all_coarse_read_tools_live(tmp_path, monkeypatch):
     app, auth = _agent_app(tmp_path, monkeypatch)
@@ -569,7 +572,7 @@ def test_agent_default_scope_can_call_all_coarse_read_tools_live(tmp_path, monke
         peer = TestClient(app, client=("192.168.1.50", 12345))
         peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
         for i, name in enumerate(
-                ["get_house_status", "get_house_map"], start=2):
+                ["get_house_status"], start=2):
             r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_tool_call(name, id_=i))
             assert r.status_code == 200, (name, r.text)
             assert r.json()["result"]["isError"] is False, (name, r.json())
@@ -593,6 +596,23 @@ def test_agent_default_scope_denied_the_four_sensitive_read_tools_live(tmp_path,
             r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_tool_call(name, id_=i))
             assert r.status_code == 403, (name, r.text)
             assert name in r.json()["detail"]
+
+
+def test_agent_default_scope_denied_get_house_map_live(tmp_path, monkeypatch):
+    # Phase-2B re-threat FIX 1 (MEDIUM): unlike the four PII/tracking crown
+    # jewels above, get_house_map's minimized shape (mcp.py FIX C) still ships
+    # room `id` (which ENCODES the room name in every real house.json, e.g.
+    # "cozinha"/"quarto-1") plus the room's polygon GEOMETRY -- the annotated
+    # floor plan. A default (no explicit tool_scopes grant) agent must be
+    # refused by gate 4.5 BEFORE FastMCP dispatch, same as the four above.
+    app, auth = _agent_app(tmp_path, monkeypatch)
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer = TestClient(app, client=("192.168.1.50", 12345))
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_tool_call("get_house_map", id_=2))
+        assert r.status_code == 403, r.text
+        assert "get_house_map" in r.json()["detail"]
 
 
 def test_agent_explicit_broad_grant_can_still_reach_all_read_tools_live(tmp_path, monkeypatch):

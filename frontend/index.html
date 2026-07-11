@@ -114,6 +114,9 @@
                background:var(--elevated);border:1px solid var(--line-strong);border-radius:12px;
                padding:12px 14px;font-size:.84rem;color:var(--dim);line-height:1.5;}
   .privacy-pop b{color:var(--text);}
+  /* UX HIGH #1: the live cloud-vendor addendum reads as its own line, same "two separate
+     sentences in two elements" precedent as the egress summary's demo note (P6 fix 3). */
+  .privacy-pop-asst{display:block;margin-top:8px;color:var(--warn);}
   /* #house / #mode keep their exact class names — JS overwrites className on #house. */
   .house{font-size:.75rem;font-weight:600;padding:5px 12px;border-radius:999px;
          border:1px solid var(--line);background:var(--elevated);white-space:nowrap;
@@ -850,6 +853,36 @@
   .conn-group-h{margin:6px 0 0;font-size:.78rem;font-weight:600;text-transform:uppercase;
                 letter-spacing:.04em;color:var(--dim);}
   .conn-group-h:first-child{margin-top:0;}
+
+  /* ---------------- Wavr Assistant engine picker + ask + audit (gear, Phase 2B) ----------------
+     Reuses .conn-card/.conn-egress-badge/.conn-scope/.conn-state/.conn-note verbatim — same
+     "what leaves home" visual language as Connectors, deliberately (one voice about egress).
+     Only the radio-selected ring, the manual-engine form box, and the ask/audit-specific rows
+     below are new. */
+  .conn-card.engine-selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
+  .engine-radio{display:inline-flex;align-items:center;gap:7px;}
+  .engine-radio .radio-dot{width:15px;height:15px;border-radius:50%;flex:none;
+      border:1.5px solid var(--line-strong);background:transparent;}
+  .engine-radio[aria-checked="true"] .radio-dot{border-color:var(--accent);
+      background:radial-gradient(var(--accent) 0 40%,transparent 44%);}
+  .asst-manual-box{border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+                   margin:2px 0 14px;background:var(--elevated);max-width:60ch;}
+  .asst-manual-box .controls-row{margin:8px 0;}
+  .asst-trace{display:flex;flex-direction:column;gap:5px;margin-top:10px;max-width:60ch;}
+  .asst-trace-step{display:flex;align-items:baseline;gap:8px;font-size:.8rem;color:var(--dim);}
+  .asst-trace-step .step-n{font-variant-numeric:tabular-nums;color:var(--text);font-weight:600;min-width:2.2em;}
+  .asst-trace-step.refused{color:var(--warn);}
+  .asst-trace-step.final{color:var(--text);}
+  .asst-log-list{display:flex;flex-direction:column;gap:10px;margin-top:6px;}
+  .asst-log-row{border:1px solid var(--line);border-radius:10px;padding:11px 14px;background:var(--elevated);
+               display:flex;flex-direction:column;gap:5px;max-width:70ch;}
+  .asst-log-top{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap;}
+  .asst-log-engine{font-size:.78rem;font-weight:600;color:var(--text);}
+  .asst-log-ts{font-size:.74rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .asst-log-q{margin:0;font-size:.85rem;color:var(--text);overflow-wrap:anywhere;}
+  .asst-log-a{margin:0;font-size:.82rem;color:var(--dim);line-height:1.5;overflow-wrap:anywhere;}
+  .asst-log-tools{display:flex;flex-wrap:wrap;gap:6px;}
+  .asst-tool-chip{font-size:.7rem;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 8px;}
 
   /* ---------------- House editor (gear) ---------------- */
   .hed-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
@@ -1797,12 +1830,19 @@
     <div id="helpBanner" class="help-banner" hidden role="status" aria-live="polite">Help mode is on — tap any control to see what it does. Tap ? again to turn it off.</div>
     <!-- P5 fix 1: honest copy — the narrator is the only egress in the CORE flow; the other
          opt-in egress paths (ntfy/MQTT/HA/MCP) exist but ship OFF, and the Sistema dashboard
-         is the live receipt of what's actually enabled. -->
+         is the live receipt of what's actually enabled.
+         UX HIGH #1: "only the narrator sends a summary" went stale once the Assistant (Settings
+         → Assistant) can also be pointed at a cloud engine — dropped the false exclusivity claim
+         and added the Assistant to the enumerated optional-features list (it ships off by default,
+         same as ntfy/MQTT/HA/MCP — see app.py's assistant-cloud connector upsert). #privacyPopAsst
+         appends the live vendor sentence only while a cloud engine is actually selected+enabled. -->
     <div id="privacyPop" class="privacy-pop" hidden role="note">
       <b>Nothing leaves home by default.</b> Cameras process in memory and never record. Positions
-      and vitals stay on your local network. In basic use, only the narrator sends a summary to
-      the cloud — and only when you ask. Optional features (ntfy, MQTT, Home Assistant, MCP
-      control) ship off; see what's active in System → “What can leave this home”.
+      and vitals stay on your local network. In basic use, sending anything to the cloud takes an
+      explicit action and a confirmation — like asking the narrator for a summary, or asking the
+      Assistant with a cloud engine selected. Optional features (ntfy, MQTT, Home Assistant, MCP
+      control, and a cloud Assistant engine) ship off; see what's active in System → “What can
+      leave this home”.<span id="privacyPopAsst" class="privacy-pop-asst" hidden></span>
     </div>
 
     <!-- First-run onboarding (simulated/demo only): P4 fix 4 — the old full-width strip is
@@ -2355,6 +2395,7 @@
       <button type="button" class="gear-rail-item" data-section="gearSecLayout" aria-pressed="false">Layout</button>
       <button type="button" class="gear-rail-item" data-section="gearSecDevices" aria-pressed="false">Devices</button>
       <button type="button" class="gear-rail-item" data-section="gearSecConnectors" aria-pressed="false">Connectors</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecAssistant" aria-pressed="false">Assistant</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPrivacy" aria-pressed="false">Privacy</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPanelLock" aria-pressed="false">Panel lock</button>
       <button type="button" class="gear-rail-item" data-section="gearSecAbout" aria-pressed="false">About</button>
@@ -2569,6 +2610,84 @@
       <div id="connList" class="conn-list" aria-live="polite"></div>
     </div>
     </div><!-- /#gearSecConnectors -->
+    <div class="settings-section" id="gearSecAssistant" aria-labelledby="gearSecAssistant-h">
+    <h3 id="gearSecAssistant-h" class="settings-section-h">Assistant</h3>
+    <!-- Wavr Assistant — engine picker + bounded ask + audit trail (Phase 2B). Live/central
+         only, same gate tier as Connectors: GET /api/assistant/engines is router
+         require_central+admin (a multidevice 'user' peer, or a build with the router not
+         reachable, gets a non-200 and this whole panel stays hidden — byte-identical to
+         today, feature-off reads as feature-absent). "Wavr Assistant (built-in)" is the
+         default/first entry and is always local/zero-egress by construction; the other five
+         entries (Local LLM / OpenAI / Anthropic / Gemini / + Add manually) are picked
+         explicitly. Every label/description/model/base_url/key_env_var/question/answer/tool
+         name below is server data — rendered via textContent, NEVER innerHTML. -->
+    <div id="assistant" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="asst-h">Wavr Assistant</h2>
+        <span class="hint">which AI answers when you ask about your home</span></div>
+      <p class="pair-hint" style="margin:-2px 0 10px;max-width:70ch">Wavr Assistant (built-in) runs
+        entirely on this hub by default — no data leaves home. Pick a different engine below to use
+        a specific AI provider instead; cloud engines are clearly marked and must be enabled in
+        Connectors before they can answer.
+        <span id="asstFb" class="action-fb" aria-live="polite"></span></p>
+      <div id="asstList" class="conn-list" role="radiogroup" aria-label="Assistant engine"></div>
+
+      <!-- The one "manual" engine slot: selecting it always (re)submits base_url+model in the
+           same request (the backend has no separate "just re-select" path for it), so its card's
+           control always opens this form — pre-filled when a manual engine is already configured. -->
+      <div id="asstManualForm" class="asst-manual-box" hidden role="group" aria-labelledby="asstManualFormTitle">
+        <span class="pair-fp-label" id="asstManualFormTitle">Add your own OpenAI-compatible endpoint</span>
+        <div class="controls-row">
+          <label class="pair-role">Base URL
+            <input type="text" id="asstManualBaseUrl" placeholder="http://127.0.0.1:11434/v1" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="pair-role">Model
+            <input type="text" id="asstManualModel" placeholder="llama3.2" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="pair-role">Key env var name (optional)
+            <input type="text" id="asstManualKeyEnv" placeholder="e.g. GROQ_API_KEY" autocomplete="off" spellcheck="false">
+          </label>
+        </div>
+        <p class="pair-fp-hint">Wavr never asks for the key itself — only the <b>name</b> of an
+          environment variable already set on the hub (e.g. in <code>.env</code>) that holds it. A
+          loopback address (localhost/127.0.0.1) stays local/zero-egress; anything else is treated
+          as cloud egress and needs the Connectors toggle below.</p>
+        <div class="controls-row">
+          <button type="button" id="asstManualSave" class="ctl small primary">Save and select</button>
+          <button type="button" id="asstManualCancel" class="ctl small off">Cancel</button>
+          <span id="asstManualFb" class="action-fb" aria-live="polite"></span>
+        </div>
+      </div>
+
+      <div class="tile-head" style="margin-top:20px"><h2 id="asstAsk-h">Ask</h2>
+        <span id="asstAsking" class="egress-live" hidden><i aria-hidden="true"></i>asking…</span>
+      </div>
+      <div class="narrate-row">
+        <label class="pair-role" style="flex:1 1 260px;min-width:220px" for="asstQuestion">Question
+          <input type="text" id="asstQuestion" maxlength="2000" style="flex:1;max-width:none"
+                 placeholder="e.g. is anyone in the kitchen?" autocomplete="off">
+        </label>
+        <button type="button" id="asstAskBtn" class="ctl">Ask</button>
+      </div>
+      <!-- UX HIGH #2: mirrors the Narrator's two-step cloud-confirm (#narrateConfirm above) —
+           same classes, same shape. Only armed when the SELECTED engine's own `egress` flag is
+           true (a live per-engine check, not a fixed id list — see askBtn.onclick below); local
+           engines (built-in / Local LLM / a loopback manual endpoint) stay one-click. -->
+      <div id="asstAskConfirm" class="narrate-confirm" hidden role="group" aria-label="confirm sending to the cloud">
+        <p class="narrate-confirm-txt" id="asstAskConfirmTxt"></p>
+        <div class="controls-row">
+          <button id="asstAskYes" type="button" class="ctl small narrate-yes">Confirm and send</button>
+          <button id="asstAskNo" type="button" class="ctl small off">Cancel</button>
+        </div>
+      </div>
+      <p id="asstAnswer" class="narrate-out muted">Ask a question about your home — the selected
+        engine above answers it, using only what Wavr itself knows.</p>
+      <div id="asstTrace" class="asst-trace" aria-live="polite" hidden></div>
+
+      <div class="tile-head" style="margin-top:20px"><h2 id="asstLog-h">What the assistant saw and did</h2>
+        <span class="hint">recent questions, engine, tools used</span></div>
+      <div id="asstLogList" class="asst-log-list" aria-live="polite"></div>
+    </div>
+    </div><!-- /#gearSecAssistant -->
     <div class="settings-section" id="gearSecPrivacy" aria-labelledby="gearSecPrivacy-h">
     <h3 id="gearSecPrivacy-h" class="settings-section-h">Privacy</h3>
     <!-- Stage 3b (§2.6/§7#6/#10 + §9): Privacy & security — the brand's trust screen,
@@ -2581,8 +2700,10 @@
         <li><svg aria-hidden="true"><use href="#ic-camera"/></svg><span><b>Frames stay in memory only.</b> Cameras process every frame in RAM and discard it — they never write to disk, never send video.</span></li>
         <li><svg aria-hidden="true"><use href="#ic-radar"/></svg><span><b>Vitals and positions exist live only.</b> Breathing, heart rate, and movement paths exist in the live stream and are not retained beyond your hub.</span></li>
         <!-- P5 fix 1: the old "the narrator is the only egress" claim contradicted the System egress
-             dashboard (ntfy/MQTT/HA/MCP are real opt-in egress paths). This is the accurate version. -->
-        <li><svg aria-hidden="true"><use href="#ic-alert"/></svg><span><b>All egress is opt-in.</b> In the basic flow, only the narrator (History tab) sends data to the cloud — with confirmation, every time. Notifications (ntfy), MQTT, Home Assistant, and MCP control are also optional egress paths from the hub: they ship off and only leave home if you turn them on.</span></li>
+             dashboard (ntfy/MQTT/HA/MCP are real opt-in egress paths). This is the accurate version.
+             UX HIGH #1: the Assistant (Settings → Assistant) joins the same enumerated optional-egress
+             list once it can be pointed at a cloud engine — it ships off by default, same as the rest. -->
+        <li><svg aria-hidden="true"><use href="#ic-alert"/></svg><span><b>All egress is opt-in.</b> In the basic flow, only the narrator (History tab) sends data to the cloud — with confirmation, every time. Notifications (ntfy), MQTT, Home Assistant, MCP control, and a cloud Assistant engine are also optional egress paths from the hub: they ship off and only leave home if you turn them on.</span></li>
         <li><svg aria-hidden="true"><use href="#ic-lock"/></svg><span><b>Cameras start off.</b> Every new camera (and every hub restart) starts off — turning it on is always your action.</span></li>
       </ul>
       <!-- P5 fix 1 (+ resolves the "split trust story" finding): the two privacy surfaces now
@@ -5264,6 +5385,389 @@ async function renderConnectors(){
   render(list);
 }
 renderConnectors();
+
+// ---- Wavr Assistant (Phase 2B): engine picker + bounded ask + audit trail (gear) ----
+// Live/central only, same "hidden until the backend answers 200" discipline as
+// renderConnectors() above: MODE!=="live" or a non-ok GET (403 non-admin peer, or the
+// router simply not reachable) means this whole card stays hidden, byte-identical to
+// today for demo/companion and for any build where the feature is off.
+async function renderAssistant(){
+  if(MODE!=="live") return;
+  const card = document.getElementById("assistant");
+  if(!card) return;
+  const hdr = {"X-Wavr-Local":"1"};
+  let probe;
+  try{ probe = await fetch(location.origin+"/api/assistant/engines",{headers:hdr}); }
+  catch{ return; }                          // backend unreachable — stay hidden
+  if(!probe.ok) return;                     // 403 (non-admin peer) / feature off — stay hidden
+  let data; try{ data = await probe.json(); }catch{ data = {}; }
+  card.hidden = false;
+
+  const list = document.getElementById("asstList");
+  const fb = document.getElementById("asstFb");
+  const manualBox = document.getElementById("asstManualForm");
+  const manualTitle = document.getElementById("asstManualFormTitle");
+  const manualUrl = document.getElementById("asstManualBaseUrl");
+  const manualModel = document.getElementById("asstManualModel");
+  const manualKey = document.getElementById("asstManualKeyEnv");
+  const manualSave = document.getElementById("asstManualSave");
+  const manualCancel = document.getElementById("asstManualCancel");
+  const manualFb = document.getElementById("asstManualFb");
+  const qInput = document.getElementById("asstQuestion");
+  const askBtn = document.getElementById("asstAskBtn");
+  const askConfirmBox = document.getElementById("asstAskConfirm");
+  const askConfirmTxt = document.getElementById("asstAskConfirmTxt");
+  const askYes = document.getElementById("asstAskYes");
+  const askNo = document.getElementById("asstAskNo");
+  const asking = document.getElementById("asstAsking");
+  const answerP = document.getElementById("asstAnswer");
+  const traceBox = document.getElementById("asstTrace");
+  const logList = document.getElementById("asstLogList");
+
+  const SVG_NS2 = "http://www.w3.org/2000/svg";
+  const KEY_ENV_RE = /^[A-Z][A-Z0-9_]*$/;
+  let engines = Array.isArray(data.engines) ? data.engines : [];
+
+  function labelFor(id){                    // derived from the live catalog — one source of truth
+    const e = engines.find(x => x.id === id);
+    return (e && e.label) || id;
+  }
+
+  function jumpToConnectors(){
+    const btn = document.querySelector('.gear-rail-item[data-section="gearSecConnectors"]');
+    if(btn) btn.click();                    // switches the visible section at panel width
+    const el = document.getElementById("connectors");
+    if(el) el.scrollIntoView({block:"start"});   // scrolls to it in desktop's single column
+  }
+
+  async function refreshEngines(){
+    let r; try{ r = await fetch(location.origin+"/api/assistant/engines",{headers:hdr}); }catch{ return; }
+    if(!r.ok) return;
+    let d; try{ d = await r.json(); }catch{ return; }
+    engines = Array.isArray(d.engines) ? d.engines : [];
+    renderList();
+    // UX HIGH #2: the engine (and therefore the confirm's vendor sentence) just changed
+    // underneath any still-open confirm box — close it rather than let a stale "sends to
+    // <old vendor>" prompt linger past a re-selection.
+    const askConfirmBox2 = document.getElementById("asstAskConfirm");
+    if(askConfirmBox2 && !askConfirmBox2.hidden){
+      askConfirmBox2.hidden = true;
+      const askBtn2 = document.getElementById("asstAskBtn");
+      if(askBtn2) askBtn2.disabled = false;
+    }
+  }
+
+  async function selectEngine(engineId, extra){
+    const body = Object.assign({engine_id: engineId}, extra || {});
+    let r;
+    try{
+      r = await fetch(location.origin+"/api/assistant/engine",{method:"POST",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body: JSON.stringify(body)});
+    }catch{ return {ok:false, detail:"connection failed"}; }
+    if(r.ok){ await refreshEngines(); return {ok:true}; }
+    let detail=""; try{ detail = (await r.json()).detail || ""; }catch{}
+    return {ok:false, detail: detail || "couldn't select this engine"};
+  }
+
+  function openManualForm(existing){
+    manualTitle.textContent = existing && existing.available
+      ? "Edit your OpenAI-compatible endpoint" : "Add your own OpenAI-compatible endpoint";
+    manualUrl.value = (existing && existing.base_url) || "";
+    manualModel.value = (existing && existing.model) || "";
+    manualKey.value = (existing && existing.key_env_var) || "";
+    manualFb.textContent = ""; manualFb.className = "action-fb";
+    manualBox.hidden = false;
+    manualUrl.focus();
+    manualBox.scrollIntoView({block:"nearest"});
+  }
+  manualCancel.onclick = ()=>{ manualBox.hidden = true; };
+  manualSave.onclick = async ()=>{
+    const base_url = manualUrl.value.trim();
+    const model = manualModel.value.trim();
+    const key_env_var = manualKey.value.trim();
+    if(!base_url || !model){ actionFeedback(manualFb, false, "base URL and model are both required"); return; }
+    if(!/^https?:\/\/.+/i.test(base_url)){ actionFeedback(manualFb, false, "base URL must start with http:// or https://"); return; }
+    if(key_env_var && !KEY_ENV_RE.test(key_env_var)){ actionFeedback(manualFb, false, "env var name must look like UPPERCASE_NAME"); return; }
+    manualSave.disabled = true;
+    const res = await selectEngine("manual", {base_url, model, key_env_var: key_env_var || null});
+    manualSave.disabled = false;
+    if(res.ok){ manualBox.hidden = true; actionFeedback(fb, true, null, "✓ manual engine saved and selected"); }
+    else actionFeedback(manualFb, false, res.detail);
+  };
+
+  function buildCard(e){
+    const cardEl = document.createElement("div");
+    cardEl.className = "conn-card" + (e.selected ? " engine-selected" : "");
+
+    const top = document.createElement("div"); top.className = "conn-top";
+    const nm = document.createElement("h4"); nm.className = "conn-name";
+    nm.textContent = e.label || e.id;         // textContent — server descriptor data
+    top.appendChild(nm);
+    cardEl.appendChild(top);
+
+    const descP = document.createElement("p"); descP.className = "conn-desc";
+    descP.textContent = e.description || "";
+    cardEl.appendChild(descP);
+
+    // Same egress badge/wording as Connectors — one voice about what leaves home.
+    const egress = !!e.egress;
+    const badge = document.createElement("span");
+    badge.className = "conn-egress-badge " + (egress ? "leaves" : "stays");
+    const bsvg = document.createElementNS(SVG_NS2, "svg"); bsvg.setAttribute("aria-hidden", "true");
+    const buse = document.createElementNS(SVG_NS2, "use"); buse.setAttribute("href", egress ? "#ic-net" : "#ic-lock");
+    bsvg.appendChild(buse); badge.appendChild(bsvg);
+    badge.appendChild(document.createTextNode(egress ? "Can reach outside your home" : "Stays on your local network"));
+    cardEl.appendChild(badge);
+
+    if(e.model || e.base_url || e.key_env_var){
+      const sc = document.createElement("p"); sc.className = "conn-scope";
+      const bits = [];
+      if(e.model) bits.push("Model: " + e.model);
+      if(e.base_url) bits.push("Endpoint: " + e.base_url);
+      if(e.key_env_var) bits.push("API key env var: " + e.key_env_var);
+      sc.textContent = bits.join(" · ");      // textContent — server/config data, never interpolated HTML
+      cardEl.appendChild(sc);
+    }
+
+    const foot = document.createElement("div"); foot.className = "conn-foot";
+    const radio = document.createElement("button"); radio.type = "button";
+    radio.className = "ctl small engine-radio" + (e.selected ? " on" : "");
+    radio.setAttribute("role", "radio");
+    radio.setAttribute("aria-checked", e.selected ? "true" : "false");
+    // (MED a11y) roving tabindex: every radio starts OUT of the tab order; syncRoving()
+    // (called right after renderList() rebuilds the list) puts exactly one back in. The
+    // engine id survives the rebuild so focus can be restored onto the NEW node below.
+    radio.tabIndex = -1;
+    radio.dataset.engineId = e.id;
+    const dot = document.createElement("span"); dot.className = "radio-dot"; dot.setAttribute("aria-hidden","true");
+    radio.appendChild(dot);
+    radio.appendChild(document.createTextNode(
+      e.id === "manual" ? (e.available ? "Edit / re-select" : "Configure…")
+        : (e.selected ? "Selected" : "Select")));
+    radio.onclick = async ()=>{
+      if(e.id === "manual"){ openManualForm(e); return; }
+      radio.disabled = true;
+      const res = await selectEngine(e.id);
+      radio.disabled = false;
+      if(res.ok) actionFeedback(fb, true, null, "✓ " + (e.label || e.id) + " selected");
+      else actionFeedback(fb, false, res.detail);
+    };
+    foot.appendChild(radio);
+
+    const st = document.createElement("span");
+    st.className = "conn-state" + (e.needs ? " setup" : (e.selected ? " active" : ""));
+    st.textContent = e.needs === "config" ? "needs setup"
+      : e.needs === "connector" ? "needs Connectors" : (e.selected ? "in use" : "ready");
+    foot.appendChild(st);
+    cardEl.appendChild(foot);
+
+    if(e.needs){
+      const note = document.createElement("p"); note.className = "conn-note";
+      note.textContent = e.needs === "connector"
+        ? "This engine sends data outside your home — enable it in Connectors first."
+        : (e.id === "manual" ? "Set a base URL and model to finish configuring it."
+           : ("Add " + (e.key_env_var || "its API key") + " to the hub's .env and restart to finish configuring it."));
+      foot.appendChild(note);
+      if(e.needs === "connector"){
+        const jump = document.createElement("button"); jump.type = "button";
+        jump.className = "ctl small"; jump.textContent = "Open Connectors";
+        jump.onclick = jumpToConnectors;
+        foot.appendChild(jump);
+      }
+    }
+    return cardEl;
+  }
+
+  // (MED a11y) #asstList is role="radiogroup"/role="radio" but previously had no roving
+  // tabindex or arrow-key handling — every card's radio sat in the tab order individually
+  // and arrow keys did nothing, unlike the app's other correct ARIA widgets (.nav-tabs,
+  // .viewToggle.dsub — same cycle/Home/End pattern mirrored below).
+  function asstRadios(){
+    return Array.prototype.slice.call(list.querySelectorAll('[role="radio"]'));
+  }
+  function syncRoving(){
+    const radios = asstRadios();
+    let i = radios.findIndex(r => r.getAttribute("aria-checked") === "true");
+    if(i === -1) i = 0;
+    radios.forEach((r, idx) => { r.tabIndex = idx === i ? 0 : -1; });
+  }
+  function renderList(){
+    // engine selection round-trips through the backend then rebuilds this list from
+    // scratch (server truth) — without this, a keyboard user's focus would silently
+    // fall out of the list on every selection (mouse or arrow-key driven alike).
+    const active = document.activeElement;
+    const focusedId = (active && list.contains(active) && active.dataset) ? active.dataset.engineId : null;
+    list.textContent = "";
+    engines.forEach(e => list.appendChild(buildCard(e)));
+    syncRoving();
+    if(focusedId){
+      const esc = (window.CSS && CSS.escape) ? CSS.escape(focusedId) : focusedId;
+      const toFocus = list.querySelector('[data-engine-id="' + esc + '"]');
+      if(toFocus) toFocus.focus();
+    }
+  }
+  renderList();
+  const ASST_KEYS = ["ArrowRight","ArrowDown","ArrowLeft","ArrowUp","Home","End"];
+  list.addEventListener("keydown", (e)=>{
+    if(ASST_KEYS.indexOf(e.key) === -1) return;
+    const radios = asstRadios();
+    if(!radios.length) return;
+    let i = radios.indexOf(document.activeElement);
+    if(i === -1) i = radios.findIndex(r => r.getAttribute("aria-checked") === "true");
+    if(i === -1) i = 0;
+    e.preventDefault();
+    if(e.key === "ArrowRight" || e.key === "ArrowDown") i = (i + 1) % radios.length;
+    else if(e.key === "ArrowLeft" || e.key === "ArrowUp") i = (i - 1 + radios.length) % radios.length;
+    else if(e.key === "Home") i = 0;
+    else i = radios.length - 1;
+    const target = radios[i];
+    if(!target) return;
+    target.focus();
+    target.click();   // arrow-key SELECTS (native radiogroup behavior), mirroring target.click's
+                       // existing click handler — same select/openManualForm path either input takes
+  });
+
+  function renderTrace(trace){
+    traceBox.textContent = "";
+    if(!Array.isArray(trace) || !trace.length){ traceBox.hidden = true; return; }
+    trace.forEach(t => {
+      const row = document.createElement("div");
+      row.className = "asst-trace-step" + (t.final ? " final" : (t.ok === false ? " refused" : ""));
+      const n = document.createElement("span"); n.className = "step-n"; n.textContent = "Step " + t.step;
+      row.appendChild(n);
+      const msg = document.createElement("span");
+      if(t.final) msg.textContent = t.forced ? "gave a final answer (ran out of tool calls)" : "gave a final answer";
+      else if(t.tool) msg.textContent = "called " + t.tool + (t.ok === false ? " — refused/failed" : " — ok");
+      else msg.textContent = "—";
+      row.appendChild(msg);
+      traceBox.appendChild(row);
+    });
+    traceBox.hidden = false;
+  }
+
+  async function refreshLog(){
+    let r; try{ r = await fetch(location.origin+"/api/assistant/log?limit=50",{headers:hdr}); }catch{ return; }
+    if(!r.ok) return;
+    let d; try{ d = await r.json(); }catch{ return; }
+    const rows = Array.isArray(d.log) ? d.log : [];
+    logList.textContent = "";
+    if(!rows.length){
+      const p = document.createElement("p"); p.className = "pair-hint";
+      p.textContent = "No questions asked yet.";
+      logList.appendChild(p);
+      return;
+    }
+    rows.forEach(row => {
+      const el = document.createElement("div"); el.className = "asst-log-row";
+      const top = document.createElement("div"); top.className = "asst-log-top";
+      const eng = document.createElement("span"); eng.className = "asst-log-engine";
+      eng.textContent = labelFor(row.engine_id);
+      top.appendChild(eng);
+      const ts = document.createElement("span"); ts.className = "asst-log-ts";
+      ts.textContent = fmtRelative(row.ts) || "";
+      if(row.ts) ts.title = row.ts;
+      top.appendChild(ts);
+      el.appendChild(top);
+
+      const q = document.createElement("p"); q.className = "asst-log-q";
+      const qLabel = document.createElement("b"); qLabel.textContent = "Asked: ";
+      q.appendChild(qLabel); q.appendChild(document.createTextNode(row.question || ""));
+      el.appendChild(q);
+
+      const tools = Array.isArray(row.tool_names_called) ? row.tool_names_called : [];
+      const tw = document.createElement("div"); tw.className = "asst-log-tools";
+      if(tools.length){
+        tools.forEach(name => {
+          const chip = document.createElement("span"); chip.className = "asst-tool-chip";
+          chip.textContent = name;
+          tw.appendChild(chip);
+        });
+      } else {
+        const noTools = document.createElement("span"); noTools.className = "asst-tool-chip";
+        noTools.textContent = "no tools used";
+        tw.appendChild(noTools);
+      }
+      el.appendChild(tw);
+
+      const a = document.createElement("p"); a.className = "asst-log-a";
+      const aLabel = document.createElement("b"); aLabel.textContent = "Answered: ";
+      a.appendChild(aLabel); a.appendChild(document.createTextNode(row.answer || ""));
+      el.appendChild(a);
+
+      logList.appendChild(el);
+    });
+  }
+  refreshLog();
+
+  function setAsking(on){
+    if(asking) asking.hidden = !on;
+    askBtn.disabled = on;
+  }
+  // UX HIGH #2: which engine is CLOUD right now, read live off the same `engines` catalog
+  // the picker cards render from (refreshed after every select) — never a fixed id list,
+  // so e.g. wavr_assistant/local_llm pointed at a non-loopback endpoint still confirms.
+  function selectedAsstEngine(){
+    return engines.find(e => e.selected) || null;
+  }
+  function vendorFor(e){
+    if(!e) return "the selected engine";
+    return e.id === "manual" ? "your configured endpoint" : (e.label || e.id);
+  }
+  async function doAsk(q){
+    setAsking(true);
+    answerP.className = "narrate-out muted"; answerP.textContent = "asking…";
+    traceBox.hidden = true; traceBox.textContent = "";
+    try{
+      const r = await fetch(location.origin+"/api/assistant/ask",{method:"POST",
+        headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body: JSON.stringify({question:q})});
+      if(r.status===422){
+        let detail=""; try{ detail=(await r.json()).detail||""; }catch{}
+        answerP.textContent = detail || "that question isn't valid";
+      } else if(r.status===503){
+        let detail=""; try{ detail=(await r.json()).detail||""; }catch{}
+        answerP.textContent = detail || "the selected engine isn't ready yet";
+      } else if(r.status===502){
+        answerP.textContent = "the assistant engine could not answer right now — try again";
+      } else if(!r.ok){
+        answerP.textContent = "couldn't get an answer";
+      } else {
+        const d = await r.json();
+        answerP.className = "narrate-out";
+        answerP.textContent = d.answer || "(no response)";
+        renderTrace(d.trace);
+        refreshLog();                          // a completed ask just appended a new audit row
+      }
+    }catch{ answerP.textContent = "connection failed"; }
+    finally{ setAsking(false); }
+  }
+  // Step 1: "Ask" on a CLOUD engine only ARMS the confirm — mirrors narrateBtn.onclick
+  // (~narrateConfirm). A local engine (built-in / Local LLM / loopback manual) sends
+  // straight away, same one-click flow as before this fix.
+  askBtn.onclick = ()=>{
+    const q = qInput.value.trim();
+    if(!q){ answerP.className = "narrate-out muted"; answerP.textContent = "type a question first"; qInput.focus(); return; }
+    const sel = selectedAsstEngine();
+    if(sel && sel.egress && askConfirmBox && askConfirmTxt){
+      askConfirmTxt.textContent = "This sends your question, plus a coarse summary of your home " +
+        "(current occupancy and the house-status verdict), to " + vendorFor(sel) + ". Send?";
+      askConfirmBox.hidden = false;
+      askBtn.disabled = true;
+      askYes?.focus();
+      return;
+    }
+    doAsk(q);
+  };
+  if(askNo) askNo.onclick = ()=>{
+    if(askConfirmBox) askConfirmBox.hidden = true;
+    askBtn.disabled = false; askBtn.focus();
+  };
+  // Step 2 (confirmed): the only line that actually sends the cloud request.
+  if(askYes) askYes.onclick = ()=>{
+    if(askConfirmBox) askConfirmBox.hidden = true;
+    doAsk(qInput.value.trim());
+  };
+}
+renderAssistant();
 
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -9536,6 +10040,12 @@ try {
   var lastEventAt = null, evtCount = 0;
   var bootAt = Date.now();
   var wsDown = false, wsSince = null, wsDrops = 0;
+  // UX HIGH #1: the SELECTED engine descriptor from GET /api/assistant/engines (Phase 2B),
+  // polled independently below (own 15s cadence, live only) since it isn't part of the
+  // /api/status payload. Stays null — and the trust-receipt row/popover sentence stay
+  // ABSENT, not "na" — whenever this build has no assistant routes (404), the peer isn't
+  // admin (403), or MODE isn't live: keeps every mode byte-identical to before this feature.
+  var asstCloud = null;
 
   // =====================================================================
   // P0 §7#1 — Privacy & Egress dashboard (System): "what can leave this
@@ -9657,6 +10167,35 @@ try {
     if(M !== "live") egKillDemoState();
     return row;
   }
+  // UX HIGH #1: "Wavr Assistant (cloud engine)" trust-receipt row — describes exactly
+  // what leaves when the Ask panel (Settings -> Assistant) is pointed at a cloud engine.
+  // Driven by asstCloud (the SELECTED descriptor from GET /api/assistant/engines, polled
+  // below), NOT by /api/status.features — that endpoint has no assistant key. `egress`/
+  // `needs` are the backend's own live classification (assistant_engine._descriptor):
+  // needs === null means the engine is both configured AND the assistant-cloud connector
+  // is on, i.e. the next "Ask" really would leave home right now.
+  function asstVendorName(e){
+    if(!e) return "the selected engine";
+    return e.id === "manual" ? "your configured endpoint" : (e.label || e.id);
+  }
+  function assistantCloudEgRow(){
+    if(!asstCloud) return null;   // no live data yet / assistant routes absent (404) / non-admin / not live
+    var active = !!asstCloud.egress && asstCloud.needs == null;
+    var row;
+    if(active){
+      var vendor = asstVendorName(asstCloud);
+      var txt = "sends your question, plus a coarse house-state summary (current occupancy " +
+        "and the house-status verdict), to " + vendor +
+        " — only when you use Ask with this engine selected";
+      row = egRow("Wavr Assistant (cloud engine)", txt, "egress", "egress possible", "on", "ic-spark");
+      row.__open = true;
+    } else {
+      var offTxt = "off — the Assistant is set to a local engine, or the cloud engine isn't " +
+        "enabled yet in Connectors; no question leaves home";
+      row = egRow("Wavr Assistant (cloud engine)", offTxt, "local", "off", "", "ic-spark");
+    }
+    return row;
+  }
   function renderEgress(){
     var list = $("egressList"), sum = $("egressSummary"), note = $("egressNote");
     var demoNote = $("egressDemoNote");
@@ -9680,6 +10219,13 @@ try {
       else if(it.lan){ st = "lan"; tagTxt = "local network"; tagCls = "lan"; txt = it.on; open++; }
       else { st = "egress"; tagTxt = "egress possible"; tagCls = "on"; txt = it.on; open++; }
       list.appendChild(egRow(it.label, txt, st, tagTxt, tagCls, it.icon));
+      // UX HIGH #1: grouped right after the AI Narrator row — both are "ask an AI" cloud
+      // paths. Absent (not even an "na" row) unless a live /api/assistant/engines fetch
+      // has actually succeeded — see assistantCloudEgRow()'s own docstring.
+      if(it.k === "narrate"){
+        var asstRow = assistantCloudEgRow();
+        if(asstRow){ list.appendChild(asstRow); if(asstRow.__open) open++; }
+      }
     });
     if(feats){
       if(note) note.hidden = true;
@@ -9704,6 +10250,43 @@ try {
       if(demoNote) demoNote.hidden = true;
       if(note) note.hidden = false;
     }
+  }
+
+  // UX HIGH #1: the header privacy popover (#privacyPop) is the OTHER surface that claimed
+  // "only the narrator sends a summary to the cloud" — now stale once a cloud assistant
+  // engine is live. Reuses the same asstCloud state as the trust-receipt row; the sentence
+  // is appended (not rewritten) so the fixed legal-ish copy above it never gets touched.
+  function renderPrivacyPopAssistant(){
+    var el = $("privacyPopAsst");
+    if(!el) return;
+    var active = !!(asstCloud && asstCloud.egress && asstCloud.needs == null);
+    if(!active){ el.hidden = true; el.textContent = ""; return; }
+    el.textContent = " The Assistant is currently set to a cloud engine (" + asstVendorName(asstCloud) +
+      "): your question and a coarse house-state summary go to it each time you use Ask.";
+    el.hidden = false;
+  }
+
+  // UX HIGH #1: independent poll for the assistant's SELECTED engine — /api/status has no
+  // assistant key, so this can't ride the existing 3s __wavrStatus hook. Same fail-hidden
+  // discipline as renderAssistant() itself (Settings -> Assistant): a non-ok response (404
+  // routes absent, 403 non-admin peer, or the fetch throwing) leaves asstCloud null, which
+  // keeps both the trust-receipt row and the popover sentence ABSENT — byte-identical to
+  // every mode's pre-existing rendering whenever this build has no assistant feature.
+  var asstEgressStarted = false;
+  async function pollAssistantEgress(){
+    if(M !== "live"){ asstCloud = null; renderEgress(); renderPrivacyPopAssistant(); return; }
+    try{
+      var r = await fetch(location.origin + "/api/assistant/engines", { headers: { "X-Wavr-Local": "1" } });
+      if(!r.ok){ asstCloud = null; }
+      else{
+        var d = await r.json();
+        var engines = Array.isArray(d && d.engines) ? d.engines : [];
+        asstCloud = engines.find(function(e){ return e && e.selected; }) || null;
+      }
+    }catch(e){ asstCloud = null; }
+    renderEgress();
+    renderPrivacyPopAssistant();
+    if(!asstEgressStarted){ asstEgressStarted = true; setInterval(pollAssistantEgress, 15000); }
   }
 
   // =====================================================================
@@ -10855,6 +11438,7 @@ try {
   renderDiag();
   applyTlFilter();
   renderPresence();    // A2.2 — live-only poller; no-ops (shows the note) elsewhere
+  pollAssistantEgress();   // UX HIGH #1 — live-only poller; no-ops (stays absent) elsewhere
 })();
 </script>
 <script>
