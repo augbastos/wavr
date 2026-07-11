@@ -25,7 +25,7 @@ from wavr.mcp import FusionStateProvider, build_mcp_server
 from wavr.fusion import FusionEngine
 from wavr.mcp_http import (
     _origin_ok, _RateLimiter, _extract_tool_call_names, build_mcp_http_mount,
-    _buffer_body, _BodyTooLarge,
+    _buffer_body, _BodyTooLarge, _has_tools_list_call, _filter_tools_list_response,
 )
 from wavr.auth import AGENT_ACTUATOR_TOOL_SCOPE, AGENT_READ_TOOL_SCOPE
 
@@ -718,3 +718,190 @@ def test_agent_promoted_via_devices_role_route_can_call_mcp(app):
             "call_ha_service",
             {"domain": "switch", "service": "turn_on", "entity_id": "switch.x"}))
         assert denied.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# tools/list scope-disclosure (appsec LOW, 2A appsec pass, closed here): gate
+# 4.5 already refuses a tools/call for a tool outside a restricted agent's
+# allow-list, but until now a plain tools/list still answered with FastMCP's
+# FULL catalog -- names/descriptions/JSON-schemas of every read tool, incl.
+# ones the caller can never call. This filters the tools/list RESPONSE per
+# caller, same discipline as the existing tools/call check.
+# --------------------------------------------------------------------------- #
+_LIST_TOOLS = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+
+
+def test_agent_default_scope_tools_list_shows_only_its_scope(tmp_path, monkeypatch):
+    # Coarse default agent grant (list_rooms/get_room_context/get_house_status)
+    # -- tools/list must return EXACTLY those three, never the other five read
+    # tools it is refused by gate 4.5 for tools/call.
+    app, auth = _agent_app(tmp_path, monkeypatch)
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer = TestClient(app, client=("192.168.1.50", 12345))
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_LIST_TOOLS)
+        assert r.status_code == 200, r.text
+        names = {t["name"] for t in r.json()["result"]["tools"]}
+        from wavr.auth import AGENT_DEFAULT_TOOL_SCOPE
+        assert names == AGENT_DEFAULT_TOOL_SCOPE
+        assert "get_alerts" not in names and "call_ha_service" not in names
+
+
+def test_agent_narrow_explicit_scope_tools_list_shows_only_that_one_tool(tmp_path, monkeypatch):
+    # A device explicitly narrowed to a single tool (list_rooms only) --
+    # tools/list must not leak the other seven, even the ones in the DEFAULT
+    # coarse grant it was narrowed BELOW.
+    app, auth = _agent_app(tmp_path, monkeypatch, tool_scopes=frozenset({"list_rooms"}))
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer = TestClient(app, client=("192.168.1.50", 12345))
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_LIST_TOOLS)
+        assert r.status_code == 200, r.text
+        names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert names == {"list_rooms"}
+
+
+def test_agent_explicit_empty_tool_scopes_tools_list_is_empty(tmp_path, monkeypatch):
+    # An explicit EMPTY grant (deny-all) refuses every tools/call (existing
+    # coverage above) and must ALSO show an empty tools/list -- nothing to
+    # discover, matching nothing callable.
+    app, auth = _agent_app(tmp_path, monkeypatch, tool_scopes=frozenset())
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer = TestClient(app, client=("192.168.1.50", 12345))
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_LIST_TOOLS)
+        assert r.status_code == 200, r.text
+        assert r.json()["result"]["tools"] == []
+
+
+def test_agent_actuator_scope_tools_list_still_omits_call_ha_service(tmp_path, monkeypatch):
+    # AGENT_ACTUATOR_TOOL_SCOPE includes call_ha_service in the allow-list, but
+    # the HTTP transport never registers it at all (expose_control=False) --
+    # the list-filter only NARROWS what FastMCP already returned, it can never
+    # WIDEN it back in. call_ha_service stays absent from tools/list here too.
+    app, auth = _agent_app(tmp_path, monkeypatch, tool_scopes=AGENT_ACTUATOR_TOOL_SCOPE)
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer = TestClient(app, client=("192.168.1.50", 12345))
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_LIST_TOOLS)
+        assert r.status_code == 200, r.text
+        names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert "call_ha_service" not in names
+        assert names == _READ_TOOLS   # every OTHER read tool is in scope, so all 8 show
+
+
+def test_root_tools_list_returns_the_full_unfiltered_catalog(app):
+    # root's tool_scopes is None (not restricted by this axis) -- the filter
+    # is a total no-op, byte-identical to before this feature: every read tool
+    # is visible, same catalog test_http_server_omits_call_ha_service asserts
+    # at the server level.
+    with TestClient(app) as central:
+        _enable(central, True)
+        central.post("/mcp", headers=MCP_HDRS, json=INIT)
+        r = central.post("/mcp", headers=MCP_HDRS, json=_LIST_TOOLS)
+        assert r.status_code == 200, r.text
+        names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert names == _READ_TOOLS
+
+
+def test_central_tools_list_unaffected_by_tool_scope_axis(app):
+    # central also resolves tool_scopes=None (only 'agent' is restricted by
+    # this axis) -- same no-op guarantee as root, live through a paired peer.
+    peer, auth = _pair(app, "central")
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_LIST_TOOLS)
+        assert r.status_code == 200, r.text
+        names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert names == _READ_TOOLS
+
+
+def test_agent_tools_list_content_length_matches_filtered_body(tmp_path, monkeypatch):
+    # `_wrap_send_for_tools_list` recomputes Content-Length by hand after
+    # filtering (`str(len(filtered)).encode(...)`, mcp_http.py). TestClient's
+    # in-process ASGI transport builds its Response purely from the
+    # `http.response.body` chunks -- it does NOT truncate/validate against the
+    # Content-Length header the way a real HTTP/1.1 client over the wire
+    # would, so a wrong header here would NOT surface as a failure anywhere
+    # else in this suite (r.json() would still parse fine). Assert the header
+    # explicitly against the real filtered body length.
+    app, auth = _agent_app(tmp_path, monkeypatch, tool_scopes=frozenset({"list_rooms"}))
+    with TestClient(app) as central:
+        _enable(central, True)
+        peer = TestClient(app, client=("192.168.1.50", 12345))
+        peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=INIT)
+        r = peer.post("/mcp", headers={**MCP_HDRS, **auth}, json=_LIST_TOOLS)
+        assert r.status_code == 200, r.text
+        header_len = r.headers.get("content-length")
+        assert header_len is not None
+        assert int(header_len) == len(r.content)
+        # sanity: this really is the NARROWED body, not a stale unfiltered one.
+        assert {t["name"] for t in r.json()["result"]["tools"]} == {"list_rooms"}
+
+
+# --------------------------------------------------------------------------- #
+# _has_tools_list_call / _filter_tools_list_response: pure parse + filter unit
+# tests, mirroring _extract_tool_call_names's own unit-level coverage above.
+# --------------------------------------------------------------------------- #
+def test_has_tools_list_call_single_message():
+    assert _has_tools_list_call(json.dumps(_LIST_TOOLS).encode()) is True
+
+
+def test_has_tools_list_call_batch_array():
+    batch = [_tool_call("list_rooms", id_=1), _LIST_TOOLS]
+    assert _has_tools_list_call(json.dumps(batch).encode()) is True
+
+
+def test_has_tools_list_call_false_for_other_methods():
+    assert _has_tools_list_call(json.dumps(INIT).encode()) is False
+    assert _has_tools_list_call(json.dumps(_tool_call("list_rooms")).encode()) is False
+
+
+def test_has_tools_list_call_malformed_or_empty_body_is_false():
+    assert _has_tools_list_call(b"not json{{{") is False
+    assert _has_tools_list_call(b"") is False
+    assert _has_tools_list_call(b'"just a string"') is False
+
+
+def _tools_list_result(names):
+    return {"jsonrpc": "2.0", "id": 2,
+           "result": {"tools": [{"name": n, "description": n} for n in names]}}
+
+
+def test_filter_tools_list_response_narrows_to_scope():
+    body = json.dumps(_tools_list_result(["list_rooms", "get_alerts", "get_house_status"])).encode()
+    out = _filter_tools_list_response(body, frozenset({"list_rooms", "get_house_status"}))
+    names = [t["name"] for t in json.loads(out)["result"]["tools"]]
+    assert names == ["list_rooms", "get_house_status"]
+
+
+def test_filter_tools_list_response_batch_array():
+    batch = [_tools_list_result(["list_rooms", "get_alerts"])]
+    body = json.dumps(batch).encode()
+    out = _filter_tools_list_response(body, frozenset({"list_rooms"}))
+    parsed = json.loads(out)
+    names = [t["name"] for t in parsed[0]["result"]["tools"]]
+    assert names == ["list_rooms"]
+
+
+def test_filter_tools_list_response_unchanged_when_nothing_dropped():
+    body = json.dumps(_tools_list_result(["list_rooms"])).encode()
+    out = _filter_tools_list_response(body, frozenset({"list_rooms", "get_alerts"}))
+    assert out == body
+
+
+def test_filter_tools_list_response_ignores_non_list_results():
+    call_result = {"jsonrpc": "2.0", "id": 2, "result": {"isError": False, "content": []}}
+    body = json.dumps(call_result).encode()
+    out = _filter_tools_list_response(body, frozenset({"list_rooms"}))
+    assert out == body
+
+
+def test_filter_tools_list_response_malformed_or_empty_body_is_unchanged():
+    assert _filter_tools_list_response(b"not json{{{", frozenset()) == b"not json{{{"
+    assert _filter_tools_list_response(b"", frozenset()) == b""
