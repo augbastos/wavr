@@ -2495,7 +2495,7 @@
         <button type="button" id="hedImportBtn" class="ctl small" data-tip="Load a house map from a file">Import floor plan</button>
         <input type="file" id="hedImportFile" accept="application/json,.json" hidden>
         <a id="hedMeasure" class="ctl small" href="/measure.html" target="_blank" rel="noopener"
-           data-tip="Open the phone capture page (WebXR): tap a room's floor corners with an Android phone or Quest, then position it here">Medir com o celular</a>
+           data-tip="Open the phone capture page (WebXR): tap a room's floor corners with an Android phone or Quest, then position it here">Measure with phone</a>
         <span id="hedDirty" class="hed-dirty" hidden aria-live="polite">unsaved</span>
       </div>
       <p class="hed-hint" id="hedHint">Select: click a room/wall/stairs to mark and delete it · + Room/+ Wall: drag on the plan · + Stairs: click on the plan.</p>
@@ -2903,7 +2903,7 @@
     </div>
     <div id="coreHealth" class="core-health" aria-live="polite">
       <span id="coreHealthCore" class="core-health-item">Core …</span>
-      <span id="coreHealthNet" class="core-health-item">Rede …</span>
+      <span id="coreHealthNet" class="core-health-item">Net …</span>
       <!-- Feature 1 (wifi/bluetooth/battery): native-bridge only (window.WavrNative). Stays
            [hidden] in a plain browser/dev tab — no errors, no placeholder; aria-label is set
            dynamically from the parsed status so screen readers get the same summary sighted
@@ -4705,6 +4705,23 @@ function renderHouseStatus(){
 }
 renderHouseStatus();
 
+// One-shot read of GET /api/status.features.multidevice, shared by the three
+// multidevice-gated panels below (Pairing/Peers/Nodes). /api/devices, /api/peers and
+// /api/nodes are only mounted when WAVR_MULTIDEVICE=1 (backend/wavr/app.py) -- on a
+// single-device (HTTP) install they are GUARANTEED to 404, and the browser logs that
+// network failure to the console itself even though the code below already catches
+// it (fetch() rejecting/resolving-non-ok doesn't suppress DevTools' own "failed to
+// load resource" line). Knowing multidevice=false ahead of time lets each panel skip
+// the doomed probe entirely instead of just handling its failure. Computed ONCE (not
+// per-panel) and resolves to false -- never short-circuiting -- if /api/status itself
+// is unreachable or doesn't say, so the existing probe-then-404-hides-panel behavior
+// below is untouched for every case this can't prove ahead of time (multidevice=true
+// but peers/nodes individually off, status endpoint down, etc).
+const _wavrMultideviceOff = (MODE==="live")
+  ? fetch(location.origin+"/api/status").then(r=>r.ok?r.json():null)
+      .then(j=>(j&&j.features&&j.features.multidevice)===false).catch(()=>false)
+  : Promise.resolve(false);
+
 // ---- Pairing panel (Plano A / live only, multidevice-gated) ----
 // Mints one-time multi-device pairing codes and lists/revokes paired devices.
 // The backend routes (/api/pair-code, /api/devices) only exist when WAVR_MULTIDEVICE=1;
@@ -4712,6 +4729,7 @@ renderHouseStatus();
 // single-device installs never see it. Never shows in Plano B (demo).
 async function renderPairing(){
   if(MODE!=="live") return;                 // live-only; never in Plano B (demo)
+  if(await _wavrMultideviceOff) return;     // proven off via /api/status — skip the doomed probe (no console 404)
   const hdr = {"X-Wavr-Local":"1"};         // same local-only guard as the other panels
   // Probe the multidevice API first. A 404 means the feature is off; a thrown fetch
   // means the backend is momentarily unreachable. Either way: leave the panel hidden.
@@ -5037,6 +5055,7 @@ renderIdentity();
 // fingerprint is server/network data rendered via textContent — NEVER innerHTML.
 async function renderPeers(){
   if(MODE!=="live") return;                 // live/central only; never in Plano B (demo) or companion
+  if(await _wavrMultideviceOff) return;     // proven off via /api/status — skip the doomed probe (no console 404)
   const hdr = {"X-Wavr-Local":"1"};         // same local-only guard the other admin panels use (no authHeaders() in this file)
   // Probe the paired list first. A 404 means the peers feature is off; a thrown fetch
   // means the backend is momentarily unreachable. Either way: leave the panel hidden.
@@ -5300,6 +5319,7 @@ renderPeers();
 // data rendered via textContent — NEVER innerHTML.
 async function renderNodes(){
   if(MODE!=="live") return;                 // live/central only; never Plano B (demo) or companion
+  if(await _wavrMultideviceOff) return;     // proven off via /api/status — skip the doomed probe (no console 404)
   const hdr = {"X-Wavr-Local":"1"};          // same local-only guard the other admin panels use
   let probe;
   try{ probe = await fetch(location.origin+"/api/nodes",{headers:hdr}); }
@@ -12406,7 +12426,7 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
       coreHealthCoreEl.className = "core-health-item" + (wsDownCore ? " core-health-warn" : "");
     }
     if(coreHealthNetEl){
-      var label = internetOkCore === true ? "Rede ✓" : internetOkCore === false ? "Rede ⚠" : "Rede …";
+      var label = internetOkCore === true ? "Net ✓" : internetOkCore === false ? "Net ⚠" : "Net …";
       coreHealthNetEl.textContent = label;
       coreHealthNetEl.className = "core-health-item" + (internetOkCore === false ? " core-health-warn" : "");
     }
