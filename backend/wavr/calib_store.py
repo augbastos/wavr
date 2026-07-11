@@ -8,13 +8,14 @@ from wavr.localize import MountPose
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS camera_calib (
-    name       TEXT PRIMARY KEY,
-    mount_json TEXT,
-    h_json     TEXT,
-    img_w      INTEGER,
-    img_h      INTEGER,
-    quality    REAL,
-    updated    TEXT
+    name        TEXT PRIMARY KEY,
+    mount_json  TEXT,
+    h_json      TEXT,
+    img_w       INTEGER,
+    img_h       INTEGER,
+    quality     REAL,
+    points_json TEXT,
+    updated     TEXT
 );
 """
 
@@ -23,6 +24,16 @@ CREATE TABLE IF NOT EXISTS camera_calib (
 # uploaded geometry blind" rule housemap.validate_house_map enforces applies here).
 _MAX_JSON_BYTES = 4096
 _MAX_DIM = 100_000  # a sane pixel-dimension ceiling
+
+# Progressive-refinement point store (guided-calib, Tier 1): the RAW image<->floor
+# correspondence pairs a walk was solved from, kept SEPARATELY from the solved
+# homography so a LATER walk can merge against them (wavr.calib_refine.merge_points)
+# instead of only ever re-solving the same 4-8 points every session. 200 points is a
+# generous ceiling for a room-scale calibration (many repeated walks); the JSON blob
+# cap is larger than `_MAX_JSON_BYTES` on purpose -- 200 correspondences is
+# legitimately bigger than a single mount/homography blob.
+_MAX_POINTS = 200
+_MAX_POINTS_JSON_BYTES = 16384
 
 
 class CalibrationError(ValueError):
@@ -100,6 +111,35 @@ def validate_homography(h) -> list[float]:
     return out
 
 
+def _finite_pair(p) -> bool:
+    try:
+        return len(p) == 2 and all(math.isfinite(float(c)) for c in p)
+    except (TypeError, ValueError, OverflowError, IndexError):
+        # OverflowError: same huge-int-literal class as validate_mount/validate_homography
+        # above -- a garbage coordinate is just not finite, never a crash.
+        return False
+
+
+def validate_points(image_pts, floor_pts) -> tuple[list, list]:
+    """Validate a set of RAW image<->floor correspondence pairs (the accumulated
+    walk points progressive refinement solves from) -- same shape-guard style as
+    `validate_homography`: this is the PERSISTENCE-shape guard, not a re-solve (the
+    caller still runs `localize.homography_from_points`, which already guards
+    degeneracy). Returns normalized `(image_pts, floor_pts)` as lists of `[x, y]`
+    float pairs; raises CalibrationError otherwise."""
+    if not isinstance(image_pts, (list, tuple)) or not isinstance(floor_pts, (list, tuple)):
+        raise CalibrationError("points must be arrays")
+    if len(image_pts) != len(floor_pts):
+        raise CalibrationError("image_pts and floor_pts must be the same length")
+    if len(image_pts) > _MAX_POINTS:
+        raise CalibrationError(f"too many points (max {_MAX_POINTS})")
+    if not all(_finite_pair(p) for p in image_pts) or not all(_finite_pair(p) for p in floor_pts):
+        raise CalibrationError("all point coordinates must be finite [x, y] pairs")
+    out_img = [[float(p[0]), float(p[1])] for p in image_pts]
+    out_flr = [[float(p[0]), float(p[1])] for p in floor_pts]
+    return out_img, out_flr
+
+
 class CalibrationStore:
     """Persisted per-camera localization calibration (mount prior + optional 4-point
     homography + capture image size + a MEASURED homography quality). Configuration,
@@ -133,6 +173,8 @@ class CalibrationStore:
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(camera_calib)")}
         if "quality" not in cols:
             self._conn.execute("ALTER TABLE camera_calib ADD COLUMN quality REAL")
+        if "points_json" not in cols:
+            self._conn.execute("ALTER TABLE camera_calib ADD COLUMN points_json TEXT")
 
     def set_mount(self, name: str, mount: MountPose) -> None:
         """Upsert a camera's mount prior (monocular estimate path), keeping any
@@ -179,14 +221,41 @@ class CalibrationStore:
             (name, blob, int(img_w), int(img_h), quality))
         self._conn.commit()
 
+    def set_points(self, name: str, image_pts, floor_pts, img_w: int, img_h: int) -> None:
+        """Upsert the RAW image<->floor correspondence pairs a progressive solve was
+        fed (`wavr.calib_refine.solve_progressive`), keeping any existing mount.
+        Persisted SEPARATELY from the solved homography (points feed the NEXT walk's
+        merge; the homography is what `localize()` actually consumes) -- this is
+        configuration (marked pixel coords + floor metres), never a frame
+        (ADR-0002). Change-gated by the caller: this is only ever reached from a
+        completed, explicit solve -- never a per-capture write (a walk in progress
+        touches only the in-memory `CalibSession`, not this store/disk)."""
+        img_pts, flr_pts = validate_points(image_pts, floor_pts)
+        if not (0 < int(img_w) <= _MAX_DIM and 0 < int(img_h) <= _MAX_DIM):
+            raise CalibrationError("image size out of range")
+        blob = json.dumps({"image_pts": img_pts, "floor_pts": flr_pts})
+        if len(blob) > _MAX_POINTS_JSON_BYTES:
+            raise CalibrationError("points blob too large")
+        self._conn.execute(
+            "INSERT INTO camera_calib (name, points_json, img_w, img_h, updated) "
+            "VALUES (?, ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(name) DO UPDATE SET points_json=excluded.points_json, "
+            "img_w=excluded.img_w, img_h=excluded.img_h, updated=excluded.updated",
+            (name, blob, int(img_w), int(img_h)))
+        self._conn.commit()
+
     def get(self, name: str) -> dict | None:
         """Return {mount: MountPose|None, homography: list[9]|None, img_w, img_h,
-        quality, updated} for a camera, or None if it has no calibration row. A
-        corrupt stored blob degrades that field to None (never raises) so one bad row
-        can't brick the localizer for a healthy camera. `quality` is None whenever no
-        homography was ever measured/stored (including a pre-migration row)."""
+        quality, points: {"image_pts":[...], "floor_pts":[...]}|None, updated} for a
+        camera, or None if it has no calibration row. A corrupt stored blob degrades
+        that field to None (never raises) so one bad row can't brick the localizer
+        for a healthy camera. `quality` is None whenever no homography was ever
+        measured/stored (including a pre-migration row); `points` is None whenever no
+        progressive-refinement walk has stored raw correspondences yet (including
+        every pre-`points_json`-migration row and every camera calibrated only via
+        the legacy one-shot PUT before this feature existed)."""
         r = self._conn.execute(
-            "SELECT name, mount_json, h_json, img_w, img_h, quality, updated "
+            "SELECT name, mount_json, h_json, img_w, img_h, quality, points_json, updated "
             "FROM camera_calib WHERE name = ?", (name,)).fetchone()
         if r is None:
             return None
@@ -202,9 +271,17 @@ class CalibrationStore:
                 homography = validate_homography(json.loads(r["h_json"]))
             except (ValueError, TypeError):
                 homography = None
+        points = None
+        if r["points_json"]:
+            try:
+                pj = json.loads(r["points_json"])
+                img_pts, flr_pts = validate_points(pj.get("image_pts"), pj.get("floor_pts"))
+                points = {"image_pts": img_pts, "floor_pts": flr_pts}
+            except (ValueError, TypeError, AttributeError):
+                points = None
         return {"mount": mount, "homography": homography,
                 "img_w": r["img_w"], "img_h": r["img_h"], "quality": r["quality"],
-                "updated": r["updated"]}
+                "points": points, "updated": r["updated"]}
 
     def delete(self, name: str) -> bool:
         cur = self._conn.execute("DELETE FROM camera_calib WHERE name = ?", (name,))

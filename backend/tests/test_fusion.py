@@ -369,6 +369,12 @@ def test_presence_only_source_leaves_count_unknown():
     rs = f.update(ev("casa", "network", True, 0.6))
     assert rs.person_count is None
     assert rs.sources[0]["count"] is None
+    # known-presence invariant #1: a network-only casa event can never produce
+    # occupied=False with person_count>0 (structurally impossible -- network isn't
+    # in COUNTING_MODALITIES) and `occupied` here follows ONLY the confidence-vs-
+    # threshold debounce (weight 0.5 * confidence 0.6 = 0.30 < threshold 0.5, first
+    # reading -> vacant), never a fabricated headcount pulling it True.
+    assert rs.occupied is False
 
 
 def test_wifi_csi_with_targets_is_not_counted():

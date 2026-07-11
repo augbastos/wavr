@@ -136,3 +136,59 @@ def test_get_devices_no_csrf_needed(tmp_path):
     store = IdentityStore(str(tmp_path / "id.db"))
     with TestClient(create_app(sources=[], identity_store=store)) as c:   # read, no header
         assert c.get("/api/identity/devices").status_code == 200
+
+
+def test_known_presence_empty_registry_is_honest(tmp_path):
+    # No sources at all (sources=[]) -> no fused 'casa' state either -- the route
+    # must return a well-shaped, all-absent summary rather than erroring.
+    with _client(tmp_path) as c:
+        body = c.get("/api/identity/known-presence").json()
+        assert body["scope"] == "house"
+        assert body["modality"] == "network"
+        assert body["likely_home"] is False
+        assert body["confidence_label"] == "coarse"
+        assert body["corroborators"] == []
+
+
+def test_known_presence_lists_registered_device_absent_when_unseen(tmp_path):
+    seed = [{"address": "aa:bb:cc:dd:ee:ff", "person": "alice",
+             "source": "network", "origin": "manual"}]
+    with _client(tmp_path, seed=seed) as c:
+        body = c.get("/api/identity/known-presence").json()
+        assert body["corroborators"] == [
+            {"person": "alice", "mac_prefix": "aa:bb:cc", "present": False, "details": None}
+        ]
+
+
+def test_patch_details_toggles_and_persists(tmp_path):
+    seed = [{"address": "aa:bb:cc:dd:ee:ff", "person": "alice",
+             "source": "network", "origin": "manual"}]
+    with _client(tmp_path, seed=seed) as c:
+        r = c.patch("/api/identity/devices/aa:bb:cc:dd:ee:ff/details", json={"on": True})
+        assert r.status_code == 200
+        row = next(d for d in r.json()["devices"] if d["address"] == "aa:bb:cc:dd:ee:ff")
+        assert row["details"] is True
+
+
+def test_patch_details_unknown_address_404(tmp_path):
+    with _client(tmp_path) as c:
+        r = c.patch("/api/identity/devices/aa:bb:cc:dd:ee:ff/details", json={"on": True})
+        assert r.status_code == 404
+
+
+def test_patch_details_requires_csrf_header(tmp_path):
+    store = IdentityStore(str(tmp_path / "id.db"))
+    store.add("aa:bb:cc:dd:ee:ff", "alice", "network", "manual")
+    with TestClient(create_app(sources=[], identity_store=store)) as c:   # no X-Wavr-Local
+        r = c.patch("/api/identity/devices/aa:bb:cc:dd:ee:ff/details", json={"on": True})
+        assert r.status_code == 403
+
+
+def test_post_with_details_true_is_reflected_in_known_presence(tmp_path):
+    with _client(tmp_path) as c:
+        c.post("/api/identity/devices", json={
+            "person": "alice",
+            "devices": [{"address": "aa:bb:cc:dd:ee:ff", "source": "network", "details": True}],
+        })
+        devices = c.get("/api/identity/devices").json()["devices"]
+        assert devices[0]["details"] is True

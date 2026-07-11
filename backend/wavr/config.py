@@ -222,6 +222,12 @@ class Config:
     # auto-learn the first-seen gateway MAC, persisted across restarts.
     net_gateway_monitor: bool
     net_gateway_known_macs: set[str]
+    # network-doctor auto-fix (WAVR_NET_DOCTOR_AUTOFIX) -- opt-in, default OFF.
+    # Two-factor gate WITH the route's own per-call `auto_fix=true` query param
+    # (see GET /api/health/doctor): either false means every fixable candidate
+    # renders as a suggestion only, nothing executes. Diagnose-only is the
+    # default install behaviour.
+    net_doctor_autofix: bool
     # Health-check ladder (defensive-inventory #12) -- extra operator-configured
     # targets on top of the fixed gateway + public-resolver checks. Empty by
     # default (no extra egress beyond the resolver checks themselves).
@@ -479,6 +485,9 @@ def load_config() -> Config:
             m.strip().replace("-", ":").lower()
             for m in os.getenv("WAVR_NET_GATEWAY_MACS", "").split(",") if m.strip()
         },
+        # network-doctor auto-fix -- opt-in, default OFF (see field docstring above).
+        net_doctor_autofix=os.getenv("WAVR_NET_DOCTOR_AUTOFIX", "").strip().lower()
+            in ("1", "true", "yes"),
         # Health-check ladder: extra targets beyond gateway + public resolvers.
         health_extra_targets=tuple(
             s.strip() for s in os.getenv("WAVR_HEALTH_EXTRA_TARGETS", "").split(",") if s.strip()

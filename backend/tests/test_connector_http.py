@@ -150,3 +150,65 @@ def test_post_form_caps_oversize_body(fake_server):
     _Handler.response_body = oversize
     with pytest.raises(ValueError):
         wavr_http.post_form(_url(fake_server), {"host": "x.example"})
+
+
+# --------------------------------------------------------------------------- #
+# guarded_call: the system-toggles egress master ANDs on top of is_enabled --
+# a blocked master must stop fn() from EVER running, same fail-closed shape
+# as the connector-off path (feature "system-toggles").
+# --------------------------------------------------------------------------- #
+class _Store:
+    def __init__(self, enabled: bool, egress: bool = True):
+        self._enabled = enabled
+        self._egress = egress
+
+    def is_enabled(self, connector_id: str) -> bool:
+        return self._enabled
+
+    def egress_allowed(self) -> bool:
+        return self._egress
+
+
+class _StoreNoMaster:
+    """Pre-system-toggles test double: no egress_allowed() at all. guarded_call
+    must fall back to allowed (getattr default) -- zero behaviour change for
+    every existing connector test double that predates this feature."""
+    def __init__(self, enabled: bool):
+        self._enabled = enabled
+
+    def is_enabled(self, connector_id: str) -> bool:
+        return self._enabled
+
+
+def test_guarded_call_blocked_by_egress_master_even_when_connector_enabled():
+    calls = []
+    result = wavr_http.guarded_call(_Store(enabled=True, egress=False), "open-meteo",
+                                    lambda: calls.append(1) or {"ok": True})
+    assert result == {"ok": False, "status": "disabled"}
+    assert calls == []                 # fn() never invoked -- zero network attempted
+
+
+def test_guarded_call_allowed_when_connector_enabled_and_egress_allowed():
+    calls = []
+    result = wavr_http.guarded_call(_Store(enabled=True, egress=True), "open-meteo",
+                                    lambda: calls.append(1) or {"ok": True})
+    assert result == {"ok": True}
+    assert calls == [1]
+
+
+def test_guarded_call_still_blocked_by_connector_off_regardless_of_master():
+    calls = []
+    result = wavr_http.guarded_call(_Store(enabled=False, egress=True), "open-meteo",
+                                    lambda: calls.append(1) or {"ok": True})
+    assert result == {"ok": False, "status": "disabled"}
+    assert calls == []
+
+
+def test_guarded_call_tolerates_store_without_egress_allowed_method():
+    # A pre-system-toggles test double (no egress_allowed method) must behave
+    # exactly as before: enabled -> fn() runs, no AttributeError.
+    calls = []
+    result = wavr_http.guarded_call(_StoreNoMaster(enabled=True), "open-meteo",
+                                    lambda: calls.append(1) or {"ok": True})
+    assert result == {"ok": True}
+    assert calls == [1]

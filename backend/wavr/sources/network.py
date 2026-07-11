@@ -166,7 +166,8 @@ class NetworkSource:
                  grace: int = 2, present_confidence: float = 0.8,
                  known: dict[str, str] | None = None,
                  emit_identity: bool = False,
-                 known_provider: Callable[[], dict[str, str]] | None = None):
+                 known_provider: Callable[[], dict[str, str]] | None = None,
+                 detail_provider: Callable[[], set[str]] | None = None):
         self._known = {m.replace("-", ":").lower() for m in known_macs}
         # LIVE consent registry seam: when a provider is injected it is re-read at the
         # start of every scan cycle; its {mac: person} entries are UNIONED into both
@@ -186,6 +187,13 @@ class NetworkSource:
         self._known_labels = {m.replace("-", ":").lower(): p
                               for m, p in (known or {}).items()}
         self._emit_identity = emit_identity
+        # LIVE per-device opt-in seam (consent #2, IdentityStore.detailed_net_addresses):
+        # re-read every cycle, same pattern as `known_provider`. A MAC in this set gets
+        # its label emitted even when `emit_identity` (the GLOBAL flag) is off -- but
+        # ONLY for that device, never every present device. Default None -> empty set
+        # every cycle -> the emit gate below reduces to `self._emit_identity` alone,
+        # i.e. byte-identical to before this seam existed.
+        self._detail_provider = detail_provider
         self._missed = grace + 1  # start "absent" until first sighting
 
     def _current(self) -> tuple[set[str], dict[str, str]]:
@@ -214,14 +222,18 @@ class NetworkSource:
                 self._missed += 1
             present = self._missed <= self._grace
             # House-level "who is home": name currently-seen labelled devices only
-            # when the gate is on. rssi is None — an ARP scan gives no signal
-            # strength. Empty during a grace-held miss (nothing seen this cycle).
+            # when the gate is on -- either the GLOBAL flag, or (per-device) this
+            # MAC opted into consent #2 via the live detail_provider. rssi is None —
+            # an ARP scan gives no signal strength. Empty during a grace-held miss
+            # (nothing seen this cycle).
             identities: tuple = ()
-            if present and self._emit_identity and known_labels:
+            if present and known_labels:
+                detail_macs = self._detail_provider() if self._detail_provider is not None else set()
                 identities = tuple(
                     Identity(person=known_labels[m], source="network", rssi=None)
                     for m in sorted(known_labels)
                     if m in seen and known_labels.get(m)
+                    and (self._emit_identity or m in detail_macs)
                 )
             yield SensingEvent(
                 room=self._room, modality="network", presence=present,

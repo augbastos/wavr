@@ -133,6 +133,12 @@ def build_assistant_router(cfg, store, connectors, *, tool_deps, write_deps=None
                 status_code=503,
                 detail=("cloud assistant engine disabled in Connectors — enable "
                         "'Wavr Assistant (cloud engine)' to use it"))
+        # system-toggles egress master: ANDs on top of the assistant-cloud
+        # connector's own kill switch above (see /api/system/toggles).
+        if engine["egress"] and not connectors.egress_allowed():
+            raise HTTPException(
+                status_code=503,
+                detail="egress disabled by operator (System tab)")
 
         manual_cfg = store.get_manual_config() if engine["id"] == "manual" else None
         try:

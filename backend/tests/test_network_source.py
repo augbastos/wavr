@@ -124,6 +124,47 @@ async def test_network_identity_house_level_only():
     assert ev.room == "casa"
 
 
+async def test_detail_provider_emits_label_for_optin_mac_with_global_flag_off():
+    # Per-device opt-in (consent #2): global emit_identity is OFF, but the MAC is
+    # in the live detail_provider allowlist -> its label still emits.
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff"}
+    src = NetworkSource(KNOWN, scan=scan, interval=0,
+                        known={"aa:bb:cc:dd:ee:ff": "alice"},
+                        detail_provider=lambda: {"aa:bb:cc:dd:ee:ff"})
+    [ev] = await _first_n(src, 1)
+    assert ev.presence is True
+    assert [i.to_dict() for i in ev.identities] == [
+        {"person": "alice", "source": "network", "rssi": None}
+    ]
+
+
+async def test_detail_provider_never_labels_a_non_optin_mac():
+    # A second present, labelled MAC NOT in the allowlist stays unlabelled --
+    # opting one device in must never widen to every present device.
+    known_two = {"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}
+    async def scan():
+        return known_two
+    src = NetworkSource(known_two, scan=scan, interval=0,
+                        known={"aa:bb:cc:dd:ee:ff": "alice",
+                               "11:22:33:44:55:66": "housemate"},
+                        detail_provider=lambda: {"aa:bb:cc:dd:ee:ff"})
+    [ev] = await _first_n(src, 1)
+    people = {i.person for i in ev.identities}
+    assert people == {"alice"}
+
+
+async def test_detail_provider_none_is_byte_identical_to_before():
+    # Default (no detail_provider) with the global flag off: no identities at all --
+    # unchanged from before the per-device seam existed.
+    async def scan():
+        return {"aa:bb:cc:dd:ee:ff"}
+    src = NetworkSource(KNOWN, scan=scan, interval=0,
+                        known={"aa:bb:cc:dd:ee:ff": "alice"})
+    [ev] = await _first_n(src, 1)
+    assert ev.identities == ()
+
+
 async def test_arp_scan_parses_real_command_output(monkeypatch):
     from wavr.sources import network
     async def fake_run(*args):

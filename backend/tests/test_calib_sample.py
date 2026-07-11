@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import wavr.sources.camera as _cam
-from wavr.app import create_app, _camera_factory
+from wavr.app import create_app, _camera_factory, _CALIB_SAMPLE_MIN_CONFIDENCE
 from wavr.calib_sample import CalibSampleStore
 from wavr.camera_store import CameraStore
 from wavr.config import load_config
@@ -201,6 +201,58 @@ def test_factory_no_sampling_is_unchanged():
 
     src = _camera_factory(cam, cfg, None, _NoCalib(), DEFAULT_MAP)()
     assert src._pose is False
+
+
+def _no_calib():
+    class _NoCalib:
+        def get(self, name):
+            return None
+    return _NoCalib()
+
+
+def test_factory_sampling_raises_confidence_floor(monkeypatch):
+    # A camera tuned very low (0.0) for normal operation must NOT let a marginal
+    # detection become a calibration correspondence: sampling raises the effective
+    # confidence to _CALIB_SAMPLE_MIN_CONFIDENCE, independent of the camera's own
+    # setting.
+    cfg = load_config()
+    cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": 0.0}
+    src = _camera_factory(cam, cfg, None, _no_calib(), DEFAULT_MAP,
+                          sample_store=CalibSampleStore(), sampling=True)()
+    assert src._confidence == pytest.approx(_CALIB_SAMPLE_MIN_CONFIDENCE)
+
+
+def test_factory_sampling_never_lowers_a_stricter_camera_floor(monkeypatch):
+    # A camera already tuned STRICTER than the calibration floor keeps its own, higher
+    # number -- sampling only ever raises the floor, never lowers it.
+    cfg = load_config()
+    strict = _CALIB_SAMPLE_MIN_CONFIDENCE + 0.2
+    cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": strict}
+    src = _camera_factory(cam, cfg, None, _no_calib(), DEFAULT_MAP,
+                          sample_store=CalibSampleStore(), sampling=True)()
+    assert src._confidence == pytest.approx(strict)
+
+
+def test_factory_sampling_drops_marginal_detection_below_calib_floor(monkeypatch):
+    # End-to-end through the actual pose pass (mirrors how CameraSource drives
+    # `_pose_detect(frame, self._confidence)`): a detection below the calibration floor
+    # never reaches the feet-sample store, even though the camera's own setting (0.0)
+    # would have accepted it.
+    cfg = load_config()
+    cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": 0.0}
+    store = CalibSampleStore()
+    src = _camera_factory(cam, cfg, None, _no_calib(), DEFAULT_MAP,
+                          sample_store=store, sampling=True)()
+    boxes = [((600.0, 300.0, 700.0, 700.0), _CALIB_SAMPLE_MIN_CONFIDENCE - 0.1)]
+    monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame, **kw: [_pose_result(boxes)]))
+    src._pose_detect(_Frame(), src._confidence)   # the confidence CameraSource would use
+    assert store.latest("cam_q") is None
+
+    # A confident detection (>= the floor) DOES get sampled.
+    boxes[0] = (boxes[0][0], _CALIB_SAMPLE_MIN_CONFIDENCE + 0.1)
+    src._pose_detect(_Frame(), src._confidence)
+    got = store.latest("cam_q")
+    assert got is not None and got["feet_px"] == (650.0, 700.0)
 
 
 # --------------------------------------------------------------------------- #
