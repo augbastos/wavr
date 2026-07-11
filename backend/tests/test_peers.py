@@ -122,6 +122,24 @@ def test_discovered_lists_mdns_results(tmp_path, monkeypatch):
     assert r.json() == [{"name": "Core", "host": "1.2.3.4", "port": 8000, "role": "core"}]
 
 
+def test_discovered_degrades_to_empty_list_when_zeroconf_missing(tmp_path, monkeypatch):
+    # `zeroconf` is the optional [mdns] extra -- a base/test install lacks it, so the
+    # real browse_wavr_peers's lazy `from zeroconf import ...` raises ModuleNotFoundError.
+    # /api/peers/discovered must degrade to [] (mirroring the startup self-advertise
+    # path), never bubble that into an unhandled 500.
+    app, *_ = _app(tmp_path)
+    from wavr import mdns_peers
+
+    def _raise(**k):
+        raise ModuleNotFoundError("No module named 'zeroconf'")
+
+    monkeypatch.setattr(mdns_peers, "browse_wavr_peers", _raise)
+    client = TestClient(app)
+    r = client.get("/api/peers/discovered")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
 def test_no_exchange_endpoint_exists(tmp_path):
     # C1 root cause deleted: nothing may network-vend a central code. (405, not 404,
     # because the path collides with the DELETE /api/peers/{peer_id} route pattern --

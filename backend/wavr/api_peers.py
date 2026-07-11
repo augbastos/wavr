@@ -43,6 +43,7 @@ directly with no gates. `local_ip` bounds the §D SSRF guard on the operator-sup
 from __future__ import annotations
 
 import asyncio
+import logging
 import urllib.parse
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -115,7 +116,16 @@ def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
         # Module-qualified call (not a bare imported name) so a test can monkeypatch
         # wavr.mdns_peers.browse_wavr_peers and have THIS see it. Off-loop via
         # to_thread: the real browse blocks ~3s (time.sleep) waiting for mDNS.
-        found = await asyncio.to_thread(mdns_peers.browse_wavr_peers)
+        # `zeroconf` is the optional [mdns] extra (base/test installs lack it) --
+        # mirror the startup self-advertise path's graceful degrade (app.py's
+        # lifespan: missing dep logs + continues, never crashes) instead of letting
+        # the lazy `from zeroconf import ...` ModuleNotFoundError bubble into a 500.
+        try:
+            found = await asyncio.to_thread(mdns_peers.browse_wavr_peers)
+        except Exception:
+            logging.warning("peer mDNS browse unavailable "
+                            "(zeroconf missing or browse failed)", exc_info=True)
+            return []
         return [{"name": p.name, "host": p.host, "port": p.port, "role": p.role}
                 for p in found]
 
