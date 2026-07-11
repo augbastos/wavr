@@ -160,7 +160,10 @@ def test_apply_recognition_fills_hostname_from_bonjour_when_ptr_absent():
     dev = apply_recognition(_bare_device(), bonjour={"hostname": "Living-Room-HomePod"})
     assert dev.hostname == "Living-Room-HomePod"
     assert dev.device_type == "speaker"
-    assert dev.type_confidence == "high"
+    # FUSION-C: hostname is `self_report` family (spoofable, same threat model as
+    # bonjour/upnp/snmp/netbios) -- a LONE hostname now caps at "medium" like every
+    # sibling self-description, restored to "high" only by a 2nd agreeing family.
+    assert dev.type_confidence == "medium"
     assert dev.sources[0]["signal"] == "hostname"
 
 
@@ -205,12 +208,15 @@ def test_apply_recognition_randomized_mac_with_self_report_hostname_beats_phone_
     # heuristic (see test_build_inventory_shape_and_fields above). Once its
     # OWN mDNS-announced name is wired into Device.hostname, recog's
     # hostname_type() candidate (weight 0.65) outranks random_mac (weight
-    # 0.2) and classifies at high confidence instead.
+    # 0.2) and classifies as esp_dev instead of phone. Confidence is "medium"
+    # (FUSION-C: a lone self_report-family hostname caps at medium, same as
+    # bonjour/upnp/snmp/netbios -- random_mac disagrees on type, so no 2nd
+    # agreeing family is present here to bump it to high).
     dev = apply_recognition(_bare_device(mac="02:11:22:33:44:55"),
                             bonjour={"hostname": "esp32-kitchen-sensor"})
     assert dev.hostname == "esp32-kitchen-sensor"
     assert dev.device_type == "esp_dev"
-    assert dev.type_confidence == "high"
+    assert dev.type_confidence == "medium"
 
 
 async def test_scan_inventory_uses_injected_transport_no_network():

@@ -210,7 +210,13 @@ def _candidates(signals: Mapping) -> list[dict]:
     hostname = signals.get("hostname")
     dtype = hostname_type(hostname)
     if dtype:
-        add("hostname", dtype, "high", f"{hostname} -> {dtype}")
+        # FUSION-C: hostname is `self_report` family (a DHCP/mDNS-announced, spoofable
+        # name -- see module docstring) exactly like upnp/bonjour/ha/snmp/netbios below,
+        # yet it was seeded "high" here while every sibling self_report seeds "medium".
+        # Match the module's own documented threat model (a lone self-description must
+        # never claim "high" alone): seed "medium"; the family-consensus bump below
+        # already restores "high" once a 2nd, DISTINCT-family signal agrees.
+        add("hostname", dtype, "medium", f"{hostname} -> {dtype}")
 
     hint = port_type_hint(signals.get("open_ports"))
     if hint:

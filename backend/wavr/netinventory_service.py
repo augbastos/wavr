@@ -326,7 +326,7 @@ class NetworkInventoryService:
         self._inventory = devices
         self._observe_gateway(devices)
         self._record_rogues(devices)
-        self._record_seen(devices)
+        await self._record_seen(devices)
         return devices
 
     def _get_mdns(self):
@@ -556,17 +556,23 @@ class NetworkInventoryService:
             _LOG.warning("ha_store.signals failed", exc_info=True)
             return {}
 
-    def _record_seen(self, devices) -> None:
+    async def _record_seen(self, devices) -> None:
         # Feature A: persist first-seen/last-seen for every observed MAC, not
-        # just rogue ones. Tolerant, same rule as the on_rogue callback -- a
-        # persistence failure must never break scanning.
+        # just rogue ones. ONE batched call (DeviceMeta.seen_many -- one sqlite
+        # commit for the whole scan cycle instead of one seen()+commit per
+        # device) run via asyncio.to_thread so the synchronous sqlite write
+        # never blocks THIS event loop, even on a slow/busy disk. Tolerant,
+        # same rule as the on_rogue callback -- a persistence failure (raised
+        # either by the write itself, or by a store that predates seen_many()
+        # and doesn't have it) must never break scanning, even though nothing
+        # gets recorded that cycle in the latter case.
         if not self._device_meta:
             return
-        for d in devices:
-            try:
-                self._device_meta.seen(d.mac)
-            except Exception:
-                _LOG.warning("device_meta.seen failed for %s", d.mac, exc_info=True)
+        macs = [d.mac for d in devices]
+        try:
+            await asyncio.to_thread(self._device_meta.seen_many, macs)
+        except Exception:
+            _LOG.warning("device_meta.seen_many failed for %d MACs", len(macs), exc_info=True)
 
     def _record_rogues(self, devices) -> None:
         ts = datetime.now(timezone.utc).isoformat()

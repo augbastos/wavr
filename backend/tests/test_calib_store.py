@@ -59,6 +59,25 @@ def test_validate_homography_rejects_nonfinite_and_zero_h33():
         validate_homography([1, 0, 0, 0, 1, 0, 0, 0, 0])
 
 
+# Audit HIGH regression: a raw `10**400`-shaped JSON int (json.loads decodes it as an
+# arbitrary-precision Python int, not a float) used to raise an unhandled OverflowError
+# out of float() -- an unhandled 500 via PUT /api/cameras/{name}/calibration -- instead
+# of the clean CalibrationError (422) every other malformed value already gets.
+def test_validate_mount_rejects_huge_int_literal_not_overflowerror():
+    with pytest.raises(CalibrationError):
+        validate_mount({"pos_x": 10**400, "pos_y": 0})
+
+
+def test_validate_mount_rejects_huge_int_literal_vfov_not_overflowerror():
+    with pytest.raises(CalibrationError):
+        validate_mount({"pos_x": 0, "pos_y": 0, "vfov_deg": 10**400})
+
+
+def test_validate_homography_rejects_huge_int_literal_not_overflowerror():
+    with pytest.raises(CalibrationError):
+        validate_homography([10**400, 0, 0, 0, 1, 0, 0, 0, 1])
+
+
 # ---- store round-trips ---- #
 
 def test_get_unknown_camera_returns_none(store):

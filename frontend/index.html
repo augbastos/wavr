@@ -6002,7 +6002,9 @@ function colorFor(pct){
 // Trust weights per modality — mirrors backend fusion.py DEFAULT_WEIGHTS exactly (same
 // table SimulatorProvider already mirrors). Feeds the per-source weight disclosure line
 // ("Camera · weight 43% · agrees"); 0.5 is the backend's fallback for unknown modalities.
-const FUSION_WEIGHTS = {camera:1.0, mmwave:0.9, wifi_csi:0.85, ble:0.7, network:0.5, sim:0.6};
+// `pir`/`node` (sensor-node modalities, 2026-07-11) added to keep this mirror exact.
+const FUSION_WEIGHTS = {camera:1.0, mmwave:0.9, wifi_csi:0.85, ble:0.7, network:0.5, sim:0.6,
+                        pir:0.6, node:0.5};
 const FUSION_WEIGHT_DEFAULT = 0.5;
 // Every modality seen anywhere in the house — a modality present here but absent from a
 // room's sources[] renders as that room's "no sensor here" (no-coverage) row (§6).

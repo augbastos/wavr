@@ -93,6 +93,15 @@ _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 _VENDOR_DIR = _INDEX.parent / "vendor"
 _CATALOG_PATH = _VENDOR_DIR / "device-catalog.json"
 
+# PERF: GET /api/house-status's own routine/is_unusual sweep (see _compute_house_status)
+# re-runs occupancy_log.is_unusual() -- up to a 5000-row sqlite scan PER currently-fused
+# room -- on every call. The dashboard polls this route every ~20s, so amortize just
+# that sweep over a short TTL. Deliberately NOT applied to intrusion/network/fall
+# reasons -- those must self-clear/appear the instant they resolve/fire (see
+# wavr.house_status's own "RECENCY, honestly" docstring), only the routine-anomaly
+# sweep (a soft, non-security signal) is cached.
+_HOUSE_STATUS_ROUTINE_TTL_S = 5.0
+
 
 def _load_device_catalog() -> list:
     """Read the static offline device catalog (a repo asset -- safe to read
@@ -610,7 +619,32 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     async def _ingest(event):
         rs = _fusion.update(event)
-        await _publish(rs)
+        # PERF-CRITICAL (SD-card write-wear on the live G9 Core): mmwave publishes at
+        # ~0.2s cadence, camera at ~0.5s -- writing a full sqlite INSERT+commit to
+        # `_storage` (the `room_states` table GET /api/history and /api/narrate read)
+        # on EVERY SensingEvent wears the card for no benefit when the fused RoomState
+        # hasn't actually changed (a still room re-asserting the same reading every
+        # frame). Mirror _refuse_once's own persist=changed change-gate here, but
+        # compare the FULL derived state (not just occupied/confidence) so a
+        # sources[]/targets/identities/person_count-only change still persists. `ts` is
+        # excluded from the comparison -- it is per-event metadata (every event has a
+        # new ts by construction), not signal state; including it would make the
+        # comparison never match and defeat the whole gate.
+        #
+        # DURABILITY TRADE-OFF: a room holding a perfectly steady reading now logs only
+        # its LAST-persisted row's `ts`, not every intervening (identical) event's --
+        # /api/history and /api/narrate see fewer, coarser rows while a room is steady
+        # (still an honestly reconstructible history: state X held from that row's ts
+        # until the next one), never a WRONG one. `occupancy_log` (A4 house memory,
+        # below via `_publish`) is UNCHANGED -- it already applies its own independent
+        # on-change gate (`OccupancyLog.append_if_changed`) regardless of `persist`.
+        prev = latest.get(event.room)
+        new = rs.to_dict()
+        changed = prev is None or (
+            {k: v for k, v in new.items() if k != "ts"}
+            != {k: v for k, v in prev.items() if k != "ts"}
+        )
+        await _publish(rs, persist=changed)
 
     async def _refuse_once():
         # One periodic re-fuse pass. Fusion is otherwise purely event-driven, so a
@@ -852,6 +886,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _block_local_ip = _local_ipv4() or ""
     _blocker = arp_block.ArpBlocker(send=arp_send)
 
+    # PERF cache for _compute_house_status's routine/is_unusual sweep -- see
+    # _HOUSE_STATUS_ROUTINE_TTL_S above. Single-slot (house-wide, not per-window_minutes:
+    # routine_flags never depends on window_minutes, only the network-alert filter
+    # inside compose_house_status does, and that stays uncached below).
+    _routine_cache: dict = {"ts": None, "flags": []}
+
     async def _compute_house_status(window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES) -> dict:
         # Build A10 v0: the unified "esta tudo bem em casa?" answer, fusing the NETWORK
         # layer (rogue-device/rogue-DHCP/gateway-identity -- the SAME `merge_alerts()`
@@ -870,18 +910,28 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         routine_flags = []
         if _occupancy_log is not None:
             now = datetime.now(timezone.utc)
-            rooms = list(latest.items())
-            # Concurrent, off the event loop -- one sqlite read per currently-fused
-            # room, never a blocking serial loop.
-            checks = await asyncio.gather(*(
-                asyncio.to_thread(_occupancy_log.is_unusual, room, d.get("occupied"), at=now)
-                for room, d in rooms
-            ))
-            routine_flags = [
-                {"room": room, "ts": now.isoformat()}
-                for (room, _d), verdict in zip(rooms, checks)
-                if verdict.get("unusual") is True
-            ]
+            cached_ts = _routine_cache["ts"]
+            if cached_ts is not None and (now - cached_ts).total_seconds() < _HOUSE_STATUS_ROUTINE_TTL_S:
+                # Amortize the expensive per-room sqlite sweep below -- see
+                # _HOUSE_STATUS_ROUTINE_TTL_S. A few seconds of staleness on a
+                # "is this hour's occupancy unusual" note is a non-issue; a genuinely
+                # new anomaly is still caught within one TTL window, never suppressed.
+                routine_flags = _routine_cache["flags"]
+            else:
+                rooms = list(latest.items())
+                # Concurrent, off the event loop -- one sqlite read per currently-fused
+                # room, never a blocking serial loop.
+                checks = await asyncio.gather(*(
+                    asyncio.to_thread(_occupancy_log.is_unusual, room, d.get("occupied"), at=now)
+                    for room, d in rooms
+                ))
+                routine_flags = [
+                    {"room": room, "ts": now.isoformat()}
+                    for (room, _d), verdict in zip(rooms, checks)
+                    if verdict.get("unusual") is True
+                ]
+                _routine_cache["ts"] = now
+                _routine_cache["flags"] = routine_flags
         return compose_house_status(network_alerts=network_alerts,
                                     intrusion_alerts=intrusion_alerts,
                                     fall_alerts=fall_alerts,
@@ -1069,6 +1119,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * calib_sample: the walk-to-calibrate feet-pixel sink, so a test can record a
     #    coordinate and assert GET calib-sample surfaces it (never a frame -- ADR-0002).
     app.state.calib_sample = _calib_sample
+    #  * ingest: the fusion event-ingest path (SourceManager's on_event), so a test can
+    #    drive one deterministic SensingEvent through fusion + the SD-wear persist=
+    #    changed write-gate without needing a real/timed source or a node bearer token.
+    app.state.ingest = _ingest
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or

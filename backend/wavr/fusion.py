@@ -82,6 +82,22 @@ class FusionEngine:
         self._now_fn = now_fn
         self._freshness_s = _DEFAULT_FRESHNESS_S if freshness_s is None else freshness_s
         self._stale_s = _DEFAULT_STALE_S if stale_s is None else stale_s
+        # LOW fix: fail fast on an inverted/degenerate window instead of letting it
+        # silently skip the linear decay curve. `_freshness()` already has a defensive
+        # `stale_s <= freshness_s` branch (avoids a division by zero / negative-slope
+        # decay), but that branch's actual EFFECT is confusing: every source jumps
+        # straight from full trust (1.0) to dead (0.0) the instant it crosses
+        # freshness_s, with no stale/decaying middle window at all -- exactly the
+        # footgun a misconfigured WAVR_SOURCE_FRESHNESS_S/WAVR_SOURCE_STALE_S env pair
+        # would hit silently. Raise here, at construction, so the operator sees the
+        # mistake immediately rather than a live box that stops decaying anything.
+        if self._stale_s <= self._freshness_s:
+            raise ValueError(
+                f"FusionEngine: stale_s ({self._stale_s}) must be greater than "
+                f"freshness_s ({self._freshness_s}) -- otherwise a source's trust "
+                "jumps straight from full weight to dead with no decay window "
+                "(see _freshness())."
+            )
         # Asymmetric occupancy dwell: how long `occupied` is held after
         # confidence falls below threshold before it may flip to vacant
         # (0 disables the dwell).
@@ -89,6 +105,13 @@ class FusionEngine:
         self._latest: dict[str, dict[str, SensingEvent]] = {}  # room -> modality -> event
         self._occupied_state: dict[str, bool] = {}     # room -> last debounced occupied
         self._vacate_since: dict[str, datetime] = {}   # room -> when a pending vacate began
+        # FUSION-B: last-known person_count/targets while `occupied` is held, keyed by
+        # room -> {"count": int, "targets": list[dict], "ts": datetime}. Lets a STILL
+        # counting source (e.g. mmwave on someone barely moving) survive a single/multi-
+        # frame presence dropout without person_count flickering N -> None -> N on every
+        # fuse -- see the latch block in `_fuse`. Bounded by `self._stale_s` so a long-
+        # dead counting source can never keep vouching for a headcount forever.
+        self._count_latch: dict[str, dict] = {}
 
     def update(self, event: SensingEvent) -> RoomState:
         room_events = self._latest.setdefault(event.room, {})
@@ -217,11 +240,48 @@ class FusionEngine:
                             "count": (e.count if modality in COUNTING_MODALITIES else None)})
             if e.presence and e.breathing_bpm is not None:
                 vitals = {"breathing_bpm": e.breathing_bpm, "heart_bpm": e.heart_bpm}
+        # Person COUNT (additive, honest) -- computed HERE, BEFORE raw_occupied/debounce,
+        # so FUSION-A below can pull `occupied` True off a fresh, present counting source
+        # (see that block). Only counting-capable modalities that are PRESENT and still
+        # fresh (decay>0) may vouch for a number -- the SAME gate as the targets pass
+        # below. Among those, the highest-weight source wins when counts disagree
+        # (deterministic precedence, mirroring the targets pass-through); each source's
+        # own count still rides in `sources[]` above so a disagreement is SURFACED, never
+        # silently resolved. NEVER feeds num/den/strength -- confidence is provably
+        # unchanged by this loop. None = no counting-capable source vouches for a number
+        # here (unknown, not a fabricated 0). `live_count` is the CURRENT frame's count;
+        # the FUSION-B latch below decides the RoomState's actual `person_count`.
+        live_count: int | None = None
+        best_cw = -1.0
+        for modality, e in events.items():
+            if modality not in COUNTING_MODALITIES:
+                continue
+            if not (e.presence and decays.get(modality, 0.0) > 0.0):
+                continue
+            if e.count is None:
+                continue
+            w = self._weights.get(modality, 0.5)
+            if w > best_cw:
+                best_cw = w
+                live_count = int(e.count)
+
         agreement = num / den if den > 0 else 0.0
         # Defensive clamp: a single out-of-range source confidence (negative or
         # >1) must never drive the fused confidence outside [0, 1].
         confidence = round(min(1.0, max(0.0, agreement * strength)), 3)
-        raw_occupied = confidence >= self._threshold
+        # FUSION-A: a fresh, PRESENT counting source (camera/mmwave -- the two highest-
+        # trust, most-precise modalities, see COUNTING_MODALITIES) asserting count>=1
+        # pulls `occupied` True even when the blended confidence sits below threshold.
+        # Rationale: `occupied=False ∧ person_count>0` is an incoherent state that also
+        # BLINDS the intrusion path (room_unrecognized/house_unrecognized in watch.py
+        # read person_count regardless of `occupied`) -- a missed intruder is a worse
+        # failure than an extra "occupied" pill on a low-confidence detection.
+        # `confidence` itself is NOT touched here, so the UI still renders the honest
+        # low % (this is the same shape as the existing vacate-dwell HOLD, where
+        # occupied=True with confidence<threshold is already a legal, shipped state).
+        # live_count == 0 (a present source explicitly counting nobody) does NOT pull
+        # occupied -- `0 > 0` is False.
+        raw_occupied = confidence >= self._threshold or (live_count is not None and live_count > 0)
         occupied, pending_s = self._debounce_occupancy(room, raw_occupied, ref)
         parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
         explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
@@ -243,27 +303,41 @@ class FusionEngine:
                     best_w = w
                     best_targets = [t.to_dict() for t in e.targets]
 
-        # Person COUNT (additive, honest). Only counting-capable modalities that are
-        # PRESENT and still fresh (decay>0) may set it -- the SAME gate as targets
-        # above. Among those, the highest-weight source wins when counts disagree
-        # (deterministic precedence, mirroring the targets pass-through); each source
-        # own count rides in sources[] so a disagreement is SURFACED, never silently
-        # resolved. Like the targets/identity passes it NEVER feeds num/den/strength --
-        # confidence is provably unchanged. None = no counting-capable source vouches
-        # for a number here (unknown, not a fabricated 0).
-        person_count: int | None = None
-        best_cw = -1.0
-        for modality, e in events.items():
-            if modality not in COUNTING_MODALITIES:
-                continue
-            if not (e.presence and decays.get(modality, 0.0) > 0.0):
-                continue
-            if e.count is None:
-                continue
-            w = self._weights.get(modality, 0.5)
-            if w > best_cw:
-                best_cw = w
-                person_count = int(e.count)
+        # FUSION-B: latch person_count/targets across a single/multi-frame presence
+        # dropout of a STILL counting source while `occupied` is held by the debounce
+        # above. Without this, a very-still person can single-frame `present=False` on
+        # mmwave and person_count flickers None -> N -> None on every fuse, which (a)
+        # blinds a still-present intrusion check that reads person_count and (b) churns
+        # occupancy_log with a row per flicker (person_count is an exact-match field
+        # there, so any None<->N change is an insert). Bounded by `self._stale_s` -- the
+        # SAME dead-source bound freshness decay already uses -- so a long-dead counting
+        # source can never keep vouching for a headcount indefinitely off a
+        # presence-only source holding the room occupied; that would overclaim.
+        count_held = False
+        if not occupied:
+            # Vacant room surfaces no count -- matches the UI's own
+            # `rs.occupied && person_count>0` gate, and there is nothing left to latch.
+            self._count_latch.pop(room, None)
+            person_count = None
+        elif live_count is not None:
+            self._count_latch[room] = {"count": live_count, "targets": best_targets, "ts": ref}
+            person_count = live_count
+        else:
+            latch = self._count_latch.get(room)
+            if latch is not None and (ref - latch["ts"]).total_seconds() <= self._stale_s:
+                person_count = latch["count"]
+                if not best_targets:
+                    best_targets = list(latch["targets"])
+                count_held = True
+            else:
+                self._count_latch.pop(room, None)
+                person_count = None
+        if count_held:
+            # Explanation-only surface, mirroring the pending-vacate countdown above
+            # (`pending_s` is likewise never a RoomState field) -- the minimal honest
+            # surface for "this number is latched, not this instant's evidence" without
+            # a contract change to RoomState/its consumers.
+            explanation += ", contagem mantida"
 
         # Identity pass-through (non-biometric "who is home"). METADATA ONLY: this
         # rides the SAME present + fresh (decay>0) gate as targets and NEVER feeds

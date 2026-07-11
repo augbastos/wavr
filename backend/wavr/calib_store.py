@@ -41,7 +41,12 @@ def validate_mount(d: dict) -> MountPose:
             return default
         try:
             v = float(d[key])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: a raw huge-magnitude JSON int (e.g. a `10**400`-shaped
+            # literal -- json.loads decodes it as an arbitrary-precision Python int,
+            # not a float) can't be widened to a C double by float(). Same class
+            # localize._finite_point / housemap._finite guard; treat it as "not a
+            # number" -> clean CalibrationError (422 at the route), never a 500.
             raise CalibrationError(f"mount.{key} must be a number")
         if not (lo <= v <= hi):
             raise CalibrationError(f"mount.{key} out of range [{lo}, {hi}]")
@@ -51,7 +56,7 @@ def validate_mount(d: dict) -> MountPose:
     if vfov is not None:
         try:
             vfov = float(vfov)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # see _num()'s comment above
             raise CalibrationError("mount.vfov_deg must be a number or null")
         if not (1.0 <= vfov <= 179.0):
             raise CalibrationError("mount.vfov_deg out of range [1, 179]")
@@ -77,7 +82,13 @@ def validate_homography(h) -> list[float]:
     for v in h:
         try:
             f = float(v)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: same huge-int-literal class as validate_mount's _num()
+            # above. Today's only writer (PUT /api/cameras/{name}/calibration) always
+            # hands this a server-computed, already-finite matrix from
+            # localize.homography_from_points -- but this is the shared persistence-
+            # shape guard (also runs on CalibrationStore.get's read-back), so it stays
+            # defensive against a directly-supplied homography too.
             raise CalibrationError("homography entries must be numbers")
         if f != f or f in (float("inf"), float("-inf")):
             raise CalibrationError("homography entries must be finite")

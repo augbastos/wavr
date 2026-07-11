@@ -78,6 +78,17 @@ def test_post_junk_address_rejected_and_not_persisted(tmp_path):
         assert c.get("/api/identity/devices").json() == {"devices": []}
 
 
+def test_post_oversized_batch_rejected_and_not_persisted(tmp_path):
+    # Audit LOW: an unbounded devices[] batch could force normalize_mac/sanitize_name
+    # + store.add() over an arbitrarily large list from one request.
+    from wavr.api_identity import _MAX_DEVICES_PER_BATCH
+    with _client(tmp_path) as c:
+        devices = [{"address": f"aa:bb:cc:dd:ee:{i:02x}"} for i in range(_MAX_DEVICES_PER_BATCH + 1)]
+        r = c.post("/api/identity/devices", json={"person": "alice", "devices": devices})
+        assert r.status_code == 400
+        assert c.get("/api/identity/devices").json() == {"devices": []}   # nothing persisted
+
+
 def test_post_batch_is_atomic_on_junk(tmp_path):
     # One junk address rejects the WHOLE batch -> nothing persisted.
     with _client(tmp_path) as c:

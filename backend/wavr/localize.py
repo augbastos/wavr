@@ -112,7 +112,13 @@ class LocalizeResult:
 def _finite_point(p) -> bool:
     try:
         return len(p) == 2 and all(math.isfinite(float(c)) for c in p)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: float() on a raw huge-magnitude JSON int (e.g. a `10**400`-
+        # shaped literal -- json.loads decodes it as an arbitrary-precision Python int,
+        # not a float) can't be widened to a C double. Same class housemap._finite
+        # guards; a non-finite-by-construction coordinate is just not finite, not a
+        # crash -- callers (homography_from_points via PUT /api/cameras/{name}/
+        # calibration) already turn a False here into a clean ValueError -> 422.
         return False
 
 

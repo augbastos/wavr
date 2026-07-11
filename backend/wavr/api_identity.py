@@ -27,6 +27,13 @@ from fastapi import APIRouter, Body, HTTPException
 from wavr.identity_store import VALID_ORIGINS, VALID_SOURCES
 from wavr.device_meta import normalize_mac, sanitize_name
 
+# Bound a single POST's device batch (audit LOW): a real household registration is a
+# handful of devices at a time (the admin confirming their own phone/watch, or a
+# bonded-suggestion batch); this caps how many normalize_mac/sanitize_name + store.add()
+# calls one unauthenticated-shape-but-CSRF-gated request can force. Mirrors
+# wavr.nodes._MAX_ARRAY's per-request batch-cap convention.
+_MAX_DEVICES_PER_BATCH = 128
+
 
 def build_identity_router(store, bonded_reader=None, ensure_source=None,
                           write_deps=None) -> APIRouter:
@@ -73,6 +80,9 @@ def build_identity_router(store, bonded_reader=None, ensure_source=None,
         # the WHOLE batch first -> reject 400 with nothing persisted on any junk.
         if not isinstance(devices, list) or not devices:
             raise HTTPException(status_code=400, detail="devices must be a non-empty list")
+        if len(devices) > _MAX_DEVICES_PER_BATCH:
+            raise HTTPException(status_code=400,
+                                detail=f"devices batch too large (> {_MAX_DEVICES_PER_BATCH})")
         prepared = []
         for d in devices:
             if not isinstance(d, dict):
