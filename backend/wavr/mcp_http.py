@@ -17,10 +17,30 @@ control gate is process-global (not per-caller), so control must never be reacha
 the network where every paired token would get it equally. The stdio bridge
 (``wavr.mcp_serve``) keeps the full gated toolset, unchanged.
 
+PER-AGENT TOOL SCOPES (Wavr Pass, Phase 2A / B4): a caller resolved to the 'agent'
+principal type (``wavr.devices.VALID_ROLES``) carries an explicit MCP tool-name
+allow-list (``request.state.tool_scopes`` -- ``wavr.auth.effective_tool_scopes``,
+default READ-ONLY: every read tool, never ``call_ha_service``). Gate 4.5 below
+refuses a ``tools/call`` whose ``name`` isn't in that allow-list BEFORE it ever
+reaches FastMCP -- a bounded capability set, not the whole (already read-only)
+toolset. root/central/user are UNCHANGED: their resolved ``tool_scopes`` is
+``None`` ("not restricted by this axis"), so gate 4.5 is a no-op for them, byte-
+identical to before this feature existed.
+
 Request path for ``/mcp`` (each gate fail-closed):
   1. ``loopback_or_authed`` (app.py, upstream)  -- unpaired / out-of-subnet / revoked
      -> 403 BEFORE this guard ever runs (proven: the mounted sub-app is wrapped by the
-     parent ``@app.middleware('http')``).
+     parent ``@app.middleware('http')``). Also sets ``request.state.tool_scopes``
+     (Phase 2A / B4), visible here via ``scope["state"]`` (Starlette's ``Request.state``
+     IS backed by that dict -- same object, not a copy).
+  1.5. ``mcp`` route scope (Phase-2A verify FIX 5) -- ``wavr.auth.SCOPES`` has named
+     ``mcp`` since Phase 1 but its own docstring says it is "only ENFORCED from
+     Phase 4"; ENFORCED HERE for the first time. root (never scope-limited) always
+     passes; every other caller must carry ``mcp`` in its resolved
+     ``request.state.scopes`` -- central and agent both do by DEFAULT
+     (``auth.DEFAULT_SCOPES``), so this is a no-op for them; ``user`` does NOT, so
+     this is what actually keeps a mere authenticated in-subnet ``user`` device out
+     of every /mcp read tool (previously it reached them all -- HIGH finding).
   2. kill-switch  -- the ``mcp-http`` connector is default-OFF; a per-request
      ``is_enabled`` check 503s when disabled (REVOCABLE, no restart).
   3. Origin  -- DNS-rebind defence (the streamable-HTTP spec requirement).
@@ -29,6 +49,11 @@ Request path for ``/mcp`` (each gate fail-closed):
      (non-browser) MCP clients send no Origin and are allowed.
   4. rate-limit  -- token bucket per peer IP (stdio had none; it was local-by-
      construction). Defence-in-depth against a hammering paired peer.
+  4.5. tool-scope  -- ONLY when the caller's resolved ``tool_scopes`` is not None
+     (today: role == 'agent'): buffer + inspect the JSON-RPC body for a
+     ``tools/call`` (single message or a batch array) and refuse with a clean
+     403 if the requested tool name isn't in the caller's allow-list. Costs
+     nothing for every other principal (root/central/user skip straight to 5).
   5. dispatch  -- delegate to the FastMCP session manager's ``handle_request``.
 
 The FastMCP transport is built with ``stateless_http=True`` (Wavr auth is already
@@ -44,12 +69,15 @@ never needs the extra -- mirrors ``wavr.mcp``. app.py wires the mount only when
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
 import time
 
 from starlette.responses import JSONResponse
+
+from wavr.auth import has_scope, tool_call_allowed
 
 _log = logging.getLogger("wavr.mcp.http")
 
@@ -92,6 +120,62 @@ def _origin_ok(origin: str | None, local_ip: str) -> bool:
     if local_ip:
         allowed.add(local_ip)
     return host in allowed
+
+
+async def _buffer_body(receive):
+    """Drain the ASGI request body into `bytes`, returning `(body, replay_receive)`.
+    `replay_receive` is a `receive()` callable that replays the EXACT messages
+    consumed here -- byte-identical to the original stream -- before forwarding
+    anything after to the real `receive`, so a downstream ASGI app (FastMCP's
+    session manager, which reads the SAME body via its own `receive()`) sees an
+    unmodified request. Only called when there's an actual tool-scope restriction
+    to check (gate 4.5 below) -- an unrestricted principal (root/central/user)
+    never pays this cost; dispatch reads the original `receive` untouched, exactly
+    as before this feature."""
+    messages = []
+    while True:
+        message = await receive()
+        messages.append(message)
+        if message.get("type") != "http.request" or not message.get("more_body", False):
+            break
+    body = b"".join(m.get("body", b"") for m in messages if m.get("type") == "http.request")
+
+    it = iter(messages)
+
+    async def replay():
+        try:
+            return next(it)
+        except StopIteration:
+            return await receive()
+
+    return body, replay
+
+
+def _extract_tool_call_names(body: bytes) -> list[str]:
+    """Best-effort parse of a JSON-RPC request body -> every tool `name` any
+    `tools/call` message within it requests. Handles both a single JSON-RPC
+    object and a JSON-RPC BATCH (a JSON array of messages) so a batched request
+    can't smuggle a disallowed tool call past a single-message-shaped check.
+
+    NEVER raises: a malformed/binary/non-JSON body (or one with no `tools/call`
+    at all -- `initialize`, `tools/list`, `ping`, ...) yields `[]`, so gate 4.5
+    lets it through to FastMCP's own protocol-conformant handling. This parser is
+    advisory-ONLY for the scope gate -- it is not a second protocol validator and
+    never itself decides a request is malformed."""
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return []
+    messages = payload if isinstance(payload, list) else [payload]
+    names: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("method") != "tools/call":
+            continue
+        params = msg.get("params")
+        name = params.get("name") if isinstance(params, dict) else None
+        if isinstance(name, str):
+            names.append(name)
+    return names
 
 
 class _RateLimiter:
@@ -146,6 +230,24 @@ class _McpHttpGuard:
         if scope.get("type") != "http":
             return
 
+        # Gate 1.5 -- the reserved 'mcp' route scope (Phase-2A verify FIX 5),
+        # ENFORCED here for the first time (auth.py's SCOPES docstring: "mcp is
+        # named now but only ENFORCED from Phase 4"). loopback_or_authed (app.py,
+        # Gate 1, upstream) already resolved request.state.role/scopes -- root is
+        # NEVER scope-limited (bypasses here exactly like app.py's own
+        # require_scope() dependency does), every other caller must carry 'mcp' in
+        # its resolved scopes. central and agent both carry it by DEFAULT
+        # (auth.DEFAULT_SCOPES), so this is a no-op for them; 'user' does NOT --
+        # this is what stops a merely-authenticated in-subnet 'user' device from
+        # reaching every /mcp read tool (HIGH finding this closes).
+        state = scope.get("state") or {}
+        role = state.get("role")
+        if role != "root" and not has_scope(state.get("scopes"), "mcp"):
+            _log.warning("mcp route refused: role=%r lacks 'mcp' scope", role)
+            await JSONResponse({"detail": "missing scope: mcp"}, status_code=403)(
+                scope, receive, send)
+            return
+
         # Gate 2 -- kill-switch (mcp-http connector default-OFF). Fail-closed if the store
         # read raises (e.g. during shutdown): treat as disabled, never dispatch.
         try:
@@ -173,13 +275,35 @@ class _McpHttpGuard:
                 scope, receive, send)
             return
 
+        # Gate 4.5 -- per-agent MCP tool scope (Wavr Pass, Phase 2A / B4). Only
+        # restricts a caller whose resolved principal carries an explicit tool-name
+        # allow-list (today: the 'agent' role -- see auth.access_for_scoped /
+        # auth.DEFAULT_AGENT_TOOL_SCOPES). `tool_scopes is None` means "not
+        # restricted by this axis" (root/central/user, unchanged pre-existing
+        # behaviour) -> skip straight to dispatch with ZERO extra work, so this
+        # gate costs nothing for every principal type that predates this feature.
+        # (`state` was already read for Gate 1.5 above -- same dict, reused.)
+        tool_scopes = state.get("tool_scopes")
+        if tool_scopes is not None:
+            body, receive = await _buffer_body(receive)
+            for tool_name in _extract_tool_call_names(body):
+                if not tool_call_allowed(tool_scopes, tool_name):
+                    _log.warning("mcp tool call refused: %r not in agent scope %s",
+                                tool_name, sorted(tool_scopes))
+                    await JSONResponse(
+                        {"detail": f"tool not in scope: {tool_name!r}"},
+                        status_code=403)(scope, receive, send)
+                    return
+
         # Gate 5 -- dispatch to FastMCP (read-only tool set; call_ha_service is absent).
         await self._sm.handle_request(scope, receive, send)
 
 
 def build_mcp_http_mount(provider, *, is_enabled, local_ip: str, name: str = "wavr",
                          ha_client=None, rate_capacity: int | None = None,
-                         rate_refill: float | None = None):
+                         rate_refill: float | None = None,
+                         network_inventory_fn=None, alerts_fn=None,
+                         occupancy_provider=None, house_status_fn=None):
     """Build the READ-ONLY, stateless MCP-over-streamable-HTTP mount.
 
     Returns ``(route, session_manager)``:
@@ -193,6 +317,12 @@ def build_mcp_http_mount(provider, *, is_enabled, local_ip: str, name: str = "wa
     ``is_enabled`` is a callable ``() -> bool`` read per request (the ``mcp-http``
     kill-switch). ``local_ip`` seeds the Origin allowlist. ``ha_client`` (or None) is
     passed to the read tool ``get_ha_entities`` (LOCAL HA on the LAN; None -> []).
+
+    ``network_inventory_fn`` / ``alerts_fn`` / ``occupancy_provider`` / ``house_status_fn``
+    (Phase 2A / B1-B3, all optional) are forwarded straight to ``build_mcp_server`` --
+    see its docstring for what each expects. Every one defaults to None, so an existing
+    caller of this function is unaffected until it opts a source in; each corresponding
+    tool degrades to its honest empty/disabled shape rather than erroring.
 
     The [mcp] SDK is imported HERE, lazily -- importing this module never needs the extra.
     """
@@ -211,6 +341,8 @@ def build_mcp_http_mount(provider, *, is_enabled, local_ip: str, name: str = "wa
         # SDK's overlapping DNS-rebind validator (one source of truth per check).
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=False),
+        network_inventory_fn=network_inventory_fn, alerts_fn=alerts_fn,
+        occupancy_provider=occupancy_provider, house_status_fn=house_status_fn,
     )
     # Lazily create the session manager (SDK does this on first streamable_http_app()).
     server.streamable_http_app()
