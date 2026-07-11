@@ -98,19 +98,22 @@ class _OneRoomSource:
 
 class _WatchSource:
     """Same shape as test_watch.py's own fixture: 'ana' known-present on casa (BLE),
-    sala's camera counts TWO people -> sala holds one unrecognized person."""
+    sala's camera counts TWO people -> sala holds one unrecognized person. sala
+    REPEATS on a ~0.05s cadence (mirrors real per-frame camera publish) so
+    wavr.watch.IntrusionAlertLog's consecutive-check debounce gets enough checks to
+    arm within the tests' short poll windows."""
 
     async def events(self):
         now = datetime.now(timezone.utc).isoformat()
         yield SensingEvent(room="casa", modality="ble", presence=True, motion=0.0,
                            breathing_bpm=None, heart_bpm=None, confidence=0.7, ts=now,
                            identities=(Identity("ana", "ble", -50),))
-        now2 = datetime.now(timezone.utc).isoformat()
         tgts = tuple(Target(id=i + 1, x=float(i), y=float(i) + 0.5) for i in range(2))
-        yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
-                           breathing_bpm=13.0, heart_bpm=60.0, confidence=0.95, ts=now2,
-                           targets=tgts, count=2)
         while True:
+            now2 = datetime.now(timezone.utc).isoformat()
+            yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                               breathing_bpm=13.0, heart_bpm=60.0, confidence=0.95, ts=now2,
+                               targets=tgts, count=2)
             await asyncio.sleep(0.05)
 
 
@@ -121,6 +124,16 @@ def _settle(client, rooms, tries=40):
             return st
         time.sleep(0.05)
     return client.get("/api/state").json()
+
+
+def _wait_until(predicate, tries=40, interval=0.05):
+    """Poll `predicate()` instead of a fixed sleep -- the debounced intrusion edge
+    needs a couple of the source's repeating ~0.05s ticks to arm."""
+    for _ in range(tries):
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 def test_house_status_ok_when_nothing_wired():
@@ -190,11 +203,19 @@ def test_house_status_surfaces_active_intrusion_and_clears_when_watch_turned_off
         with TestClient(app) as client:
             _settle(client, ["sala", "casa"])
             client.post("/api/watch", json={"on": True}, headers=LOCAL)
-            time.sleep(0.2)
+            # wait for the debounce streak (a couple of the source's repeating
+            # ~0.05s ticks) to arm the edge-triggered intrusion alert.
+            assert _wait_until(lambda: any(
+                r["kind"] == "intrusion"
+                for r in client.get("/api/house-status").json()["reasons"]))
             body = client.get("/api/house-status").json()
             intr = [r for r in body["reasons"] if r["kind"] == "intrusion"]
-            assert intr and intr[0]["layer"] == "physical"
-            assert intr[0]["what"] == "unrecognized person in sala"
+            # sala (2 > known 1) AND the house-level aggregate (house total 2 > known
+            # 1) both cross the debounce threshold on the same repeating-source tick,
+            # so their `ts` ties and `reasons.sort()`'s tie-break order is incidental
+            # -- assert the per-room reason is PRESENT rather than assuming its index.
+            sala_reason = next((r for r in intr if r["what"] == "unrecognized person in sala"), None)
+            assert sala_reason is not None and sala_reason["layer"] == "physical"
             assert body["status"] == "alert" and body["score"] == 4
 
             # turning Watch back off resets the edge state -- a resolved intrusion

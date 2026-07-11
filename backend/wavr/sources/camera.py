@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import threading
 import time
@@ -9,7 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator, Callable
 
+from wavr.camera_url import rtsp_host
 from wavr.events import SensingEvent, Target
+from wavr.sources._dhcp_raw import open_with_timeout
 
 
 @dataclass(frozen=True)
@@ -160,19 +163,33 @@ class CameraSource:
                                 # privacy mode (the lens was uncovered again).
                                 self._emit_privacy(False)
                                 self._privacy_reported = False
-                            det = await asyncio.to_thread(self._detect, frame)
-                            present = det.count > 0
+                            # MEDIUM double-inference fix: yolo_detect and yolo_pose_detect
+                            # are DIFFERENT model files (yolov8n.pt vs yolo11n-pose.pt) --
+                            # running both on the same frame every tick roughly doubles
+                            # per-frame inference latency (costly on the G9's ~0.7-1.3s/
+                            # frame budget) and their counts can disagree. When pose is
+                            # active, yolo_pose_detect's targets ARE the single source of
+                            # truth for this frame: count/confidence are DERIVED from them
+                            # (mirrors sources/mmwave.py's count=len(targets)), never
+                            # independently re-detected via a second model call.
                             targets: tuple[Target, ...] = ()
                             if self._pose:
                                 targets = tuple(await asyncio.to_thread(
                                     self._pose_detect, frame, self._confidence))
+                                count = len(targets)
+                                confidence = max((t.confidence for t in targets), default=0.0)
+                            else:
+                                det = await asyncio.to_thread(self._detect, frame)
+                                count = det.count
+                                confidence = det.confidence
+                            present = count > 0
                             yield SensingEvent(
                                 room=self.room, modality="camera", presence=present,
                                 motion=0.0, breathing_bpm=None, heart_bpm=None,
-                                confidence=det.confidence if present else 0.0,
+                                confidence=confidence if present else 0.0,
                                 ts=datetime.now(timezone.utc).isoformat(),
                                 targets=targets,
-                                count=det.count,   # honest per-source count (0 when empty)
+                                count=count,   # honest per-source count (0 when empty)
                             )
                             if self._interval:
                                 await asyncio.sleep(self._interval)
@@ -224,10 +241,32 @@ _POSE_MODEL = None
 _ACTIVE = 0                       # count of running CameraSource.events() loops
 _MODEL_LOCK = threading.Lock()    # guards the lazy YOLO load (called from to_thread workers)
 
+# HIGH stalled-read-leak fix (see rtsp_frames docstring): two independent bounds,
+# same two-layer defense _dhcp_raw.py already uses for the G9's stalled-bind field
+# bug. Layer 1 (this module): ask cv2/FFMPEG itself to give up after a few
+# seconds instead of blocking the syscall indefinitely -- the well-behaved,
+# expected-to-fire-every-time bound. Layer 2 (open_with_timeout below): a
+# generous asyncio-level backstop, ONLY meant to trip if a backend ignores its
+# own CAP_PROP_*_TIMEOUT_MSEC (exactly the class of bug _dhcp_raw.py's bind()
+# stall was) -- deliberately larger than the cv2 bound so it never fires in the
+# well-behaved case.
+_CAP_OPEN_TIMEOUT_MSEC = 8_000
+_CAP_READ_TIMEOUT_MSEC = 8_000
+CAMERA_OPEN_TIMEOUT = 15.0
+CAMERA_READ_TIMEOUT = 15.0
+
 
 def _open_capture(url: str):
     import cv2  # lazy: only needed on the real path
-    return cv2.VideoCapture(url)
+    cap = cv2.VideoCapture()
+    # Must be set BEFORE open() for the FFMPEG backend to honor them. Best-effort:
+    # a backend that doesn't support these properties just ignores .set() (no
+    # raise), so this is always safe to attempt.
+    with contextlib.suppress(Exception):
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, _CAP_OPEN_TIMEOUT_MSEC)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, _CAP_READ_TIMEOUT_MSEC)
+    cap.open(url)
+    return cap
 
 
 def _read(cap):
@@ -299,6 +338,24 @@ async def rtsp_frames(url: str) -> "AsyncIterator[object]":
     hung/unreachable camera would otherwise freeze the whole backend for the
     OS TCP timeout on every (re)connect.
 
+    HIGH stalled-read-leak fix: both the open AND every individual read now go
+    through `_dhcp_raw.open_with_timeout` (the same bounded-executor-call +
+    sticky "genuinely timed out once, never retry" guard the DHCP collectors
+    use for their own G9 stalled-bind field bug -- see that module's
+    docstring). Without this, a stalled/powered-off-but-ARP-resident camera's
+    blocking cv2 call can wedge the executor thread FOREVER: the coroutine
+    awaiting it never resumes, so this generator's `finally: _release(cap)`
+    never runs, and the "hard RTSP kill on disable" claim above would be
+    false. `open_with_timeout` makes the AWAIT itself time out promptly (the
+    event loop, and therefore disable/aclose(), is never blocked by it) even
+    though the underlying OS thread cannot be forcibly killed (stdlib
+    limitation, same caveat _dhcp_raw documents) -- and its sticky guard
+    caps the number of such abandoned threads at one per (open|read) x host,
+    instead of leaking a fresh one on every reconnect_delay cycle forever.
+    The `what` label is built from `rtsp_host(url)` ONLY, never the raw url
+    -- an rtsp:// URL can carry embedded credentials, and `what` can surface
+    inside an OSError message, so the host is the most this may ever expose.
+
     Privacy-mode signature (see CameraPrivacySignal): if the capture opened
     (isOpened() True -- the RTSP session negotiated) but not a single frame was ever
     read before the stream ended, this raises CameraPrivacySignal instead of ending
@@ -306,12 +363,16 @@ async def rtsp_frames(url: str) -> "AsyncIterator[object]":
     never opens at all (isOpened() False -- wrong IP/creds/camera off the network) is
     unaffected: it still just ends the generator normally, same as before this feature
     (F3's existing down-latch path)."""
-    cap = await asyncio.to_thread(_open_capture, url)
+    host = rtsp_host(url) or "unknown-host"
+    cap = await open_with_timeout(functools.partial(_open_capture, url),
+                                  f"RTSP open ({host})", timeout=CAMERA_OPEN_TIMEOUT)
     try:
         opened = await asyncio.to_thread(_is_opened, cap)
         got_frame = False
         while True:
-            ok, frame = await asyncio.to_thread(_read, cap)
+            ok, frame = await open_with_timeout(functools.partial(_read, cap),
+                                                f"RTSP read ({host})",
+                                                timeout=CAMERA_READ_TIMEOUT)
             if not ok:
                 break
             got_frame = True
@@ -328,7 +389,18 @@ def yolo_detect(frame, conf_threshold: float = 0.0) -> Detection:
     # line (image size/detections/timing) to stdout on EVERY predict() call --
     # per-frame spam at a 0.5s interval. This runs on every camera tick, so
     # it's the only knob that matters here.
-    results = _model()(frame, verbose=False)
+    #
+    # MEDIUM-HIGH conf-floor fix: without an explicit conf= kwarg, ultralytics'
+    # own predict() defaults conf to 0.25 (see engine/model.py's `custom =
+    # {"conf": 0.25, ...}` fallback, VERIFIED against the installed ultralytics
+    # 8.4.87) and strips any box below THAT before results are ever returned --
+    # so an operator-set conf_threshold below 0.25 had zero effect (the box was
+    # gone long before the `>= conf_threshold` filter below ever saw it). We pass
+    # a 0.01 floor (never 0.0 -- keep a token non-zero gate at the model level as
+    # a defensive minimum per spec) so the model returns everything down to that
+    # floor and OUR `>= conf_threshold` filter below is the real, single gate for
+    # anything the operator actually asked to see.
+    results = _model()(frame, verbose=False, conf=max(conf_threshold, 0.01))
     persons = []
     for r in results:
         boxes = getattr(r, "boxes", None)
@@ -368,8 +440,10 @@ def yolo_pose_detect(frame, confidence: float = 0.0, localize=None,
     The frame is read ONLY for its pixel size (`frame.shape`); it is never stored
     (ADR-0002)."""
     # verbose=False -- see yolo_detect's comment; same per-frame log spam on
-    # the pose-predict path.
-    results = _pose_model()(frame, verbose=False)
+    # the pose-predict path. conf= -- same MEDIUM-HIGH conf-floor fix as
+    # yolo_detect: without it ultralytics' own 0.25 default silently strips
+    # sub-0.25 boxes before our own `< confidence` filter below ever runs.
+    results = _pose_model()(frame, verbose=False, conf=max(confidence, 0.01))
     img_size = None
     if localize is not None or on_feet is not None:
         try:

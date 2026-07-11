@@ -27,15 +27,26 @@ detector is useless if noisy):
     crossed the threshold and has fallen completely out of the window
     (absent for the window's whole span) is forgotten too, bounding memory
     for a one-off blip.
-  * Anti-flood (audit fix #5): distinct tracked extra ids are capped at
-    `max_tracked_extras` per window -- a burst of OFFERs bearing many
-    spoofed option-54 server-ids can't grow the tracking dict unboundedly or
-    crowd out an already-accumulating genuine rogue's progress (brand-new
-    ids beyond the cap are simply not tracked that cycle; already-tracked
-    ids are unaffected). And when multiple ids cross the threshold in the
-    SAME cycle, `on_rogue` fires exactly ONCE (coalesced) rather than once
-    per id -- the alert LOG below still records one row per id for triage;
-    only the push/ntfy fan-out is capped.
+  * Anti-flood (audit fix #5, hardened): distinct tracked extra ids are
+    capped at `max_tracked_extras` per window -- a burst of OFFERs bearing
+    many spoofed option-54 server-ids can't grow the tracking dict
+    unboundedly or crowd out an already-accumulating genuine rogue's
+    progress (brand-new ids beyond the cap are simply not tracked that
+    cycle *while room remains*; already-tracked ids are unaffected). When
+    the cap is FULLY saturated, `_record` evicts one lowest-priority
+    tracked entry per brand-new arrival (confirmed/`_alerted` noise first,
+    then lowest progress) instead of refusing every brand-new id forever --
+    a flood-blinding fix: a sustained flood that stays present every cycle
+    naturally crosses the threshold and becomes `_alerted`, and an alerted
+    id was previously only forgotten once it went quiet, so a persistent
+    flood could permanently pin the cap with confirmed noise and hide any
+    later, genuinely new rogue id from ever being tracked. Eviction
+    guarantees a genuinely new id always gets at least one cycle to start
+    accumulating even under a sustained flood. And when multiple ids cross
+    the threshold in the SAME cycle, `on_rogue` fires exactly ONCE
+    (coalesced) rather than once per id -- the alert LOG below still
+    records one row per id for triage; only the push/ntfy fan-out is
+    capped.
   * A legitimate second DHCP server (failover pair, a second router the
     operator actually runs) is handled by seeding `known_servers` with both
     IPs up front -- same allowlist idea as `NetworkInventoryService.known_macs`.
@@ -205,7 +216,53 @@ class RogueDhcpMonitor:
         # ids are unaffected, so a slow-building genuine rogue keeps going).
         brand_new = sorted(extras - set(self._windows))
         room = max(0, self._max_tracked - len(self._windows))
-        tracked_this_cycle = (extras & set(self._windows)) | set(brand_new[:room])
+        admitted_new = brand_new[:room]
+
+        # CRITICAL flood-blinding fix (execution-verified exploit): the cap
+        # above is only safe while `room` can reopen. A sustained flood of
+        # ~max_tracked distinct ids that stays PRESENT every cycle naturally
+        # crosses `alert_threshold` on its own (each one legitimately IS an
+        # "extra" server) and becomes `_alerted` -- and an `_alerted` id is
+        # only ever forgotten once it goes quiet (by design, so a confirmed
+        # rogue doesn't storm-alert every cycle it persists). An attacker
+        # who just keeps every flood id present therefore permanently pins
+        # the whole cap with CONFIRMED noise: `room` never reopens, so a
+        # genuinely new rogue id introduced afterwards is dropped by the
+        # slice above EVERY cycle, forever -- the anti-flood cap itself
+        # becomes the blind spot.
+        #
+        # Fix: only when the cap is FULLY saturated (room == 0 -- the exact
+        # condition that would otherwise silently drop every brand-new id
+        # forever) do we make room, evicting one already-tracked entry per
+        # brand-new arrival. Eviction order prefers entries that already
+        # fired (`_alerted`; their alert already landed in the log/
+        # recent_alerts -- only the live debounce state resets) over ones
+        # still quietly accumulating, and within the same tier the lowest
+        # window-sum (least progress, so most likely pure noise) first --
+        # `sorted()` is stable so ties fall back to id order for determinism.
+        # This guarantees an unseen id always gets at least one cycle to
+        # start accumulating even under a sustained flood; once tracked, it
+        # is the LEAST evictable tier (still not `_alerted`) until it either
+        # fires or goes quiet, so a later flood-driven eviction round
+        # displaces already-confirmed noise before it ever displaces a real
+        # rogue's in-progress state. When there's still SOME room (room > 0,
+        # just not enough for every brand-new id this cycle) nothing
+        # changes: excess brand-new ids beyond room are simply left
+        # untracked this cycle exactly as before -- a lone in-progress
+        # genuine id is never displaced by a same-cycle flood that still
+        # fits under the cap (see
+        # test_flood_of_spoofed_server_ids_is_capped_and_does_not_evict_genuine_progress).
+        if room == 0 and brand_new:
+            evictable = sorted(
+                self._windows,
+                key=lambda k: (k not in self._alerted, sum(self._windows[k]), k),
+            )
+            for victim, newcomer in zip(evictable, brand_new):
+                del self._windows[victim]
+                self._alerted.discard(victim)
+                admitted_new.append(newcomer)
+
+        tracked_this_cycle = (extras & set(self._windows)) | set(admitted_new)
 
         newly_fired: list[str] = []
         for extra in set(self._windows) | tracked_this_cycle:

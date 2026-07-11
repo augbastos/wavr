@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 
 from wavr.localize import MountPose
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS camera_calib (
     h_json     TEXT,
     img_w      INTEGER,
     img_h      INTEGER,
+    quality    REAL,
     updated    TEXT
 );
 """
@@ -100,19 +102,37 @@ def validate_homography(h) -> list[float]:
 
 class CalibrationStore:
     """Persisted per-camera localization calibration (mount prior + optional 4-point
-    homography + capture image size). Configuration, NOT runtime state and NEVER a
-    frame (ADR-0002): only stored MATRICES / detection-space parameters live here.
-    Shares the sqlite file with Storage/CameraStore but owns its own table.
+    homography + capture image size + a MEASURED homography quality). Configuration,
+    NOT runtime state and NEVER a frame (ADR-0002): only stored MATRICES / detection-
+    space parameters live here. Shares the sqlite file with Storage/CameraStore but
+    owns its own table.
 
     A camera with a row here localizes people to a floor (x, y); a camera without one
     stays room-centred (honest fallback). Keyed by camera name (FK-by-convention to
-    camera_store.cameras.name)."""
+    camera_store.cameras.name).
+
+    `quality` (0..1) is the homography's REAL reprojection-residual-derived accuracy
+    (`wavr.localize.homography_reprojection_error` + `homography_quality`), computed
+    by the caller (the calibration route, which still has the raw image/floor
+    correspondences) at solve time -- not a flat constant. Nullable: a row written
+    before this measurement existed, or a homography set without a computed quality,
+    degrades to the module's flat `Q_HOMOGRAPHY` default at localize time (never a
+    fabricated per-camera number)."""
 
     def __init__(self, path: str = "wavr.db"):
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        # Migration-safe additive column (mirrors camera_store._migrate): a DB created
+        # before the `quality` column existed lacks it; CREATE TABLE IF NOT EXISTS
+        # won't add it, so ALTER it in when absent.
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(camera_calib)")}
+        if "quality" not in cols:
+            self._conn.execute("ALTER TABLE camera_calib ADD COLUMN quality REAL")
 
     def set_mount(self, name: str, mount: MountPose) -> None:
         """Upsert a camera's mount prior (monocular estimate path), keeping any
@@ -128,29 +148,45 @@ class CalibrationStore:
             (name, blob))
         self._conn.commit()
 
-    def set_homography(self, name: str, h: list[float], img_w: int, img_h: int) -> None:
-        """Upsert a camera's 4-point homography + the image size it was marked at."""
+    def set_homography(self, name: str, h: list[float], img_w: int, img_h: int,
+                       quality: float | None = None) -> None:
+        """Upsert a camera's 4-point homography + the image size it was marked at +
+        its MEASURED quality (0..1, from `wavr.localize.homography_quality` applied to
+        the solve's reprojection residual). `quality` is optional: the caller solves
+        the homography from the raw correspondences (this store never sees them), so
+        it must compute and pass the residual-derived quality itself; None persists
+        NULL, which `localize`/`make_localizer` honestly fall back to the flat
+        Q_HOMOGRAPHY default for -- never a fabricated per-camera number."""
         clean = validate_homography(h)
         if not (0 < int(img_w) <= _MAX_DIM and 0 < int(img_h) <= _MAX_DIM):
             raise CalibrationError("image size out of range")
+        if quality is not None:
+            try:
+                quality = float(quality)
+            except (TypeError, ValueError, OverflowError):
+                raise CalibrationError("quality must be a number")
+            if not math.isfinite(quality) or not (0.0 <= quality <= 1.0):
+                raise CalibrationError("quality must be a finite number in [0, 1]")
         blob = json.dumps(clean)
         if len(blob) > _MAX_JSON_BYTES:
             raise CalibrationError("homography blob too large")
         self._conn.execute(
-            "INSERT INTO camera_calib (name, h_json, img_w, img_h, updated) "
-            "VALUES (?, ?, ?, ?, datetime('now')) "
+            "INSERT INTO camera_calib (name, h_json, img_w, img_h, quality, updated) "
+            "VALUES (?, ?, ?, ?, ?, datetime('now')) "
             "ON CONFLICT(name) DO UPDATE SET h_json=excluded.h_json, "
-            "img_w=excluded.img_w, img_h=excluded.img_h, updated=excluded.updated",
-            (name, blob, int(img_w), int(img_h)))
+            "img_w=excluded.img_w, img_h=excluded.img_h, quality=excluded.quality, "
+            "updated=excluded.updated",
+            (name, blob, int(img_w), int(img_h), quality))
         self._conn.commit()
 
     def get(self, name: str) -> dict | None:
         """Return {mount: MountPose|None, homography: list[9]|None, img_w, img_h,
-        updated} for a camera, or None if it has no calibration row. A corrupt stored
-        blob degrades that field to None (never raises) so one bad row can't brick
-        the localizer for a healthy camera."""
+        quality, updated} for a camera, or None if it has no calibration row. A
+        corrupt stored blob degrades that field to None (never raises) so one bad row
+        can't brick the localizer for a healthy camera. `quality` is None whenever no
+        homography was ever measured/stored (including a pre-migration row)."""
         r = self._conn.execute(
-            "SELECT name, mount_json, h_json, img_w, img_h, updated "
+            "SELECT name, mount_json, h_json, img_w, img_h, quality, updated "
             "FROM camera_calib WHERE name = ?", (name,)).fetchone()
         if r is None:
             return None
@@ -167,7 +203,8 @@ class CalibrationStore:
             except (ValueError, TypeError):
                 homography = None
         return {"mount": mount, "homography": homography,
-                "img_w": r["img_w"], "img_h": r["img_h"], "updated": r["updated"]}
+                "img_w": r["img_w"], "img_h": r["img_h"], "quality": r["quality"],
+                "updated": r["updated"]}
 
     def delete(self, name: str) -> bool:
         cur = self._conn.execute("DELETE FROM camera_calib WHERE name = ?", (name,))

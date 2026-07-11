@@ -65,20 +65,23 @@ class _FakeOccupancyLog:
 
 class _WatchSource:
     """Same shape as test_watch.py's own fixture: 'ana' known-present on casa (BLE),
-    sala's camera counts TWO people -> sala holds one unrecognized person."""
+    sala's camera counts TWO people -> sala holds one unrecognized person. sala
+    REPEATS on a ~0.05s cadence (mirrors real per-frame camera publish) so
+    wavr.watch.IntrusionAlertLog's consecutive-check debounce gets enough checks to
+    arm within the tests' short poll windows."""
 
     async def events(self):
         now = datetime.now(timezone.utc).isoformat()
         yield SensingEvent(room="casa", modality="ble", presence=True, motion=0.0,
                            breathing_bpm=None, heart_bpm=None, confidence=0.7, ts=now,
                            identities=(Identity("ana", "ble", -50),))
-        now2 = datetime.now(timezone.utc).isoformat()
         tgts = tuple(Target(id=i + 1, x=float(i), y=float(i) + 0.5) for i in range(2))
-        yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
-                           breathing_bpm=13.0, heart_bpm=60.0, confidence=0.95, ts=now2,
-                           targets=tgts, count=2)
         while True:
             import asyncio
+            now2 = datetime.now(timezone.utc).isoformat()
+            yield SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                               breathing_bpm=13.0, heart_bpm=60.0, confidence=0.95, ts=now2,
+                               targets=tgts, count=2)
             await asyncio.sleep(0.05)
 
 
@@ -89,6 +92,16 @@ def _settle(client, rooms, tries=40):
             return st
         time.sleep(0.05)
     return client.get("/api/state").json()
+
+
+def _wait_until(predicate, tries=40, interval=0.05):
+    """Poll `predicate()` instead of a fixed sleep -- the debounced intrusion edge
+    needs a couple of the source's repeating ~0.05s ticks to arm."""
+    for _ in range(tries):
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 def _build_watch_app(msgs, notes=None):
@@ -111,7 +124,12 @@ def test_watch_intrusion_publishes_retained_mqtt_on_then_off():
     with TestClient(app) as client:
         _settle(client, ["sala", "casa"])
         client.post("/api/watch", json={"on": True}, headers=LOCAL)
-        time.sleep(0.2)
+        # wait for the debounce streak (a couple of the source's repeating ~0.05s
+        # ticks) to arm both the per-room and house-level edge before checking MQTT.
+        assert _wait_until(lambda: any(
+            m[0] == "wavr/watch/rooms/sala/intrusion" and m[1] == "ON" for m in msgs))
+        assert _wait_until(lambda: any(
+            m[0] == "wavr/watch/house/intrusion" and m[1] == "ON" for m in msgs))
 
         room_on = [m for m in msgs if m[0] == "wavr/watch/rooms/sala/intrusion"]
         house_on = [m for m in msgs if m[0] == "wavr/watch/house/intrusion"]
@@ -119,9 +137,16 @@ def test_watch_intrusion_publishes_retained_mqtt_on_then_off():
         assert house_on and house_on[-1][1] == "ON" and house_on[-1][2] is True
 
         # a re-evaluation while STILL active must not re-publish (RulesEngine dedup).
-        before = len(msgs)
+        # Scoped to the intrusion topics themselves (not the raw `msgs` total): the
+        # background source keeps ticking every ~0.05s to satisfy the debounce (see
+        # _WatchSource above), so unrelated room-state republishes can legitimately
+        # land in `msgs` in this window -- asserting the whole list stayed the same
+        # length was a flaky proxy for the actual invariant under test.
+        before_room = len(room_on)
+        before_house = len(house_on)
         client.get("/api/watch")   # no state change -- no new fused event either
-        assert len(msgs) == before
+        assert len([m for m in msgs if m[0] == "wavr/watch/rooms/sala/intrusion"]) == before_room
+        assert len([m for m in msgs if m[0] == "wavr/watch/house/intrusion"]) == before_house
 
         client.post("/api/watch", json={"on": False}, headers=LOCAL)
         room_off = [m for m in msgs if m[0] == "wavr/watch/rooms/sala/intrusion"]
