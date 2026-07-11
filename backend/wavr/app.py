@@ -2519,7 +2519,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                             _=Depends(require_local), __=Depends(require_scope("control"))):
         result = await check_health(
             gateway_check=_health_check, gateway_host=_health_host,
-            resolver_checks=_health_resolvers, extra_checks=_health_extra,
+            # system-toggles egress master: gate the public-resolver leg exactly like
+            # /api/health (~line 2476) so "Egress: blocked" actually blocks the doctor's
+            # resolver egress too -- the gateway/extra legs stay LAN-only regardless.
+            resolver_checks=_health_resolvers if _connectors.egress_allowed() else {},
+            extra_checks=_health_extra,
         )
         room_sources = {r: ((s.sources if (s := _fusion.state(r)) else []))
                         for r in _fusion.rooms()}

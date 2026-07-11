@@ -104,6 +104,10 @@
   .tpill.down{color:var(--danger);border-color:rgba(232,114,106,.4);}
   .tpill.down .p-dot{background:var(--danger);}
   .tpill.off .p-dot{background:var(--dim);}
+  /* Approve-on-Core header pill — amber (attention/pending-decision), same family as
+     .help-btn[aria-pressed=true]/.help-banner, never the reserved live/primary green. */
+  .pa-pill{color:var(--warn);border-color:rgba(232,161,58,.45);cursor:pointer;}
+  .pa-pill .p-dot{background:var(--warn);}
   .chip-privacy{cursor:pointer;color:var(--dim);}
   .chip-privacy svg{color:var(--accent);flex:none;}
   .chip-privacy:hover{color:var(--text);border-color:var(--line-strong);}
@@ -595,6 +599,22 @@
   .dsub .ctl .dsub-n{opacity:.8;font-variant-numeric:tabular-nums;margin-left:4px;font-weight:400;}
   .dsub-add{margin-left:auto;}
   .dsub-view{display:flex;flex-direction:column;gap:var(--gap);}
+  /* devices-tab-simple (2026-07-11): the default "add a device" wizard — reuses .cap-card/
+     .cap-cta (below) for the found-device cards, so the Yes button already inherits the
+     shared .cap-cta .ctl.primary green-accent rule; only the top-level CTA (outside any
+     .cap-cta) needs its own scoped rule here. */
+  .dev-simple-intro .ctl.primary{border-color:var(--accent);color:var(--accent);}
+  .dev-simple-sub{margin:0 0 12px;font-size:.85rem;color:var(--dim);line-height:1.5;max-width:56ch;}
+  .dev-simple-cta{display:inline-flex;align-items:center;gap:7px;padding:10px 20px;font-size:.88rem;}
+  .dev-simple-cta svg{width:14px;height:14px;}
+  .dev-simple-scan{display:flex;align-items:center;gap:10px;padding:6px 0;}
+  .dev-simple-scan p{margin:0;font-size:.85rem;color:var(--dim);}
+  .dev-simple-results-h{margin:0 0 10px;font-size:.85rem;color:var(--text);}
+  .dev-simple-list{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));margin-bottom:12px;}
+  .dev-simple-list .cap-card{margin:0;}
+  .dev-simple-q{margin:0;font-size:.8rem;color:var(--text);font-weight:600;}
+  .dev-simple-pair-note{margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line);font-size:.78rem;color:var(--dim);}
+  .dev-advanced-toggle{display:inline-block;margin:2px 0 4px;text-decoration:underline;text-underline-offset:2px;}
   /* catalog: search + filters */
   .cat-controls{display:flex;flex-direction:column;gap:10px;margin-bottom:14px;}
   .cat-search{background:var(--elevated);color:var(--text);border:1px solid var(--line);
@@ -802,6 +822,28 @@
            font-size:.74rem;line-height:1.5;color:var(--accent);word-break:break-all;
            user-select:all;background:var(--bg);border-radius:6px;padding:7px 9px;}
   .pair-fp-warn{color:var(--dim);font-size:.76rem;margin:8px 0 0;}
+  /* ---- Pairing approval banner (Approve-on-Core) — amber "needs your attention" card,
+     reuses .pair-fp-box/.pair-fp-label/.pair-fp/.pair-fp-warn/.pair-role/.action-fb/.controls-row
+     verbatim for the fingerprint block, role select and feedback line. */
+  .pair-approve{background:var(--warn-soft);border:1px solid rgba(232,161,58,.4);
+    border-radius:var(--radius);padding:16px;margin:0 auto 16px;max-width:1240px;width:100%;}
+  .pa-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+  .pa-icon{font-size:1.3rem;line-height:1;}
+  .pa-h{margin:0;font-size:.95rem;font-weight:700;color:var(--text);overflow-wrap:anywhere;}
+  .pa-meta{margin:0 0 12px;font-size:.8rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .pa-fp-box{background:var(--bg);}
+  .pa-role{margin:0 0 14px;}
+  .pa-confirm{margin:0 0 4px;}
+  .pa-confirm-q{margin:0 0 10px;font-size:.85rem;font-weight:600;color:var(--text);}
+  .pa-actions{margin-top:2px;}
+  /* The one scoped green: Approve is the deliberate primary action inside its own banner —
+     same precedent as .cap-cta .ctl.primary/.ladder-steps .ctl.primary (design tokens §accent). */
+  .pair-approve .ctl.primary{border-color:var(--accent);color:var(--accent);}
+  .pa-more{margin-top:14px;padding-top:14px;border-top:1px dashed rgba(232,161,58,.35);}
+  .pa-more-head{margin:0 0 8px;font-size:.78rem;color:var(--dim);}
+  .pa-more-row{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    font-size:.82rem;padding:6px 0;flex-wrap:wrap;}
+  .pa-more-row>span:first-child{overflow-wrap:anywhere;min-width:0;}
   .pair-sub{margin:8px 0 4px;font-size:.72rem;color:var(--dim);font-weight:600;
             text-transform:uppercase;letter-spacing:.05em;}
   .pair-dev-list{display:flex;flex-direction:column;max-height:250px;overflow:auto;}
@@ -1567,9 +1609,35 @@
              font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
   .core-date{margin:3px 0 0;font-size:clamp(12px,1.5vw,16px);color:var(--dim);
              text-transform:capitalize;}
+  .core-top-right{display:flex;flex-direction:column;align-items:flex-end;gap:10px;}
   .core-health{display:flex;gap:14px;}
-  .core-health-item{font-size:clamp(12px,1.6vw,17px);color:var(--dim);font-weight:500;}
+  .core-health-item{font-size:clamp(12px,1.6vw,17px);color:var(--dim);font-weight:500;
+                    background:transparent;border:0;padding:0;cursor:pointer;font-family:inherit;}
+  .core-health-item:hover,.core-health-item:focus-visible{color:var(--text);}
   .core-health-item.core-health-warn{color:var(--warn);}
+  /* dashboard-topbar quick-controls: compact pill variant of .ctl.switch/.killswitch — same
+     on/off track logic (renderKill()/paintWatch() already drive the class names), just a
+     much smaller footprint sized for the ambient strip. ID selectors so they win over the
+     larger .killswitch geometry without touching that shared rule. */
+  .core-quick{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+  #coreKillBtn.core-pill,#coreWatchPill.core-pill{position:relative;display:inline-flex;
+    align-items:center;padding:6px 12px 6px 30px;border-radius:999px;
+    font-size:clamp(11px,1.4vw,13px);font-weight:600;}
+  #coreKillBtn.core-pill::before,#coreWatchPill.core-pill::before{content:"";position:absolute;
+    left:8px;top:50%;transform:translateY(-50%);width:18px;height:11px;border-radius:999px;
+    background:var(--elevated-2);transition:background .15s ease-out;}
+  #coreKillBtn.core-pill::after,#coreWatchPill.core-pill::after{content:"";position:absolute;
+    left:9.5px;top:50%;transform:translate(0,-50%);width:8px;height:8px;border-radius:50%;
+    background:var(--dim);transition:transform .15s ease-out,background .15s ease-out;}
+  #coreKillBtn.core-pill.on::before,#coreWatchPill.core-pill.on::before{background:rgba(61,181,74,.35);}
+  #coreKillBtn.core-pill.on::after,#coreWatchPill.core-pill.on::after{background:var(--accent);
+    transform:translate(8px,-50%);}
+  .core-pill-ro{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;
+    border-radius:999px;font-size:clamp(11px,1.4vw,13px);font-weight:500;
+    background:var(--elevated);color:var(--dim);border:1px solid var(--line);}
+  .core-pill-ro .p-dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex:none;}
+  .core-pill-ro.on{color:var(--text);}
+  .core-pill-ro.on .p-dot{background:var(--accent);}
   .core-hero{flex:1;display:flex;align-items:center;justify-content:center;position:relative;
              min-height:0;}
   /* Signature ambient wave field (replaces the old big-text "HOME EMPTY"/"N HOME" hero,
@@ -1691,6 +1759,7 @@
      each item explains one alert; tapping one deep-links into the Network tab (through the lock
      if a PIN is set). Never dissolves the panel on its own; only its items navigate. */
   #coreAlerts[data-tappable="1"]{cursor:pointer;}
+  #netAlertCount[data-tappable="1"]{cursor:pointer;}
   .core-alerts-pop{position:absolute;right:clamp(12px,3vw,32px);bottom:clamp(48px,10vh,84px);
                    z-index:20;width:min(400px,86vw);max-height:70vh;overflow:auto;
                    padding:clamp(10px,1.6vh,16px);border-radius:16px;
@@ -1701,11 +1770,16 @@
   .core-alerts-pop-title{margin:0;font-size:clamp(13px,1.8vh,15px);font-weight:600;color:var(--text);}
   .core-alerts-pop-close{background:transparent;border:0;color:var(--dim);font-size:20px;
                          line-height:1;padding:2px 6px;cursor:pointer;}
-  .core-alert-item{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;
+  /* Hub/Internet explainer: same card, anchored near the top strip instead of bottom-right. */
+  .core-info-pop{top:clamp(48px,10vh,84px);bottom:auto;right:clamp(12px,3vw,32px);
+                 width:min(320px,86vw);max-height:none;}
+  .core-info-pop-body{margin:0;font-size:clamp(12px,1.6vh,14px);line-height:1.5;color:var(--text);}
+  .core-alert-item{display:flex;flex-direction:column;border-radius:10px;color:var(--text);}
+  .core-alert-open{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;
                    padding:9px 8px;border:0;border-radius:10px;background:transparent;
-                   color:var(--text);cursor:pointer;transition:background .12s ease;}
-  .core-alert-item:hover,.core-alert-item:focus{background:var(--surface);outline:none;}
-  .core-alert-item:active{transform:scale(.99);}
+                   color:inherit;font:inherit;cursor:pointer;transition:background .12s ease;}
+  .core-alert-open:hover,.core-alert-open:focus{background:var(--surface);outline:none;}
+  .core-alert-open:active{transform:scale(.99);}
   .core-alert-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;margin-top:5px;
                   background:var(--accent);}
   .core-alert-item.sev-watch .core-alert-dot{background:var(--warn);}
@@ -1715,6 +1789,17 @@
   .core-alert-title{font-size:clamp(13px,1.7vh,15px);font-weight:600;}
   .core-alert-why{font-size:clamp(11px,1.4vh,13px);color:var(--dim);line-height:1.35;}
   .core-alert-go{margin-left:auto;flex:0 0 auto;color:var(--dim);font-size:16px;align-self:center;}
+  .core-alert-actions{display:flex;justify-content:flex-end;padding:0 8px 8px;}
+  .core-alert-dismiss{background:transparent;border:1px solid var(--line);color:var(--dim);
+                      font:inherit;font-size:clamp(11px,1.4vh,12px);padding:4px 10px;
+                      border-radius:8px;cursor:pointer;transition:background .12s ease,color .12s ease;}
+  .core-alert-dismiss:hover,.core-alert-dismiss:focus{color:var(--text);border-color:var(--dim);outline:none;}
+  /* Network tab's own explain/dismiss panel (mode-agnostic twin of .core-alerts-pop, which lives
+     inside the ?core-only #corePanel and can't be reused directly outside kiosk mode): a normal
+     in-flow disclosure under the "Intrusion alerts" header, not a floating overlay. */
+  .net-alerts-pop{margin:6px 0 10px;padding:clamp(8px,1.4vh,14px);border-radius:12px;
+                  background:var(--elevated);border:1px solid var(--line);}
+  .net-alerts-pop .core-alerts-pop-head{margin:0 0 4px;}
   /* brief highlight on the row we deep-linked to, so the eye lands on it */
   .alert-row.alert-jump{animation:alertJump 2s ease;}
   @keyframes alertJump{0%,100%{background:transparent} 15%,55%{background:var(--surface)}}
@@ -1863,6 +1948,10 @@
         <!-- Stage 3b (§9): transient topbar echo while the narrator is sending — the one
              amber "data in flight" moment, distinct from the permanent green/local chip. -->
         <span id="pillEgress" class="tpill egress" hidden role="status"><i class="p-dot" aria-hidden="true"></i><span class="p-txt">sending to the cloud…</span></span>
+        <!-- Approve-on-Core: header pill mirrors the #pairApprove banner state (live/central +
+             multidevice-gated, populated by renderPairApprove()). Tap scrolls the banner into view. -->
+        <button id="pairApprovePill" class="tpill pa-pill" type="button" hidden
+                aria-label="Devices waiting to connect — tap to review"><i class="p-dot" aria-hidden="true"></i><span class="p-txt" id="pairApprovePillTxt">1 waiting</span></button>
         <span class="mode" id="mode"></span>
         <button id="companionExit" class="ctl small" type="button" hidden>Disconnect</button>
       </div>
@@ -1914,6 +2003,51 @@
     </div>
 
     <main class="content" id="content">
+      <!-- Pairing approval banner (Approve-on-Core, design 2026-07-11): a device that asked to
+           pair (POST /api/pair-request, in-subnet/unauth) shows up HERE for a local, loopback-root
+           decision — GET /api/pending-pairings / POST .../approve|deny (X-Wavr-Local CSRF, same
+           guard as every other admin write in this file). Live/central + multidevice-gated only
+           (renderPairApprove()); a 404 on this hub (feature absent / multidevice off) leaves it
+           hidden forever — byte-identical to today. The existing 8-digit /api/pair-code flow
+           (Settings → Devices → Pair device) is UNTOUCHED and remains the fallback.
+           Fingerprint shown is THIS hub's own live cert (same source as the Settings pairing
+           tile) — never the phone's self-reported value; the operator compares hub-screen vs
+           phone-screen before approving (out-of-band MitM defense). Approve is two-tap: the
+           first tap swaps in an explicit "does this match?" confirm so the operator looks at the
+           fingerprint again at the moment of decision. Every name/ip/platform below is untrusted
+           server/network data rendered via textContent only — never innerHTML. -->
+      <div id="pairApprove" class="pair-approve" role="alert" aria-live="assertive" hidden>
+        <div class="pa-head">
+          <span class="pa-icon" aria-hidden="true">📱</span>
+          <h2 id="paH" class="pa-h"></h2>
+        </div>
+        <p id="paMeta" class="pa-meta"></p>
+        <div class="pair-fp-box pa-fp-box">
+          <span class="pair-fp-label">Check this matches the fingerprint on the phone</span>
+          <code id="paFp" class="pair-fp" aria-live="polite"></code>
+          <p class="pair-fp-warn">If the phone shows a different fingerprint, someone may be
+            intercepting your network — tap Deny.</p>
+        </div>
+        <label class="pair-role pa-role">Access level
+          <select id="paRole" aria-label="access level for this device">
+            <option value="user">User — view only (presence, no controls)</option>
+            <option value="central">Admin — full access (edit map, cameras, measure)</option>
+          </select>
+        </label>
+        <div id="paConfirmBox" class="pa-confirm" hidden>
+          <p class="pa-confirm-q">Does this exact fingerprint show on the phone?</p>
+          <div class="controls-row">
+            <button type="button" id="paYes" class="ctl primary">Yes — they match, pair</button>
+            <button type="button" id="paNo" class="ctl off">No, cancel</button>
+          </div>
+        </div>
+        <div id="paActions" class="controls-row pa-actions">
+          <button type="button" id="paDeny" class="ctl off">Deny</button>
+          <button type="button" id="paApprove" class="ctl primary">Approve</button>
+        </div>
+        <p id="paFb" class="action-fb" aria-live="polite"></p>
+        <div id="paMore" class="pa-more" aria-live="polite" hidden></div>
+      </div>
       <!-- ==================== HOME ==================== -->
       <section class="tab-panel active" id="panel-inicio" data-tab="inicio" role="tabpanel" aria-labelledby="tab-inicio">
         <section id="homeHero" aria-live="polite">
@@ -2091,6 +2225,19 @@
 
       <!-- ==================== NETWORK ==================== -->
       <section class="tab-panel" id="panel-rede" data-tab="rede" role="tabpanel" aria-labelledby="tab-rede">
+        <!-- Who's likely home — known-presence summary (2026-07-11, known-device-ui). Composed
+             PURELY from devices already ASSIGNED to a person via "assign person" on the Devices
+             list below + the already-fused house-level network signal (wavr.known_presence) --
+             no new scan, no re-fusion here. House-level & coarse ALWAYS (a network MAC localizes
+             to the house, not a room) -- never claims a tighter scope/higher confidence than
+             that. Live/central only; hidden until GET /api/identity/known-presence answers 200
+             with at least one assigned device. Every person name/status is textContent -- PII,
+             never innerHTML. -->
+        <div id="whoHome" class="net tile" hidden>
+          <div class="tile-head"><h2>Who's likely home</h2></div>
+          <p class="net-sub">From devices you've assigned to a person on the list below — house-level only, never room-level.</p>
+          <div id="whoHomeList" class="pair-dev-list" aria-live="polite"></div>
+        </div>
         <div id="network" class="net tile" hidden>
           <div class="tile-head"><h2>Network and devices</h2></div>
           <p class="net-sub">Devices connected to your Wi-Fi and alerts about unknown devices.</p>
@@ -2102,6 +2249,17 @@
           <div class="net-cols">
             <div class="net-col net-col-alerts">
               <h4>Intrusion alerts <span id="netAlertCount" class="net-alert-count"></span></h4>
+              <!-- Tap the count above -> explain each alert (what/severity/room in plain language)
+                   and dismiss/acknowledge it (persisted client-side so the same instance won't
+                   reappear); wired by initNetAlertsPop(). Mode-agnostic twin of the Core Panel's
+                   #coreAlertsPop -- see buildAlertItem(). -->
+              <div id="netAlertsPop" class="net-alerts-pop" hidden role="dialog" aria-label="Alerts">
+                <div class="core-alerts-pop-head">
+                  <p class="core-alerts-pop-title" id="netAlertsPopTitle">Alerts</p>
+                  <button type="button" id="netAlertsPopClose" class="core-alerts-pop-close" aria-label="Close">×</button>
+                </div>
+                <div id="netAlertsPopList"></div>
+              </div>
               <p class="net-hint alert-honesty">A device with a randomized MAC and no self-announced
                 name can't be auto-identified from the network alone — that's why it shows up here as
                 unfamiliar. If it's actually yours, use "this is mine" on its row to mark it known.</p>
@@ -2177,6 +2335,41 @@
 
       <!-- ==================== DEVICES (Stage 2: Detected / Catalog / Active) ==================== -->
       <section class="tab-panel" id="panel-dispositivos" data-tab="dispositivos" role="tabpanel" aria-labelledby="tab-dispositivos">
+        <!-- devices-tab-simple (2026-07-11): the 3-tab technical UI below (Detected/Catalog/
+             Active) assumed the owner already knows which tab applies to their device — too
+             hard for a non-technical user. This is the new default landing: ONE clear "add a
+             device" flow that feels like Bluetooth/controller pairing (auto-discover -> "is
+             this yours?" -> done), built ENTIRELY from data the technical view below already
+             computes (matchDevice() cascade over /api/inventory, the ONVIF camera scan) and
+             the SAME add actions (openSetup()/goToCatalog()) — no new backend call, no new
+             endpoint, nothing duplicated except the presentation. The original UI is never
+             removed — it's one tap away via "Advanced" (see #devAdvancedWrap) and is exactly
+             what setDsub()/cross-links from System/Network still land on. -->
+        <div id="devSimple" class="tile dev-simple">
+          <div class="tile-head"><h2>Add a device</h2><span class="hint">works like pairing a Bluetooth speaker</span></div>
+          <div id="devSimpleIntro" class="dev-simple-intro">
+            <p class="dev-simple-sub">Turn the device on and keep it near your Wi-Fi. Wavr looks for it automatically — most devices need no technical setup.</p>
+            <button id="devSimpleStart" type="button" class="ctl primary dev-simple-cta">
+              <svg aria-hidden="true"><use href="#ic-plus"/></svg> Look for devices
+            </button>
+          </div>
+          <div id="devSimpleScan" class="dev-simple-scan" hidden aria-live="polite">
+            <span class="scan-spin" aria-hidden="true"></span><p>Looking for devices nearby…</p>
+          </div>
+          <div id="devSimpleResults" class="dev-simple-results" hidden aria-live="polite">
+            <p id="devSimpleResultsH" class="dev-simple-results-h"></p>
+            <div id="devSimpleList" class="dev-simple-list"></div>
+            <button id="devSimpleRescan" type="button" class="ctl small">Look again</button>
+          </div>
+          <!-- Approve-on-Core integration: pairing a PHONE/TABLET (a viewer, not a sensor) is a
+               different, already-built flow (#pairApprove banner / Settings -> pairing code) —
+               this just points there instead of reinventing it. -->
+          <p class="dev-simple-pair-note">Pairing a phone or tablet instead of a sensor?
+            <button id="devSimplePairLink" type="button" class="linklike">Go to pairing</button></p>
+        </div>
+        <button id="devAdvancedToggle" type="button" class="linklike dev-advanced-toggle"
+                aria-expanded="false" aria-controls="devAdvancedWrap">Advanced: browse the full device list</button>
+        <div id="devAdvancedWrap" hidden>
         <div class="dsub-bar">
           <div class="viewToggle dsub" role="tablist" aria-label="Device sections">
             <button id="dsubBtnDetectados" type="button" class="ctl" role="tab" aria-selected="false"
@@ -2281,6 +2474,7 @@
           </div>
           <p class="panel-note" id="dispNote" hidden>Cameras and system controls are available on the hub's panel (local access).</p>
         </div>
+        </div><!-- /#devAdvancedWrap -->
       </section>
 
       <!-- ==================== SYSTEM ====================
@@ -2347,6 +2541,17 @@
                (zero new calls, never touches GET /api/health). -->
           <div id="egressPanel" class="tile" aria-labelledby="egress-h">
             <div class="tile-head"><h2 id="egress-h">What can leave this home</h2><span class="hint">trust receipt</span></div>
+            <!-- system-toggles (32b412f): operator-actuated egress master switch, POST
+                 /api/system/toggles/egress — loopback-root only (require_local+require_root).
+                 Hidden by default; renderEgress() reveals it only in live mode once
+                 /api/status.features.egress_allowed has loaded — M==="companion"/"simulated"
+                 never populate statusInfo (renderStatus() is live-only), so a paired peer or
+                 the demo viewer keeps seeing the existing honest read-only receipt below
+                 instead of a dead button. -->
+            <div class="controls-row eg-master-row">
+              <button id="egressMasterBtn" type="button" class="ctl switch small" role="switch" hidden></button>
+              <span id="egressMasterFb" class="action-fb" aria-live="polite"></span>
+            </div>
             <p id="egressSummary" class="egress-summary na">—</p>
             <!-- P6 fix 3: demo note lives here, SEPARATE from the permanent guarantee that
                  renderEgress() writes into #egressSummary — never conflated in one sentence. -->
@@ -2394,15 +2599,50 @@
             <div id="healthResult" class="health-result" hidden aria-live="polite"></div>
             <p class="egress-note" id="healthNote">This check contacts your gateway and 3 public DNS servers outside your home — only when you click “Check now”, and only once per click.</p>
           </div>
+          <!-- network-doctor UI (32b412f backend, egress-gated fix): GET /api/health/doctor
+               reuses already-polled gateway/dhcp/source/camera/mdns/inventory state for every
+               check EXCEPT the dns leg, which — exactly like /api/health above — freshly pings
+               the 3 public DNS resolvers whenever WAVR_HEALTH_RESOLVERS is configured AND egress
+               is allowed on this hub; that leg is SKIPPED (gateway/LAN-only diagnosis) the moment
+               the operator blocks egress from the System tab. Any auto-fix stays LAN-local
+               (cycles an ALREADY-enabled source, re-announces this hub's own mDNS record, or
+               re-scans the LAN — see net_doctor.py's SAFE-AUTO allowlist). No two-step confirm
+               here (unlike Health check above): egress being on/off is the operator's own
+               standing choice on this hub, not a per-click decision — the doctor just respects
+               whatever that switch already says. Auto-fix stays two-factor gated server-side
+               (WAVR_NET_DOCTOR_AUTOFIX on this hub AND this call's own auto_fix=true) — this UI
+               honestly reflects, never assumes, whether anything actually got fixed vs. only
+               suggested. -->
+          <div id="doctorCheck" class="tile" hidden aria-labelledby="doctor-h">
+            <div class="tile-head"><h2 id="doctor-h">Deep network diagnosis</h2>
+              <span id="doctorChecking" class="egress-live" role="status" hidden><i aria-hidden="true"></i>diagnosing…</span>
+            </div>
+            <div class="narrate-row">
+              <button id="doctorBtn" type="button" class="ctl" data-tip="Runs every health/network check at once — including 3 public DNS resolvers if egress is allowed on this hub — and reports what's healthy, what it safely fixed on its own, and what needs you">Run diagnosis</button>
+              <p id="doctorOut" class="narrate-out muted">Runs the full set of network/source/mDNS/inventory checks at once and reports what's healthy, what got auto-fixed (safe, local-only — never your router or other devices), and what still needs you. Also checks 3 public DNS resolvers, but only while egress is allowed on this hub — blocked egress means this stays a gateway/LAN-only diagnosis.</p>
+            </div>
+            <div id="doctorResult" class="health-result" hidden aria-live="polite"></div>
+          </div>
           <!-- A2.1: network-sensing collectors — LOCAL listeners/probes, rendered off the
                existing /api/status poll (zero new network calls). Own namespace (.sn-row),
                never mixed into #egressList — these never leave the LAN either way. -->
           <div id="netSensing" class="tile" aria-labelledby="netSensing-h">
             <div class="tile-head"><h2 id="netSensing-h">Network sensing</h2><span class="hint">local sensing — nothing leaves home</span></div>
+            <!-- system-toggles (32b412f): operator-actuated network-sensing master switch, POST
+                 /api/system/toggles/network_sensing — same loopback-root-only gate as the egress
+                 master above. Pauses the optional collectors (port scan, mDNS/SSDP/NetBIOS/SNMP/
+                 DHCP-fp) at once; the base zero-egress ARP inventory is a core LAN-read presence
+                 signal and stays unaffected. Hidden until renderSensing() reveals it in live mode
+                 with data loaded — same fail-hidden discipline as egressMasterBtn above. -->
+            <div class="controls-row sn-master-row">
+              <button id="sensingMasterBtn" type="button" class="ctl switch small" role="switch" hidden></button>
+              <span id="sensingMasterFb" class="action-fb" aria-live="polite"></span>
+            </div>
             <p class="panel-note">These read standard network-discovery traffic already on your LAN (mDNS,
               UPnP, DHCP, etc.) to identify your devices better. Unlike the list above, these are not egress
-              paths — they scan only your own network and nothing leaves home. Set from the hub's
-              configuration; changing one needs a hub restart (no in-app switch yet).</p>
+              paths — they scan only your own network and nothing leaves home. Each collector is set from
+              the hub's configuration — flipping one individually needs a hub restart, but the master
+              switch above can pause all of them at once, right now.</p>
             <div id="sensingList" class="sensing-list"></div>
           </div>
           <!-- Demoted per the layout spec: session/status detail, not glance-priority. -->
@@ -2803,12 +3043,45 @@
     </div><!-- /#gearSecAssistant -->
     <div class="settings-section" id="gearSecPrivacy" aria-labelledby="gearSecPrivacy-h">
     <h3 id="gearSecPrivacy-h" class="settings-section-h">Privacy</h3>
-    <!-- Stage 3b (§2.6/§7#6/#10 + §9): Privacy & security — the brand's trust screen,
-         visible in EVERY mode (demo included). Invariants are static truth; the kill-switch
-         shortcut and the export act on live/loaded data where available. -->
+    <!-- Stage 3b (§2.6/§7#6/#10 + §9) revamp: real controls FIRST (kill-switch, network-sensing
+         master toggle, data export, identity/egress cross-links), the static commitments prose
+         LAST — this tab used to be commitments-text-first, burying the one-tap kill-switch below
+         a wall of copy. Every control below reuses an existing backend-wired instance
+         (renderKill()/wireSysToggleMaster()/showGearSection()) — nothing new invented here.
+         Visible in EVERY mode (demo included); each control fail-hides exactly like its other
+         surfaced instance when live data isn't available. -->
     <div class="tile" id="gearPrivacy" aria-labelledby="gpriv-h">
       <div class="tile-head"><h2 id="gpriv-h">Privacy &amp; security</h2><span class="hint">Wavr's contract with your home</span></div>
-      <p class="privacy-copy"><b>Nothing leaves home by default.</b> Four commitments hold for every Wavr installation:</p>
+      <!-- kill-switch shortcut: intentionally duplicates Devices→Active (§2.6). SAME renderKill()/
+           killToggle() fan-out as camKillBtn/coreKillBtn/egKill — see the Stage-3b script. -->
+      <div class="killwrap">
+        <button id="gearKillBtn" type="button" class="ctl switch killswitch" hidden data-tip="Instantly turns off every camera — cameras boot off by default"></button>
+        <span id="gearKillState" class="kill-state" aria-live="polite"></span>
+      </div>
+      <!-- network-sensing master toggle: a second instance of the SAME POST
+           /api/system/toggles/network_sensing control as System → Network sensing's
+           #sensingMasterBtn — wired by the same wireSysToggleMaster() call inside
+           renderSensing(), same live-mode+features-loaded fail-hidden gate. -->
+      <div class="controls-row sn-master-row">
+        <button id="privSensingBtn" type="button" class="ctl switch small" role="switch" hidden></button>
+        <span id="privSensingFb" class="action-fb" aria-live="polite"></span>
+      </div>
+      <h4 class="pair-sub">Your data</h4>
+      <div class="controls-row">
+        <button id="expJson" type="button" class="ctl small">Export my data (JSON)</button>
+        <button id="expCsv" type="button" class="ctl small">Export history (CSV)</button>
+        <span id="expFb" class="action-fb" aria-live="polite"></span>
+      </div>
+      <p class="panel-note">Exports, right here on this device, what this panel has already loaded: presence history, house floor plan, and zones. Deleting data on the hub (“right to be forgotten”) needs a backend route — not in this version yet.</p>
+      <!-- cross-links to the two other real privacy controls, each already living on its own
+           tab (My devices' consent registry, elsewhere in this same Settings overlay; the full
+           egress dashboard on System) — P5 fix 1 precedent: point at each other, don't duplicate
+           the whole surface. -->
+      <div class="controls-row">
+        <button id="gearIdentityLink" type="button" class="ctl small">Manage known devices &amp; consent →</button>
+        <button id="gearEgressLink" type="button" class="ctl small">See what's enabled now — “What can leave this home”</button>
+      </div>
+      <p class="privacy-copy" style="margin-top:20px"><b>Nothing leaves home by default.</b> Four commitments hold for every Wavr installation:</p>
       <div class="inv-card">
       <ul class="inv-list">
         <li><svg aria-hidden="true"><use href="#ic-camera"/></svg><span><b>Frames stay in memory only.</b> Cameras process every frame in RAM and discard it — they never write to disk, never send video.</span></li>
@@ -2821,23 +3094,6 @@
         <li><svg aria-hidden="true"><use href="#ic-lock"/></svg><span><b>Cameras start off.</b> Every new camera (and every hub restart) starts off — turning it on is always your action.</span></li>
       </ul>
       </div>
-      <!-- P5 fix 1 (+ resolves the "split trust story" finding): the two privacy surfaces now
-           point at each other — this lands on Sistema's live egress dashboard. -->
-      <div class="controls-row">
-        <button id="gearEgressLink" type="button" class="ctl small">See what's enabled now — “What can leave this home”</button>
-      </div>
-      <!-- kill-switch shortcut: intentionally duplicates Devices→Active (§2.6) -->
-      <div class="killwrap">
-        <button id="gearKillBtn" type="button" class="ctl switch killswitch" hidden data-tip="Instantly turns off every camera — cameras boot off by default"></button>
-        <span id="gearKillState" class="kill-state" aria-live="polite"></span>
-      </div>
-      <h4 class="pair-sub">Your data</h4>
-      <div class="controls-row">
-        <button id="expJson" type="button" class="ctl small">Export my data (JSON)</button>
-        <button id="expCsv" type="button" class="ctl small">Export history (CSV)</button>
-        <span id="expFb" class="action-fb" aria-live="polite"></span>
-      </div>
-      <p class="panel-note">Exports, right here on this device, what this panel has already loaded: presence history, house floor plan, and zones. Deleting data on the hub (“right to be forgotten”) needs a backend route — not in this version yet.</p>
     </div>
     </div><!-- /#gearSecPrivacy -->
     <!-- Finding #6: Panel lock (PIN) + camera admin already live on the System tab's
@@ -2901,22 +3157,57 @@
       <p id="coreClockTime" class="core-time">--:--</p>
       <p id="coreClockDate" class="core-date"></p>
     </div>
-    <div id="coreHealth" class="core-health" aria-live="polite">
-      <span id="coreHealthCore" class="core-health-item">Core …</span>
-      <span id="coreHealthNet" class="core-health-item">Net …</span>
-      <!-- Feature 1 (wifi/bluetooth/battery): native-bridge only (window.WavrNative). Stays
-           [hidden] in a plain browser/dev tab — no errors, no placeholder; aria-label is set
-           dynamically from the parsed status so screen readers get the same summary sighted
-           users glance at. See the gated poll in the script block near the end of <body>. -->
-      <span id="coreSys" class="core-sys" hidden>
-        <span id="coreSysWifi" class="core-wifi" hidden aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-        <svg id="coreSysBt" class="core-bt-icon" hidden aria-hidden="true"><use href="#ic-bt"/></svg>
-        <span id="coreSysBatt" class="core-batt" hidden aria-hidden="true">
-          <span class="core-batt-body"><i id="coreSysBattFill" class="core-batt-fill"></i></span>
-          <svg id="coreSysBattBolt" class="core-batt-bolt" hidden><use href="#ic-bolt"/></svg>
+    <div class="core-top-right">
+      <div id="coreHealth" class="core-health" aria-live="polite">
+        <!-- dashboard-topbar: "Core"/"Net" were unlabeled jargon — now tappable, honest
+             one-word labels (Hub/Internet) with a 2-line explainer on tap. Text itself is
+             filled by renderCoreHealth() below; this is just the accessible default. -->
+        <button type="button" id="coreHealthCore" class="core-health-item"
+                aria-haspopup="dialog" aria-expanded="false" aria-label="Hub connection status — tap to learn more">Hub …</button>
+        <button type="button" id="coreHealthNet" class="core-health-item"
+                aria-haspopup="dialog" aria-expanded="false" aria-label="Internet status — tap to learn more">Internet …</button>
+        <!-- Feature 1 (wifi/bluetooth/battery): native-bridge only (window.WavrNative). Stays
+             [hidden] in a plain browser/dev tab — no errors, no placeholder; aria-label is set
+             dynamically from the parsed status so screen readers get the same summary sighted
+             users glance at. See the gated poll in the script block near the end of <body>. -->
+        <span id="coreSys" class="core-sys" hidden>
+          <span id="coreSysWifi" class="core-wifi" hidden aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <svg id="coreSysBt" class="core-bt-icon" hidden aria-hidden="true"><use href="#ic-bt"/></svg>
+          <span id="coreSysBatt" class="core-batt" hidden aria-hidden="true">
+            <span class="core-batt-body"><i id="coreSysBattFill" class="core-batt-fill"></i></span>
+            <svg id="coreSysBattBolt" class="core-batt-bolt" hidden><use href="#ic-bolt"/></svg>
+          </span>
         </span>
-      </span>
+      </div>
+      <!-- dashboard-topbar quick-controls: camera privacy kill-switch (fanned out by the
+           SAME renderKill()/killToggle() as camKillBtn/gearKillBtn — see the Stage-3b script
+           block), a Watch/Vigia mirror of #watchToggle (forwards to the same watchToggle()),
+           and a READ-ONLY Bluetooth pill sourced from GET /api/status .sources (name="ble")
+           — no toggle is offered because the backend exposes no per-source enable route for
+           it here (only /api/sources/{name}/toggle for camera-named sources, and /api/watch).
+           All three stay reachable without unlocking the ambient face: turning cameras off,
+           or toggling Watch, never reveals anything the ambient face doesn't already show —
+           same low-friction-for-privacy-actions rule the camera trust receipt follows
+           elsewhere (see "P6 fix 1" in the Stage-3b script). -->
+      <div id="coreQuick" class="core-quick" role="group" aria-label="Quick controls">
+        <button type="button" id="coreKillBtn" class="ctl switch killswitch core-pill" hidden
+                data-tip="Instantly turns off every camera — cameras boot off by default"></button>
+        <button type="button" id="coreWatchPill" class="ctl switch core-pill" hidden
+                data-tip="Watch (Vigia): detect an unrecognized person without surveilling the family — hides everyone's positions, identities and vitals while on"></button>
+        <span id="coreBlePill" class="core-pill core-pill-ro" hidden data-tip="Bluetooth — detects known BLE devices nearby">
+          <i class="p-dot" aria-hidden="true"></i><span id="coreBleTxt">Bluetooth</span>
+        </span>
+      </div>
     </div>
+  </div>
+  <!-- Hub/Internet 2-line explainer — reuses the alert glance-box's card shape
+       (.core-alerts-pop), repositioned near the top strip instead of the bottom. -->
+  <div id="coreInfoPop" class="core-alerts-pop core-info-pop" hidden role="dialog" aria-modal="false" aria-labelledby="coreInfoPopTitle">
+    <div class="core-alerts-pop-head">
+      <p class="core-alerts-pop-title" id="coreInfoPopTitle"></p>
+      <button type="button" id="coreInfoPopClose" class="core-alerts-pop-close" aria-label="Close">×</button>
+    </div>
+    <p id="coreInfoPopBody" class="core-info-pop-body"></p>
   </div>
   <div class="core-hero">
     <canvas id="coreWave" class="core-wave" aria-hidden="true"></canvas>
@@ -3695,7 +3986,7 @@ async function renderCameras(){
   // the client never sends a matrix). Marking uses a TRANSIENT still the operator loads
   // LOCALLY: an object URL held in the browser, revoked on clear/rebuild, NEVER uploaded or
   // persisted (ADR-0002). All DOM via createElement + textContent (XSS-safe).
-  function buildCalibPanel(name){
+  function buildCalibPanel(name, liveness){
     const enc = encodeURIComponent(name);
     const wrap = document.createElement("div");
     wrap.className = "calib-wrap";
@@ -3864,6 +4155,35 @@ async function renderCameras(){
     startWalk.textContent = "Calibrate by walking";
     walkStart.appendChild(startWalk); s3.appendChild(walkStart);
 
+    // Camera-disabled gate: a guided walk can only ever see the walker while this camera's
+    // source is actually running, which SourceManager only spawns while Wavr's monitoring
+    // ('running') is on (see calib-session's "MAY run the camera" comment in app.py) — Wavr
+    // NEVER turns monitoring on for the operator. This surfaces that honestly BEFORE the
+    // button is pressed (GET /api/system, read-only), instead of only after a failed start.
+    // `liveness` (the snapshot from the camera list this panel was opened from) seeds a
+    // non-blocking hint for privacy/offline right away; the async check below is the
+    // authoritative gate and can disable the button outright.
+    const gate = document.createElement("p"); gate.className = "hint"; gate.hidden = true;
+    gate.setAttribute("role","status");
+    s3.insertBefore(gate, walkStart);
+    if(liveness === "privacy"){
+      gate.hidden = false; gate.style.color = "var(--dim)";
+      gate.textContent = "This camera's lens is covered right now (privacy mode) — Wavr won't see you walk until it's uncovered.";
+    } else if(liveness === "offline"){
+      gate.hidden = false; gate.style.color = "var(--warn)";
+      gate.textContent = "This camera isn't sending frames right now — check its connection before calibrating.";
+    }
+    (async ()=>{
+      let sys; try{ sys = await (await fetch(location.origin+"/api/system",
+        {headers:{"X-Wavr-Local":"1"}})).json(); }catch{ return; }
+      if(!(sys && sys.running)){
+        gate.hidden = false; gate.style.color = "var(--warn)";
+        gate.textContent = "Monitoring is off, so this camera can't turn on to calibrate — "
+          + "turn Wavr's monitoring on first, then come back. Wavr never enables it for you.";
+        startWalk.disabled = true;
+      }
+    })();
+
     // Live wizard sub-panel (hidden until started).
     const wiz = document.createElement("div"); wiz.className = "calib-sec"; wiz.hidden = true;
     wiz.style.borderTop = "0"; wiz.style.paddingTop = "0";
@@ -3882,20 +4202,24 @@ async function renderCameras(){
     wiz.appendChild(walkmap); wiz.appendChild(live); wiz.appendChild(step); wiz.appendChild(prog);
     const wizBtns = document.createElement("div"); wizBtns.className = "calib-btns";
     const capBtn = document.createElement("button"); capBtn.type = "button"; capBtn.textContent = "Capture this spot";
+    const retryBtn = document.createElement("button"); retryBtn.type = "button"; retryBtn.textContent = "Retry last spot";
     const solveBtn = document.createElement("button"); solveBtn.type = "button"; solveBtn.textContent = "Solve & save";
     const cancelWalk = document.createElement("button"); cancelWalk.type = "button"; cancelWalk.className = "danger"; cancelWalk.textContent = "Cancel";
-    wizBtns.appendChild(capBtn); wizBtns.appendChild(solveBtn); wizBtns.appendChild(cancelWalk);
+    wizBtns.appendChild(capBtn); wizBtns.appendChild(retryBtn); wizBtns.appendChild(solveBtn); wizBtns.appendChild(cancelWalk);
     wiz.appendChild(wizBtns); s3.appendChild(wiz);
     wrap.appendChild(s3);
 
-    // Wizard state: spots (known floor points), captured (feet_px paired to a spot), the
-    // live-detection poll, and the frame dims the feet pixels are measured in.
-    const walk = { on:false, spots:[], idx:0, captured:[], pollId:null, imgW:null, imgH:null, seen:false };
+    // Wizard state: SERVER-authoritative (the backend's CalibSession, POST calib-capture/
+    // calib-retry, is the single source of truth -- ADR-0002 coordinate-only). The browser
+    // only mirrors spots/spotIdx/state for rendering; it never pairs a feet-pixel itself.
+    // `room` (from calib-spots) is what links this walk to the 3D maquette (linkRoom()) so
+    // the room visibly lights up while it's being calibrated.
+    const walk = { on:false, room:null, spots:[], spotIdx:0, state:"walking", pollId:null, seen:false };
     const stopPoll = ()=>{ if(walk.pollId){ clearInterval(walk.pollId); walk.pollId = null; } };
     // Redraw the mini plan: room outline from the corner spots, a numbered dot per spot
     // (centre + each corner) -- dim = pending, dimmed accent = captured, full accent = the
-    // CURRENT target (walk.captured.length always == the count of spots done, since capture
-    // is sequential -- never skips ahead).
+    // CURRENT target (walk.spotIdx, mirrored from the server's session state -- capture is
+    // sequential, never skips ahead).
     const renderWalkMap = ()=>{
       while(walkmap.firstChild) walkmap.firstChild.remove();
       const spots = walk.spots; if(!spots.length) return;
@@ -3915,7 +4239,7 @@ async function renderCameras(){
         walkmap.appendChild(poly);
       }
       spots.forEach((s,i)=>{
-        const done = i < walk.captured.length, cur = i === walk.captured.length;
+        const done = i < walk.spotIdx, cur = i === walk.spotIdx;
         const c = document.createElementNS(SVG_NS, "circle");
         c.setAttribute("class", "wm-spot" + (done ? " done" : cur ? " cur" : ""));
         c.setAttribute("cx", sx(s.x)); c.setAttribute("cy", sy(s.y)); c.setAttribute("r", cur ? 4.5 : 3.2);
@@ -3932,19 +4256,20 @@ async function renderCameras(){
     };
     const renderWalk = ()=>{
       renderWalkMap();
-      const spot = walk.spots[walk.idx];
+      const spot = walk.spots[walk.spotIdx];
       if(spot){
         const label = spot.label === "centre" ? "the CENTRE of the room"
           : ("the corner near x=" + spot.x.toFixed(1) + " m, y=" + spot.y.toFixed(1) + " m");
-        step.textContent = "Step " + (walk.idx+1) + " of " + walk.spots.length
+        step.textContent = "Step " + (walk.spotIdx+1) + " of " + walk.spots.length
           + ": stand on " + label + ", facing the camera, then Capture.";
       } else {
         step.textContent = "All spots captured. Press Solve & save.";
       }
-      prog.textContent = walk.captured.length + " of " + walk.spots.length
-        + " spots captured (4+ needed for an accurate fit).";
+      prog.textContent = walk.spotIdx + " of " + walk.spots.length
+        + " spots captured — every spot is needed to solve (Wavr guides you to each in turn).";
       capBtn.disabled = !spot;
-      solveBtn.disabled = walk.captured.length < 4;
+      retryBtn.disabled = walk.spotIdx === 0;
+      solveBtn.disabled = walk.state !== "ready";
     };
     const setLive = (present)=>{
       walk.seen = present;
@@ -3956,11 +4281,13 @@ async function renderCameras(){
     const endWalk = async ()=>{
       stopPoll(); walk.on = false;
       try{ await post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{}
+      try{ linkRoom(walk.room, false); }catch{}   // maquette: stop highlighting this room
       wiz.hidden = true; startWalk.disabled = false;
     };
     calibCleanups.push(()=>{ stopPoll(); if(walk.on){ walk.on=false;
       // best-effort session close on teardown (fire-and-forget; page is tearing down)
-      try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{} } });
+      try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{}
+      try{ linkRoom(walk.room, false); }catch{} } });
 
     startWalk.onclick = async ()=>{
       startWalk.disabled = true;
@@ -3972,10 +4299,12 @@ async function renderCameras(){
       if(spots.length < 4){ await endWalk(); startWalk.disabled = false;
         setFb(false, "this camera's room needs a 4+ corner floor plan first (edit the map)"); return; }
       const js = r.json ? await r.json().catch(()=>({})) : {};
-      walk.on = true; walk.spots = spots; walk.idx = 0; walk.captured = []; walk.imgW = null; walk.imgH = null;
+      walk.on = true; walk.room = (sp && sp.room) || null; walk.spots = spots;
+      walk.spotIdx = 0; walk.state = "walking";
       wiz.hidden = false; setFb(true, "");
       if(js && js.active === false){ setFb(false, "monitoring is off — turn Wavr on so the camera can see you"); }
       setLive(false); renderWalk();
+      try{ linkRoom(walk.room, true); }catch{}   // maquette: this room is now being calibrated
       // Live person indicator: poll the feet-pixel sample (coordinate only, never a frame).
       walk.pollId = setInterval(async ()=>{
         let s; try{ s = await (await fetch(location.origin+`/api/cameras/${enc}/calib-sample`,
@@ -3984,31 +4313,48 @@ async function renderCameras(){
       }, 700);
     };
 
+    // Capture/retry are now driven SERVER-SIDE (POST calib-capture/calib-retry): the backend's
+    // CalibSession pairs the room's current known floor spot with the camera's latest feet
+    // pixel itself (coordinate-only, ADR-0002) and returns the walk's new state -- the browser
+    // no longer tracks pairs locally, it just mirrors spot_idx/state for rendering.
     capBtn.onclick = async ()=>{
-      const spot = walk.spots[walk.idx]; if(!spot) return;
-      let s; try{ s = await (await fetch(location.origin+`/api/cameras/${enc}/calib-sample`,
-        {headers:{"X-Wavr-Local":"1"}})).json(); }catch{}
-      if(!(s && s.person && Array.isArray(s.feet_px))){
-        setFb(false, "no person detected — stand where the camera can see you, then capture"); return; }
-      walk.imgW = s.img_w; walk.imgH = s.img_h;
-      walk.captured.push({ feet:[s.feet_px[0], s.feet_px[1]], floor:[spot.x, spot.y] });
-      setFb(true, "captured spot " + (walk.idx+1));
-      if(walk.idx < walk.spots.length - 1) walk.idx++; else walk.idx = walk.spots.length;
+      let r; try{ r = await post(`/api/cameras/${enc}/calib-capture`, {}); }catch{}
+      if(!(r && r.ok)){
+        setFb(false, (await errText(r)) || "no person detected — stand where the camera can see you, then capture");
+        return;
+      }
+      const js = await r.json().catch(()=>null); if(!js) return;
+      walk.spotIdx = js.spot_idx; walk.state = js.state;
+      setFb(true, "captured spot " + walk.spotIdx + " — the room's fit just got a little more accurate");
+      renderWalk();
+      try{ linkRoom(walk.room, true); }catch{}   // maquette: pulse again, this capture just corrected it
+    };
+
+    retryBtn.onclick = async ()=>{
+      let r; try{ r = await post(`/api/cameras/${enc}/calib-retry`, {}); }catch{}
+      if(!(r && r.ok)){ setFb(false, (await errText(r)) || "nothing to retry yet"); return; }
+      const js = await r.json().catch(()=>null); if(!js) return;
+      walk.spotIdx = js.spot_idx; walk.state = js.state;
+      setFb(true, "back to spot " + (walk.spotIdx+1) + " — try again");
       renderWalk();
     };
 
     solveBtn.onclick = async ()=>{
-      if(walk.captured.length < 4){ setFb(false, "capture 4+ spots first"); return; }
-      const imgW = Math.round(walk.imgW), imgH = Math.round(walk.imgH);
-      if(!(imgW>0 && imgH>0)){ setFb(false, "missing image size from the camera — recapture a spot"); return; }
-      const image_points = walk.captured.map(c=>c.feet);
-      const floor_points = walk.captured.map(c=>c.floor);
-      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`,
-        {image_points, floor_points, img_w:imgW, img_h:imgH}); }catch{}
-      if(r && r.ok){ await endWalk();
-        setFb(true, "calibrated by walking — quality 0.85, accurate placement is on. Re-enable the camera to apply, or calibrate again any time to redo it.");
-        loadStatus(); }
-      else { setFb(false, (await errText(r)) || "couldn't solve (spots may be too close or in a line — try again)"); }
+      if(walk.state !== "ready"){ setFb(false, "capture every spot first"); return; }
+      // use_session:true -- the server solves from THIS session's own captured pairs
+      // (calib_refine.solve_progressive), merged with any prior walk's stored points for the
+      // same camera, so accuracy is cumulative across walks, not just this one.
+      let r; try{ r = await putJson(`/api/cameras/${enc}/calibration`, {use_session:true}); }catch{}
+      if(r && r.ok){
+        const js = await r.json().catch(()=>null);
+        const qPct = (js && typeof js.quality === "number" && isFinite(js.quality))
+          ? Math.round(js.quality*100) : null;
+        await endWalk();
+        setFb(true, "calibrated by walking" + (qPct!=null ? (" — quality " + qPct + "%") : "")
+          + ". Accurate placement is on — re-enable the camera to apply. Calibrate again any time: "
+          + "each walk adds more points and refines the fit further.");
+        loadStatus();
+      } else { setFb(false, (await errText(r)) || "couldn't solve (walk again — spots may be too close or in a line)"); }
     };
 
     cancelWalk.onclick = async ()=>{ await endWalk(); setFb(true, "calibration walk cancelled — camera turned back off"); };
@@ -4032,12 +4378,19 @@ async function renderCameras(){
         {headers:{"X-Wavr-Local":"1"}})).json(); }
       catch{ status.textContent = "Couldn't read calibration."; return; }
       if(c && c.mount) for(const k in mountInputs) if(c.mount[k] != null) mountInputs[k].value = c.mount[k];
-      // Position-quality hint mirrors backend localize.Q_HOMOGRAPHY (0.85) / Q_MONOCULAR
-      // (0.45) exactly -- a number, not just a label, so "accurate" vs "estimate" is honest
-      // and comparable across cameras.
+      // Position-quality hint: for a homography this is the REAL measured value
+      // (localize.homography_quality, from calib_refine's reprojection residual over ALL
+      // accumulated correspondences, not a flat constant) -- it rises as more walks add more
+      // points (progressive refinement), so this number is honest to watch improve over time.
+      // A mount estimate has no per-camera measurement, so it stays the flat Q_MONOCULAR
+      // fallback (0.45) exactly, same as backend localize.py.
       let lead;
-      if(c && c.homography) lead = "Calibrated (precise 4-point) — quality 0.85. ";
-      else if(c && c.mount) lead = "Estimate active (approximate) — quality 0.45. ";
+      if(c && c.homography){
+        const qPct = (typeof c.quality === "number" && isFinite(c.quality)) ? Math.round(c.quality*100) : null;
+        lead = "Calibrated (precise, by walking or points) — quality "
+          + (qPct != null ? qPct + "%. " : "unknown. ");
+      }
+      else if(c && c.mount) lead = "Estimate active (approximate) — quality 45%. ";
       else lead = "Not calibrated — this camera reports its room only. ";
       status.textContent = "";
       const b = document.createElement("b"); b.textContent = lead;
@@ -4050,7 +4403,8 @@ async function renderCameras(){
     // stop any live walk poll + end the sampling session (so a collapsed panel never
     // leaves the camera running or a poll ticking).
     wrap._cleanup = ()=>{ revoke(); stopPoll();
-      if(walk.on){ walk.on = false; try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{} } };
+      if(walk.on){ walk.on = false; try{ post(`/api/cameras/${enc}/calib-session`, {active:false}); }catch{}
+        try{ linkRoom(walk.room, false); }catch{} } };
     return wrap;
   }
 
@@ -4113,7 +4467,7 @@ async function renderCameras(){
       cal.onclick = ()=>{
         if(calPanel){ try{ calPanel._cleanup?.(); }catch{} calPanel.remove(); calPanel = null;
           cal.setAttribute("aria-expanded","false"); return; }
-        calPanel = buildCalibPanel(c.name); row.after(calPanel);
+        calPanel = buildCalibPanel(c.name, c.liveness); row.after(calPanel);
         cal.setAttribute("aria-expanded","true");
       };
       row.appendChild(cal);
@@ -4391,6 +4745,79 @@ function dtypeLabelEl(t, conf, rogue){
   }
   return s;
 }
+// ---- Alert explain/dismiss: shared by the Network tab's own panel (initNetAlertsPop, all
+// modes) and, when running in ?core kiosk mode, the Core Panel's ambient badge (openAlertsPop
+// further down reuses ALERT_EXPLAIN/buildAlertItem instead of keeping its own copy). Plain
+// top-level declarations so both script blocks share them via window, no window.* export needed.
+var ALERT_EXPLAIN = {
+  gateway_identity: "Your router answered from a different hardware address. Usually a reboot or a swapped router — but it can also mean someone is impersonating your gateway.",
+  rogue_dhcp: "Another device is handing out network addresses like a router. Usually a second router or a misconfiguration; occasionally an attack.",
+  rogue_device: "A device we haven't seen on this network before just showed up.",
+  fall_suspected: "Someone may have been lying down outside a bed or rest area for a while. This is a research demonstration, not a certified medical or fall-detection device (ADR-0003) -- treat it as a prompt to check in, never a diagnosis.",
+  intrusion: "Watch (Vigia) counted more people in a room, or in the house overall, than it knows are home. It never reveals who or exactly where in the room -- only that someone unaccounted-for is present."
+};
+function alertKeyOf(a){
+  var kind = (a && a.kind) || "rogue_device";
+  return kind + "|" + ((a && a.ts) || "") + "|" +
+    ((a && (a.observed_mac || a.extra_server || a.mac || a.ip || a.gateway_ip ||
+     (typeof a.room === "string" ? a.room : ""))) || "");
+}
+// Client-only dismissal (no backend endpoint for this): persisted in localStorage so an
+// acknowledged alert instance (same kind+ts+identity key) is filtered out of every alert
+// surface until the backend produces a genuinely new occurrence (a different ts -> a new key).
+var ALERT_DISMISS_KEY = "wavr.alerts.dismissed.v1", ALERT_DISMISS_MAX = 300;
+function loadDismissedAlerts(){
+  try{ var v = JSON.parse(localStorage.getItem(ALERT_DISMISS_KEY) || "[]"); return Array.isArray(v) ? v : []; }
+  catch(e){ return []; }
+}
+function isAlertDismissed(key){ return !!key && loadDismissedAlerts().indexOf(key) !== -1; }
+function dismissAlertKey(key){
+  if(!key) return;
+  var cur = loadDismissedAlerts();
+  if(cur.indexOf(key) === -1) cur.push(key);
+  if(cur.length > ALERT_DISMISS_MAX) cur = cur.slice(cur.length - ALERT_DISMISS_MAX);
+  try{ localStorage.setItem(ALERT_DISMISS_KEY, JSON.stringify(cur)); }catch(e){}
+}
+// One #alertList row -> one explain+dismiss item, shared by both panels above.
+// opts.onOpen(row) fires when the item body is tapped (each caller defines what "open" means);
+// opts.onDismissed(key) fires after a successful dismiss so the caller can re-render/re-count.
+function buildAlertItem(row, opts){
+  var kind = row.dataset.kind || "rogue_device";
+  var key  = row.dataset.alertKey || "";
+  var sev  = (row.className.match(/sev-(\w+)/) || [])[1] || "note";
+  var titleEl = row.querySelector(".at");
+  var titleTxt = titleEl ? titleEl.textContent : "Alert";
+  var item = document.createElement("div");
+  item.className = "core-alert-item sev-" + sev;
+  var openBtn = document.createElement("button");
+  openBtn.type = "button"; openBtn.className = "core-alert-open";
+  var dot = document.createElement("span"); dot.className = "core-alert-dot"; openBtn.appendChild(dot);
+  var txt = document.createElement("span"); txt.className = "core-alert-txt";
+  var t = document.createElement("span"); t.className = "core-alert-title";
+  t.textContent = titleTxt;   // textContent — untrusted network data
+  var w = document.createElement("span"); w.className = "core-alert-why";
+  w.textContent = ALERT_EXPLAIN[kind] || "A network alert.";
+  txt.appendChild(t); txt.appendChild(w); openBtn.appendChild(txt);
+  var go = document.createElement("span"); go.className = "core-alert-go"; go.textContent = "›"; openBtn.appendChild(go);
+  openBtn.addEventListener("click", function(){ if(opts && opts.onOpen) opts.onOpen(row); });
+  item.appendChild(openBtn);
+  var actions = document.createElement("div"); actions.className = "core-alert-actions";
+  var ackBtn = document.createElement("button");
+  ackBtn.type = "button"; ackBtn.className = "core-alert-dismiss";
+  ackBtn.textContent = "Dismiss";
+  ackBtn.setAttribute("aria-label", "Dismiss alert: " + titleTxt);
+  ackBtn.addEventListener("click", function(ev){
+    ev.stopPropagation();
+    dismissAlertKey(key);
+    if(row.parentNode) row.parentNode.removeChild(row);
+    item.remove();
+    if(opts && opts.onDismissed) opts.onDismissed(key);
+  });
+  actions.appendChild(ackBtn);
+  item.appendChild(actions);
+  return item;
+}
+
 function renderNetwork(){
   // live (central) OR companion viewer (token) — both read the same local backend, read-only.
   if(MODE!=="live" && MODE!=="companion") return;     // never in Plano B (demo)
@@ -4404,8 +4831,12 @@ function renderNetwork(){
   // Device-rename edit state (item: device naming) — kept outside refresh() so the 15s poll
   // doesn't wipe an in-progress edit; only one device can be renamed at a time.
   let editingMac = null, editingValue = "", editingJustOpened = false;
+  // Assign-person edit state (known-device-ui, 2026-07-11) — same one-row-at-a-time pattern
+  // as the rename state above; the identity registry it writes is the SAME consent registry
+  // wavr.known_presence composes house-level "who's home" over (see renderKnownPresence()).
+  let assigningMac = null, assigningValue = "";
   async function refresh(){
-    let inv, al;
+    let inv, al, identityDevices = [];
     // Mobile: route the central reads through the native pinned fetch (base = stored central) so the
     // Bearer token never reaches the app's own https://localhost; the `auth` header logic is unchanged.
     // Absent the hook, __nf is exactly fetch(location.origin+path, opt) — original behavior verbatim.
@@ -4419,8 +4850,27 @@ function renderNetwork(){
       inv = await ri.json();
       al  = await ra.json();
     }catch{ return; }                       // backend momentarily unreachable — keep last view
+    // Consent-first identity registry (known-device-ui, 2026-07-11) — live/central only, so
+    // each network row can show "registered to <person>" instead of the generic assign
+    // control. A 403 (non-central peer/companion) or thrown fetch just leaves every row
+    // unregistered-looking — never a hard failure of the inventory poll above.
+    if(MODE==="live"){
+      try{
+        const rIdentity = await fetch(location.origin+"/api/identity/devices", {headers:{"X-Wavr-Local":"1"}});
+        if(rIdentity.ok){
+          const idJson = await rIdentity.json();
+          identityDevices = Array.isArray(idJson.devices) ? idJson.devices : [];
+        }
+      }catch{}
+    }
+    const netIdentityByMac = new Map();
+    identityDevices.forEach(d => { if(d && d.source==="network" && d.address) netIdentityByMac.set(String(d.address).toLowerCase(), d); });
     const devices = Array.isArray(inv && inv.devices) ? inv.devices : [];
-    const rogue   = Array.isArray(al && al.alerts)   ? al.alerts    : [];
+    // Drop alerts the operator already dismissed (client-persisted) BEFORE they ever become
+    // rows -- keeps #alertList, the "(n)" badges and the "no recent" empty state all honest
+    // without needing a separate hide-pass; a genuinely new occurrence gets a new key and
+    // reappears normally.
+    const rogue   = (Array.isArray(al && al.alerts) ? al.alerts : []).filter(a => !isAlertDismissed(alertKeyOf(a)));
     window.__wavrInventory?.(devices);   // Stage-2 hook: Detected matches this SAME payload against the catalog
     // Inventory is opt-in (WAVR_NET_INVENTORY=1); an empty list means it isn't collecting.
     hint.hidden = devices.length > 0;
@@ -4553,6 +5003,80 @@ function renderNetwork(){
           };
           left.appendChild(knownBtn);
         }
+        // Assign person — consent-first identity registry (known-device-ui, 2026-07-11). A
+        // SEPARATE opt-in from the known/unfamiliar allowlist above: this attributes the
+        // device to a named person and lets it corroborate house-level who's-home (see
+        // renderKnownPresence() / wavr.known_presence) — never automatic. POST/DELETE
+        // /api/identity/devices, the SAME consent registry known-presence composes over.
+        // One row assigns at a time (assigningMac), mirroring the rename edit-state above.
+        // `person` is PII — every name is rendered via textContent, NEVER innerHTML.
+        if(d.mac){
+          const owned = netIdentityByMac.get(String(d.mac).toLowerCase());
+          if(assigningMac === d.mac){
+            const aform = document.createElement("form"); aform.className = "dev-rename-form";
+            const ainput = document.createElement("input");
+            ainput.type = "text"; ainput.maxLength = 64; ainput.value = assigningValue;
+            ainput.placeholder = "whose device is this?";
+            ainput.setAttribute("aria-label", "person this device belongs to");
+            ainput.oninput = ()=>{ assigningValue = ainput.value; };
+            const asave = document.createElement("button");
+            asave.type = "submit"; asave.className = "ctl small primary"; asave.textContent = "Save";
+            const acancel = document.createElement("button");
+            acancel.type = "button"; acancel.className = "ctl small off"; acancel.textContent = "Cancel";
+            acancel.onclick = ()=>{ assigningMac = null; assigningValue = ""; refresh(); };
+            aform.onsubmit = async (e)=>{
+              e.preventDefault();
+              const person = ainput.value.trim();
+              if(!person){ actionFeedback(devFb, false, "enter a name first"); return; }
+              let r;
+              try{
+                r = await fetch(location.origin+"/api/identity/devices", {method:"POST",
+                  headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+                  body: JSON.stringify({person, devices:[{address:d.mac, source:"network", origin:"manual"}]})});
+              }catch{}
+              if(r && r.ok){
+                assigningMac = null; assigningValue = "";
+                actionFeedback(devFb, true, null, "✓ assigned");
+                refresh();
+              } else {
+                let msg = "couldn't assign — check the name";
+                try{ const j = await r.json(); if(j && (j.detail || j.error)) msg = String(j.detail || j.error); }catch{}
+                actionFeedback(devFb, false, msg);
+              }
+            };
+            aform.appendChild(ainput); aform.appendChild(asave); aform.appendChild(acancel);
+            left.appendChild(aform);
+          } else if(owned){
+            const ownedTag = document.createElement("span"); ownedTag.className = "dev-rename-btn dev-known-btn";
+            ownedTag.textContent = "★ " + owned.person;               // textContent — PII
+            ownedTag.setAttribute("aria-label", "registered to " + owned.person + " — presence corroborator");
+            left.appendChild(ownedTag);
+            const unassign = document.createElement("button");
+            unassign.type = "button"; unassign.className = "dev-rename-btn";
+            unassign.textContent = "un-assign";
+            unassign.setAttribute("aria-label",
+              "un-assign " + owned.person + " from this device — privacy opt-out");
+            unassign.onclick = async ()=>{
+              unassign.disabled = true;
+              let r;
+              try{
+                r = await fetch(location.origin+"/api/identity/devices/"+encodeURIComponent(d.mac),
+                  {method:"DELETE", headers:{"X-Wavr-Local":"1"}});
+              }catch{}
+              if(r && r.ok){ actionFeedback(devFb, true, null, "✓ un-assigned"); refresh(); }
+              else { actionFeedback(devFb, false, "couldn't un-assign"); unassign.disabled = false; }
+            };
+            left.appendChild(unassign);
+          } else {
+            const assignBtn = document.createElement("button");
+            assignBtn.type = "button"; assignBtn.className = "dev-rename-btn";
+            assignBtn.textContent = "+ assign person";
+            assignBtn.setAttribute("aria-label",
+              "assign a person to " + (resolvedIdentity || vendorType) + " — house-level presence, opt-in");
+            assignBtn.onclick = ()=>{ assigningMac = d.mac; assigningValue = ""; refresh(); };
+            left.appendChild(assignBtn);
+          }
+        }
       }
       const tag = document.createElement("span");
       tag.className = "tag " + (d.known ? "known" : "unknown");
@@ -4578,9 +5102,7 @@ function renderNetwork(){
       // Stable identity so the Core-panel alert glance-box can deep-link back to THIS row after
       // the list re-renders (kind + timestamp + the strongest identity field the kind carries).
       row.dataset.kind = kind;
-      row.dataset.alertKey = kind + "|" + (a.ts || "") + "|" +
-        (a.observed_mac || a.extra_server || a.mac || a.ip || a.gateway_ip ||
-         (typeof a.room === "string" ? a.room : ""));
+      row.dataset.alertKey = alertKeyOf(a);
       const badge = document.createElement("span");
       badge.className = "sev-badge sev-" + sev; badge.textContent = sev;   // textContent — untrusted
       const at = document.createElement("span"); at.className = "at";
@@ -4678,6 +5200,68 @@ function renderNetwork(){
   refresh(); setInterval(refresh, 15000);
 }
 if(!window.WAVR_MOBILE) renderNetwork();   // mobile: deferred to the post-ready boot (token cache is empty at parse time)
+
+// ---- Network tab: tap "Intrusion alerts (n)" -> explain + dismiss each one, in EVERY mode
+// (live/companion), not just the ?core kiosk face -- #netAlertCount previously only got a
+// count from Core Panel's CORE_MODE-gated renderCoreAlerts(), so outside that mode it stayed a
+// permanently-empty dead span. Runs unconditionally (cheap DOM listener wiring); harmless if
+// the Network tab never populates (demo mode never fills #alertList).
+function updateNetAlertCount(){
+  var badge = document.getElementById("netAlertCount");
+  if(!badge) return;
+  var list = document.getElementById("alertList");
+  var rows = list ? list.querySelectorAll(".alert-row") : [];
+  var n = rows.length, hasCritical = false, hasWatch = false;
+  for(var i = 0; i < rows.length; i++){
+    if(rows[i].classList.contains("sev-critical") || rows[i].classList.contains("sev-alert")) hasCritical = true;
+    else if(rows[i].classList.contains("sev-watch")) hasWatch = true;
+  }
+  badge.textContent = n ? ("(" + n + ")") : "";
+  badge.className = "net-alert-count" + (hasCritical ? " has-alert" : hasWatch ? " has-watch" : "");
+}
+function initNetAlertsPop(){
+  var countEl = document.getElementById("netAlertCount");
+  var popEl   = document.getElementById("netAlertsPop");
+  var listEl  = document.getElementById("netAlertsPopList");
+  var ttlEl   = document.getElementById("netAlertsPopTitle");
+  var xEl     = document.getElementById("netAlertsPopClose");
+  if(!countEl || !popEl || !listEl) return;
+  function close(){ popEl.hidden = true; }
+  function render(){
+    var rows = document.querySelectorAll("#alertList .alert-row");
+    listEl.textContent = "";
+    if(!rows.length){ close(); return; }
+    if(ttlEl) ttlEl.textContent = rows.length + (rows.length > 1 ? " alerts" : " alert");
+    Array.prototype.forEach.call(rows, function(row){
+      listEl.appendChild(buildAlertItem(row, {
+        onOpen: function(r){
+          close();
+          r.classList.remove("alert-jump"); void r.offsetWidth; r.classList.add("alert-jump");
+          try{ r.scrollIntoView({behavior: "smooth", block: "center"}); }catch(e){ r.scrollIntoView(); }
+        },
+        onDismissed: render   // re-render from the now-shrunk #alertList
+      }));
+    });
+    popEl.hidden = false;
+  }
+  countEl.setAttribute("data-tappable", "1");
+  countEl.setAttribute("role", "button");
+  countEl.setAttribute("tabindex", "0");
+  countEl.setAttribute("aria-label", "Alerts");
+  countEl.addEventListener("click", function(ev){
+    ev.stopPropagation();
+    if(!popEl.hidden){ close(); return; }
+    render();
+  });
+  countEl.addEventListener("keydown", function(ev){
+    if(ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); countEl.click(); }
+  });
+  if(xEl) xEl.addEventListener("click", close);
+}
+initNetAlertsPop();
+updateNetAlertCount();
+var __netAlertListEl = document.getElementById("alertList");
+if(__netAlertListEl) new MutationObserver(updateNetAlertCount).observe(__netAlertListEl, {childList: true});
 
 // ---- Build A10: House status (unified network+physical "is everything OK?" signal) ----
 // GET /api/house-status: derived-only composition of signals already rendered elsewhere
@@ -5075,6 +5659,61 @@ async function renderIdentity(){
   renderList(seed);                          // seed the registered list from the probe we already read
 }
 renderIdentity();
+
+// ---- Who's likely home — known-presence summary (live/central only, known-device-ui,
+// 2026-07-11) ----
+// Pure read of GET /api/identity/known-presence: a house-level "likely home" summary
+// composed from devices already ASSIGNED to a person on the Network/Devices list (see
+// renderNetwork()'s "assign person" control) + the already-fused network signal — no new
+// scan, no re-fusion, nothing computed client-side. The endpoint deliberately never returns
+// a full MAC (mac_prefix only, first 3 octets) so this stays a house-level summary, never a
+// per-device drill-down; scope is always "house" and confidence_label always "coarse" — this
+// UI never claims tighter than that. A corroborator's richer `details` block (first/last
+// seen, device type) only appears when that specific device separately opted into consent #2
+// (identity_store's `details` flag, toggled from the "My devices" panel above). Same
+// live-only placement as renderIdentity() (not gated behind window.WAVR_MOBILE — Mobile's
+// own native-pinned fetch reaches MODE==="live" the same way). `person` is PII — every name
+// is rendered via textContent, NEVER innerHTML.
+async function renderKnownPresence(){
+  if(MODE!=="live") return;                  // live-only; never in companion/demo
+  const hdr = {"X-Wavr-Local":"1"};
+  const tile = document.getElementById("whoHome");
+  const list = document.getElementById("whoHomeList");
+  async function refresh(){
+    let r;
+    try{ r = await fetch(location.origin+"/api/identity/known-presence",{headers:hdr}); }
+    catch{ return; }                          // backend momentarily unreachable — keep last view
+    if(!r.ok){ tile.hidden = true; return; }  // 403 (multidevice 'user') / feature off — stay hidden
+    let kp; try{ kp = await r.json(); }catch{ tile.hidden = true; return; }
+    const corroborators = Array.isArray(kp && kp.corroborators) ? kp.corroborators : [];
+    if(!corroborators.length){ tile.hidden = true; return; }   // nobody assigned yet — nothing honest to show
+    tile.hidden = false;
+    list.textContent = "";
+    corroborators.forEach(c => {
+      const row = document.createElement("div"); row.className = "pair-dev-row";
+      const left = document.createElement("span");
+      const name = document.createElement("b"); name.textContent = c.person || "(unnamed)"; // textContent — PII
+      const meta = document.createElement("span"); meta.className = "pair-dev-meta";
+      let metaTxt = " · " + (c.mac_prefix || "") + " · house-level, coarse";
+      if(c.details){                          // consent #2 — richer already-collected info
+        const seenRel = fmtRelative(c.details.last_seen);
+        if(seenRel) metaTxt += " · last seen " + seenRel;
+        if(c.details.device_type) metaTxt += " · " + c.details.device_type;
+      }
+      meta.textContent = metaTxt;             // textContent — server data
+      left.appendChild(name); left.appendChild(meta);
+      row.appendChild(left);
+      const tag = document.createElement("span");
+      tag.className = "tag" + (c.present ? " known" : "");
+      tag.textContent = c.present ? "home" : "away";
+      row.appendChild(tag);
+      list.appendChild(row);
+    });
+  }
+  await refresh();
+  setInterval(refresh, 15000);
+}
+renderKnownPresence();
 
 // ---- Peers — cross-instance mutual pairing (live/central only, peers-gated) ----
 // Discovers other Wavr hubs (mDNS) and pairs with them mutually, confirmed by an
@@ -8535,7 +9174,11 @@ const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); upd
     // BOOT GATE: token/base/house are read synchronously but the shim loads them from async
     // Keystore-backed storage. Wait for the caches, THEN build the provider and run the init we
     // deferred above (mode label, renderNetwork, renderRadar, initCompanion) in document order.
-    await window.WAVR_MOBILE.ready;
+    // Race the gate against an 8s timeout so the page can NEVER hang even if a future shim breaks
+    // the ready contract. In the happy path `ready` resolves in ms, so the timeout never fires.
+    // This whole block is inside `if(window.WAVR_MOBILE)` — when the hook is ABSENT (loopback/
+    // companion/demo web) not a byte of it executes, so the three web modes stay byte-identical.
+    await Promise.race([window.WAVR_MOBILE.ready, new Promise(r=>setTimeout(r,8000))]);
     __wavrMakeProvider();
     try{ document.getElementById("mode").innerHTML =
          companionToken() ? "source: <b>real home</b> (viewer)" : "source: <b>pairing</b>"; }catch{}
@@ -8769,6 +9412,15 @@ try {
     if(typeof window.switchTab === "function") window.switchTab("sistema");
     var ep = document.getElementById("egressPanel");
     if(ep) ep.scrollIntoView({ block: "start" });
+  });
+  // Privacy → Devices identity/consent registry: unlike gearEgressLink above, "My devices"
+  // already lives INSIDE this same Settings overlay (gearSecDevices) — no closeGear()/tab
+  // switch needed, just the same showGearSection() the left rail itself uses.
+  var gearIdentityLink = document.getElementById("gearIdentityLink");
+  if(gearIdentityLink) gearIdentityLink.addEventListener("click", function(){
+    showGearSection("gearSecDevices");
+    var md = document.getElementById("myDevices");
+    if(md) md.scrollIntoView({ block: "start" });
   });
 
   // ---- Privacy chip ("Nothing leaves home.") — §9: always present, expandable every session,
@@ -10294,9 +10946,21 @@ try {
   var DSUB_KEY = "wavr.dsub.v1";
   var dsubBtns = { detectados: $("dsubBtnDetectados"), catalogo: $("dsubBtnCatalogo"), ativos: $("dsubBtnAtivos") };
   var dsubViews = { detectados: $("dsubViewDetectados"), catalogo: $("dsubViewCatalogo"), ativos: $("dsubViewAtivos") };
-  function setDsub(name){
+  function setDsub(name, opts){
+    opts = opts || {};
     if(!dsubViews[name]) name = "catalogo";
     dsubCur = name;
+    // devices-tab-simple: any EXPLICIT navigation to a sub-tab (a cross-link from System/
+    // Network, or a click on the Advanced tab bar itself, which is only reachable once
+    // already revealed) also reveals the "Advanced" technical view it lives in — never on
+    // the silent bootstrap call below, so a page load never force-opens it.
+    if(!opts.silent){
+      var advWrap = $("devAdvancedWrap"), advToggle = $("devAdvancedToggle");
+      if(advWrap && advWrap.hidden){
+        advWrap.hidden = false;
+        if(advToggle){ advToggle.setAttribute("aria-expanded", "true"); advToggle.textContent = "Hide the full device list"; }
+      }
+    }
     Object.keys(dsubBtns).forEach(function(k){
       var on = k === name;
       if(dsubBtns[k]){
@@ -10344,9 +11008,10 @@ try {
   var dsubInit = null;
   try{ dsubInit = localStorage.getItem(DSUB_KEY); }catch(e){}
   if(!dsubViews[dsubInit]) dsubInit = M === "simulated" ? "catalogo" : M === "companion" ? "detectados" : "ativos";
-  setDsub(dsubInit);
+  setDsub(dsubInit, { silent: true });   // wires the tab buttons/views without revealing Advanced
 
-  // the catalog loads on first entry into the Devices tab (single fetch, cached)
+  // the catalog loads on first entry into the Devices tab (single fetch, cached) — still
+  // preloads with Advanced collapsed, since the Simple wizard's matchDevice() cascade needs it.
   (function(){
     var p = $("panel-dispositivos");
     if(!p) return;
@@ -10357,6 +11022,144 @@ try {
     }).observe(p, { attributes: true, attributeFilter: ["class"] });
     if(p.classList.contains("active")) ensureCatalog();
   })();
+
+  // ---------- devices-tab-simple: "Add a device" wizard (default landing) ----------
+  // Reuses matchDevice()/activeCameraIps()/onvifCams (ONVIF scan) + openSetup()/goToCatalog()
+  // exactly as the technical Detected view above does — same data, same add actions, only a
+  // simpler "is this yours?" presentation. Dismissals are session-only (never persisted),
+  // matching the rest of this file's ephemeral-UI-state convention (e.g. bannerDismissed).
+  var simpleDismissed = {};
+  function simpleKeyOnvif(cam){ return "onvif:" + ((cam && cam.ip) || ""); }
+  function simpleKeyNet(d){ return "net:" + ((d && (d.mac || d.ip)) || Math.random()); }
+
+  function buildSimpleCard(opts){
+    var card = elc("article", "cap-card");
+    var head = elc("div", "cap-head");
+    var ic = elc("span", "cap-icon");
+    ic.appendChild(icon(opts.icon || "ic-grid"));
+    var tw = elc("div");
+    tw.appendChild(elc("div", "cap-title", opts.title));
+    tw.appendChild(elc("div", "cap-brand", opts.sub));
+    head.appendChild(ic); head.appendChild(tw);
+    card.appendChild(head);
+    card.appendChild(elc("p", "dev-simple-q", "Is this yours?"));
+    var row = elc("div", "cap-cta");   // inherits the shared .cap-cta .ctl.primary green rule
+    var yes = elc("button", "ctl small primary", "Yes, that's mine");
+    yes.type = "button";
+    yes.onclick = opts.onYes;
+    var no = elc("button", "ctl small off", "Not mine");
+    no.type = "button";
+    no.onclick = function(){ simpleDismissed[opts.key] = true; renderDevSimpleResults(); };
+    row.appendChild(yes); row.appendChild(no);
+    card.appendChild(row);
+    return card;
+  }
+
+  function renderDevSimpleResults(){
+    var list = $("devSimpleList"), h = $("devSimpleResultsH"), rescan = $("devSimpleRescan");
+    if(!list || !h) return;
+    var frag = document.createDocumentFragment();
+    var count = 0;
+    onvifCams.forEach(function(cam){
+      var key = simpleKeyOnvif(cam);
+      if(simpleDismissed[key]) return;
+      count++;
+      frag.appendChild(buildSimpleCard({
+        key: key, icon: "ic-camera", title: onvifTitle(cam),
+        sub: "Camera found on your Wi-Fi" + (cam.ip ? " · " + cam.ip : ""),
+        onYes: function(ev){ openSetup(onvifCatalogEntry(cam),
+          { ip: cam.ip || "", onvif: cam, focus: "form", trigger: ev.currentTarget }); }
+      }));
+    });
+    if(CAT && invDevices.length){
+      var usedIps = activeCameraIps();
+      var onvifIps = {};
+      onvifCams.forEach(function(c){ if(c && c.ip) onvifIps[c.ip] = 1; });
+      invDevices.forEach(function(d){
+        if(!d || typeof d !== "object") return;
+        if(d.ip && (usedIps.has(d.ip) || onvifIps[d.ip])) return;
+        var m = matchDevice(d);
+        if(m.conf !== "alta" && m.conf !== "media") return;
+        var key = simpleKeyNet(d);
+        if(simpleDismissed[key]) return;
+        count++;
+        var sku = (m.cands && m.cands[0]) || null;
+        var catLbl = CAT_EN[m.cat] || m.cat || "device";
+        frag.appendChild(buildSimpleCard({
+          key: key, icon: CAT_ICON[m.cat] || "ic-grid",
+          title: m.conf === "alta" ? (sku ? sku.name : catLbl) : ("Likely a " + catLbl),
+          sub: (d.vendor && d.vendor !== "unknown" ? d.vendor + " · " : "") + "Seen on your Wi-Fi",
+          onYes: function(ev){
+            if(sku) openSetup(sku, { ip: d.ip || "", focus: rungFor(sku) === 2 ? "form" : "verify", trigger: ev.currentTarget });
+            else goToCatalog({ category: m.cat || "", search: "" });
+          }
+        }));
+      });
+    }
+    list.textContent = "";
+    list.appendChild(frag);
+    list.hidden = !count;
+    var can = canDetectNow();
+    if(count){
+      h.textContent = "Found " + count + (count === 1 ? " device" : " devices") + " — tap the one that's yours.";
+    } else if(!can){
+      h.textContent = "This demo can't scan your network — with a Wavr hub connected, found devices " +
+        "would show up here. “Advanced” below shows exactly how, with an example.";
+    } else {
+      h.textContent = "Nothing new found yet. Make sure the device is powered on and connected, then " +
+        "look again — or browse the full list below.";
+    }
+    if(rescan) rescan.hidden = false;
+  }
+
+  function runSimpleScan(){
+    var intro = $("devSimpleIntro"), scanBox = $("devSimpleScan"), res = $("devSimpleResults");
+    if(!canDetectNow()){
+      // Honest: nothing actually scans off-hub — skip the fake "looking…" delay entirely.
+      if(intro) intro.hidden = true;
+      if(scanBox) scanBox.hidden = true;
+      if(res) res.hidden = false;
+      renderDevSimpleResults();
+      return;
+    }
+    if(intro) intro.hidden = true;
+    if(res) res.hidden = true;
+    if(scanBox) scanBox.hidden = false;
+    var finish = function(){
+      if(scanBox) scanBox.hidden = true;
+      if(res) res.hidden = false;
+      renderDevSimpleResults();
+    };
+    Promise.resolve(ensureCatalog()).then(function(){ return scanCameras(); }).then(finish).catch(finish);
+  }
+  var simpleStartBtn = $("devSimpleStart");
+  if(simpleStartBtn) simpleStartBtn.addEventListener("click", runSimpleScan);
+  var simpleRescanBtn = $("devSimpleRescan");
+  if(simpleRescanBtn) simpleRescanBtn.addEventListener("click", runSimpleScan);
+
+  // Approve-on-Core integration: route "pairing a phone/tablet" to the ALREADY-BUILT flow
+  // (the #pairApprove banner if a request is pending, else Settings -> Devices -> pairing
+  // code) instead of duplicating it inside this wizard.
+  var simplePairLink = $("devSimplePairLink");
+  if(simplePairLink) simplePairLink.addEventListener("click", function(){
+    var pa = document.getElementById("pairApprove");
+    if(pa && !pa.hidden){ pa.scrollIntoView({ block: "center" }); return; }
+    var gearBtn = document.getElementById("gearTopBtn") || document.getElementById("gearNavBtn");
+    if(gearBtn) gearBtn.click();
+    setTimeout(function(){
+      var pairTile = document.getElementById("pairing");
+      if(pairTile) pairTile.scrollIntoView({ block: "start" });
+    }, 60);
+  });
+
+  var advToggleBtn = $("devAdvancedToggle"), advWrapBox = $("devAdvancedWrap");
+  if(advToggleBtn && advWrapBox) advToggleBtn.addEventListener("click", function(){
+    var show = advWrapBox.hidden;
+    advWrapBox.hidden = !show;
+    advToggleBtn.setAttribute("aria-expanded", show ? "true" : "false");
+    advToggleBtn.textContent = show ? "Hide the full device list" : "Advanced: browse the full device list";
+    if(show) setDsub(dsubCur);
+  });
 })();
 </script>
 <script>
@@ -10552,12 +11355,67 @@ try {
     }
     return row;
   }
+  // system-toggles (32b412f): shared wiring for the two System-tab master switches
+  // (egress / network_sensing) behind #egressMasterBtn / #sensingMasterBtn. POST
+  // /api/system/toggles/{name} is loopback-root only (require_local CSRF +
+  // require_root — same M1 tier as the ARP-block/nodes-admin primitives; a paired
+  // 'central' peer 403s). MODE==="live" IS that loopback-root browser session
+  // (isLoopbackHost gate, see MODE's own definition above) and statusInfo is only
+  // ever populated in live mode (renderStatus() is live-only) — so gating the
+  // actuating button on "feats loaded" already means "loopback operator only": a
+  // paired peer or the demo viewer never gets feats, so it keeps seeing the
+  // pre-existing honest read-only receipt below instead of a disabled/dead button.
+  var _sysToggleBusy = {};
+  function wireSysToggleMaster(btn, fb, name, on, labelOn, labelOff, tipOn, tipOff){
+    if(!btn) return;
+    btn.hidden = false;
+    btn.textContent = on ? labelOn : labelOff;
+    btn.className = "ctl switch small " + (on ? "on" : "off");
+    btn.setAttribute("role", "switch");
+    btn.setAttribute("aria-checked", on ? "true" : "false");
+    btn.setAttribute("aria-label", (on ? labelOn : labelOff) + ": " + (on ? "on" : "off"));
+    btn.setAttribute("data-tip", on ? tipOn : tipOff);
+    btn.disabled = !!_sysToggleBusy[name];
+    btn.onclick = async function(){
+      if(_sysToggleBusy[name]) return;
+      _sysToggleBusy[name] = true;
+      btn.disabled = true;
+      try{
+        var r = await fetch(location.origin + "/api/system/toggles/" + name, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+          body: JSON.stringify({ enabled: !on })
+        });
+        if(r && r.ok){
+          if(fb) actionFeedback(fb, true, "", "✓ " + (!on ? "on" : "off"));
+          refreshStatus?.();   // same passive-poll hook the System panel uses — repaints immediately
+        } else {
+          if(fb) actionFeedback(fb, false, "Couldn't change — this control needs local admin access");
+        }
+      } catch(e){
+        if(fb) actionFeedback(fb, false, "Couldn't change — this control needs local admin access");
+      } finally {
+        _sysToggleBusy[name] = false;
+        btn.disabled = false;
+      }
+    };
+  }
   function renderEgress(){
     var list = $("egressList"), sum = $("egressSummary"), note = $("egressNote");
     var demoNote = $("egressDemoNote");
     if(!list || !sum) return;
     var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
       ? statusInfo.features : null;
+    var egMasterBtn = $("egressMasterBtn"), egMasterFb = $("egressMasterFb");
+    if(feats && typeof feats.egress_allowed === "boolean"){
+      wireSysToggleMaster(egMasterBtn, egMasterFb, "egress", feats.egress_allowed,
+        "Egress: allowed", "Egress: blocked",
+        "Master switch — blocks every egress path below at once, even if a feature is individually enabled. Tap to block.",
+        "Blocked by the operator — every egress path below is refused, even if individually enabled. Tap to allow again.");
+    } else if(egMasterBtn){
+      egMasterBtn.hidden = true;
+      egMasterBtn.onclick = null;
+    }
     list.textContent = "";
     var open = 0;
     // P4 fix 1: the reassuring Cameras line ("process in memory, never record, never
@@ -10718,6 +11576,24 @@ try {
     if(!list) return;
     var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
       ? statusInfo.features : null;
+    var snMasterBtn = $("sensingMasterBtn"), snMasterFb = $("sensingMasterFb");
+    // Privacy tab (gearSecPrivacy): a second instance of the SAME network_sensing master
+    // toggle, surfaced where the real controls now live — same wireSysToggleMaster() call,
+    // same fail-hidden gate, just a different pair of DOM nodes.
+    var privSnBtn = $("privSensingBtn"), privSnFb = $("privSensingFb");
+    if(feats && typeof feats.sensing_allowed === "boolean"){
+      wireSysToggleMaster(snMasterBtn, snMasterFb, "network_sensing", feats.sensing_allowed,
+        "Sensing: allowed", "Sensing: paused",
+        "Master switch — pauses the optional collectors below at once (the base LAN presence scan is unaffected). Tap to pause.",
+        "Paused by the operator — the collectors below are held off, even if individually enabled. Tap to resume.");
+      wireSysToggleMaster(privSnBtn, privSnFb, "network_sensing", feats.sensing_allowed,
+        "Sensing: allowed", "Sensing: paused",
+        "Master switch — pauses the optional network-sensing collectors (mDNS/SSDP/NetBIOS/SNMP/DHCP-fp) at once. Tap to pause.",
+        "Paused by the operator — the optional collectors are held off, even if individually enabled. Tap to resume.");
+    } else {
+      if(snMasterBtn){ snMasterBtn.hidden = true; snMasterBtn.onclick = null; }
+      if(privSnBtn){ privSnBtn.hidden = true; privSnBtn.onclick = null; }
+    }
     // Fix #9/#17: GET /api/status's additive "availability" key -- tri-state per
     // privileged-bind collector (dhcp_fp/rogue_dhcp are netinventory collectors, not
     // SourceManager sources, so they carry no {enabled,active} pair of their own).
@@ -10767,7 +11643,10 @@ try {
     // P6 fix 1: egKill (the affordance inside "What can leave this home") joins the two
     // static kill buttons — in live it is the SAME master switch; in demo it stays visible
     // as a labeled example (egKillDemoState) while the central-panel buttons hide.
-    var btns = [$("camKillBtn"), $("gearKillBtn"), egKill];
+    // dashboard-topbar: #coreKillBtn (the Core Panel ambient-face pill) joins the fan-out
+    // too — no separate state paragraph for it (it's a compact pill, not a tile row), so it
+    // only appears in btns, never in states.
+    var btns = [$("camKillBtn"), $("gearKillBtn"), egKill, $("coreKillBtn")];
     var states = [$("camKillState"), $("gearKillState"), egKillState];
     // Saliency fix (07 screen): state-reflecting left accent bar on the master-control tile
     // itself (see .cam-privacy.cp-live in the CSS) — accent only while cameras are live.
@@ -10843,7 +11722,7 @@ try {
     killBusy = false;
     renderKill(); renderEgress(); renderTier();
   }
-  [$("camKillBtn"), $("gearKillBtn"), egKill].forEach(function(b){
+  [$("camKillBtn"), $("gearKillBtn"), egKill, $("coreKillBtn")].forEach(function(b){
     if(b) b.addEventListener("click", killToggle);
   });
 
@@ -11027,6 +11906,26 @@ try {
     watchBusy = false; paintWatch();
   }
   (function(){ var b = $("watchToggle"); if(b) b.addEventListener("click", watchToggle); })();
+  // dashboard-topbar: #coreWatchPill (Core Panel ambient-face quick control) mirrors
+  // #watchToggle's rendered text/class 1:1 (same MutationObserver technique the topbar's
+  // #pillInternet/#pillRede badges already use elsewhere) and forwards its click to the
+  // SAME watchToggle() above, so the two controls can never drift out of sync.
+  (function(){
+    var srcBtn = $("watchToggle"), mirror = $("coreWatchPill");
+    if(!srcBtn || !mirror) return;
+    function mirrorWatch(){
+      mirror.hidden = false;
+      mirror.disabled = srcBtn.disabled;
+      mirror.className = "ctl switch core-pill" + (srcBtn.classList.contains("on") ? " on" : " off");
+      mirror.textContent = srcBtn.textContent;
+      mirror.setAttribute("role", "switch");
+      mirror.setAttribute("aria-checked", srcBtn.getAttribute("aria-checked") || "false");
+    }
+    new MutationObserver(mirrorWatch).observe(srcBtn,
+      { attributes: true, attributeFilter: ["class", "aria-checked", "disabled"], childList: true, characterData: true, subtree: true });
+    mirror.addEventListener("click", function(ev){ ev.stopPropagation(); watchToggle(); });
+    mirrorWatch();
+  })();
 
   // =====================================================================
   // P1 §7#4 — History filters: room + kind, purely over the rows the
@@ -11704,6 +12603,112 @@ try {
   })();
 
   // =====================================================================
+  // network-doctor (Deep network diagnosis): GET /api/health/doctor reuses
+  // already-polled gateway/dhcp/source/camera/mdns/inventory state for every
+  // check EXCEPT the dns leg, which — same as /api/health — freshly pings 3
+  // public DNS resolvers whenever egress is allowed on this hub, and is
+  // SKIPPED (gateway/LAN-only) the moment the operator blocks egress. Any
+  // auto-fix only cycles an ALREADY-enabled source, re-announces THIS hub's
+  // own mDNS record, or re-scans the LAN — see net_doctor.py's SAFE-AUTO
+  // allowlist. No two-step confirm here (unlike the Health check above):
+  // egress on/off is the operator's own standing choice on this hub, not a
+  // per-click decision — the doctor just respects whatever that switch
+  // already says, same immediate-action precedent as the kill-switch/
+  // System-power controls otherwise. Visibility mirrors renderHealthTile
+  // (live mode only), painted off the same statusInfo poll (zero new calls
+  // until the button is actually clicked).
+  // =====================================================================
+  function renderDoctorTile(){
+    var tile = $("doctorCheck");
+    if(!tile) return;
+    tile.hidden = (M !== "live");
+  }
+  function doctorLbl(id){
+    return String(id == null ? "" : id).replace(/_/g, " ").replace(/:/g, ": ");
+  }
+  function renderDoctorResult(d){
+    var box = $("doctorResult");
+    if(!box) return;
+    box.hidden = false;
+    box.textContent = "";
+    var checks = Array.isArray(d.checks) ? d.checks : [];
+    var fixed = Array.isArray(d.auto_fixed) ? d.auto_fixed : [];
+    var suggestions = Array.isArray(d.suggestions) ? d.suggestions : [];
+    box.appendChild(elc("p", "panel-note pres-n",
+      checks.length + " check(s) · " + fixed.length + " auto-fixed · " + suggestions.length + " suggestion(s)"));
+    var list = elc("div", "diag-list");
+    checks.forEach(function(c){
+      var cls = (c && c.ok === true) ? "ok"
+        : (c && c.ok === false) ? (HEALTH_SEV_CLASS[c.severity] || "danger")
+        : null;   // ok===null — honest "not applicable" (monitor off), never fabricated good/bad
+      list.appendChild(diagRow(doctorLbl(c && c.id), (c && c.detail) || "—", cls));
+    });
+    box.appendChild(list);
+    if(fixed.length){
+      // "safe/local only" per net_doctor's SAFE-AUTO allowlist — never the router or other devices.
+      box.appendChild(elc("p", "panel-note", "Auto-fixed just now — safe, local-only:"));
+      var fl = elc("div", "diag-list");
+      var now = Date.now();
+      fixed.forEach(function(a){
+        var age = (a && a.ts) ? fmtAgo(now - Date.parse(a.ts)) : "";
+        fl.appendChild(diagRow(doctorLbl(a && a.kind) + ": " + ((a && a.target) || "—"),
+          ((a && a.detail) || "") + (age ? " · " + age : ""), "ok"));
+      });
+      box.appendChild(fl);
+    }
+    if(suggestions.length){
+      box.appendChild(elc("p", "panel-note", "Suggested — needs you:"));
+      var sl = elc("div", "diag-list");
+      suggestions.forEach(function(s){
+        sl.appendChild(diagRow(doctorLbl(s && s.id),
+          ((s && s.message) || "") + ((s && s.action_hint) ? " (" + s.action_hint + ")" : ""), "warn"));
+      });
+      box.appendChild(sl);
+    }
+    box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()
+      + " — point-in-time snapshot, never refreshes on its own"));
+  }
+  (function(){
+    var btn = $("doctorBtn"), out = $("doctorOut"), checking = $("doctorChecking");
+    if(!btn) return;
+    var inflight = false;   // spam guard alongside btn.disabled (belt + suspenders)
+    var DEFAULT_OUT = out ? out.textContent : "";
+    btn.onclick = function(){
+      if(inflight) return;
+      inflight = true;
+      btn.disabled = true;
+      if(checking) checking.hidden = false;
+      // Single GET per click. auto_fix=true is this call's half of the two-factor auto-fix
+      // gate (net_doctor.apply_fixes) -- the hub's own WAVR_NET_DOCTOR_AUTOFIX setting is the
+      // other half. When the hub has it off, the route still runs (diagnose-only) and every
+      // fixable item comes back as a suggestion instead -- exactly as renderDoctorResult shows it,
+      // never assumed as fixed.
+      fetch(location.origin + "/api/health/doctor?auto_fix=true",
+            { headers: { "X-Wavr-Local": "1" }, cache: "no-store" })
+        .then(function(r){ if(!r.ok) throw new Error(String(r.status)); return r.json(); })
+        .then(function(d){
+          renderDoctorResult(d || {});
+          if(out){ out.className = "narrate-out muted"; out.textContent = DEFAULT_OUT; }
+        })
+        .catch(function(err){
+          if(out){
+            out.className = "narrate-out muted";
+            out.textContent = (err && err.message === "404")
+              ? "not available on this hub version — restart/update the Wavr hub"
+              : "connection failed — couldn't reach the hub";
+          }
+        })
+        .finally(function(){
+          inflight = false;
+          if(checking) checking.hidden = true;
+          btn.disabled = false;
+          var ae = document.activeElement;
+          if(!ae || ae === document.body) btn.focus();
+        });
+    };
+  })();
+
+  // =====================================================================
   // P1 §7#14 — PWA install prompt (gear → Sobre): browser event capture
   // only, zero network. Gracefully absent where unsupported/ineligible.
   // =====================================================================
@@ -11777,6 +12782,7 @@ try {
     renderEgress();
     renderSensing();     // A2.1 — same payload, zero new fetches
     renderHealthTile();  // A2.3 — only (re)paints visibility/copy; never fetches
+    renderDoctorTile();  // network-doctor — only (re)paints visibility; never fetches
     renderHealthStatusLine();   // System regroup — same passive poll, zero new fetches
     renderWatch();       // Watch/Vigia — reflect + poll the live suppression state
     var sv = $("sobreVersion");
@@ -11797,6 +12803,7 @@ try {
   renderEgress();
   renderSensing();     // A2.1 — paints the honest "no hub connected" state in demo/companion
   renderHealthTile();  // A2.3 — hidden outside live; never fetches on its own
+  renderDoctorTile();  // network-doctor — hidden outside live; never fetches on its own
   renderKill();
   renderTier();        // global Sensing-level meter — illustrative in demo, live in live
   renderWatch();       // Watch/Vigia overlay — illustrative in demo, live in live
@@ -12124,16 +13131,16 @@ try {
 //     (updateHouse() populates it earlier in the same handle() call, before
 //     __wavrRS fires), the same documented "readable from later script
 //     blocks" pattern already used for MODE elsewhere in this file.
-//   - "Rede" (network) health: chains onto window.__wavrStatus, fed by the
-//     SAME /api/status poll renderStatus()/renderControls() already run
-//     every 3s in live mode. Deliberately NOT /api/health: that endpoint is a
-//     USER-TRIGGERED, confirm-gated egress check (see the "LOAD-BEARING"
-//     comment near healthBtn elsewhere in this file). Auto-polling it here
-//     would silently re-trigger a disclosed-only public-DNS ping on every
-//     idle cycle, which would violate that invariant. /api/status's existing
-//     internet-monitor field is the honest, already-flowing substitute.
-//   - "Core" (backend/stream) health: chains onto window.setReconnecting,
-//     which handle() already calls on every WS open/close.
+//   - "Internet" (renamed from "Rede"/"Net", dashboard-topbar) health: chains onto
+//     window.__wavrStatus, fed by the SAME /api/status poll renderStatus()/
+//     renderControls() already run every 3s in live mode. Deliberately NOT
+//     /api/health: that endpoint is a USER-TRIGGERED, confirm-gated egress check
+//     (see the "LOAD-BEARING" comment near healthBtn elsewhere in this file).
+//     Auto-polling it here would silently re-trigger a disclosed-only public-DNS
+//     ping on every idle cycle, which would violate that invariant. /api/status's
+//     existing internet-monitor field is the honest, already-flowing substitute.
+//   - "Hub" (renamed from "Core", backend/stream) health: chains onto
+//     window.setReconnecting, which handle() already calls on every WS open/close.
 //   - Alert count: observes the EXISTING #alertList DOM (rebuilt every 15s by
 //     renderNetwork()'s own poll) via MutationObserver, the same zero-new-
 //     fetch technique the header's #pillRede badge already uses above.
@@ -12466,19 +13473,23 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     }catch(e){}
   };
 
-  // ---------------- Core / Rede health (top-right) ----------------
+  // ---------------- Hub / Internet health (top-right) ----------------
+  // dashboard-topbar: renamed from the unlabeled "Core"/"Net" — Hub = this screen's own
+  // link to the Wavr hub (the live WS); Internet = the separate cloud-reachability monitor.
+  // Kept as two clearly distinct words on purpose: conflating them used to read as "no
+  // internet = no local presence", which is false (see the explainer popover below).
   var coreHealthCoreEl = document.getElementById("coreHealthCore");
   var coreHealthNetEl  = document.getElementById("coreHealthNet");
-  var wsDownCore = false;        // Core: the live WS to the backend is down/reconnecting
-  var internetOkCore = null;     // Rede: null = unknown (monitor off, or no /api/status yet)
+  var wsDownCore = false;        // Hub: the live WS to the backend is down/reconnecting
+  var internetOkCore = null;     // Internet: null = unknown (monitor off, or no /api/status yet)
 
   function renderCoreHealth(){
     if(coreHealthCoreEl){
-      coreHealthCoreEl.textContent = "Core " + (wsDownCore ? "⚠" : "✓");
+      coreHealthCoreEl.textContent = "Hub " + (wsDownCore ? "⚠" : "✓");
       coreHealthCoreEl.className = "core-health-item" + (wsDownCore ? " core-health-warn" : "");
     }
     if(coreHealthNetEl){
-      var label = internetOkCore === true ? "Net ✓" : internetOkCore === false ? "Net ⚠" : "Net …";
+      var label = internetOkCore === true ? "Internet ✓" : internetOkCore === false ? "Internet ⚠" : "Internet …";
       coreHealthNetEl.textContent = label;
       coreHealthNetEl.className = "core-health-item" + (internetOkCore === false ? " core-health-warn" : "");
     }
@@ -12494,12 +13505,63 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     };
   }
 
+  // ---------------- Hub/Internet 2-line explainer popover (tap either pill) ----------------
+  var infoPopEl      = document.getElementById("coreInfoPop");
+  var infoPopTitleEl = document.getElementById("coreInfoPopTitle");
+  var infoPopBodyEl  = document.getElementById("coreInfoPopBody");
+  var infoPopCloseEl = document.getElementById("coreInfoPopClose");
+  var CORE_INFO = {
+    hub: { title: "Hub", body: "This screen's link to your Wavr hub. A warning here just means the ambient face is reconnecting — sensing keeps running on the hub either way." },
+    net: { title: "Internet", body: "Only affects cloud features, like sending a summary to an AI. It never affects local presence — that always runs on this hub, online or not." }
+  };
+  function closeInfoPop(){
+    if(infoPopEl) infoPopEl.hidden = true;
+    [coreHealthCoreEl, coreHealthNetEl].forEach(function(b){ if(b) b.setAttribute("aria-expanded", "false"); });
+  }
+  function openInfoPop(key, anchorBtn){
+    if(!infoPopEl || !infoPopTitleEl || !infoPopBodyEl) return;
+    var info = CORE_INFO[key];
+    if(!info) return;
+    infoPopTitleEl.textContent = info.title;
+    infoPopBodyEl.textContent = info.body;
+    infoPopEl.hidden = false;
+    [coreHealthCoreEl, coreHealthNetEl].forEach(function(b){ if(b) b.setAttribute("aria-expanded", String(b === anchorBtn)); });
+  }
+  if(coreHealthCoreEl) coreHealthCoreEl.addEventListener("click", function(ev){
+    ev.stopPropagation();
+    if(infoPopEl && !infoPopEl.hidden && coreHealthCoreEl.getAttribute("aria-expanded") === "true") closeInfoPop();
+    else openInfoPop("hub", coreHealthCoreEl);
+  });
+  if(coreHealthNetEl) coreHealthNetEl.addEventListener("click", function(ev){
+    ev.stopPropagation();
+    if(infoPopEl && !infoPopEl.hidden && coreHealthNetEl.getAttribute("aria-expanded") === "true") closeInfoPop();
+    else openInfoPop("net", coreHealthNetEl);
+  });
+  if(infoPopCloseEl) infoPopCloseEl.addEventListener("click", function(ev){ ev.stopPropagation(); closeInfoPop(); });
+
+  // ---------------- Bluetooth/BLE quick-control pill (READ-ONLY; no backend toggle exists
+  // for it here) — sourced from the SAME /api/status payload as the Internet pill above,
+  // via its .sources array ({name,active}, per GET /api/status in app.py). Honestly hidden
+  // (not a fake "off") when the backend never registered a "ble" source at all. ----------
+  var bleEl    = document.getElementById("coreBlePill");
+  var bleTxtEl = document.getElementById("coreBleTxt");
+  function renderBle(active){
+    if(!bleEl) return;
+    bleEl.hidden = false;
+    bleEl.classList.toggle("on", !!active);
+    if(bleTxtEl) bleTxtEl.textContent = "Bluetooth " + (active ? "on" : "off");
+  }
+
   var _statusCore = window.__wavrStatus;
   window.__wavrStatus = function(s){
     try{ if(_statusCore) _statusCore(s); }catch(e){}
     try{
       var inet = (s && s.internet && typeof s.internet === "object") ? s.internet : {};
       internetOkCore = inet.ok === true ? true : inet.ok === false ? false : null;
+      var srcs = (s && Array.isArray(s.sources)) ? s.sources : [];
+      var ble = null;
+      for(var i = 0; i < srcs.length; i++){ if(srcs[i] && srcs[i].name === "ble"){ ble = srcs[i]; break; } }
+      if(ble) renderBle(!!ble.active); else if(bleEl) bleEl.hidden = true;
       renderCoreHealth();
     }catch(e){}
   };
@@ -12619,19 +13681,20 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
   // life while Wavr talks — see [[project-wavr-voice-agent]]. Safe no-op until voice ships.
   window.__wavrWaveSpeak = function(level){ if(wave && wave.setSpeaking) wave.setSpeaking(level); };
 
+  // dashboard-topbar: the quick-controls cluster (kill-switch/Watch/Bluetooth pills) —
+  // referenced by wake() below so tapping any of them acts immediately instead of being
+  // swallowed into the lock/reveal gate.
+  var quickEl = document.getElementById("coreQuick");
+
   // ---------------- Alert glance-box: tap the count -> explain each alert -> deep-link to it ----
   var alertsPopEl   = document.getElementById("coreAlertsPop");
   var alertsPopList = document.getElementById("coreAlertsPopList");
   var alertsPopTtl  = document.getElementById("coreAlertsPopTitle");
   var alertsPopX    = document.getElementById("coreAlertsPopClose");
   var pendingAlertNav = null;   // an alert key to deep-link to right after the dashboard reveals
-  var ALERT_EXPLAIN = {
-    gateway_identity: "Your router answered from a different hardware address. Usually a reboot or a swapped router — but it can also mean someone is impersonating your gateway.",
-    rogue_dhcp: "Another device is handing out network addresses like a router. Usually a second router or a misconfiguration; occasionally an attack.",
-    rogue_device: "A device we haven't seen on this network before just showed up.",
-    fall_suspected: "Someone may have been lying down outside a bed or rest area for a while. This is a research demonstration, not a certified medical or fall-detection device (ADR-0003) -- treat it as a prompt to check in, never a diagnosis.",
-    intrusion: "Watch (Vigia) counted more people in a room, or in the house overall, than it knows are home. It never reveals who or exactly where in the room -- only that someone unaccounted-for is present."
-  };
+  // ALERT_EXPLAIN + buildAlertItem() are defined once, mode-agnostically, near renderNetwork()
+  // above (they also drive the Network tab's own #netAlertsPop) -- reused here rather than
+  // duplicated, so the two panels can never drift out of sync on what an alert kind means.
   function closeAlertsPop(){ if(alertsPopEl) alertsPopEl.hidden = true; }
   function openAlertsPop(){
     if(!alertsPopEl || !alertsPopList) return;
@@ -12640,22 +13703,16 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     if(!rows.length){ closeAlertsPop(); return; }
     if(alertsPopTtl) alertsPopTtl.textContent = rows.length + (rows.length > 1 ? " alerts" : " alert");
     Array.prototype.forEach.call(rows, function(row){
-      var kind = row.dataset.kind || "rogue_device";
-      var key  = row.dataset.alertKey || "";
-      var sev  = (row.className.match(/sev-(\w+)/) || [])[1] || "note";
-      var titleEl = row.querySelector(".at");
-      var item = document.createElement("button");
-      item.type = "button"; item.className = "core-alert-item sev-" + sev;
-      var dot = document.createElement("span"); dot.className = "core-alert-dot"; item.appendChild(dot);
-      var txt = document.createElement("span"); txt.className = "core-alert-txt";
-      var t = document.createElement("span"); t.className = "core-alert-title";
-      t.textContent = titleEl ? titleEl.textContent : "Alert";   // textContent — untrusted network data
-      var w = document.createElement("span"); w.className = "core-alert-why";
-      w.textContent = ALERT_EXPLAIN[kind] || "A network alert.";
-      txt.appendChild(t); txt.appendChild(w); item.appendChild(txt);
-      var go = document.createElement("span"); go.className = "core-alert-go"; go.textContent = "›"; item.appendChild(go);
-      item.addEventListener("click", function(){ navAlert(key); });
-      alertsPopList.appendChild(item);
+      alertsPopList.appendChild(buildAlertItem(row, {
+        onOpen: function(r){ navAlert(r.dataset.alertKey || ""); },
+        onDismissed: function(){
+          if(!alertsPopList.children.length){ closeAlertsPop(); return; }
+          if(alertsPopTtl){
+            var remaining = alertsPopList.children.length;
+            alertsPopTtl.textContent = remaining + (remaining > 1 ? " alerts" : " alert");
+          }
+        }
+      }));
     });
     alertsPopEl.hidden = false;
   }
@@ -12938,6 +13995,22 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     }
     // Tapping the alert count opens the glance-box (its click handler) — never dissolves.
     if(e && alertsEl && (e.target === alertsEl || alertsEl.contains(e.target))){ armIdle(); return; }
+    // dashboard-topbar: Hub/Internet explainer popover open — a tap inside it is handled by
+    // its own close button; a tap outside just closes it (same shape as the alert glance-box).
+    if(infoPopEl && !infoPopEl.hidden){
+      if(e && infoPopEl.contains(e.target)) return;
+      closeInfoPop(); armIdle(); return;
+    }
+    // dashboard-topbar: tapping the Hub/Internet pills or the quick-controls cluster (privacy
+    // kill-switch, Watch mirror, Bluetooth status) acts immediately — it never dissolves the
+    // ambient face or opens the lock, same "privacy actions stay low-friction" reasoning as
+    // the camera trust receipt elsewhere; none of them reveal anything the ambient face
+    // doesn't already show.
+    if(e && e.target && (
+      (coreHealthCoreEl && coreHealthCoreEl.contains(e.target)) ||
+      (coreHealthNetEl && coreHealthNetEl.contains(e.target)) ||
+      (quickEl && quickEl.contains(e.target))
+    )){ armIdle(); return; }
     if(lockPadOpen()){ armIdle(); return; }          // pad/biometric prompt has its own handlers
     if(authenticated){ revealDashboard(); return; }
     if(gatingInProgress) return;
