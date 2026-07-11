@@ -668,3 +668,98 @@ def test_refuse_publishes_decayed_state():
         assert last["occupied"] is False                   # honestly unoccupied
 
     asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# Sensor nodes (design 2026-07-11) wiring: default-OFF, requires multidevice,
+# in-subnet-exempt data plane, loopback-root-only admin plane. Exercises the REAL
+# app.py wiring (create_app), not the minimal harness in test_api_nodes.py.
+# ---------------------------------------------------------------------------
+
+def _nodes_app(tmp_path, monkeypatch, multidevice="1", nodes="1"):
+    if multidevice is None:
+        monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
+    else:
+        monkeypatch.setenv("WAVR_MULTIDEVICE", multidevice)
+    if nodes is None:
+        monkeypatch.delenv("WAVR_NODES_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("WAVR_NODES_ENABLED", nodes)
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "nodes-app.db"))
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    return create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+
+
+def test_nodes_enabled_requires_multidevice(tmp_path, monkeypatch):
+    # Prerequisite validation (mirrors peers_enabled's fail-fast in test_peers.py):
+    # a node is a LAN device that needs multidevice's LAN bind + local TLS.
+    monkeypatch.setenv("WAVR_NODES_ENABLED", "1")
+    monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "x-nodes.db"))
+    with pytest.raises(RuntimeError, match="requires WAVR_MULTIDEVICE"):
+        create_app(sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+                   storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+
+
+def test_nodes_routes_absent_by_default():
+    # Default-OFF: with WAVR_NODES_ENABLED unset (conftest's autouse fixture clears
+    # it for every test), the node routers are never mounted -- GET/POST /api/nodes*
+    # must 404, byte-identical to today (before nodes existed at all), never some
+    # auth-branch response (403/401).
+    with build_client() as client:
+        assert client.get("/api/nodes").status_code == 404
+        assert client.post("/api/nodes/enroll", json={"code": "x"}).status_code == 404
+        assert client.post("/api/nodes/telemetry", json={"seq": 1}).status_code == 404
+        assert client.post("/api/nodes/heartbeat").status_code == 404
+        assert client.post("/api/nodes/reactivate", json={"press_count": 1}).status_code == 404
+
+
+def test_nodes_routes_absent_when_flag_off_but_multidevice_on(tmp_path, monkeypatch):
+    # Multidevice ON, nodes explicitly OFF -> still not mounted -> 404 (mirrors
+    # test_peer_routes_absent_when_flag_off in test_peers.py).
+    app = _nodes_app(tmp_path, monkeypatch, nodes="0")
+    with TestClient(app) as client:
+        assert client.get("/api/nodes", headers=LOCAL).status_code == 404
+
+
+def test_node_admin_route_reachable_by_real_authed_root_only(tmp_path, monkeypatch):
+    # Exercises the REAL app.py wiring (require_local + require_root), not the
+    # test's own stand-in dependency -- proves admin_deps was actually threaded
+    # through (the router fails CLOSED, 403-ing everything, if app.py forgot it --
+    # see api_nodes._admin_deps_not_wired).
+    app = _nodes_app(tmp_path, monkeypatch)
+    root = TestClient(app)
+    # Root WITHOUT the CSRF header still cannot reach it (require_local's rule).
+    assert root.get("/api/nodes").status_code == 403
+    # Root WITH the CSRF header: a real authed-root reaches the admin route.
+    ok = root.get("/api/nodes", headers=LOCAL)
+    assert ok.status_code == 200 and ok.json() == {"nodes": []}
+
+    # A non-root caller (unauthenticated, forged in-subnet LAN peer) cannot reach it
+    # at all -- denied by the loopback_or_authed middleware before require_root/
+    # require_local even run.
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    assert peer.get("/api/nodes", headers=LOCAL).status_code == 403
+
+
+def test_node_data_plane_reachable_in_subnet_without_device_token(tmp_path, monkeypatch):
+    # The data-plane exemption (middleware) + in-handler node-token self-auth: an
+    # in-subnet LAN caller with NO DeviceStore token can reach /api/nodes/enroll
+    # (same deliberately-unauthenticated onboarding surface as /api/pair), and a
+    # subsequent telemetry call authenticates on the NODE bearer token alone.
+    app = _nodes_app(tmp_path, monkeypatch)
+    root = TestClient(app)
+    code = root.post("/api/nodes/enroll-code", headers=LOCAL, json={
+        "name": "n", "sensor_type": "ld2450", "room": "kitchen"}).json()["code"]
+
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    r = peer.post("/api/nodes/enroll", json={"code": code})
+    assert r.status_code == 200
+    token = r.json()["token"]
+    r = peer.post("/api/nodes/telemetry", headers={"Authorization": f"Bearer {token}"},
+                  json={"seq": 1, "presence": True})
+    assert r.status_code == 200 and r.json()["accepted"] is True
+    # The admin plane stays out of reach for this same unauthenticated peer.
+    assert peer.get("/api/nodes", headers=LOCAL).status_code == 403

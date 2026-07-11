@@ -78,6 +78,10 @@ from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_vie
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.peers import PeerStore
 from wavr.api_peers import build_peers_public_router, build_peers_admin_router
+from wavr.nodes import NodeStore, NodeEnroller
+from wavr.api_nodes import (
+    build_nodes_public_router, build_nodes_ingest_router, build_nodes_admin_router,
+)
 from wavr.local_token import resolve_local_token
 from wavr import arp_block
 from wavr.companion_presence import resolve_source_mac, mac_prefix
@@ -286,6 +290,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         raise RuntimeError(
             "WAVR_PEERS_ENABLED requires WAVR_MULTIDEVICE=1 -- peer identity "
             "IS a multidevice central identity")
+    # Sensor nodes (design 2026-07-11): a node is a LAN device that needs multidevice's
+    # LAN bind + local TLS -- same "fail fast rather than silently mount a broken
+    # surface" rule as the peers check above.
+    if cfg.nodes_enabled and not cfg.multidevice:
+        raise RuntimeError(
+            "WAVR_NODES_ENABLED requires WAVR_MULTIDEVICE=1 -- a node is a LAN "
+            "device that needs multidevice's LAN bind + local TLS")
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
     # Wall-clock ageing is applied ONLY to the engine this function builds itself
@@ -524,6 +535,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # the check above guarantees implies multidevice). PeerStore shares cfg.db_path but
     # owns its own `peers` table; closed in the lifespan finally alongside _devices.
     _peer_store = PeerStore(cfg.db_path) if cfg.peers_enabled else None
+    # Sensor nodes (design 2026-07-11): NodeStore shares cfg.db_path but owns its own
+    # `nodes` table (same pattern as PeerStore/DeviceStore); NodeEnroller is ephemeral
+    # in-memory enrollment-code bookkeeping bound to the store. Built ONLY when
+    # WAVR_NODES_ENABLED (which the check above guarantees implies multidevice); closed
+    # in the lifespan finally alongside _peer_store.
+    _node_store = NodeStore(cfg.db_path) if cfg.nodes_enabled else None
+    _node_enroller = NodeEnroller(_node_store) if cfg.nodes_enabled else None
 
     async def _publish(rs, *, persist=True):
         # Shared publish path for both the event-driven ingest and the periodic
@@ -1027,6 +1045,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _peer_store is not None:
                 with suppress(Exception):
                     _peer_store.close()
+            if _node_store is not None:
+                with suppress(Exception):
+                    _node_store.close()
             if _devices is not None:
                 with suppress(Exception):
                     _devices.close()
@@ -1147,7 +1168,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # which network-vended a code, is DELETED, closing C1). /api/peers/link-back is
         # AUTHENTICATED (require_central) so it is NOT exempt here. When peers are disabled
         # these routes simply don't exist (-> 404), so the check is inert unless mounted.
-        if request.url.path in ("/api/pair", "/api/peers/redeem"):
+        # Sensor nodes (design 2026-07-11): the same in-subnet-bounded exemption as
+        # /api/pair / /api/peers/redeem, extended to the four NODE data-plane paths.
+        # Unlike a device/peer, a node never holds a DeviceStore token -- it carries a
+        # NODE bearer token that /api/nodes/enroll issues and the ingest routes
+        # self-verify IN-HANDLER (wavr.api_nodes._auth_node -> NodeStore.get_by_token),
+        # so this middleware only needs to let an in-subnet caller reach the handler,
+        # never to authenticate it. The ADMIN routes (/api/nodes, /api/nodes/enroll-code,
+        # /api/nodes/{id}/disable, DELETE /api/nodes/{id}) are deliberately NOT in this
+        # tuple -- they stay loopback-root-only via admin_deps below.
+        if request.url.path in (
+            "/api/pair", "/api/peers/redeem",
+            "/api/nodes/enroll", "/api/nodes/telemetry",
+            "/api/nodes/heartbeat", "/api/nodes/reactivate",
+        ):
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 request.state.scopes = None
@@ -1281,6 +1315,26 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             self_base_url=f"https://{_local_ip}:{cfg.port}", local_ip=_local_ip,
             admin_deps=[Depends(require_local), Depends(require_root)],
             linkback_deps=[Depends(require_central)]))
+
+    # Sensor nodes (design 2026-07-11). Three routers, three DIFFERENT auth boundaries
+    # (mirrors the peer-pairing split just above):
+    #  * public (enroll): NO deps -- the middleware exempts it in-subnet, same
+    #    deliberately-unauthenticated onboarding surface as /api/pair.
+    #  * ingest (telemetry/heartbeat/reactivate): NO deps here either -- also
+    #    middleware-exempted in-subnet, but every route self-verifies the NODE bearer
+    #    token IN-HANDLER (see wavr.api_nodes._auth_node). `_ingest` is the app's
+    #    existing async fusion callback -- the SAME seam SourceManager feeds, so a node
+    #    frame enters fusion by exactly the path a local source does. The kill-switch
+    #    (node.state != active) is enforced at ingest + in node_event, NOT here.
+    #  * admin (enroll-code/list/disable/revoke): LOOPBACK-ROOT ONLY -- require_local
+    #    (root's X-Wavr-Local CSRF header) + require_root, same as the peers admin
+    #    router. There is deliberately NO enable route anywhere (remote-OFF-never-ON).
+    if cfg.nodes_enabled:
+        app.include_router(build_nodes_public_router(_node_store, _node_enroller))
+        app.include_router(build_nodes_ingest_router(_node_store, _ingest))
+        app.include_router(build_nodes_admin_router(
+            _node_store, _node_enroller,
+            admin_deps=[Depends(require_local), Depends(require_root)]))
 
     # Consent-first identity registry routes. Router-level require_central keeps the
     # person-labelled PII list off a multidevice 'user' (loopback root always passes);
