@@ -3,8 +3,11 @@
 factory built around ConnectorStore so it stays testable.
 
 Routes (all gated in app.py -- router-level central/root, same as the identity +
-device-management routes; the state-changing enable additionally carries
-require_local CSRF):
+device-management routes). The state-changing enable additionally carries
+require_local CSRF, and -- since 2026-07 (M1) -- require_root: this route is the
+EGRESS-CONTROL plane (enable/disable ANY connector, including the assistant-cloud
+kill switch), so a paired central peer, which otherwise holds this router's
+router-level tier, must NOT be able to flip it; only the loopback operator can.
 
   * GET  /api/connectors          -> built-in + generic connectors with live state
   * GET  /api/connectors/catalog  -> the built-in descriptors only ("what CAN plug in")
@@ -48,8 +51,9 @@ def _generic_descriptor(row: dict) -> dict:
 def build_connectors_router(store, catalog_fn, write_deps=None) -> APIRouter:
     """`store` -- ConnectorStore. `catalog_fn` -- () -> list of built-in descriptors
     computed live from cfg + store overlay. `write_deps` -- FastAPI deps applied to
-    the state-changing enable route only (require_local CSRF); the GET reads carry no
-    CSRF (but are still router-level central-gated in app.py)."""
+    the state-changing enable route only (app.py wires require_local CSRF +
+    require_root -- loopback-operator-only, M1); the GET reads carry no CSRF/root
+    requirement (but are still router-level central-gated in app.py)."""
     router = APIRouter()
     wdeps = list(write_deps or [])
 

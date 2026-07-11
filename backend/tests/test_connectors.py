@@ -337,3 +337,41 @@ def test_multidevice_user_is_forbidden(tmp_path, monkeypatch):
                      headers=auth).status_code == 403
     # loopback root passes
     assert central.get("/api/connectors", headers=CSRF).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# M1 (appsec re-audit, 2026-07, HIGH): the egress-CONTROL plane (enable/disable
+# ANY connector) must be loopback-root-only. A paired PEER is minted role=central
+# with the FULL central DEFAULT_SCOPES (incl. "admin"), so it legitimately clears
+# the router-level central+admin gate (unlike the 'user' case above) -- proving
+# THAT gate alone is not enough: without the route-level require_root tightening,
+# a malicious/compromised peer could flip the "assistant-cloud" kill switch (or
+# any other connector) remotely.
+# --------------------------------------------------------------------------- #
+def test_multidevice_central_peer_forbidden_from_enable(tmp_path, monkeypatch):
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "md2.db"))
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house2.json"))
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    s = ConnectorStore(":memory:")
+    s.upsert("gen-x", "generic", "My API")
+    app = create_app(sources=[], storage=Storage(":memory:"), connector_store=s)
+    central_loopback = TestClient(app)
+    code = central_loopback.post("/api/pair-code", json={"role": "central"},
+                                 headers=CSRF).json()["code"]
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    token = peer.post("/api/pair",
+                      json={"code": code, "device_name": "peer"}).json()["token"]
+    auth = {"Authorization": f"Bearer {token}"}
+    # The central peer legitimately clears the router-level central+admin gate --
+    # the READ still works (unchanged by M1).
+    assert peer.get("/api/connectors", headers=auth).status_code == 200
+    # ...but the enable WRITE (egress-control) is refused: loopback-root-only.
+    r = peer.post("/api/connectors/gen-x/enable", json={"enabled": True}, headers=auth)
+    assert r.status_code == 403
+    assert s.is_enabled("gen-x") is False               # nothing was flipped
+    # The loopback operator (true root) still can.
+    r = central_loopback.post("/api/connectors/gen-x/enable", json={"enabled": True},
+                              headers=CSRF)
+    assert r.status_code == 200
+    assert s.is_enabled("gen-x") is True

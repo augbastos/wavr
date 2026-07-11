@@ -6,6 +6,7 @@ import functools
 import hmac
 import ipaddress
 import logging
+import os
 import re
 import sqlite3
 from contextlib import asynccontextmanager, suppress
@@ -1667,23 +1668,38 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                  if r["kind"] == "generic" and r["enabled"] == 1)
         return n
 
-    # Single egress surface: the ONLY UI that enumerates/toggles connectors. Same gates
-    # as the identity + camera routes -- router-level central/root, per-write CSRF.
+    # Single egress surface: the ONLY UI that enumerates/toggles connectors. Router-level
+    # central/root (GET reads). M1 (2026-07, appsec): the enable/disable WRITE is the
+    # egress-CONTROL plane itself -- a paired peer is minted role=central with the full
+    # central DEFAULT_SCOPES (incl. "admin"), so plain require_central+control-scope
+    # would let a malicious/compromised peer flip ANY connector (incl. the
+    # "assistant-cloud" kill switch) remotely. Tightened to LOOPBACK-ROOT ONLY
+    # (require_local CSRF + require_root), the same tier as the peers-admin/nodes-admin/
+    # ARP-block routes -- only the local operator may change what egresses.
     app.include_router(
         build_connectors_router(
             _connectors, _connector_catalog,
-            write_deps=[Depends(require_local), Depends(require_scope("control"))]),
+            write_deps=[Depends(require_local), Depends(require_root)]),
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
-    # Wavr Assistant engine picker + bounded ask (Phase 2B). Same router-level gate
-    # tier as identity/connectors (central + admin scope) -- this screen decides
-    # WHICH model gets to see the house, a bigger blast radius than toggling an
-    # existing feature on/off. The state-changing engine-select and ask additionally
-    # carry require_local CSRF + control scope, mirroring /api/narrate.
+    # Wavr Assistant engine picker + bounded ask (Phase 2B). Router-level gate tier
+    # matches identity/connectors (central + admin scope) for the READ routes (engines
+    # list, ask, log) -- ask additionally carries require_local CSRF + control scope,
+    # mirroring /api/narrate, so an authenticated central peer may still ask a bounded
+    # question. M1 (2026-07, appsec): POST /api/assistant/engine is a SEPARATE,
+    # stricter EGRESS-CONFIG write -- it picks the active engine and, for "manual",
+    # persists a base_url the assistant will call PLUS the *name* of an env var it
+    # will read as a bearer key. Left at require_central+control, a paired/compromised
+    # peer could point the assistant at an attacker host and name a real secret env
+    # var, then use /ask (still peer-reachable) to exfiltrate the resolved secret +
+    # coarse house state. Tightened via `engine_deps` to LOOPBACK-ROOT ONLY
+    # (require_local CSRF + require_root) -- only the local operator may reconfigure
+    # which engine/endpoint the assistant calls.
     app.include_router(
         build_assistant_router(
             cfg, _assistant, _connectors, tool_deps=_assistant_tool_deps,
-            write_deps=[Depends(require_local), Depends(require_scope("control"))]),
+            write_deps=[Depends(require_local), Depends(require_scope("control"))],
+            engine_deps=[Depends(require_local), Depends(require_root)]),
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     @app.get("/api/history")
@@ -2905,4 +2921,95 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     return app
 
 
-app = create_app()
+# F1 (appsec re-audit, 2026-07, MEDIUM-HIGH -- originally audit HIGH: pre-auth
+# resource exhaustion): global request-body-size cap, wrapped around the MODULE-
+# LEVEL `app` singleton below rather than only inside wavr.serve.main(). Every
+# test builds its OWN unwrapped instance via create_app() directly (transport-
+# agnostic, never binds a socket) -- but this singleton is what EVERY real
+# uvicorn entry point imports: wavr.serve's launcher (which sets local TLS) AND
+# the Dockerfile/docker-compose/scripts/wavr.ps1 invocations that run
+# `uvicorn wavr.app:app` DIRECTLY. That direct path bypassed serve.py's wrapper
+# entirely -- serve.py's old docstring claim that it was "the ONE place a
+# listening uvicorn socket actually opens" was false. Wrapping HERE means every
+# entry point carries the cap by construction; wavr.serve.main() no longer wraps
+# a second time (see its own docstring) -- it only re-reads WAVR_MAX_BODY_BYTES
+# at call time and updates this SAME instance's `_max_bytes` in place, so a
+# same-process env override (e.g. in a test) still takes effect without a
+# double-wrapped ASGI chain.
+DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024  # 8 MiB
+
+
+class MaxBodySizeMiddleware:
+    """Pure-ASGI wrapper -- deliberately NOT installed via FastAPI's
+    ``app.add_middleware()`` (Starlette's ``ServerErrorMiddleware`` sits OUTSIDE every
+    ``add_middleware()`` entry; an exception raised from inside our own guard would
+    still propagate through it, which sends its OWN 500 response before re-raising --
+    a double `send()`). Wrapping the ASGI callable directly here instead puts this
+    guard entirely OUTSIDE that stack, so it can hand back one clean response itself.
+
+    Two checks, cheapest first:
+      1. ``Content-Length``: an honest client's declared size is checked BEFORE any
+         body is read -- the common case, zero bytes consumed for an oversized request.
+      2. Streamed drain-and-replay: covers a client that omits ``Content-Length``
+         (chunked transfer) or under-declares it. Reads at most ``max_bytes + 1`` bytes
+         before either rejecting (413, nothing forwarded to the app) or replaying the
+         buffered chunks verbatim to the wrapped app (the same trick
+         ``wavr.mcp_http._buffer_body`` already uses) -- a within-budget request is
+         byte-identical to today; an over-budget one never reaches the app at all, so
+         it can never partially consume memory/CPU parsing it.
+    """
+
+    def __init__(self, asgi_app, max_bytes: int = DEFAULT_MAX_BODY_BYTES) -> None:
+        self._app = asgi_app
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        # Only HTTP requests carry a body this way; websocket/lifespan scopes pass
+        # straight through untouched (e.g. /ws/live streaming is unaffected).
+        if scope.get("type") != "http" or self._max_bytes <= 0:
+            await self._app(scope, receive, send)
+            return
+
+        for name, value in scope.get("headers") or ():
+            if name == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    declared = None  # malformed header -- fall through to the drain guard
+                if declared is not None and declared > self._max_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+                break
+
+        total = 0
+        messages = []
+        while True:
+            message = await receive()
+            messages.append(message)
+            total += len(message.get("body", b"") or b"")
+            if total > self._max_bytes:
+                await self._reject(scope, receive, send)
+                return
+            if message.get("type") != "http.request" or not message.get("more_body", False):
+                break
+
+        it = iter(messages)
+
+        async def _replay():
+            try:
+                return next(it)
+            except StopIteration:
+                return await receive()
+
+        await self._app(scope, _replay, send)
+
+    async def _reject(self, scope, receive, send) -> None:
+        await JSONResponse({"detail": "request body too large"}, status_code=413)(
+            scope, receive, send)
+
+
+def _max_body_bytes_from_env() -> int:
+    return int(os.getenv("WAVR_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES)))
+
+
+app = MaxBodySizeMiddleware(create_app(), max_bytes=_max_body_bytes_from_env())

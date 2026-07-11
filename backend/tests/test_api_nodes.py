@@ -132,6 +132,26 @@ def test_telemetry_malformed_payload_shape_never_500s(tmp_path):
     assert h.events == []
 
 
+def test_telemetry_dict_shaped_arrays_never_500(tmp_path):
+    # M4 (appsec re-audit, 2026-07, MEDIUM): a JSON OBJECT for `ld2450_frames`/
+    # `targets` (instead of an array) used to reach the raw `payload["..."][:64]`
+    # slice -- on this Python, slicing a dict raises KeyError, which was NOT
+    # caught by the (TypeError, ValueError, OverflowError) tuple and 500'd this
+    # handler for any caller holding a valid node token. Must now be
+    # accepted-but-dropped (200, no fusion event), never a 500.
+    h = _Harness(tmp_path)
+    _, token = h.enroll()
+    r = h.client.post("/api/nodes/telemetry", headers=_auth(token),
+                      json={"seq": 1, "ld2450_frames": {"0": "aa"}})
+    assert r.status_code == 200 and r.json()["accepted"] is True
+    assert h.events == []
+    _, token2 = h.enroll(sensor_type="generic", room="hall")
+    r = h.client.post("/api/nodes/telemetry", headers=_auth(token2),
+                      json={"seq": 1, "targets": {"0": {"id": 1, "x": 1.0, "y": 2.0}}})
+    assert r.status_code == 200 and r.json()["accepted"] is True
+    assert h.events == []
+
+
 def test_telemetry_overflow_values_never_500(tmp_path):
     # Appsec finding #2, part 2 (M1): a huge-magnitude JSON int in x/motion/
     # velocity/confidence, or a target `id` that decoded from the non-standard

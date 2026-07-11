@@ -8,14 +8,20 @@ live-read-from-cfg discipline) rather than a snapshot captured at router-build
 time.
 
 Routes (all gated in app.py -- router-level central+admin scope, same tier as
-the identity/peers-admin routers; the state-changing engine-select and ask
-additionally carry require_local CSRF + control scope, mirroring /api/narrate):
+the identity/peers-admin routers):
 
   * GET  /api/assistant/engines          -> the 6-engine catalog + which is selected
   * POST /api/assistant/engine {engine_id, base_url?, model?, key_env_var?}
-        -> select the active engine (manual additionally persists its config)
+        -> select the active engine (manual additionally persists its config).
+        EGRESS-CONFIG plane (M1, 2026-07): gated LOOPBACK-ROOT ONLY in app.py
+        (require_local + require_root) -- a paired central peer holds this router's
+        router-level tier but must NOT be able to repoint the assistant's base_url
+        or name a secret env var for /ask to resolve+leak.
   * POST /api/assistant/ask {question}   -> {answer, trace} -- runs the bounded
         MCP tool loop against the SELECTED engine. Fulfils C1's voice_ask text MVP.
+        Additionally carries require_local CSRF + control scope, mirroring
+        /api/narrate -- reachable by an authenticated central peer (read-shaped,
+        bounded by the engine's own tool scope, unlike the config write above).
   * GET  /api/assistant/log              -> the audit trail (B5)
 """
 from __future__ import annotations
@@ -54,22 +60,35 @@ def _validate_manual_body(base_url: str | None, model: str | None,
             detail="key_env_var must look like an ENV_VAR name (uppercase letters/digits/underscore)")
 
 
-def build_assistant_router(cfg, store, connectors, *, tool_deps, write_deps=None) -> APIRouter:
+def build_assistant_router(cfg, store, connectors, *, tool_deps, write_deps=None,
+                           engine_deps=None) -> APIRouter:
     """`store` -- AssistantEngineStore. `connectors` -- ConnectorStore (only
     `is_enabled("assistant-cloud")` is read here -- the single egress surface's
     cloud-assistant kill switch, seeded/upserted by app.py at wiring time).
     `tool_deps` -- zero-arg callable -> kwargs for `assistant_engine.
     build_tool_runtime` (fusion/house_map/ha_client/network_inventory_fn/
-    alerts_fn/occupancy_provider/house_status_fn)."""
+    alerts_fn/occupancy_provider/house_status_fn).
+
+    `write_deps` gates ONLY /api/assistant/ask (CSRF + control scope, reachable by
+    an authenticated central peer -- same tier as /api/narrate). `engine_deps` gates
+    /api/assistant/engine SEPARATELY and deliberately more strictly (app.py wires it
+    loopback-root-only): this route is the assistant's EGRESS-CONFIG plane -- it picks
+    the active engine and, for 'manual', persists a base_url the assistant will call
+    AND the *name* of an environment variable it will read as a bearer key. A paired
+    peer/central otherwise holds this router's tier (central+admin) via router-level
+    deps, so without a route-level engine_deps tightening it could point the assistant
+    at an attacker host and name a real secret env var for /ask to resolve and leak
+    (M1) -- see app.py's require_root wiring."""
     router = APIRouter()
     wdeps = list(write_deps or [])
+    edeps = list(engine_deps or [])
 
     @router.get("/api/assistant/engines")
     async def list_engines():
         return {"engines": engine_mod.engine_catalog(cfg, store, connectors),
                 "selected": store.selected(cfg.assistant_engine_default)}
 
-    @router.post("/api/assistant/engine", dependencies=wdeps)
+    @router.post("/api/assistant/engine", dependencies=edeps)
     async def select_engine(engine_id: str = Body(..., embed=True),
                             base_url: str | None = Body(None, embed=True),
                             model: str | None = Body(None, embed=True),
