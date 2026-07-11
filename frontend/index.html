@@ -209,6 +209,26 @@
   .bar{height:6px;border-radius:4px;background:var(--elevated-2);overflow:hidden;margin:6px 0 0;}
   .bar>i{display:block;height:100%;background:var(--dim);width:100%;
          transform:scaleX(0);transform-origin:left;transition:transform .3s ease-out,background-color .3s ease-out;}
+  /* Precision ladder (distinct axis from confidence — see PRECISION_RANK above): a 4-segment
+     stepper (Home·Room·People·Positions). Deliberately monochrome (--text/--dim), NEVER
+     --accent — --accent is reserved for live/confident-presence (see colorFor()), and a full
+     ladder must never read as "100% sure". `locked` borrows the same dashed/faint grammar as
+     .radar-room.blind (a coverage gap, not a fault) — no loop, so nothing to gate on
+     REDUCED_MOTION. Hidden whenever precision_level is absent/"none" (older backend or a
+     vacant room) so all three web modes stay byte-identical pre-ladder. */
+  .precision{margin-top:6px;}
+  .precision[hidden]{display:none;}
+  .precision-steps{display:flex;gap:4px;}
+  .precision-steps i{flex:1;height:4px;border-radius:2px;background:var(--elevated-2);
+                      border:1px solid transparent;box-sizing:border-box;
+                      transition:background-color .3s ease-out,border-color .3s ease-out;}
+  .precision-steps i[data-state="done"],.precision-steps i[data-state="active"]{background:var(--text);}
+  .precision-steps i[data-state="locked"]{background:transparent;border:1px dashed var(--dim);opacity:.5;}
+  .precision-label{display:block;font-size:.72rem;margin-top:4px;font-variant-numeric:tabular-nums;}
+  .precision-rung{color:var(--text);font-weight:650;}
+  .precision-detail{color:var(--dim);}
+  .precision-next{display:block;font-size:.68rem;color:var(--dim);margin-top:2px;font-style:italic;}
+  .precision-next[hidden]{display:none;}
   /* confidence ring (§6): inline SVG stroke-dasharray, grey→green via colorFor(), tabular %
      in the center. Draw-in transition fires ONLY when upsert() writes a NEW dashoffset
      (it skips the write when the rounded % is unchanged), never on idle re-renders. */
@@ -1514,6 +1534,7 @@
     #panel-inicio .rooms .ring-pct small[data-conf="Uncertain"]::before{background:transparent;border-color:var(--dim);}
     #panel-inicio .rooms .ring-pct small[data-conf="empty"]::before{background:transparent;border-color:var(--line-strong);}
     #panel-inicio .rooms .card .bar,
+    #panel-inicio .rooms .card .precision,
     #panel-inicio .rooms .card .srcs,
     #panel-inicio .rooms .card .why{display:none;}
     /* Panel: a room card is tappable to reveal its detection-methods breakdown inline (which
@@ -1818,7 +1839,7 @@
   /* ---------------- Reduced motion: jump-cut instead of tween ---------------- */
   @media (prefers-reduced-motion:reduce){
     .bar>i,.ctl,.rm,.radar-target,.radar-zone,.pill,.house,.hero-line1,.radar-room,
-    .nav-item,.viewToggle .ctl,.tpill,.ring .ring-fg,.card,
+    .nav-item,.viewToggle .ctl,.tpill,.ring .ring-fg,.card,.precision-steps i,
     .map-panel-toggle,.map-panel-toggle .mpt-chevron{transition:none;}
     .ctl:active{transform:none;}
     .ctl.switch::after{transition:background .15s ease-out;}
@@ -6977,6 +6998,18 @@ function colorFor(pct){
 const FUSION_WEIGHTS = {camera:1.0, mmwave:0.9, wifi_csi:0.85, ble:0.7, network:0.5, sim:0.6,
                         pir:0.6, node:0.5};
 const FUSION_WEIGHT_DEFAULT = 0.5;
+// ---- Precision ladder (DISTINCT axis from confidence — fusion.py RESOLUTION_SCOPE/_fuse).
+// confidence = how SURE someone is present; precision = how DETAILED an answer the fused
+// evidence can honestly support (house -> room -> count -> position). Mirrors the backend
+// enum client-side once (same pattern as FUSION_WEIGHTS above) — the level/pct/next are
+// computed ONLY server-side and read verbatim here; the frontend never re-derives a rung.
+const PRECISION_RANK = {none:0, house:1, room:2, count:3, position:4};
+const PRECISION_WORD = {none:"—", house:"Home", room:"Room", count:"People", position:"Positions"};
+const PRECISION_NEXT_COPY = {
+  add_room_sensor:           "Add a room sensor (Bluetooth/radar) to locate the room",
+  add_counting_sensor:       "Turn on a camera or radar to count people here",
+  calibrate_camera_position: "Calibrate a camera for exact positions",
+};
 // Every modality seen anywhere in the house — a modality present here but absent from a
 // room's sources[] renders as that room's "no sensor here" (no-coverage) row (§6).
 const SEEN_MODS = new Set();
@@ -9095,6 +9128,13 @@ function upsert(rs){
           <span class="pill"></span>
           <span class="pcount" hidden></span>
           <div class="bar"><i></i></div>
+          <div class="precision" hidden role="img">
+            <div class="precision-steps" aria-hidden="true">
+              <i data-rung="house"></i><i data-rung="room"></i><i data-rung="count"></i><i data-rung="position"></i>
+            </div>
+            <span class="precision-label"><b class="precision-rung"></b><span class="precision-detail"></span></span>
+            <span class="precision-next" hidden></span>
+          </div>
         </div>
       </div>
       <div class="srcs"></div>
@@ -9143,6 +9183,52 @@ function upsert(rs){
   } else {
     pc.textContent = "";
     pc.hidden = true;
+  }
+  // ---- Precision ladder (DISTINCT from confidence — PRECISION_RANK/WORD above). Pure
+  // renderer of rs.precision_* — never re-derives a rung client-side, never claims a
+  // precision the backend didn't emit. An older backend (fields absent) or a vacant room
+  // (backend always emits "none" when !occupied) hides this: the three web modes stay
+  // byte-identical pre-ladder. Gate the whole block on real value change (same discipline
+  // as the confidence ring's strokeDashoffset) so idle WS re-renders don't rewrite the DOM.
+  const prec = c.querySelector(".precision");
+  const rung = rs.precision_level;
+  const precKey = rung + "|" + rs.precision_pct + "|" + rs.precision_next;
+  if(c.dataset.precKey !== precKey){
+    c.dataset.precKey = precKey;
+    if(!rung || rung === "none" || !PRECISION_RANK.hasOwnProperty(rung)){
+      prec.hidden = true;
+    } else {
+      prec.hidden = false;
+      const rank = PRECISION_RANK[rung];
+      prec.querySelectorAll("[data-rung]").forEach(seg => {
+        const segRank = PRECISION_RANK[seg.dataset.rung];
+        seg.dataset.state = segRank < rank ? "done" : segRank === rank ? "active" : "locked";
+      });
+      const n = typeof pcn === "number" ? pcn : null;
+      let label;
+      if(rank === PRECISION_RANK.position){
+        // Top rung: no new dots — this just names the ceiling the map's existing target
+        // dots already reached (isPositioned/isEstimated, same POS_EST_MAX the map uses).
+        const hasExact = (rs.targets || []).some(t => isPositioned(t) && !isEstimated(t));
+        const plural = n !== 1;
+        label = (n != null ? (n === 1 ? "1 person" : n + " people") : "People here") + ", " +
+          (hasExact ? "exact" : "approximate") + " position" + (plural ? "s" : "") + " shown on the map";
+      } else if(rank === PRECISION_RANK.count){
+        label = n != null ? (n === 1 ? "1 person" : n + " people") : "Someone's here";
+      } else if(rank === PRECISION_RANK.room){
+        label = "Someone's here";
+      } else {   // house
+        label = "Someone's probably home";
+      }
+      const rungWordEl = prec.querySelector(".precision-rung");
+      rungWordEl.textContent = PRECISION_WORD[rung];
+      prec.querySelector(".precision-detail").textContent = " · " + label;
+      const nextEl = prec.querySelector(".precision-next");
+      const nextCopy = PRECISION_NEXT_COPY[rs.precision_next] || "";
+      nextEl.textContent = nextCopy;
+      nextEl.hidden = !nextCopy;
+      prec.setAttribute("aria-label", `${PRECISION_WORD[rung]} detail — ${label} in ${rs.room}`);
+    }
   }
   // ---- 3-state sensor-consensus rows (§6). States, driven from RoomState sources[]:
   //   absent  — modality seen in the house but not in THIS room's array: "no sensor here"

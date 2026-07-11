@@ -21,6 +21,15 @@ class RoomState:
     person_count: int | None = None
     explanation: str = ""
     ts: str = ""
+    # PRECISION / RESOLUTION axis -- DISTINCT from `confidence` (how SURE someone is
+    # present vs how DETAILED an answer the present+fresh evidence can honestly
+    # support). Set by FusionEngine after the FUSION-B latch; a RoomState built without
+    # them degrades to the pre-ladder 'none', so every existing construction is
+    # unaffected. NEVER a certainty %: `precision_pct` is an ordinal rung fill
+    # (0/25/50/75/100) derived from `precision_level`, never interpolated.
+    precision_level: str = "none"       # none|house|room|count|position (AUTHORITATIVE enum)
+    precision_pct: int = 0              # ordinal rung for the meter ONLY, from precision_level
+    precision_next: str | None = None   # next-rung capability key; None when topped out
 
     def to_dict(self) -> dict:
         return asdict(self)
