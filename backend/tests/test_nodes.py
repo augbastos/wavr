@@ -306,6 +306,28 @@ def test_node_event_malformed_targets_not_a_list_is_dropped(tmp_path):
     assert node_event(node, {"seq": 1, "targets": 3.5}) is None
 
 
+def test_node_event_dict_shaped_ld2450_frames_dropped_not_500(tmp_path):
+    # M4 (appsec re-audit, 2026-07, MEDIUM): a JSON OBJECT for `ld2450_frames`
+    # (dict) is truthy and used to reach the bare `payload["ld2450_frames"][:64]`
+    # slice -- on this Python, slicing a dict raises KeyError (slice objects are
+    # hashable), which escaped the narrower (TypeError, ValueError, OverflowError)
+    # catch and would 500 the /api/nodes/telemetry route for any node-token
+    # holder. Must now be a clean drop, exactly like the int/bool cases above.
+    node = _active_node()
+    assert node_event(node, {"seq": 1, "ld2450_frames": {"foo": 1}}) is None
+    # A single-key dict is still truthy and still not a list -- same drop.
+    assert node_event(node, {"seq": 1, "ld2450_frames": {"0": "aa"}}) is None
+
+
+def test_node_event_dict_shaped_targets_dropped_not_500(tmp_path):
+    # Same KeyError-on-slice shape error, for the `targets` field of a non-LD2450/
+    # mmwave node (or an ld2450/mmwave node with no `ld2450_frames`, which falls
+    # into the same `else` branch below).
+    node = _active_node(sensor_type="generic", modality="node")
+    assert node_event(node, {"seq": 1, "targets": {"foo": 1}}) is None
+    assert node_event(node, {"seq": 1, "targets": {"0": {"id": 1, "x": 1.0, "y": 2.0}}}) is None
+
+
 def test_node_event_malformed_target_id_is_dropped(tmp_path):
     # A target `id` that can't coerce to int (str garbage or a nested structure)
     # used to raise ValueError/TypeError out of int(t.get("id", ...)).

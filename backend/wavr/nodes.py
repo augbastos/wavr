@@ -484,7 +484,18 @@ def node_event(node: Node, payload: dict, now_iso: str | None = None) -> Sensing
     shape error is now caught and the WHOLE payload is dropped as a clean no-op
     (returns None, same as a non-presence sensor) rather than raised -- consistent
     with the existing per-frame `continue` below, just widened to the rest of the
-    translation."""
+    translation.
+
+    M4 (appsec re-audit, 2026-07, MEDIUM): `ld2450_frames`/`targets` being a JSON
+    OBJECT (a dict, e.g. `{"foo": 1}`) used to escape the guard above -- `dict[:64]`
+    raises KeyError (slice objects are hashable), which was NOT in the
+    (TypeError, ValueError, OverflowError) tuple below, so it propagated straight
+    through this function into the request handler -> HTTP 500 on
+    /api/nodes/telemetry (reachable by any caller holding a valid node token). Both
+    arrays are now `isinstance(list)`-checked BEFORE slicing -- a non-list field
+    (dict, str, int, ...) is treated exactly like any other malformed shape: raise
+    TypeError here so it funnels through the SAME except clause below and the whole
+    payload drops as a clean no-op, never a 500."""
     if node.state != STATE_ACTIVE or not node.modality:
         return None
     ts = now_iso or _utcnow_iso()
@@ -494,18 +505,23 @@ def node_event(node: Node, payload: dict, now_iso: str | None = None) -> Sensing
         # Cap attacker-controlled array lengths before materializing Targets: an LD2450
         # emits <=3 targets/frame, so a node batching thousands of frames or targets is
         # definitionally malformed. Truncating keeps the drop-don't-crash posture while
-        # bounding memory/CPU (an uncapped 50k-target payload measured ~+23MB). A non-list
-        # value still raises TypeError on the slice -> caught below -> dropped.
+        # bounding memory/CPU (an uncapped 50k-target payload measured ~+23MB).
         _MAX_ARRAY = 64
-        if node.sensor_type in ("ld2450", "mmwave") and payload.get("ld2450_frames"):
-            for hexframe in payload["ld2450_frames"][:_MAX_ARRAY]:
+        _frames = payload.get("ld2450_frames")
+        _raw_targets = payload.get("targets") or []
+        if node.sensor_type in ("ld2450", "mmwave") and _frames:
+            if not isinstance(_frames, list):
+                raise TypeError("ld2450_frames must be a JSON array")
+            for hexframe in _frames[:_MAX_ARRAY]:
                 try:
                     raw = bytes.fromhex(hexframe)
                 except (ValueError, TypeError):
                     continue                       # a malformed frame is dropped, not fatal
                 targets.extend(parse_ld2450_frame(raw))
         else:
-            for i, t in enumerate((payload.get("targets") or [])[:_MAX_ARRAY]):
+            if not isinstance(_raw_targets, list):
+                raise TypeError("targets must be a JSON array")
+            for i, t in enumerate(_raw_targets[:_MAX_ARRAY]):
                 if not isinstance(t, dict):
                     continue
                 x, y = t.get("x"), t.get("y")
