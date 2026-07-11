@@ -4446,9 +4446,13 @@ function renderNetwork(){
       // v2: device_type is the backend's fixed taxonomy → English label + confidence-honest cue
       const vendorType = (d.vendor || "unknown") + " · " + dtypeLabel(d.device_type);  // plain-text form (aria)
       // Resolved-identity priority: a user-set name wins; otherwise the device's own
-      // self-announced/PTR-resolved hostname (still a real identity, just not user-confirmed);
-      // only when NEITHER is known does the row fall back to the honest vendor+type guess.
-      const resolvedIdentity = d.name || d.hostname || null;
+      // self-announced/PTR-resolved hostname, CLEANED for display (display_name strips the
+      // router's DHCP search-domain suffix, e.g. ".vodafone.ultrahub", and prettifies
+      // separators server-side -- wavr.data.deviceclass.display_hostname; falls back to the
+      // raw hostname if display_name is ever absent, still a real identity, just not
+      // user-confirmed); only when NONE of the three is known does the row fall back to the
+      // honest vendor+type guess.
+      const resolvedIdentity = d.name || d.display_name || d.hostname || null;
       if(resolvedIdentity){
         main.className = "dev-main named"; main.textContent = resolvedIdentity;   // textContent only — XSS-safe
         const sub = document.createElement("span"); sub.className = "dev-sub";
@@ -9366,8 +9370,10 @@ try {
   function detMetaLine(d){
     var bits = [];
     // Resolved identity (a user-set name, else the device's own self-announced/PTR
-    // hostname) leads the line when known — same priority as the Network tab's rows.
+    // hostname, CLEANED via display_name) leads the line when known — same priority
+    // as the Network tab's rows.
     if(d.name) bits.push(d.name);
+    else if(d.display_name) bits.push(d.display_name);
     else if(d.hostname) bits.push(d.hostname);
     if(d.ip) bits.push(d.ip);
     if(typeof maskMac === "function" && d.mac) bits.push(maskMac(d.mac));
@@ -9471,10 +9477,12 @@ try {
     ic.appendChild(icon(dtypeIcon(d.device_type)));   // v2: taxonomy icon (ic-qmark fallback)
     var tw = elc("div");
     var known = d.vendor && d.vendor !== "unknown";
-    // Resolved identity (name, else the device's own self-announced/PTR hostname) leads the
-    // title when known — same priority as the Network tab's rows; only a truly unresolved
-    // device (no name, no hostname, no vendor) keeps the honest "Unknown device" title.
-    tw.appendChild(elc("div", "cap-title", d.name || d.hostname || (known ? d.vendor : "Unknown device")));
+    // Resolved identity (name, else the device's own self-announced/PTR hostname, CLEANED
+    // via display_name) leads the title when known — same priority as the Network tab's
+    // rows; only a truly unresolved device (no name, no hostname, no vendor) keeps the
+    // honest "Unknown device" title.
+    tw.appendChild(elc("div", "cap-title",
+      d.name || d.display_name || d.hostname || (known ? d.vendor : "Unknown device")));
     var brandU = elc("div", "cap-brand");
     brandU.appendChild(dtypeLabelEl(d.device_type, d.type_confidence, d.known === false));
     tw.appendChild(brandU);

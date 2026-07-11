@@ -209,6 +209,60 @@ def test_inventory_view_exposes_hostname_when_populated():
     assert {"mac", "ip", "vendor", "device_type", "type_confidence", "known"} <= set(view)
 
 
+# ---- display_name: Network-tab label cleanup, additive + non-mutating ----------
+
+def test_display_name_strips_router_search_domain_hostname_stays_raw():
+    # the real example that motivated this: Vodafone Ultrahub appends its own
+    # search domain to every PTR answer -- "display_name" cleans it for the
+    # Network tab, but "hostname" (what hostname_type/recog key off) must stay
+    # the untouched raw PTR answer.
+    d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Xiaomi",
+               device_type="phone", known=True,
+               hostname="Xiaomi-12T-Pto.vodafone.ultrahub")
+    view = _device_view(d)
+    assert view["hostname"] == "Xiaomi-12T-Pto.vodafone.ultrahub"   # raw, unmutated
+    assert view["display_name"] == "Xiaomi 12T Pto"                # cleaned
+
+
+def test_display_name_absent_when_hostname_absent():
+    d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Apple",
+               device_type="unknown", known=True)   # no hostname
+    view = _device_view(d)
+    assert "hostname" not in view
+    assert "display_name" not in view
+
+
+def test_user_set_name_is_never_run_through_the_display_cleanup():
+    # precedence unchanged: a user-set name (device_meta) always wins and is
+    # returned verbatim -- the display cleanup only ever touches the
+    # HOSTNAME-derived label, never the user's own chosen name.
+    d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Xiaomi",
+               device_type="phone", known=True,
+               hostname="Xiaomi-12T-Pto.vodafone.ultrahub")
+    meta = {"name": "kitchen-phone_v2", "first_seen": None, "last_seen": None,
+            "device_type": None}
+    view = _device_view(d, meta=meta)
+    assert view["name"] == "kitchen-phone_v2"          # untouched, not prettified
+    assert view["display_name"] == "Xiaomi 12T Pto"    # hostname cleanup still ran
+
+
+def test_recog_still_classifies_the_raw_suffixed_hostname():
+    # hostname_type/recog MUST keep seeing the full raw hostname (some
+    # patterns key on the full string) -- only the display is cleaned. Feed a
+    # hostname with a router search-domain suffix through the real
+    # apply_recognition pipeline and confirm classification still fires from
+    # the raw string, while display_name shows the cleaned label.
+    from wavr.netinventory import apply_recognition
+    d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Aqara",
+               device_type="unknown", known=True,
+               hostname="aqara-hub.vodafone.ultrahub")
+    d = apply_recognition(d)
+    assert d.device_type == "gateway"                      # hostname_type fired on the raw string
+    assert d.hostname == "aqara-hub.vodafone.ultrahub"      # raw, unmutated
+    view = _device_view(d)
+    assert view["display_name"] == "Aqara Hub"              # cleaned for the Network tab
+
+
 # ---- app-level CSRF gating (mirrors PUT /api/inventory/name) ---------------------
 
 def test_app_put_type_requires_local_header():

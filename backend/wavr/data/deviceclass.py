@@ -71,3 +71,45 @@ def hostname_type(hostname: str | None) -> str | None:
         if pattern.search(low):
             return dtype
     return None
+
+
+# Collapses one-or-more hyphen/underscore separators to a single space --
+# ``display_hostname``'s prettify step.
+_SEP_RUN_RE = re.compile(r"[-_]+")
+
+
+def display_hostname(hostname: str | None) -> str | None:
+    """A human-friendly DISPLAY label derived from a raw hostname, or None.
+    Pure/offline; never mutates/replaces the raw hostname anywhere else --
+    callers project this alongside it (e.g. as a NEW `display_name` view
+    field), never in place of it, because `hostname_type` above (and any
+    other classifier keyed on the full raw string) must keep seeing the
+    original.
+
+    Two-step, explicit and orderable (no ML, no guessing):
+    1. Strip the DHCP/router search-domain suffix a PTR lookup adds -- keep
+       only the first DNS label. A device's own name effectively never
+       contains a dot; the tail is always the router's domain (e.g.
+       "Xiaomi-12T-Pto.vodafone.ultrahub" -> "Xiaomi-12T-Pto").
+    2. Prettify: collapse hyphen/underscore runs to a single space and trim.
+       Each resulting token is Title-cased ONLY when it is a plain word --
+       purely alphabetic AND uniformly cased (all-lower or all-upper). A
+       token that already mixes case (e.g. "Pto", "iPhone") or carries a
+       digit (e.g. "12T", "8Gen1", "C210") is a model/brand token and is
+       left completely untouched -- never lowercased, never split.
+
+    Returns None when there is nothing left to show (empty/whitespace-only
+    input)."""
+    if not isinstance(hostname, str) or not hostname.strip():
+        return None
+    label = hostname.split(".", 1)[0]
+    label = _SEP_RUN_RE.sub(" ", label).strip()
+    if not label:
+        return None
+    tokens = []
+    for tok in label.split(" "):
+        if tok.isalpha() and (tok.islower() or tok.isupper()):
+            tokens.append(tok[:1].upper() + tok[1:].lower())
+        else:
+            tokens.append(tok)   # mixed-case/digit model token -- preserved as-is
+    return " ".join(tokens)

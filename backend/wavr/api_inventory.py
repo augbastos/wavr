@@ -12,7 +12,13 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  fusion: `type_confidence` always; `make`,
                                  `model`, `os`, `hostname`, `open_ports`,
                                  `sources` only when populated. Every
-                                 pre-existing field is unchanged.
+                                 pre-existing field is unchanged. `display_name`
+                                 rides alongside `hostname` (only when
+                                 `hostname` is set): the router's DHCP
+                                 search-domain suffix stripped + separators
+                                 prettified (wavr.data.deviceclass.
+                                 display_hostname) -- what the Network tab
+                                 should render; `hostname` itself stays raw.
   * GET /api/alerts          -- rogue-device alerts (+ `type_confidence` +
                                  `kind: "rogue_device"`), merged chronologically
                                  with `dhcp_monitor`'s rogue/multiple-DHCP-server
@@ -52,6 +58,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException
 
+from wavr.data.deviceclass import display_hostname
 from wavr.device_meta import DeviceMeta, normalize_mac
 from wavr.netinventory_service import NetworkInventoryService
 
@@ -142,6 +149,14 @@ def _device_view(d, meta: dict | None = None) -> dict:
         view["os"] = d.os
     if d.hostname:
         view["hostname"] = d.hostname
+        # `display_name` is a DERIVED cleanup of `hostname` for the Network-tab
+        # label only (strips the router's DHCP search-domain suffix, prettifies
+        # separators) -- the raw `hostname` above is left untouched so anything
+        # keyed on the full string (wavr.data.deviceclass.hostname_type et al.)
+        # keeps seeing it. Omitted (not just None) when nothing survives cleanup.
+        cleaned = display_hostname(d.hostname)
+        if cleaned:
+            view["display_name"] = cleaned
     if d.sources:
         view["sources"] = [dict(s) for s in d.sources]
     if d.is_gateway:
