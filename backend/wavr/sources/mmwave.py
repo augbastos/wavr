@@ -47,12 +47,16 @@ async def _serial_frames(port: str) -> AsyncIterator[bytes]:
     pyserial is a lazy optional dep ([mmwave] extra)."""
     import serial                                    # lazy: optional [mmwave] extra
 
+    leftover = b""
+
     def _read_frame(s) -> bytes:
-        buf = b""
+        nonlocal leftover
+        buf = leftover
         while True:
             buf += s.read(64)
             i = buf.find(_HEADER)
             if i >= 0 and len(buf) >= i + 30:
+                leftover = buf[i + 30:]
                 return buf[i: i + 30]
             if len(buf) > 4096:
                 buf = buf[-64:]

@@ -20,9 +20,21 @@ route reads the descriptor's `enforcement` to decide whether the toggle has teet
 (registry-overlay/registry) or is env-only (409 with the exact env var to edit)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from wavr.connector_store import BUILTIN_IDS
+
+
+def _deps_not_wired() -> None:
+    """FAIL-CLOSED default for `write_deps` (sweep #13, mirrors
+    api_nodes._admin_deps_not_wired). Previously `write_deps=None` -> `[]`, so if
+    app.py's wiring ever forgot to pass require_local + require_root, the enable
+    route -- the EGRESS-CONTROL plane, including the assistant-cloud kill switch --
+    would run completely UNAUTHENTICATED. A forgotten argument must never silently
+    open egress control, so the default now DENIES instead: the enable route 403s
+    until the real gate is explicitly wired."""
+    raise HTTPException(status_code=403,
+                        detail="connector write routes have no auth gate wired")
 
 
 def _generic_descriptor(row: dict) -> dict:
@@ -55,7 +67,7 @@ def build_connectors_router(store, catalog_fn, write_deps=None) -> APIRouter:
     require_root -- loopback-operator-only, M1); the GET reads carry no CSRF/root
     requirement (but are still router-level central-gated in app.py)."""
     router = APIRouter()
-    wdeps = list(write_deps or [])
+    wdeps = list(write_deps) if write_deps else [Depends(_deps_not_wired)]
 
     def _all_connectors() -> list[dict]:
         builtins = list(catalog_fn())

@@ -244,7 +244,7 @@
   /* P4: layer-1 confidence word ("Confident" / "Likely" / "Uncertain" / "empty")
      replaces the static "confidence" caption — normal case + tighter tracking so the longest
      word ("Uncertain") still fits inside the 88px phone ring. */
-  .ring-pct small{font-size:.62rem;color:var(--dim);text-transform:none;letter-spacing:.01em;}
+  .ring-pct small{font-size:.7rem;color:var(--dim);text-transform:none;letter-spacing:.01em;}
   .card.quiet .ring{opacity:.72;}   /* unoccupied: ring reads unlit-grey, never green (§2.1) */
   /* 3-state sensor-consensus rows (§6): agree = green check · disagree = warn dash ·
      absent/no-coverage = dim dash + empty bar. Text labels, never icon-only (§7#12). */
@@ -3554,7 +3554,6 @@ document.getElementById("mode").innerHTML =
 // Content-first reorder (item 2): the config panels below the divider are all live-only
 // (or companion-only for #network), so only reveal the divider itself in live mode.
 if(MODE==="live"){
-  const cd = document.getElementById("configDivider"); if(cd) cd.hidden = false;
 } else if(MODE==="simulated"){
   // First-run onboarding (item 5) → P4 fix 4: a compact "demo" header pill instead of the
   // full-width strip. Still unmistakably a demo — the pill is always visible; tapping it
@@ -4773,8 +4772,14 @@ function dtypeLabelEl(t, conf, rogue){
   const s = document.createElement("span");
   s.className = "dtype-lbl" + (conf === "high" ? "" : " guess");
   s.textContent = dtypeLabel(t);               // textContent only — device data is untrusted
-  if(conf === "medium"){
-    s.title = "probable type — not confirmed";
+  if(conf === "medium"){                        // UX (#11): title-only tooltips are invisible on
+    s.title = "probable type — not confirmed";   // touch — give medium the same visible "?" cue low has
+    const q = document.createElement("span");
+    q.className = "dtype-q"; q.setAttribute("aria-hidden", "true"); q.textContent = "?";
+    s.appendChild(q);
+    const sr = document.createElement("span");
+    sr.className = "sr-only"; sr.textContent = " (probable, not confirmed)";
+    s.appendChild(sr);
   } else if(conf !== "high"){                  // low (or missing) → explicit guess affordance
     s.title = "guessed from weak signals";
     const q = document.createElement("span");
@@ -4795,7 +4800,7 @@ var ALERT_EXPLAIN = {
   rogue_dhcp: "Another device is handing out network addresses like a router. Usually a second router or a misconfiguration; occasionally an attack.",
   rogue_device: "A device we haven't seen on this network before just showed up.",
   fall_suspected: "Someone may have been lying down outside a bed or rest area for a while. This is a research demonstration, not a certified medical or fall-detection device (ADR-0003) -- treat it as a prompt to check in, never a diagnosis.",
-  intrusion: "Watch (Vigia) counted more people in a room, or in the house overall, than it knows are home. It never reveals who or exactly where in the room -- only that someone unaccounted-for is present."
+  intrusion: "Watch counted more people in a room, or in the house overall, than it knows are home. It never reveals who or exactly where in the room -- only that someone unaccounted-for is present."
 };
 function alertKeyOf(a){
   var kind = (a && a.kind) || "rogue_device";
@@ -5630,6 +5635,7 @@ async function renderPairApprove(){
     paFp.textContent = coreFp || "—";       // THIS hub's own cert fp — never the companion's reported_fp
     if(paRole) paRole.value = "user";       // least-privilege default on every fresh hero
     confirmBox.hidden = true;
+    paCode.hidden = false;                  // SECURITY (#9): restore the compare code — this is a fresh hero, not a confirm-in-progress
     actionsBox.hidden = false;
   }
   function renderMore(rest){
@@ -5681,6 +5687,7 @@ async function renderPairApprove(){
     pillTxt.textContent = requests.length===1 ? "1 waiting" : (requests.length + " waiting");
   }
   async function poll(){
+    if(document.hidden) return;             // perf: skip network work while this tab isn't visible
     let r;
     try{ r = await fetch(location.origin+"/api/pending-pairings",{headers:hdr}); }
     catch{ return; }                        // backend momentarily unreachable — keep last view
@@ -5695,18 +5702,23 @@ async function renderPairApprove(){
     if(!heroId) return;
     actionsBox.hidden = true;
     confirmBox.hidden = false;              // operator now TYPES the number shown on the device
+    // SECURITY (#9): hide the Core-side compare code while the confirm box is open — the phone
+    // must be the ONLY source of the number the operator types, or the "type the number from the
+    // phone" check degrades to "copy the number already on this screen" for a LAN impostor.
+    paCode.hidden = true;
     paConfirmInput.value = "";
     try{ paConfirmInput.focus(); }catch{}
   };
   paNo.onclick = ()=>{
     confirmBox.hidden = true;
+    paCode.hidden = false;                  // SECURITY (#9): restore now that the confirm step is over
     actionsBox.hidden = false;
   };
   paYes.onclick = async ()=>{
     if(!heroId) return;
     const id = heroId;
     const rec = requests.find(r=>r.request_id===id);
-    if(!rec){ actionFeedback(paFb, false, "That request expired — ask the device to try again."); confirmBox.hidden = true; poll(); return; }
+    if(!rec){ actionFeedback(paFb, false, "That request expired — ask the device to try again."); confirmBox.hidden = true; paCode.hidden = false; poll(); return; }
     // SECURITY (Stage-4 #1): send exactly the digits the operator TYPED off the phone — NEVER
     // rec.compare_code. The server's constant-time match then fails closed unless the operator
     // truly read the number off the right device; auto-filling the record's own code would make
@@ -5726,6 +5738,7 @@ async function renderPairApprove(){
     else if(r && r.status===404) actionFeedback(paFb, false, "That request expired, or the numbers didn't match — ask the device to try again.");
     else actionFeedback(paFb, false, "Couldn't pair — try again.");
     confirmBox.hidden = true;
+    paCode.hidden = false;                  // SECURITY (#9): restore now that the confirm step is over
     poll();                                 // re-sync: the decided request drops off the list
   };
   paDeny.onclick = async ()=>{
@@ -5740,7 +5753,7 @@ async function renderPairApprove(){
     paDeny.disabled = false;
     if(r && r.ok) actionFeedback(paFb, true, null, "Declined.");
     else actionFeedback(paFb, false, "Couldn't decline — try again.");
-    confirmBox.hidden = true; actionsBox.hidden = false;
+    confirmBox.hidden = true; paCode.hidden = false; actionsBox.hidden = false;
     poll();
   };
   pill.onclick = ()=>{ banner.scrollIntoView({block:"center"}); };

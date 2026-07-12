@@ -28,11 +28,23 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from wavr.identity_store import VALID_ORIGINS, VALID_SOURCES
 from wavr.device_meta import normalize_mac, sanitize_name
 from wavr.known_presence import compose_known_presence
+
+
+def _deps_not_wired() -> None:
+    """FAIL-CLOSED default for `write_deps` (sweep #13, mirrors
+    api_nodes._admin_deps_not_wired). Previously `write_deps=None` -> `[]`, so if
+    app.py's wiring ever forgot to pass the require_local CSRF guard, the
+    register/set_details/unregister writes would run completely UNAUTHENTICATED.
+    A forgotten argument must never silently open the identity registry, so the
+    default now DENIES instead: every write route 403s until the real gate is
+    explicitly wired."""
+    raise HTTPException(status_code=403,
+                        detail="identity write routes have no auth gate wired")
 
 # Bound a single POST's device batch (audit LOW): a real household registration is a
 # handful of devices at a time (the admin confirming their own phone/watch, or a
@@ -57,7 +69,7 @@ def build_identity_router(store, bonded_reader=None, ensure_source=None,
     `device_meta` -- optional wavr.device_meta.DeviceMeta, read via `.all()` for the
     known-presence route's freshness check; None => no rows => everything absent."""
     router = APIRouter()
-    wdeps = list(write_deps or [])
+    wdeps = list(write_deps) if write_deps else [Depends(_deps_not_wired)]
 
     @router.get("/api/identity/devices")
     async def list_devices():

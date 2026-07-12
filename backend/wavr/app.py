@@ -529,7 +529,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # (no restart) actually takes effect on the very next rogue-device sighting.
         on_rogue=lambda a: _notify_all(
             f"Wavr: dispositivo desconhecido na rede ({a.vendor})",
-            kind="rogue_device", severity="alert"),
+            kind="rogue_device", severity=a.severity),
         device_meta=_device_meta,
         # Passive protocol collectors (defensive-inventory collectors) -- opt-in, default
         # OFF; only ever run when the operator sets WAVR_NET_MDNS/WAVR_NET_SSDP.
@@ -819,7 +819,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         while True:
             await asyncio.sleep(cfg.refuse_interval)
             await _refuse_once()
-            await _publish_derived_mqtt()
+            try:
+                await _publish_derived_mqtt()
+            except Exception:
+                logging.warning("publish_derived_mqtt tick failed", exc_info=True)
 
     # Consent-first identity/device registry (2026-07-06 ethics decision): the
     # persistent, admin-confirmed source of {addr -> person}. Built like CameraStore

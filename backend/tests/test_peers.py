@@ -90,12 +90,19 @@ def test_revoke_is_idempotent(tmp_path):
 # --------------------------------------------------------------------------
 import types
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from wavr.api_peers import build_peers_public_router, build_peers_admin_router
 from wavr.devices import DeviceStore
 from wavr.pairing import PairingManager
+
+
+def _allow():
+    # No-op admin/link-back gate. The router factory now defaults to a FAIL-CLOSED
+    # sentinel when deps are omitted (audit #13), so these logic-only tests must pass
+    # an explicit allow to exercise the endpoints directly (mirrors test_api_nodes).
+    return None
 
 
 def _app(tmp_path, self_base_url="https://192.168.1.10:8000", self_name="Desktop",
@@ -107,7 +114,9 @@ def _app(tmp_path, self_base_url="https://192.168.1.10:8000", self_name="Desktop
     app = FastAPI()
     app.include_router(build_peers_public_router(peers, pairing, cfg))
     app.include_router(build_peers_admin_router(peers, pairing, devices, cfg,
-                                                self_name, self_base_url, local_ip))
+                                                self_name, self_base_url, local_ip,
+                                                admin_deps=[Depends(_allow)],
+                                                linkback_deps=[Depends(_allow)]))
     return app, devices, peers, pairing
 
 

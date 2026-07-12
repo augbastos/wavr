@@ -192,20 +192,39 @@ def list_rooms(provider: StateProvider) -> list[dict]:
     return rooms
 
 
+# Agent/cloud projection of a RoomState (audit CRITICAL-1): an EXPLICIT ALLOWLIST,
+# mirroring get_alerts / get_network_inventory / get_house_map. Default-DENY so any
+# future RoomState field (e.g. a new precision_*/biometric/positional field) is
+# withheld from agents/cloud LLM until it is deliberately added here -- a blocklist
+# would leak it by default. Strictly stricter than the human dashboard: room-level
+# occupancy/confidence, the honest per-room person COUNT, the precision (resolution)
+# rungs, and the explainable `sources`/`explanation`/`ts` only. NEVER `vitals`
+# (breathing/heart rate), `targets` (per-person x/y tracking), or `identities`
+# (non-biometric "who is home" labels -- PII).
+_ROOM_CONTEXT_FIELDS = (
+    "room", "occupied", "confidence",
+    "person_count",
+    "precision_level", "precision_pct", "precision_next",
+    "sources", "explanation", "ts",
+)
+
+
 def get_room_context(provider: StateProvider, room: str) -> dict | None:
     """RoomState for one room, including the explainable "why": the per-modality
     `sources` and the human-readable `explanation`. None if the room is unknown.
 
-    PRIVACY (audit CRITICAL-1): strips `vitals` (breathing/heart rate), `targets`
-    (per-person x/y tracking) and `identities` (non-biometric "who is home" person
-    labels — PII) before returning. MCP read tools must never expose per-person
+    PRIVACY (audit CRITICAL-1): projects through an explicit allowlist
+    (`_ROOM_CONTEXT_FIELDS`) rather than blocking known-bad keys, so `vitals`
+    (breathing/heart rate), `targets` (per-person x/y tracking), `identities`
+    (non-biometric "who is home" person labels — PII) AND any not-yet-allowlisted
+    future field are withheld by default. MCP read tools must never expose per-person
     biometric, positional, or identity data -- only room-level occupancy, confidence,
-    and the explainable sources/explanation are exposed here."""
+    person count, precision rungs, and the explainable sources/explanation are exposed
+    here."""
     state = provider.room_state(room)
     if state is None:
         return None
-    return {k: v for k, v in state.items()
-            if k not in ("vitals", "targets", "identities")}
+    return {k: state[k] for k in _ROOM_CONTEXT_FIELDS if k in state}
 
 
 # verify FIX C (MEDIUM): unlike GET/PUT /api/house(/room) (the human dashboard's

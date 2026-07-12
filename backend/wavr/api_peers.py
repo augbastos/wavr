@@ -36,9 +36,10 @@ in app.py, NOT here):
 
 `admin_deps` (loopback-root-only in app.py: require_local + require_root) guard
 discovered/observe/confirm/list/unpair; `linkback_deps` (require_central) guard
-link-back only. Both default None -> [] so the router unit tests hit every endpoint
-directly with no gates. `local_ip` bounds the §D SSRF guard on the operator-supplied
-`peer_base_url`.
+link-back only. Both FAIL CLOSED if omitted (see `_admin_deps_not_wired` /
+`_linkback_deps_not_wired`) rather than the old `None -> []` (open) default; a test
+that wants every endpoint ungated must explicitly pass its own allow-dependency.
+`local_ip` bounds the §D SSRF guard on the operator-supplied `peer_base_url`.
 """
 from __future__ import annotations
 
@@ -46,7 +47,7 @@ import asyncio
 import logging
 import urllib.parse
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from wavr import mdns_peers
 from wavr.auth import in_subnet, parse_bearer
@@ -100,16 +101,41 @@ def build_peers_public_router(peer_store, pairing, cfg) -> APIRouter:
     return router
 
 
+def _admin_deps_not_wired() -> None:
+    """FAIL-CLOSED default for `admin_deps` (mirrors api_nodes.py's
+    `_admin_deps_not_wired`). Previously `admin_deps=None` -> `[]`, meaning if
+    app.py's wiring ever forgot to pass `[Depends(require_local), Depends(require_root)]`,
+    every admin route (discovered/observe/confirm/list/unpair) would run completely
+    UNAUTHENTICATED. A forgotten argument must never silently open the loopback-root
+    control plane, so the default now DENIES instead: every admin route 403s until
+    the real gate is explicitly wired. Real callers (app.py) always pass admin_deps
+    and never hit this; only an intentional override (e.g. a test standing up its
+    own allow-dependency) can make these routes reachable."""
+    raise HTTPException(status_code=403,
+                        detail="peer admin routes have no auth gate wired")
+
+
+def _linkback_deps_not_wired() -> None:
+    """FAIL-CLOSED default for `linkback_deps` (same rationale as
+    `_admin_deps_not_wired`). Previously `linkback_deps=None` -> `[]`, meaning if
+    app.py's wiring ever forgot to pass `[Depends(require_central)]`, the ONE
+    peer-reachable route (`link-back`) would accept any unauthenticated caller. The
+    default now DENIES instead until the real gate is explicitly wired."""
+    raise HTTPException(status_code=403,
+                        detail="peer link-back route has no auth gate wired")
+
+
 def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
                              self_base_url, local_ip,
                              admin_deps=None, linkback_deps=None) -> APIRouter:
     """Loopback-root control plane + the single peer-reachable reverse-leg route.
     `admin_deps` (loopback-root-only) wrap discovered/observe/confirm/list/unpair;
-    `linkback_deps` (require_central) wrap link-back only. Both default None -> []
-    so the router unit tests call every route ungated."""
+    `linkback_deps` (require_central) wrap link-back only. Both FAIL CLOSED if
+    omitted/empty -- see `_admin_deps_not_wired` / `_linkback_deps_not_wired` --
+    rather than the old `None -> []` (open) default."""
     router = APIRouter()
-    admin_deps = list(admin_deps or [])
-    linkback_deps = list(linkback_deps or [])
+    admin_deps = list(admin_deps) if admin_deps else [Depends(_admin_deps_not_wired)]
+    linkback_deps = list(linkback_deps) if linkback_deps else [Depends(_linkback_deps_not_wired)]
 
     @router.get("/api/peers/discovered", dependencies=admin_deps)
     async def discovered():
@@ -204,6 +230,13 @@ def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
         if caller is None:
             raise HTTPException(status_code=401,
                                 detail="link-back requires an authenticated central peer")
+        # §D SSRF guard: `base_url` is peer-supplied (the caller's own callback
+        # address). Without this, an authenticated-but-malicious peer could hand us
+        # an off-subnet/non-LAN base_url that we would later dial (e.g. on unpair's
+        # future re-confirm flows or any other consumer of PeerStore rows) -- the
+        # same class of landmine _validate_peer_url already closes on /confirm and
+        # /observe's operator-supplied peer_base_url (#14).
+        _validate_peer_url(base_url, local_ip)
         peer_id = peer_store.add(name, base_url, fingerprint, caller.device_id, token)
         return {"peer_id": peer_id}
 
