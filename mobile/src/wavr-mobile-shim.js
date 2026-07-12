@@ -149,10 +149,16 @@
   // NullProvider page, never by hanging the gate. resolveReady() is idempotent (a _readyDone latch), and
   // a defensive 4s timer force-resolves it so that even if the SecureStorage plugin itself WEDGES (the
   // Promise.all at the bottom never settling) index.html's boot is never blocked on a broken plugin.
-  var _resolveReady, _readyDone = false;
+  var _resolveReady, _readyDone = false, _screenDecided = false;
   var ready = new Promise(function(res){ _resolveReady = res; });
   function resolveReady(){ if(_readyDone) return; _readyDone = true; try{ _resolveReady(); }catch(_){} }
-  setTimeout(resolveReady, 4000);
+  // Defensive wedge path (#21): if the SecureStorage plugin never settles, the Promise.all at the bottom
+  // never runs decideScreen(), so WITHOUT this the user is stranded on a blank overlay and the 8-digit
+  // fallback would POST to an empty base. So the 4s timer force-resolves the gate AND lands the user on a
+  // usable screen. decideScreen() is idempotent (the _screenDecided latch): whichever of the Keystore-
+  // settled path or this timer runs first wins; the loser is a no-op. On a true wedge the caches are still
+  // at their empty defaults, so decideScreen() falls through to the capability chooser (showChooser()).
+  setTimeout(function(){ resolveReady(); decideScreen(); }, 4000);
 
   // ================= NET BRIDGE (CONTRACT A: netFetch / netWebSocket) =================
   function headersView(h){
@@ -722,33 +728,22 @@
     codeIn.spellcheck = false; codeIn.autocapitalize = "characters"; codeIn.maxLength = 12;
     codeIn.placeholder = "3F9A2C"; codeIn.setAttribute("aria-label", "last 6 fingerprint characters");
     f.appendChild(codeIn); card.appendChild(f);
-    // Task 6: capture this device's presence label at pair time (shown as "home" presence). REQUIRED
-    // per F-EMPTYLABEL: the Core 400s an empty register-companion, so pairing with a blank label leaves
-    // auto-presence permanently inert. Display-only, never a credential, never logged. Persisted with
-    // the pairing on a successful pin.
-    var lf = el("label", "wavrm-field");
-    lf.appendChild(el("span", "wavrm-lab", "Your name on this device (shown as your presence at home)"));
-    var labelIn = el("input", "wavrm-input"); labelIn.type = "text"; labelIn.autocomplete = "off";
-    labelIn.maxLength = 48;   // FIX-C3: cap the display label (textContent + JSON.stringify already injection-safe)
-    labelIn.placeholder = "e.g., Augusto"; labelIn.setAttribute("aria-label", "your name on this device");
-    lf.appendChild(labelIn); card.appendChild(lf);
+    // The presence label is NOT collected here anymore -- it is collected once at showRequestPairing()
+    // (Gate B), right after this pin, before register-companion. F-EMPTYLABEL stays satisfied because that
+    // screen requires a non-empty name. This screen is purely the out-of-band certificate compare.
     var pinBtn = el("button", "wavrm-btn", "Pin & continue"); pinBtn.type = "button"; pinBtn.disabled = true;
     var backBtn = el("button", "wavrm-btn ghost", "Back"); backBtn.type = "button";
     var msg = el("p", "wavrm-msg", "");
     var fp = null, expect = "";
-    function labelOk(){ return (labelIn.value || "").trim().length > 0; }   // F-EMPTYLABEL: name required
-    function recompute(){ pinBtn.disabled = !(fp && expect.length === 6 && normHex(codeIn.value) === expect && labelOk()); }
+    function recompute(){ pinBtn.disabled = !(fp && expect.length === 6 && normHex(codeIn.value) === expect); }
     codeIn.oninput = recompute;
-    labelIn.oninput = recompute;
     pinBtn.onclick = function(){
       if(pinBtn.disabled) return;
-      if(!fp || expect.length !== 6 || normHex(codeIn.value) !== expect || !labelOk()) return;   // defence in depth
+      if(!fp || expect.length !== 6 || normHex(codeIn.value) !== expect) return;   // defence in depth
       _pinnedFp = fp;
-      _presenceLabel = (labelIn.value || "").trim();          // Task 6: label captured at pair
       _coreName = _pendingCoreName || _base;                  // Task 6: friendly Core name (mDNS pick or base)
       pinBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Saving…";
       Promise.all([ persistPairing(_base, fp, null),
-                    secureSet(K_PRESENCE_LABEL, _presenceLabel),
                     secureSet(K_CORE_NAME, _coreName) ]).then(function(){
         // Gate A done (cert pinned via the out-of-band last-6). Gate B (authorization) is now the
         // approve-on-Core flow -- the operator taps Approve on the hub instead of the user typing a code.
@@ -762,7 +757,16 @@
       });
     };
     backBtn.onclick = function(){ showSetup(); };
-    card.appendChild(pinBtn); card.appendChild(backBtn); card.appendChild(msg);
+    card.appendChild(pinBtn); card.appendChild(backBtn);
+    // Back-to-discovery: a discovery user who reaches verify by picking a hub must not be stranded at the
+    // manual-IP setup screen (the plain Back goes there). When automatic discovery is available, offer a
+    // second ghost path straight back to the hub list.
+    if(zeroconfAvailable()){
+      var discBtn = el("button", "wavrm-btn ghost", "Back to hub list"); discBtn.type = "button";
+      discBtn.onclick = function(){ showChooseCore(); };
+      card.appendChild(discBtn);
+    }
+    card.appendChild(msg);
     if(!WavrNet || typeof WavrNet.probe !== "function"){
       fpEl.textContent = "(unavailable)"; msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available.";
       return;
@@ -1746,6 +1750,8 @@
 
   // ----- Boot: load caches, resolve the gate, then decide which screen to show -----
   function decideScreen(){
+    if(_screenDecided) return;   // #21: idempotent -- run at most once (Keystore-settled path OR the 4s wedge timer)
+    _screenDecided = true;
     whenDom(function(){
       injectStyle();
       if(_token){
