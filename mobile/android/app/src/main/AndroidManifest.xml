@@ -68,4 +68,15 @@
          WifiManager.MulticastLock (ZeroConf.java) to receive multicast mDNS packets on Wi-Fi.
          ACCESS_WIFI_STATE and INTERNET above are already present and cover its other needs. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- WavrBluetooth (READ-ONLY bonded-device enrichment for the admin phone): reads
+         BluetoothAdapter.bondedDevices only — the user's OWN already-paired hardware — to
+         label the Core's identity registry. NEVER scans, discovers, or connects.
+         BLUETOOTH_CONNECT is the single runtime prompt (Android 12 / API 31+); the legacy
+         install-time BLUETOOTH (maxSdkVersion=30) covers the read below API 31.
+         DELIBERATELY NO BLUETOOTH_SCAN and NO ACCESS_FINE/COARSE_LOCATION — the bonded read
+         needs neither, and omitting them keeps the Play Data-Safety form honestly
+         "no data collected, no data shared". -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
 </manifest>

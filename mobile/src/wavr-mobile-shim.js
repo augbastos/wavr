@@ -48,6 +48,13 @@
   // the native plugin -> discovery is skipped and the user falls to manual entry, never throws.
   var Zeroconf = plugin("ZeroConf");
   function zeroconfAvailable(){ return !!(Zeroconf && typeof Zeroconf.watch === "function"); }
+  // Item 7 (bonded Bluetooth import) + Complement (ii) (pinned web-asset OTA). Both are NATIVE
+  // capabilities that live in their OWN sibling plugins (WavrNet contract stays FROZEN). ABSENT on a
+  // build without the native plugin -> every call site is null-guarded and the feature degrades to an
+  // honest "not available on this device" rather than throwing. Read-only bonds (no BLE scan, no
+  // location); OTA carries WEB ASSETS ONLY over the SAME pinned trust anchor (never the shim/lib/native).
+  var WavrBluetooth = plugin("WavrBluetooth");
+  var WavrUpdate = plugin("WavrUpdate");
 
   // ---------- Secure-storage adapter (capacitor-shell-engineer implements the plugin) ----------
   // Expected API (async, EncryptedSharedPreferences/Keystore-backed, DURABLE commit before resolve):
@@ -94,6 +101,25 @@
   // are user-facing display strings, never security-relevant (the pinned fingerprint is), never logged.
   // Read at boot so the status chip paints without a flash.
   var K_PRESENCE_LABEL = "wavr.presenceLabel", K_CORE_NAME = "wavr.coreName";
+  // Item 3 (first-open contribute onboarding): a one-time flag so the affirmative-tap "help sense
+  // who's home?" sequence is shown ONCE before the dashboard, never nagging after a choice is made
+  // (mirrors K_ONBOARDED). Complement (ii) (What's-New): the last app version whose release-notes card
+  // the user dismissed, so the card re-shows only on a version CHANGE and stays re-readable from details.
+  var K_CONTRIB_ONBOARDED = "wavr.contribOnboarded", K_SEEN_VERSION = "wavr.seenVersion";
+
+  // Complement (ii) — What's-New release notes, shown once per version change BEFORE the dashboard and
+  // re-readable later from This-device. PUBLIC-facing copy (ships EN). `version` is compared against the
+  // dismissed K_SEEN_VERSION; bump it + edit `notes` on each release. Purely local, no network.
+  var WHATS_NEW = {
+    version: "1.4",
+    title: "What's new",
+    notes: [
+      "See at a glance whether this is an Admin or Member device.",
+      "Your home's sensing level now shows here, read-only — set how much THIS device shares from the same card.",
+      "A quick connection check tells you if this device and your hub are talking.",
+      "Clearer help: tap the ? on any screen, then tap a control to see what it does."
+    ]
+  };
 
   // FIX-E3(b): durable-write helper for the PAIR / RE-PIN paths. Resolves only once every write of the
   // pairing state has committed; rejects if ANY write fails, so the caller surfaces a save error and
@@ -114,6 +140,8 @@
   var _role = null;       // "central" | "user" | null  (null is treated as viewer everywhere)
   var _caps = null;       // {sensor,viewer,admin} | null   (null = true first launch -> chooser)
   var _onboarded = false; // sensor permission wizard completed at least once
+  var _contribOnboarded = false; // item 3: first-open contribute sequence completed at least once
+  var _seenVersion = "";         // complement (ii): last What's-New version the user dismissed
   // Consent level, read from Keystore at boot. ASSUMPTION (surfaced to owner): the hub defaults a freshly
   // paired device to full participation, so an absent/first-launch value defaults to "green"; there is no
   // GET /api/consent yet, so we do NOT reconcile against the hub at boot (a GET reconciliation is a NEXT).
@@ -355,6 +383,7 @@
         if(next === undefined || next === _role) return;         // no definitive change -> no reload
         var wasAdmin = (_role === "central");
         _role = next;                                            // memory-first: blocks a re-trigger loop
+        renderRolePill();                                        // item 1: repaint the pill on the no-reload path (null->user)
         var capFlip = ((next === "central") !== wasAdmin);        // viewer<->admin only; null~user = viewer
         secureSet(K_ROLE, next).then(function(){
           if(capFlip){ try{ location.reload(); }catch(_){} }      // re-boot with the new capability set
@@ -372,8 +401,24 @@
     tokenSet: tokenSet,
     onPaired: onPaired,                 // capture our device_id from the /api/pair response
     get role(){ return _role; },        // "central" | "user" | null  (null treated as viewer)
+    listBondedDevices: listBondedDevices,   // item 7: read-only bonded-BT list (null when native plugin absent)
     ready: ready
   };
+
+  // Item 7 — read this phone's ALREADY-BONDED Bluetooth devices via the sibling WavrBluetooth plugin
+  // (read-only: no BLE scan, no location). Resolves an array of {address,label} on success, [] when the
+  // phone has no bonds, and NULL when the capability is unavailable (no plugin / call failed) so the
+  // caller renders an honest "not available" instead of an empty list. Never logs addresses.
+  function listBondedDevices(){
+    if(!(WavrBluetooth && typeof WavrBluetooth.listBonded === "function")) return Promise.resolve(null);
+    return Promise.resolve(WavrBluetooth.listBonded()).then(function(r){
+      var list = (r && Array.isArray(r.devices)) ? r.devices : (Array.isArray(r) ? r : null);
+      if(!Array.isArray(list)) return null;
+      return list.map(function(d){
+        return { address: (d && d.address) || "", label: (d && (d.label || d.name)) || "" };
+      }).filter(function(d){ return !!d.address; });
+    }).catch(function(){ return null; });
+  }
 
   // Foreground/resume trigger for detectRole: re-check our role when the app returns to the fore.
   // visibilitychange is the zero-dependency choice (no @capacitor/app); it fires on WebView
@@ -382,7 +427,7 @@
   // resume): add @capacitor/app's appStateChange. Do NOT add that dependency pre-emptively.
   try{
     document.addEventListener("visibilitychange", function(){
-      if(document.visibilityState === "visible"){ detectRole(); reassertPresence(); }   // Task 5: re-assert presence on resume
+      if(document.visibilityState === "visible"){ detectRole(); reassertPresence(); pollManifest(); }   // Task 5 + OTA (ii) on resume
     });
   }catch(_){}
 
@@ -498,7 +543,32 @@
       // 2s hold progress fill (withdrawal affordance): danger-tinted, animates 0->100% while held.
       ".wavrm-consent .wavrm-cprog{position:absolute;left:0;bottom:0;height:2px;width:0;" +
       "background:var(--danger,#e8726a);pointer-events:none;transition:width .15s ease;}" +
-      ".wavrm-consent.holding .wavrm-cprog{width:100%;transition:width 2s linear;}";
+      ".wavrm-consent.holding .wavrm-cprog{width:100%;transition:width 2s linear;}" +
+      // Item 5: the shared "?" help button, top-right of every card.
+      ".wavrm-card{position:relative;}" +
+      ".wavrm-help{position:absolute;top:10px;right:10px;width:32px;height:32px;min-height:0;padding:0;" +
+      "border-radius:999px;border:1px solid var(--line,rgba(255,255,255,.14));background:transparent;" +
+      "color:var(--dim,#9AA4AD);font-size:1rem;font-weight:700;line-height:1;cursor:pointer;}" +
+      // Item 1: role pill accent (Admin device). Member device stays the neutral .tpill default.
+      "#wavrm-role.wavrm-role-admin{border-color:var(--accent,#3db54a)!important;color:var(--accent,#3db54a);}" +
+      // Item 2/6: a labelled row that hosts a control (consent tile / health rows).
+      ".wavrm-inrow{display:flex;align-items:center;justify-content:space-between;gap:10px;" +
+      "background:var(--elevated,#1C232C);border:1px solid var(--line,rgba(255,255,255,.07));" +
+      "border-radius:10px;padding:10px 12px;}" +
+      ".wavrm-inrow .wavrm-inrow-l{color:var(--dim,#9AA4AD);font-size:.82rem;}" +
+      ".wavrm-inrow .wavrm-inrow-v{font-size:.86rem;font-variant-numeric:tabular-nums;text-align:right;}" +
+      ".wavrm-inrow .wavrm-inrow-v.ok{color:var(--accent,#3db54a);}" +
+      ".wavrm-inrow .wavrm-inrow-v.warn{color:var(--warn,#e8a13a);}" +
+      ".wavrm-inrow .wavrm-inrow-v.err{color:var(--danger,#e8726a);}" +
+      // Item 2: device-consent row mounted INTO index.html's #sensingLevelTile (companion).
+      "#wavrm-consent-tile{margin-top:12px;display:flex;flex-direction:column;gap:6px;}" +
+      "#wavrm-consent-tile .wavrm-ct-lab{font-size:.72rem;font-weight:600;text-transform:uppercase;" +
+      "letter-spacing:.06em;color:var(--dim,#9AA4AD);}" +
+      // Complement (ii): the OTA "update available" chip in the header pill row.
+      "#wavrm-ota{cursor:pointer;}" +
+      // Complement (iii): the one-glance per-device privacy receipt.
+      ".wavrm-receipt{margin:0;font-size:.82rem;color:var(--dim,#9AA4AD);" +
+      "border-left:2px solid var(--consent-color,var(--line,rgba(255,255,255,.14)));padding-left:10px;}";
     var s = el("style"); s.id = "wavrm-style"; s.textContent = css;
     (document.head || document.documentElement).appendChild(s);
   }
@@ -518,6 +588,18 @@
     // routes through showConnecting("Reconnecting..."), releases the guard for future mismatches.
     _mismatchActive = (screen === "mismatch" || screen === "reverify");
     var card = el("div", "wavrm-card");
+    // Item 5 (help everywhere): one shared "?" per overlay card. The shim overlay is
+    // position:fixed;inset:0;z-index:2147483000 and COVERS index.html's own #helpModeBtn, so we can't
+    // rely on the user reaching it. This button PROGRAMMATICALLY clicks #helpModeBtn — reusing
+    // index.html's existing help state machine verbatim (a real click fires regardless of z-order), which
+    // then turns any tap on a [data-tip] control (incl. the shim controls below) into a tooltip reveal.
+    // It carries NO data-tip itself, so index.html's help-mode click handler always lets it ACT (toggle),
+    // never intercepts it. Security screens (mismatch/reVerify) only gain EXPLANATION this way — never a
+    // bypass. NOT VERIFIED on-device: #tipPop z-index vs this overlay (bump #tipPop if a tip is occluded).
+    var helpBtn = el("button", "wavrm-help", "?"); helpBtn.type = "button";
+    helpBtn.setAttribute("aria-label", "Help — explain the controls on this screen");
+    helpBtn.onclick = function(){ try{ var hb = document.getElementById("helpModeBtn"); if(hb) hb.click(); }catch(_){} };
+    card.appendChild(helpBtn);
     overlay.appendChild(card);
     return card;
   }
@@ -695,6 +777,7 @@
     if(_base){ var m = /^https?:\/\/([^:/]+)(?::(\d+))?/i.exec(_base); if(m){ ip.value = m[1]; if(m[2]) port.value = m[2]; } }
     var msg = el("p", "wavrm-msg", "");
     var btn = el("button", "wavrm-btn", "Continue"); btn.type = "button";
+    btn.setAttribute("data-tip", "Saves the hub address and moves on to verifying its certificate.");
     btn.onclick = function(){
       var host = (ip.value || "").trim(), p = (port.value || "").trim() || "8000";
       if(!isHost(host)){ msg.className = "wavrm-msg err"; msg.textContent = "Enter a valid IP address."; return; }
@@ -732,6 +815,7 @@
     // (Gate B), right after this pin, before register-companion. F-EMPTYLABEL stays satisfied because that
     // screen requires a non-empty name. This screen is purely the out-of-band certificate compare.
     var pinBtn = el("button", "wavrm-btn", "Pin & continue"); pinBtn.type = "button"; pinBtn.disabled = true;
+    pinBtn.setAttribute("data-tip", "Trusts this exact certificate. Enabled only when the last 6 characters you typed match the hub's own screen.");
     var backBtn = el("button", "wavrm-btn ghost", "Back"); backBtn.type = "button";
     var msg = el("p", "wavrm-msg", "");
     var fp = null, expect = "";
@@ -815,6 +899,7 @@
     f.appendChild(nameIn); card.appendChild(f);
     var msg = el("p", "wavrm-msg", "");
     var askBtn = el("button", "wavrm-btn", "Ask to connect"); askBtn.type = "button";
+    askBtn.setAttribute("data-tip", "Sends a request to your hub. Its owner approves it on the hub's own screen — no code to type.");
     askBtn.onclick = function(){
       var name = (nameIn.value || "").trim();
       if(!name){ msg.className = "wavrm-msg err"; msg.textContent = "Enter your name on this device."; return; }
@@ -1206,7 +1291,12 @@
     WavrSensor.getStatus().then(function(s){ if(s){ _lastStatus = s; renderSensor(); } }).catch(function(){});
   }
   function startSensor(name){
-    if(!sensorAvailable()) return; ensureSensor();
+    if(!sensorAvailable()) return;
+    // Item 4: you cannot start contributing while shown "Off" (red = detached). Raise to Presence
+    // (yellow) first -- which re-attaches (and reloads) via changeConsent -- so the tri-color never
+    // disagrees with a running sensor. The post-reattach node screen offers Start again.
+    if(_consent === "red"){ changeConsent("yellow"); return; }
+    ensureSensor();
     callSensor("start", { name: name || defaultNodeName() }).then(function(s){ if(s){ _lastStatus = s; renderSensor(); } });
   }
   function stopSensor(){
@@ -1342,6 +1432,7 @@
     counts.appendChild(document.createTextNode("  ·  err ")); counts.appendChild(errEl);
     stat.appendChild(stateEl); stat.appendChild(counts); card.appendChild(stat);
     var btn = el("button", "wavrm-btn", "Start"); btn.type = "button";
+    btn.setAttribute("data-tip", "Starts or stops contributing this device's presence to your home.");
     _nodeUi = { state: stateEl, sent: sentEl, err: errEl, btn: btn };
     if(!sensorAvailable()){
       btn.disabled = true;
@@ -1396,11 +1487,14 @@
   // permission: a device can be "admin · red"). Never logs the token or the level.
 
   // Honest, non-overclaiming copy (blueprint item 5). GREEN does NOT claim network reach over the phone.
+  // Item 4: labels use the HUB's own sensing vocabulary (Off / Presence / Full, mirroring index.html's
+  // TIER_META) so the device-scope control and the home-scope tile read the same. Wire values
+  // (green/yellow/red) and the colour mapping are UNCHANGED -- only the human label/tip.
   var CONSENT = {
-    green:  { next: "yellow", color: "var(--accent,#3db54a)", label: "Full participation",
-              tip: "Full participation — Wavr uses this phone's presence and names it at home." },
-    yellow: { next: "red",    color: "var(--warn,#e8a13a)",   label: "Limited",
-              tip: "Limited — present but anonymous; minimal data." },
+    green:  { next: "yellow", color: "var(--accent,#3db54a)", label: "Full",
+              tip: "Full — Wavr uses this phone's presence and names it at home." },
+    yellow: { next: "red",    color: "var(--warn,#e8a13a)",   label: "Presence",
+              tip: "Presence — present but anonymous; minimal data, no name." },
     // TAP wraps red -> green: a single visible control must be able to RE-ENGAGE, and re-granting one's
     // OWN consent is legitimate. The deliberate 2s-hold is the easy-withdrawal path, so an accidental
     // single tap can only ever step the level (never hold-to-off), and every tap changes colour+label
@@ -1610,6 +1704,7 @@
       u.dot.style.background = meta.color;
       u.txt.textContent = label;
       u.btn.title = tip;
+      u.btn.setAttribute("data-tip", tip);   // complement (iv): help mode explains the CURRENT level
       u.btn.setAttribute("aria-label", "Consent: " + label + ". Tap to reduce, hold two seconds to withdraw.");
       u.btn.classList.toggle("pending", !!_consentPending);
     }
@@ -1683,12 +1778,76 @@
     b.appendChild(_statusChip);
     row.appendChild(b);
   }
+  // ================= ITEM 1: ROLE INDICATOR (read-only reflection of the token's role) ==============
+  // The pill states whether THIS device is an Admin (central) or Member (user) device. It is a pure
+  // reflection of WAVR_MOBILE.role (resolved by detectRole from GET /api/devices) -- NEVER an actuator:
+  // there is deliberately NO "become admin" button (privilege escalation is a Core-side grant only). null
+  // (role not yet known) hides the pill rather than guessing. Member uses the neutral .tpill (accent is
+  // reserved for presence); Admin gets the accent border via .wavrm-role-admin.
+  var _roleUi = null;
+  function roleLabel(){ return _role === "central" ? "Admin device" : _role === "user" ? "Member device" : ""; }
+  function renderRolePill(){
+    if(!_roleUi) return;
+    var lab = roleLabel();
+    if(!lab){ _roleUi.btn.hidden = true; return; }
+    _roleUi.btn.hidden = false;
+    _roleUi.txt.textContent = lab;
+    _roleUi.btn.classList.toggle("wavrm-role-admin", _role === "central");
+    _roleUi.btn.setAttribute("aria-label", lab + " — tap to learn what this means");
+  }
+  function injectRolePill(){
+    if(!_token) return;
+    var row = document.querySelector(".status-pills"); if(!row) return;
+    if(document.getElementById("wavrm-role")){ renderRolePill(); return; }   // idempotent
+    var b = el("button", "tpill"); b.id = "wavrm-role"; b.type = "button";
+    b.setAttribute("data-tip", "Whether this device can manage your home (Admin) or only view it (Member). Set on your hub.");
+    var txt = el("span", "p-txt", "");
+    b.appendChild(txt);
+    b.onclick = function(){ showRoleInfo(); };
+    row.appendChild(b);
+    _roleUi = { btn: b, txt: txt };
+    renderRolePill();
+  }
+  function showRoleInfo(){
+    var card = ensureOverlay("roleInfo");
+    card.appendChild(el("h2", "wavrm-h", roleLabel() || "This device"));
+    card.appendChild(el("p", "wavrm-sub", _role === "central"
+      ? "This is an Admin device: it can view your home AND change settings (rooms, sensing, connectors)."
+      : "This is a Member device: it can view your home, but can't change its settings."));
+    card.appendChild(el("p", "wavrm-sub",
+      "Your access level is set on your hub. To change it, ask the hub's owner to update this device on the hub's own screen. It can't be changed from here."));
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ hideOverlay(); };
+    card.appendChild(back);
+  }
+
+  // Complement (iii) — one-glance per-device privacy receipt: exactly what THIS device shares RIGHT NOW,
+  // derived from role + the current consent level. Honest and non-overclaiming; never names a data path
+  // the device doesn't actually use. Colour matches the consent level via --consent-color.
+  function privacyReceiptText(){
+    if(_consent === "red") return "Right now this device shares nothing — it's turned off.";
+    var who = (_role === "central") ? "As an admin device, it can also change home settings." : "";
+    if(_consent === "yellow")
+      return "Right now this device shares that someone is home from here — anonymously, with no name. " + who;
+    return "Right now this device shares your presence at home as “" + (_presenceLabel || "this device") + "”. " + who;
+  }
+  function injectReceipt(card){
+    var p = el("p", "wavrm-receipt", privacyReceiptText());
+    try{ p.style.setProperty("--consent-color", (CONSENT[_consent] || CONSENT.green).color); }catch(_){}
+    card.appendChild(p);
+    return p;
+  }
+
   // Details overlay: edit the presence label (re-asserts on save) and a deliberate Unpair (DELETE presence,
   // then wipe token/url/fp + reload back to setup). Unpair is NOT a security downgrade -- it removes the
   // pairing entirely; re-pairing requires the full out-of-band fingerprint verify again.
   function showDetails(){
     var card = ensureOverlay("details");
     card.appendChild(el("h2", "wavrm-h", "This device"));
+    // Item 1: overlays cover the header role pill, so restate the role here.
+    var rl = roleLabel(); if(rl) card.appendChild(el("p", "wavrm-sub", rl));
+    // Complement (iii): the one-glance "what this device shares now" receipt.
+    injectReceipt(card);
     var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", "Your name on this device"));
     var input = el("input", "wavrm-input"); input.type = "text"; input.autocomplete = "off";
     input.maxLength = 48;   // FIX-C3: cap the display label (textContent + JSON.stringify already injection-safe)
@@ -1706,6 +1865,15 @@
     };
     card.appendChild(save);
     card.appendChild(el("p", "wavrm-sub", "Core: " + (_coreName || "—")));
+    // Item 6: a dedicated connection/health check, composed on-device.
+    var health = el("button", "wavrm-btn ghost", "Connection check"); health.type = "button";
+    health.setAttribute("data-tip", "Checks whether this device and your hub are talking — reachability, certificate and presence.");
+    health.onclick = function(){ showHealth(); };
+    card.appendChild(health);
+    // Complement (ii): the What's-New notes stay re-readable after first dismissal.
+    var wn = el("button", "wavrm-btn ghost", "What's new"); wn.type = "button";
+    wn.onclick = function(){ showWhatsNew(function(){ showDetails(); }); };
+    card.appendChild(wn);
     // The actual wipe -- security-critical, unchanged. Only reached via the explicit "Yes, unpair" confirm.
     function doUnpair(){
       unregisterPresence();   // best-effort DELETE FIRST -- builds the Bearer from the still-valid _token synchronously
@@ -1723,6 +1891,7 @@
     // F-UNPAIRCONFIRM: the soft keyboard can shift the overlay so a Save-aimed tap lands on Unpair and
     // instantly wipes the pairing. Require a distinct, on-demand confirm before the wipe ever fires.
     var unpair = el("button", "wavrm-btn ghost", "Unpair this device"); unpair.type = "button";
+    unpair.setAttribute("data-tip", "Removes this pairing. You'll verify the hub's certificate again before you can reconnect.");
     var confirmPanel = el("div", "wavrm-field");   // hidden until Unpair is tapped; appears below, distinct from Save
     confirmPanel.style.display = "none";
     confirmPanel.appendChild(el("p", "wavrm-warn",
@@ -1748,6 +1917,258 @@
     card.appendChild(back); card.appendChild(msg);
   }
 
+  // ================= ITEM 6: DEVICE + NETWORK HEALTH (composed on-device) ==========================
+  // Honest, self-reported verdict from signals THIS device already tracks -- attachment, presence
+  // (Core-confirmed only), pin match (WavrNet.probe vs the pinned fp), WS liveness (window.__wavrWsDown,
+  // exposed by index.html's setReconnecting wrapper), and a live round-trip time. Reuses WavrNet.probe
+  // for the TLS/reachability leg (no new native reachability method). For an Admin device it adds a
+  // user-invoked "your home's internet" check against the real /api/health (control scope); a Member
+  // device is honestly told to ask an admin device (never widening its egress boundary). Never logs.
+  function hrow(list, label){
+    var r = el("div", "wavrm-inrow");
+    r.appendChild(el("span", "wavrm-inrow-l", label));
+    var v = el("span", "wavrm-inrow-v", "…");
+    r.appendChild(v); list.appendChild(r);
+    return v;
+  }
+  function setV(v, text, cls){ if(!v) return; v.textContent = text; v.className = "wavrm-inrow-v" + (cls ? " " + cls : ""); }
+  function showHealth(){
+    var card = ensureOverlay("health");
+    card.appendChild(el("h2", "wavrm-h", "Connection check"));
+    // RED / detached: calm state, nothing to check (matches the "you turned this off" posture).
+    if(!_attached){
+      card.appendChild(el("p", "wavrm-sub", "You've turned this device off, so it isn't connected. Nothing to check. Re-enter from the coloured control to reconnect."));
+      var b0 = el("button", "wavrm-btn ghost", "Back"); b0.type = "button"; b0.onclick = function(){ showDetails(); };
+      card.appendChild(b0); return;
+    }
+    card.appendChild(el("p", "wavrm-sub", "How this device and " + (_coreName || "your hub") + " are getting along right now."));
+    var list = el("div", "wavrm-field"); card.appendChild(list);
+    var vReach = hrow(list, "Reachable");
+    var vCert  = hrow(list, "Certificate");
+    var vRtt   = hrow(list, "Round-trip");
+    var vLive  = hrow(list, "Live updates");
+    var vPres  = hrow(list, "Sharing presence");
+    var verdict = el("p", "wavrm-msg", "Checking…"); card.appendChild(verdict);
+
+    // Presence (already known locally; Core-confirmed only claims presence).
+    if(_presenceError) setV(vPres, "No network presence", "warn");
+    else if(_presenceConfirmed) setV(vPres, "Yes, as " + (_presenceLabel || "this device"), "ok");
+    else setV(vPres, "Not confirmed", "");
+    // WS liveness from index.html's wrapper (may be undefined on an older page -> "unknown").
+    try{
+      var down = window.__wavrWsDown;
+      if(down === true) setV(vLive, "Reconnecting…", "warn");
+      else if(down === false) setV(vLive, "Flowing", "ok");
+      else setV(vLive, "—", "");
+    }catch(_){ setV(vLive, "—", ""); }
+
+    function finishVerdict(reachable, certOk, rtt){
+      if(!reachable){ verdict.className = "wavrm-msg err"; verdict.textContent = "Can't reach your hub right now."; return; }
+      if(certOk === false){ verdict.className = "wavrm-msg err"; verdict.textContent = "The hub's certificate doesn't match what you verified."; return; }
+      if(rtt != null && rtt < 1500 && _attached && !_presenceError){
+        verdict.className = "wavrm-msg"; verdict.textContent = "Your device and the hub are talking. All good.";
+      } else {
+        verdict.className = "wavrm-msg"; verdict.textContent = "Connected. Some checks are slow or unconfirmed — see above.";
+      }
+    }
+    // TLS/reachability + pin leg (WavrNet.probe), then RTT via a real authed status read.
+    var certOk = null, reachable = false, rtt = null;
+    function afterProbe(){
+      if(!(_token && _base && WavrNet && typeof WavrNet.request === "function")){
+        setV(vRtt, "—", ""); finishVerdict(reachable, certOk, rtt); return;
+      }
+      var s0 = Date.now();
+      netFetch(_base + "/api/status", { method: "GET", headers: { "Authorization": "Bearer " + _token } })
+        .then(function(r){
+          rtt = Date.now() - s0; reachable = reachable || !!(r && r.status);
+          setV(vRtt, rtt + " ms", rtt < 1500 ? "ok" : "warn");
+          if(reachable) setV(vReach, "Yes", "ok");
+        }, function(){ setV(vRtt, "—", "err"); })
+        .then(function(){ finishVerdict(reachable, certOk, rtt); });
+    }
+    if(WavrNet && typeof WavrNet.probe === "function"){
+      WavrNet.probe({ url: _base }).then(function(r){
+        var fp = (r && r.fingerprint) || null;
+        reachable = !!fp;
+        setV(vReach, fp ? "Yes" : "No", fp ? "ok" : "err");
+        certOk = (fp && _pinnedFp) ? (normHex(fp) === normHex(_pinnedFp)) : null;
+        setV(vCert, certOk === true ? "Verified" : certOk === false ? "Changed!" : "—",
+             certOk === true ? "ok" : certOk === false ? "err" : "");
+      }, function(){ reachable = false; setV(vReach, "No", "err"); setV(vCert, "—", ""); })
+        .then(afterProbe);
+    } else { setV(vReach, "—", ""); setV(vCert, "—", ""); afterProbe(); }
+
+    // Admin: a user-invoked "your home's internet" leg against the real /api/health (never automatic --
+    // /api/health pings public resolvers, an egress path). Member: honestly deferred to an admin device.
+    if(_role === "central"){
+      card.appendChild(el("span", "wavrm-lab", "Your home's internet"));
+      var netFb = el("p", "wavrm-msg", "");
+      var chk = el("button", "wavrm-btn ghost", "Check now"); chk.type = "button";
+      chk.setAttribute("data-tip", "Asks your hub to test its internet — this also pings public DNS servers, so it runs only when you tap it.");
+      chk.onclick = function(){
+        chk.disabled = true; netFb.className = "wavrm-msg"; netFb.textContent = "Checking…";
+        netFetch(_base + "/api/health", { method: "GET", headers: { "Authorization": "Bearer " + _token } })
+          .then(function(r){ return (r && r.ok) ? r.json() : null; })
+          .then(function(body){
+            chk.disabled = false;
+            if(!body){ netFb.className = "wavrm-msg err"; netFb.textContent = "Couldn't run the check."; return; }
+            var sev = body.severity || "unknown";
+            netFb.className = "wavrm-msg"; netFb.textContent = "Home internet: " + sev + ".";
+          }, function(){ chk.disabled = false; netFb.className = "wavrm-msg err"; netFb.textContent = "Couldn't run the check."; });
+      };
+      card.appendChild(chk); card.appendChild(netFb);
+    } else if(_role === "user"){
+      card.appendChild(el("p", "wavrm-sub", "To check your home's internet, ask an admin device."));
+    }
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ showDetails(); };
+    card.appendChild(back);
+  }
+
+  // ================= COMPLEMENT (ii): WHAT'S-NEW CARD (version-gated, re-readable) =================
+  function whatsNewPending(){ return !!(WHATS_NEW && WHATS_NEW.version && _seenVersion !== WHATS_NEW.version); }
+  function markSeenVersion(){
+    _seenVersion = (WHATS_NEW && WHATS_NEW.version) || "";
+    secureSet(K_SEEN_VERSION, _seenVersion).catch(function(){});
+  }
+  // Shown BEFORE the dashboard on a version change; dismiss => don't reshow THAT version. onDone continues
+  // to whatever comes next (the contribute gate / the dashboard, or back to details when re-read).
+  function showWhatsNew(onDone){
+    var card = ensureOverlay("whatsNew");
+    card.appendChild(el("h2", "wavrm-h", (WHATS_NEW && WHATS_NEW.title) || "What's new"));
+    if(WHATS_NEW && WHATS_NEW.version) card.appendChild(el("p", "wavrm-sub", "Version " + WHATS_NEW.version));
+    var notes = (WHATS_NEW && WHATS_NEW.notes) || [];
+    notes.forEach(function(n){ card.appendChild(el("p", "wavrm-sub", "• " + n)); });
+    var ok = el("button", "wavrm-btn", "Got it"); ok.type = "button";
+    ok.onclick = function(){ markSeenVersion(); if(typeof onDone === "function") onDone(); };
+    card.appendChild(ok);
+  }
+
+  // ================= COMPLEMENT (ii): OTA "update available" chip (pinned, web-assets-only) =========
+  // Poll /api/app/manifest over the PINNED transport on resume; if the hub advertises a newer WEB bundle
+  // AND the sibling WavrUpdate plugin is present, surface an honest "Update available -> Apply & restart"
+  // chip. The plugin does the pinned download + SHA-256 verify + safe-untar + next-launch apply; the shim
+  // only signals. OTA NEVER carries the shim/lib/native (that's the code holding the pin -> ships via APK).
+  // Absent the plugin, no chip is shown (the check is a no-op). Never logs versions/urls.
+  var _otaUi = null, _otaSeenVersion = null, _otaInFlight = false;
+  function updateAvailable(){ return !!(WavrUpdate && typeof WavrUpdate.download === "function"); }
+  function pollManifest(){
+    if(_otaInFlight || !updateAvailable() || !_token || !_base || !_attached) return;
+    if(!(WavrNet && typeof WavrNet.request === "function")) return;
+    _otaInFlight = true;
+    netFetch(_base + "/api/app/manifest", { method: "GET", headers: { "Authorization": "Bearer " + _token } })
+      .then(function(r){ return (r && r.ok) ? r.json() : null; })
+      .then(function(m){
+        _otaInFlight = false;
+        var ver = m && m.version;
+        if(!ver || !WavrUpdate) return;
+        Promise.resolve(typeof WavrUpdate.current === "function" ? WavrUpdate.current() : null).then(function(cur){
+          var active = (cur && cur.version) || null;
+          if(active && String(active) === String(ver)) return;   // already on this bundle
+          _otaSeenVersion = String(ver); injectOtaChip(m);
+        }, function(){ _otaSeenVersion = String(ver); injectOtaChip(m); });
+      }, function(){ _otaInFlight = false; });
+  }
+  function injectOtaChip(manifest){
+    if(!_token) return;
+    var row = document.querySelector(".status-pills"); if(!row) return;
+    if(!document.getElementById("wavrm-ota")){
+      var b = el("button", "tpill", ""); b.id = "wavrm-ota"; b.type = "button";
+      var dot = el("i", "p-dot"); var txt = el("span", "p-txt", "Update available");
+      try{ dot.style.background = "var(--warn,#e8a13a)"; }catch(_){}
+      b.appendChild(dot); b.appendChild(txt);
+      b.setAttribute("data-tip", "A newer version of the app screens is ready on your hub. Downloads over your verified, pinned connection and applies on next launch.");
+      b.onclick = function(){ applyOta(manifest); };
+      row.appendChild(b);
+      _otaUi = b;
+    }
+    _otaUi.hidden = false;
+  }
+  function applyOta(manifest){
+    if(!(WavrUpdate && typeof WavrUpdate.download === "function")) return;
+    if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Updating…"; _otaUi.disabled = true; }
+    Promise.resolve(WavrUpdate.download({ manifest: manifest })).then(function(){
+      return typeof WavrUpdate.apply === "function" ? WavrUpdate.apply({}) : null;   // apply = next-launch activation
+    }).then(function(){
+      if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Restart to finish"; _otaUi.disabled = false; }
+    }, function(){
+      if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Update failed"; _otaUi.disabled = false; }
+    });
+  }
+
+  // ================= ITEM 3: FIRST-OPEN CONTRIBUTE ONBOARDING (affirmative-tap only) ================
+  function markContribOnboarded(){ _contribOnboarded = true; secureSet(K_CONTRIB_ONBOARDED, "1").catch(function(){}); }
+  function choiceCard(title, sub, primary){
+    var b = el("button", "wavrm-choice" + (primary ? " primary" : "")); b.type = "button";
+    b.appendChild(el("span", "wavrm-choice-mark", ""));
+    b.appendChild(el("div", "wavrm-choice-t", title));
+    b.appendChild(el("div", "wavrm-choice-s", sub));
+    return b;
+  }
+  // Shown ONCE (K_CONTRIB_ONBOARDED) before the dashboard. Nothing is registered until the user TAPS a
+  // choice (no silent default-green enrolment). Undo is the persistent tri-color control + the note; a
+  // "Not now" tap sets red (which routes to showOut via changeConsent). onDone reveals the dashboard.
+  function showContributeOnboarding(onDone){
+    var card = ensureOverlay("contribute");
+    card.appendChild(el("h2", "wavrm-h", "Help your home know who's in?"));
+    card.appendChild(el("p", "wavrm-sub",
+      "This device can add its presence so your home knows when you're home. You choose how much, and you can change or turn it off anytime."));
+    var cGreen = choiceCard("Help sense who's home", "Wavr uses this phone's presence and names it at home.", true);
+    cGreen.setAttribute("data-tip", "Full participation — your presence counts and is named at home.");
+    cGreen.onclick = function(){ markContribOnboarded(); changeConsent("green"); if(typeof onDone === "function") onDone(); };
+    var cYellow = choiceCard("Stay present but anonymous", "Counted as home, without a name. Minimal data.", false);
+    cYellow.setAttribute("data-tip", "Limited — present but anonymous; minimal data.");
+    cYellow.onclick = function(){ markContribOnboarded(); changeConsent("yellow"); if(typeof onDone === "function") onDone(); };
+    var cRed = choiceCard("Not now", "Don't contribute from this device. Turn it on anytime from the control at the top.", false);
+    cRed.setAttribute("data-tip", "Off — this device contributes nothing until you turn it on.");
+    cRed.onclick = function(){ markContribOnboarded(); changeConsent("red"); };   // red routes to showOut itself
+    card.appendChild(cGreen); card.appendChild(cYellow); card.appendChild(cRed);
+    card.appendChild(el("p", "wavrm-sub", "You can change this anytime — tap the coloured control, or hold it to turn off."));
+  }
+
+  // ================= ITEM 2: DEVICE-CONSENT ROW MOUNTED INTO #sensingLevelTile ======================
+  // The consent tri-color is the device-scope participation control. It lives WITH the hub's sensing tile
+  // (index.html's #sensingLevelTile shows the HOME's read-only level; this row is "this device"), so the
+  // two are read together. Registered in _consentUis via makeConsentControl, so its colour+label stay in
+  // lockstep with the header pill (item 4). isNative-guarded; the tile is untouched in web modes.
+  function injectConsentTile(){
+    if(!_token) return;
+    var tile = document.getElementById("sensingLevelTile"); if(!tile) return;
+    if(document.getElementById("wavrm-consent-tile")){ renderConsent(); return; }   // idempotent
+    var box = el("div", ""); box.id = "wavrm-consent-tile";
+    box.appendChild(el("span", "wavrm-ct-lab", "This device"));
+    var row = el("div", "wavrm-inrow");
+    row.appendChild(el("span", "wavrm-inrow-l", "Tap to reduce · hold to turn off"));
+    row.appendChild(makeConsentControl().btn);
+    box.appendChild(row);
+    tile.appendChild(box);
+    renderConsent();
+  }
+
+  // Reveal the dashboard viewer chrome: confirm the hub is reachable (connectPinned), then inject the
+  // header pills. connectPinned keeps the overlay up on failure instead of the frozen default house.
+  // withSensorPill = the combo (sensor+viewer) device also gets the compact contribute pill.
+  function revealDashboard(withSensorPill){
+    connectPinned(function(){ hideOverlay(); });
+    if(withSensorPill) injectSensorPill();
+    injectConsentPill();   // consent toggle in the header chrome (participation != permission)
+    injectStatusChip();    // Task 6: attachment + presence chip
+    injectRolePill();      // item 1: Admin/Member indicator
+    injectConsentTile();   // item 2: device-consent row inside #sensingLevelTile (with the hub level)
+    pollManifest();        // complement (ii): check for a newer web bundle over the pinned transport
+  }
+  // First-open gates run BEFORE the dashboard, in order: What's-New (on a version change) -> contribute
+  // onboarding (once). Each is affirmative and dismissible; only then is the dashboard revealed. The
+  // contribute "Not now" path routes to showOut itself (red), so revealDashboard is skipped there.
+  function gateThenDashboard(withSensorPill){
+    var proceed = function(){ revealDashboard(withSensorPill); };
+    var afterWhatsNew = function(){
+      if(_token && !_contribOnboarded){ showContributeOnboarding(proceed); }
+      else proceed();
+    };
+    if(whatsNewPending()) showWhatsNew(afterWhatsNew); else afterWhatsNew();
+  }
+
   // ----- Boot: load caches, resolve the gate, then decide which screen to show -----
   function decideScreen(){
     if(_screenDecided) return;   // #21: idempotent -- run at most once (Keystore-settled path OR the 4s wedge timer)
@@ -1767,26 +2188,14 @@
           // Show the permission wizard once before the first Start, then the node screen.
           if(!_onboarded) showWizard(showNode); else showNode();
         } else if(capsHasSensor()){
-          // sensor + viewer/admin: the dashboard is PRIMARY (boots exactly as the viewer path below);
-          // inject the compact "this device" sensor pill into the header chrome. The wizard is deferred
-          // to the pill's first Start (ensureOnboardedThen) so viewing is never blocked.
-          // connectPinned confirms the stored hub is REACHABLE (silently re-finding it by pinned fp if its
-          // DHCP address moved) before revealing the dashboard; the overlay stays up on failure instead of
-          // showing the empty default house. Falls back to today's blind handoff when WavrNet.probe is absent.
-          connectPinned(function(){ hideOverlay(); });
-          injectSensorPill();
-          injectConsentPill();   // consent toggle in the header chrome (combo device)
-          injectStatusChip();    // Task 6: attachment + presence chip in the header chrome
+          // sensor + viewer/admin: the dashboard is PRIMARY; inject the compact "this device" sensor pill
+          // into the header chrome. The wizard is deferred to the pill's first Start (ensureOnboardedThen)
+          // so viewing is never blocked. The gates below (What's-New, contribute) run BEFORE the dashboard.
+          gateThenDashboard(true);
         } else {
           // viewer / admin / migrated (token, no caps): the dashboard boots exactly as today once the hub is
-          // CONFIRMED reachable. connectPinned probes the stored base (silently re-discovering it by pinned
-          // fingerprint if the address moved) and only then hideOverlay reveals the dashboard; an unreachable
-          // hub keeps an actionable overlay instead of the frozen default map. Absent WavrNet.probe it is
-          // today's immediate handoff. Plus the consent toggle in the header chrome (participation !=
-          // permission -- a viewer/admin/central device shows it too).
-          connectPinned(function(){ hideOverlay(); });
-          injectConsentPill();
-          injectStatusChip();   // Task 6: attachment + presence chip in the header chrome
+          // CONFIRMED reachable, after the same first-open gates.
+          gateThenDashboard(false);
         }
       } else if(!_caps && !_base){
         // True first launch (nothing chosen AND nothing entered) -> capability chooser before setup.
@@ -1807,12 +2216,14 @@
   Promise.all([secureGet(K_URL), secureGet(K_FP), secureGet(K_TOKEN),
                secureGet(K_DEVICE_ID), secureGet(K_ROLE),
                secureGet(K_CAPS), secureGet(K_ONBOARDED), secureGet(K_CONSENT),
-               secureGet(K_PRESENCE_LABEL), secureGet(K_CORE_NAME)]).then(function(v){
+               secureGet(K_PRESENCE_LABEL), secureGet(K_CORE_NAME),
+               secureGet(K_CONTRIB_ONBOARDED), secureGet(K_SEEN_VERSION)]).then(function(v){
     _base = v[0] || ""; _pinnedFp = v[1] || null; _token = v[2] || null;
     _deviceId = v[3] || null; _role = v[4] || null;   // role read synchronously at boot, like the token
     _caps = parseCaps(v[5]); _onboarded = (v[6] === "1");   // caps + onboarded read synchronously too
     _consent = normConsent(v[7]);   // consent level read synchronously -> the toggle's boot colour is correct
     _presenceLabel = v[8] || ""; _coreName = v[9] || "";   // Task 6: label + Core name for the status chip
+    _contribOnboarded = (v[10] === "1"); _seenVersion = v[11] || "";   // item 3 + complement (ii) gates
     _attached = WavrLib.consentToActions(_consent).attached;   // Task 4: stored RED => boot DETACHED (fail-closed: tokenGet hides the token, netWebSocket refuses). Task 7 completes the boot-detached UX (showOut).
   }).catch(function(){}).then(function(){
     resolveReady();   // caches populated (or read failed): index.html's deferred boot may run now
