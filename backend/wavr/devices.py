@@ -30,6 +30,17 @@ from datetime import datetime, timezone
 # not the whole API" by design, not by convention.
 VALID_ROLES = frozenset({"central", "user", "agent"})
 
+# Device-scope participation tri-color (mobile companion consent, 2026-07-11
+# reconciliation): the SAME axis the shim's POST /api/consent has always
+# targeted (wavr-mobile-shim.js's CONSENT map) -- this column is what finally
+# makes that endpoint real. green=full (named presence), yellow=presence only
+# (no name label), red=off (contributes nothing, enforced server-side at
+# register_companion, not just client-side). NULL (every pre-existing row, and
+# every add() call that doesn't pass consent=) resolves to "green" -- the same
+# NULL-derives-a-default idiom `scopes`/`tool_scopes` already use, so this is
+# additive-only for every device paired before this feature existed.
+VALID_CONSENT = frozenset({"green", "yellow", "red"})
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
     device_id    TEXT PRIMARY KEY,
@@ -66,6 +77,13 @@ class Device:
     # meaningful for role == "agent" -- every other role resolves this axis to
     # None ("not restricted by it at all"), unchanged pre-existing behaviour.
     tool_scopes: frozenset[str] | None = None
+    # Device-scope participation tri-color (see VALID_CONSENT above). `None` means
+    # "no explicit grant yet" -- every pre-existing row and every add() call
+    # without an explicit consent= -- and resolves to "green" everywhere this is
+    # READ (to_dict() below, and app.py's enforcement); it is stored as-is (raw
+    # None, never silently rewritten to "green") so a fresh pairing's very first
+    # /api/consent GET can still tell "never set" apart from "explicitly green".
+    consent: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +93,10 @@ class Device:
             "created_ts": self.created_ts,
             "last_seen_ts": self.last_seen_ts,
             "revoked": self.revoked,
+            # Resolved (never raw NULL) so a device-list caller always sees an
+            # honest tri-color, matching the "NULL -> green" default everywhere
+            # else consent is consumed.
+            "consent": self.consent or "green",
         }
 
 
@@ -122,6 +144,7 @@ class DeviceStore:
         self._conn.commit()
         self._migrate_scopes_column()
         self._migrate_tool_scopes_column()
+        self._migrate_consent_column()
 
     def _migrate_scopes_column(self) -> None:
         """Wavr Pass (Phase 1), additive: add the nullable `scopes` column to an
@@ -148,8 +171,21 @@ class DeviceStore:
             self._conn.execute("ALTER TABLE devices ADD COLUMN tool_scopes TEXT")
             self._conn.commit()
 
+    def _migrate_consent_column(self) -> None:
+        """Mobile companion consent tri-color, additive: same idempotent
+        PRAGMA-guarded pattern as `_migrate_scopes_column`/`_migrate_tool_scopes_
+        column` -- a pre-existing db gains this column exactly once, every
+        existing row reading back `consent=None` ("derive green", the sane
+        full-participation default so a device paired before this feature
+        existed keeps contributing exactly as it always has)."""
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(devices)")}
+        if "consent" not in cols:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN consent TEXT")
+            self._conn.commit()
+
     def add(self, name: str, role: str, scopes: frozenset[str] | None = None,
-            tool_scopes: frozenset[str] | None = None) -> tuple[str, str]:
+            tool_scopes: frozenset[str] | None = None,
+            consent: str | None = None) -> tuple[str, str]:
         """Create a device and return (device_id, token). The token is generated
         here, stored hashed, and returned exactly once — the caller must hand it to
         the device now; it can never be recovered later.
@@ -160,9 +196,14 @@ class DeviceStore:
         future consent-granted device (P2). `tool_scopes` (Phase 2A / B4) is the
         SAME NULL-derives-from-role idiom for the MCP tool-name axis -- meaningful
         only for role="agent" (auth.effective_tool_scopes); every other caller
-        passing neither kwarg is unaffected."""
+        passing neither kwarg is unaffected. `consent` is the SAME NULL-derives-
+        default idiom for the mobile companion tri-color -- None (every existing
+        caller) resolves to "green" (full participation); pass an explicit
+        green/yellow/red only for a future consent-aware pairing flow."""
         if role not in VALID_ROLES:
             raise ValueError(f"invalid role: {role!r} (expected one of {sorted(VALID_ROLES)})")
+        if consent is not None and consent not in VALID_CONSENT:
+            raise ValueError(f"invalid consent: {consent!r} (expected one of {sorted(VALID_CONSENT)})")
         device_id = secrets.token_hex(16)          # 128-bit opaque id
         token = secrets.token_urlsafe(32)          # 256-bit secret, URL-safe
         token_hash = _hash_token(token)
@@ -170,9 +211,10 @@ class DeviceStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO devices (device_id, name, role, token_hash, created_ts,"
-                " last_seen_ts, revoked, scopes, tool_scopes) VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)",
+                " last_seen_ts, revoked, scopes, tool_scopes, consent)"
+                " VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)",
                 (device_id, name, role, token_hash, ts, _serialize_scopes(scopes),
-                 _serialize_scopes(tool_scopes)),
+                 _serialize_scopes(tool_scopes), consent),
             )
             self._conn.commit()
         return device_id, token
@@ -187,7 +229,7 @@ class DeviceStore:
         ts = self._now()
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, revoked, scopes, tool_scopes"
+                "SELECT device_id, name, role, created_ts, revoked, scopes, tool_scopes, consent"
                 " FROM devices WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()
@@ -203,6 +245,7 @@ class DeviceStore:
             created_ts=row["created_ts"], last_seen_ts=ts, revoked=False,
             scopes=_parse_scopes(row["scopes"]),
             tool_scopes=_parse_scopes(row["tool_scopes"]),
+            consent=row["consent"],
         )
 
     def list(self) -> list[Device]:
@@ -210,7 +253,7 @@ class DeviceStore:
         includes token material."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes, tool_scopes"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes, tool_scopes, consent"
                 " FROM devices ORDER BY created_ts, device_id"
             ).fetchall()
         return [self._to_device(r) for r in rows]
@@ -218,7 +261,7 @@ class DeviceStore:
     def get(self, device_id: str) -> Device | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes, tool_scopes"
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes, tool_scopes, consent"
                 " FROM devices WHERE device_id = ?",
                 (device_id,),
             ).fetchone()
@@ -250,6 +293,21 @@ class DeviceStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def set_consent(self, device_id: str, level: str) -> bool:
+        """Self-service device-scope participation change (POST /api/consent):
+        the ONLY writer of the `consent` column. Returns True if the device
+        exists (row updated), False for an unknown id. Raises ValueError for a
+        level outside VALID_CONSENT (validated before touching the db) -- the
+        route turns that into a clean 422, same convention as `set_role`."""
+        if level not in VALID_CONSENT:
+            raise ValueError(f"invalid consent: {level!r} (expected one of {sorted(VALID_CONSENT)})")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE devices SET consent = ? WHERE device_id = ?", (level, device_id)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
     @staticmethod
     def _to_device(r: sqlite3.Row) -> Device:
         return Device(
@@ -257,6 +315,7 @@ class DeviceStore:
             created_ts=r["created_ts"], last_seen_ts=r["last_seen_ts"],
             revoked=bool(r["revoked"]), scopes=_parse_scopes(r["scopes"]),
             tool_scopes=_parse_scopes(r["tool_scopes"]),
+            consent=r["consent"],
         )
 
     def close(self) -> None:

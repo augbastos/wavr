@@ -10,7 +10,7 @@
 // precaching the same-origin shell, so it adds zero external egress.
 //
 // Bump CACHE to invalidate the old shell on the next activate.
-const CACHE = "wavr-shell-v3";
+const CACHE = "wavr-shell-v4";
 const VENDOR_CACHE = "wavr-vendor-v1";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 const SHELL_PATHS = new Set(["/", "/index.html", "/manifest.webmanifest", "/icon.svg"]);
