@@ -80,7 +80,11 @@ class BLESource:
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:
-            known = self._current_known()
+            try:
+                known = self._current_known()
+            except Exception:
+                logging.warning("BLESource known_provider failed", exc_info=True)
+                known = {}
             if known:
                 try:
                     seen = await self._scan()

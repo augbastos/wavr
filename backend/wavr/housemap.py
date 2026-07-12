@@ -164,7 +164,10 @@ def _valid_backdrop(b) -> bool:
     if not isinstance(b, dict) or len(b) > MAX_BACKDROP_KEYS:
         return False
     try:
-        size = len(json.dumps(b))
+        # allow_nan=False: reject a NaN/Infinity leaf too -- json.dumps happily
+        # serializes those by default, but that's not valid JSON and would brick a
+        # strict JSON.parse() on the next GET (same class of bug as to_level above).
+        size = len(json.dumps(b, allow_nan=False))
     except (TypeError, ValueError):
         return False
     return size <= MAX_BACKDROP_BYTES
@@ -253,6 +256,10 @@ def validate_house_map(doc: dict) -> None:
             at = feat.get("at")
             if at is not None and not _point(at):
                 raise HouseMapError("feature 'at' must be a finite point")
+            if "to_level" in feat:
+                to_level = feat.get("to_level")
+                if not isinstance(to_level, int) or isinstance(to_level, bool):
+                    raise HouseMapError("feature to_level must be an integer")
         zones = f.get("zones", [])
         if not isinstance(zones, list) or len(zones) > MAX_ZONES_PER_FLOOR:
             raise HouseMapError(f"zones must be a list (<= {MAX_ZONES_PER_FLOOR})")

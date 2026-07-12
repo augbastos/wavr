@@ -50,12 +50,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import socket
 import struct
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable
 
 from wavr.data.deviceclass import hostname_type
+from wavr.sources._dhcp_raw import open_with_timeout
 
 MDNS_GROUP = "224.0.0.251"
 MDNS_PORT = 5353
@@ -269,9 +271,18 @@ async def _default_listen() -> AsyncIterator[tuple[bytes, str]]:
     datagram received (READ-ONLY -- never transmits a query). Uses a blocking
     socket handed to a thread executor (portable across platforms/Python
     versions, unlike relying on ProactorEventLoop UDP support on Windows). A
-    1s recv timeout lets the loop notice cancellation (aclose()) promptly."""
+    1s recv timeout lets the loop notice cancellation (aclose()) promptly.
+
+    The socket()/bind()/IP_ADD_MEMBERSHIP open itself runs off the event loop
+    via `_dhcp_raw.open_with_timeout` (same seam as dhcp/dhcp_fp/camera) --
+    unlike the bounded per-recv executor call below, an unguarded synchronous
+    bind() here could stall the event loop thread outright on a device where
+    that call hangs instead of failing fast (see `_dhcp_raw` module
+    docstring for the observed G9 field bug this pattern fixes)."""
     loop = asyncio.get_event_loop()
-    sock = _open_multicast_socket(MDNS_GROUP, MDNS_PORT)
+    sock = await open_with_timeout(
+        functools.partial(_open_multicast_socket, MDNS_GROUP, MDNS_PORT),
+        f"UDP/{MDNS_PORT} multicast bind (mDNS)")
     sock.settimeout(1.0)
     try:
         while True:

@@ -33,6 +33,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections import defaultdict
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 
 DEFAULT_RETENTION_DAYS = 60
@@ -76,6 +77,15 @@ class OccupancyLog:
         # (even with check_same_thread=False) is NOT safe under concurrent execute()
         # calls from multiple threads. Mirrors wavr.storage.Storage's own lock.
         self._lock = threading.Lock()
+        # WAL + synchronous=NORMAL: same trade as wavr.storage.Storage -- this table is
+        # on the same hot fusion-publish write path, so fewer/smaller fsyncs is the
+        # SD-card-wear/latency win on the G9, and this is DERIVED history (never the
+        # live occupancy decision), so losing the last commit or two on an unclean
+        # shutdown is an acceptable trade. :memory: (test suite) doesn't support WAL;
+        # suppressed same as Storage.
+        with suppress(sqlite3.OperationalError):
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.execute(_INDEX)
@@ -120,22 +130,21 @@ class OccupancyLog:
                 " VALUES (?, ?, ?, ?, ?)",
                 (room, int(bool(occupied)), person_count, confidence, ts),
             )
+            self._prune_locked()
             self._conn.commit()
         self._last[room] = {"occupied": bool(occupied), "person_count": person_count,
                              "confidence": confidence, "ts": ts}
-        self._prune()
         return True
 
-    def _prune(self) -> None:
-        """Delete rows older than ``retention_days``. Runs after every insert -- cheap,
-        because inserts themselves are edge-triggered (a handful a day per room, never
-        one per re-fuse tick). ``retention_days`` <= 0 or None disables pruning."""
+    def _prune_locked(self) -> None:
+        """Delete rows older than ``retention_days``. Folded into the same transaction
+        as the triggering insert (caller holds ``self._lock`` and commits once for
+        both) -- one fsync per edge-triggered event instead of two. ``retention_days``
+        <= 0 or None disables pruning."""
         if not self.retention_days or self.retention_days <= 0:
             return
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
-        with self._lock:
-            self._conn.execute("DELETE FROM occupancy_log WHERE ts < ?", (cutoff,))
-            self._conn.commit()
+        self._conn.execute("DELETE FROM occupancy_log WHERE ts < ?", (cutoff,))
 
     # ---- read -------------------------------------------------------------------------
 

@@ -297,7 +297,11 @@ fn pinned_https_agent(der: Vec<u8>) -> ureq::Agent {
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
-    ureq::builder().tls_config(Arc::new(config)).build()
+    ureq::builder()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(5))
+        .tls_config(Arc::new(config))
+        .build()
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +364,7 @@ fn wait_healthy(timeout: Duration) -> bool {
         false
     } else {
         while Instant::now() < deadline {
-            if ureq::get(&probe).call().is_ok() {
+            if ureq::get(&probe).timeout(Duration::from_secs(5)).call().is_ok() {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(400));
@@ -503,7 +507,7 @@ fn fetch_alerts(url: &str, https_agent: &mut Option<ureq::Agent>) -> Option<Vec<
         }
         https_agent.as_ref()?.get(url).call().ok()?.into_string().ok()?
     } else {
-        ureq::get(url).call().ok()?.into_string().ok()?
+        ureq::get(url).timeout(Duration::from_secs(5)).call().ok()?.into_string().ok()?
     };
     let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
     parsed.get("alerts")?.as_array().cloned()

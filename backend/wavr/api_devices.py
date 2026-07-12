@@ -16,9 +16,21 @@ still bounded by the pairing code's ~2-min one-time window.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Header, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 
 from wavr.auth import parse_bearer
+
+
+def _deps_not_wired() -> None:
+    """FAIL-CLOSED default for `delete_deps` (sweep #13, mirrors
+    api_nodes._admin_deps_not_wired). Previously `delete_deps=None` -> `[]`, so if
+    app.py's wiring ever forgot to pass `[Depends(require_csrf_root)]`, DELETE
+    /api/devices/{id} and POST /api/devices/{id}/role would run completely
+    UNAUTHENTICATED. A forgotten argument must never silently open device
+    revoke/role-change, so the default now DENIES instead: both routes 403 until
+    the real gate is explicitly wired."""
+    raise HTTPException(status_code=403,
+                        detail="device management routes have no auth gate wired")
 
 
 def build_pair_router(store, pairing) -> APIRouter:
@@ -71,18 +83,19 @@ def build_devices_router(store, delete_deps=None) -> APIRouter:
     state-changing DELETE (e.g. a CSRF-header guard) -- the GET list is a read and
     needs no CSRF, so it must stay reachable without the header."""
     router = APIRouter()
+    ddeps = list(delete_deps) if delete_deps else [Depends(_deps_not_wired)]
 
     @router.get("/api/devices")
     async def devices():
         return {"devices": [d.to_dict() for d in store.list()]}
 
-    @router.delete("/api/devices/{device_id}", dependencies=list(delete_deps or []))
+    @router.delete("/api/devices/{device_id}", dependencies=ddeps)
     async def revoke(device_id: str):
         if not store.revoke(device_id):
             raise HTTPException(status_code=404, detail=f"unknown device: {device_id}")
         return {"revoked": device_id}
 
-    @router.post("/api/devices/{device_id}/role", dependencies=list(delete_deps or []))
+    @router.post("/api/devices/{device_id}/role", dependencies=ddeps)
     async def set_role(device_id: str, role: str = Body(..., embed=True)):
         """Promote/demote an already-paired device between the two grantable roles.
         State-changing, so it carries the SAME delete_deps (CSRF X-Wavr-Local guard)

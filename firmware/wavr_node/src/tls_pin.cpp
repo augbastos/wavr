@@ -104,18 +104,38 @@ bool TlsPin::capture(Client& client) {
 
 void TlsPin::commit() {
   if (!candidatePem.length()) return;
-  pinnedPem = candidatePem;
-  pinnedFp = candidateFp;
   // ESP32 NVS entries top out around 4000 bytes each; a self-signed
   // RSA-2048 leaf's PEM (~1.5-2 KB, see derToPem()'s sizing comment) fits
   // comfortably under that, so this is not expected to fail in practice --
-  // flagged here rather than silently, since Preferences::putString()
-  // returns a length/0 that this firmware does not currently check.
+  // but Preferences::putString() returns 0 (or a short count) on a real NVS
+  // failure (e.g. a worn/full partition), and this used to update the
+  // in-RAM pin unconditionally regardless of that return value. That left a
+  // silent failure mode: this boot would behave as pinned (RAM updated),
+  // but nothing durable was written, so the next boot's begin() would find
+  // NVS empty/stale and silently fall back to the unpinned setInsecure()
+  // path -- a downgrade the operator has no way to notice. Check both
+  // writes and only adopt the candidate as the live pin once NVS actually
+  // confirms it persisted; otherwise log it and stay on the prior pin state
+  // (fail-closed) so RAM and NVS cannot disagree about whether this node is
+  // pinned.
   Preferences nvs;
-  nvs.begin("wavr-node", false);
-  nvs.putString("pinPem", pinnedPem);
-  nvs.putString("pinFp", pinnedFp);
+  if (!nvs.begin("wavr-node", false)) {
+    Serial.println("[wavr] TLS pin commit FAILED: NVS begin() error -- "
+                    "staying on prior pin state, will retry next enroll.");
+    return;
+  }
+  size_t pemWritten = nvs.putString("pinPem", candidatePem);
+  size_t fpWritten = nvs.putString("pinFp", candidateFp);
   nvs.end();
+  if (pemWritten != (size_t)candidatePem.length() ||
+      fpWritten != (size_t)candidateFp.length()) {
+    Serial.println("[wavr] TLS pin commit FAILED: NVS putString() wrote "
+                    "fewer bytes than expected -- staying on prior pin "
+                    "state (fail-closed), will retry next enroll.");
+    return;
+  }
+  pinnedPem = candidatePem;
+  pinnedFp = candidateFp;
   candidatePem = "";
   candidateFp = "";
 }

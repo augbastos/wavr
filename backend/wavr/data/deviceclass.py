@@ -43,13 +43,13 @@ def _p(pattern: str, dtype: str) -> tuple[re.Pattern, str]:
 # substring) precisely so words like "switch" can be scoped safely.
 HOSTNAME_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     _p(r"iphone|android|pixel|galaxy-?s\d|galaxy-?a\d", "phone"),
-    _p(r"ipad|galaxy-?tab|tablet", "tablet"),
+    _p(r"ipad|galaxy-?tab|tablet\b", "tablet"),
     _p(r"macbook|laptop|thinkpad|notebook", "laptop"),
     _p(r"imac|desktop|pc-|optiplex", "desktop"),
     _p(r"\btv\b|bravia|webos|tizen", "tv"),
     _p(r"chromecast|fire-?tv|apple-?tv|shield|roku", "streaming_stick"),
     _p(r"\becho\b|alexa|\bhomepod\b|\bsonos\b", "speaker"),
-    _p(r"hikvision|dahua|reolink|\bnvr\b|\bdvr\b|\bcam(?:era)?\b|tapo-?c\d", "camera"),
+    _p(r"hikvision|dahua|reolink|\bnvr\b|\bdvr\b|\b(?:web|ip)?cam(?:era)?\b|tapo-?c\d", "camera"),
     _p(r"deskjet|officejet|laserjet|\bepson\b|\bcanon\b|\bprinter\b", "printer"),
     _p(r"synology|\bqnap\b|\bnas\b", "nas"),
     _p(r"playstation|\bps[45]\b|\bxbox\b|nintendo-?switch", "console"),
@@ -57,7 +57,7 @@ HOSTNAME_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     _p(r"\bdeco\b|\barcher\b|\beero\b|\bunifi\b|\budm\b|omada|\brouter\b", "router"),
     _p(r"tapo-?[ps]\d|smart-?plug|wemo", "smart_plug"),
     _p(r"esp32|esp8266|esphome|espresense|tasmota", "esp_dev"),
-    _p(r"sensor|motion|contact|\bmi-?jia\b", "iot_sensor"),
+    _p(r"\bsensor\b|\bmotion\b|\bcontact\b|\bmi-?jia\b", "iot_sensor"),
     _p(r"mi-?band|fitbit|\bwatch\b|galaxy-?watch", "wearable"),
 )
 
