@@ -2408,6 +2408,17 @@
           <p class="dev-simple-pair-note">Pairing a phone or tablet instead of a sensor?
             <button id="devSimplePairLink" type="button" class="linklike">Go to pairing</button></p>
         </div>
+        <!-- Item 7 (mobile-only, admin device): register a label for a device this PHONE is already
+             paired to over Bluetooth. Hidden by default so the three web modes are byte-identical —
+             only the shim's companion-admin build (window.WAVR_MOBILE.role==='central' +
+             listBondedDevices) reveals + fills it, via renderMobileBonded(). Read-only bonds:
+             no BLE scan, no location. A phone-bonded MAC is a LABEL, not live presence. -->
+        <div id="mobileBtImport" class="tile" hidden>
+          <div class="tile-head"><h2>Add from this phone's Bluetooth</h2><span class="hint">devices already paired to this phone</span></div>
+          <p class="dev-simple-sub">These are devices already paired to this phone. Adding one gives your home a friendly label for it — it doesn't switch on live presence; that still depends on the hub's own radios.</p>
+          <div id="mobileBtList" class="dev-list" aria-live="polite"></div>
+          <div id="mobileBtFb" class="dsub-fb" role="status" aria-live="polite"></div>
+        </div>
         <button id="devAdvancedToggle" type="button" class="linklike dev-advanced-toggle"
                 aria-expanded="false" aria-controls="devAdvancedWrap">Advanced: browse the full device list</button>
         <div id="devAdvancedWrap" hidden>
@@ -3729,15 +3740,29 @@ const STATUS_FEATURE_LABEL = {
   tls:"TLS", ntfy:"notifications",
 };
 function renderStatus(){
-  if(MODE!=="live") return;                 // live-only; never in Plano B (demo) or companion
+  // live (loopback) OR companion viewer (Bearer token) — both read the same read-only /api/status.
+  // Feeding statusInfo (via window.__wavrStatus) is what populates the System tab's egress/sensing/
+  // sensing-level surfaces for a paired viewer (fixes "no hub connected" there). Demo never runs this.
+  if(MODE!=="live" && !(MODE==="companion" && companionToken())) return;
   document.getElementById("statusPanel").hidden = false;
   const versionEl  = document.getElementById("statusVersion");
   const sourcesEl  = document.getElementById("statusSources");
   const featuresEl = document.getElementById("statusFeatures");
   const houseEl    = document.getElementById("statusHouse");
   const internetEl = document.getElementById("statusInternet");
+  // Mobile: route the read through the native pinned fetch (base = stored central) with a Bearer, so
+  // the token never hits the app's own https://localhost. Absent the hook, __nf is exactly the
+  // original same-origin fetch — live behavior verbatim. 401/403 → drop back to pairing.
+  const auth = MODE==="companion" ? {"Authorization":"Bearer "+companionToken()} : null;
+  const __nf = (path, opt)=> window.WAVR_MOBILE
+    ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+    : fetch(location.origin + path, opt);
   async function refresh(){
-    let s; try{ s = await (await fetch(location.origin+"/api/status")).json(); }catch{ return; }
+    let s; try{
+      const r = await __nf("/api/status", auth?{headers:auth}:undefined);
+      if(auth && (r.status===401||r.status===403)){ companionAuthFailed(); return; }
+      s = await r.json();
+    }catch{ return; }
     window.__wavrStatus?.(s);   // Stage-3b hook: egress dashboard + Sobre reuse this SAME payload
     versionEl.textContent = "version " + (s.version ?? "?");
     // Internet up/down (item: internet monitor) — ok:null means the monitor is off or the
@@ -3779,6 +3804,9 @@ function renderStatus(){
   }
   refreshStatus = refresh;
   refresh();
+  // Live drives refreshStatus from renderControls' 3s poll; companion (renderControls is live-only)
+  // needs its own cadence to keep statusInfo fresh for the System-tab surfaces.
+  if(MODE==="companion") setInterval(refresh, 3000);
 }
 renderStatus();
 
@@ -5905,6 +5933,78 @@ async function renderIdentity(){
   renderList(seed);                          // seed the registered list from the probe we already read
 }
 renderIdentity();
+
+// ---- Item 7: add a device THIS phone is bonded to over Bluetooth (mobile ADMIN device only) ----
+// Guarded by the shim contract: window.WAVR_MOBILE + role 'central' + listBondedDevices. Absent it —
+// which is ALL THREE web modes (loopback/companion-web/demo) and any non-admin device — this is a
+// no-op and #mobileBtImport stays hidden, so web behavior is byte-identical. Reads bonds from the
+// native sibling plugin (no BLE scan, no location), diffs against GET /api/identity/devices, and
+// registers ONE at a time, consent-first, over the pinned Bearer transport. Router-level require_central
+// + admin already gates the POST server-side (a user tablet 403s). Honest limitation: a phone-bonded MAC
+// is a LABEL enriching the registry — live presence still depends on the hub's own radios.
+async function renderMobileBonded(){
+  const m = window.WAVR_MOBILE;
+  if(!(m && MODE==="companion" && m.role==="central" && typeof m.listBondedDevices==="function")) return;
+  const box = document.getElementById("mobileBtImport");
+  const list = document.getElementById("mobileBtList");
+  const fb = document.getElementById("mobileBtFb");
+  if(!box || !list) return;
+  const auth = {"Authorization":"Bearer "+companionToken()};
+  const __nf = (path, opt)=> m.netFetch(m.base + path, opt);
+  box.hidden = false;
+  let bonded;
+  try{ bonded = await m.listBondedDevices(); }catch{ bonded = null; }
+  if(bonded === null){                        // capability unavailable — honest, not an empty list
+    list.textContent = "";
+    const e = document.createElement("div"); e.className = "empty";
+    e.textContent = "Bluetooth device import isn't available on this device.";
+    list.appendChild(e); return;
+  }
+  const registered = new Set();
+  try{
+    const r = await __nf("/api/identity/devices", {headers:auth});
+    if(r.status===401||r.status===403){ companionAuthFailed(); return; }
+    if(r.ok){ const j = await r.json();
+      (Array.isArray(j.devices)?j.devices:[]).forEach(d=>{ if(d && d.address) registered.add(String(d.address).toLowerCase()); }); }
+  }catch{}
+  const fresh = bonded.filter(d => d.address && !registered.has(String(d.address).toLowerCase()));
+  list.textContent = "";
+  if(!fresh.length){
+    const e = document.createElement("div"); e.className = "empty";
+    e.textContent = bonded.length ? "All paired devices are already added." : "No paired Bluetooth devices found on this phone.";
+    list.appendChild(e); return;
+  }
+  fresh.forEach(d => {
+    const row = document.createElement("div"); row.className = "pair-dev-row";
+    const left = document.createElement("span");
+    const nm = document.createElement("b"); nm.textContent = d.label || "(unnamed device)";     // textContent — user data
+    const mac = document.createElement("span"); mac.className = "pair-dev-meta";
+    mac.textContent = " · " + (d.address || "");                                                 // textContent — server/plugin data
+    left.appendChild(nm); left.appendChild(mac); row.appendChild(left);
+    const personIn = document.createElement("input"); personIn.type = "text";
+    personIn.placeholder = "whose device?"; personIn.value = d.label || "";
+    const add = document.createElement("button"); add.type = "button"; add.className = "ctl small"; add.textContent = "Add";
+    add.onclick = async ()=>{
+      const person = (personIn.value || "").trim();
+      if(!person){ actionFeedback(fb, false, "enter whose device this is"); return; }
+      add.disabled = true;
+      let r;
+      try{ r = await __nf("/api/identity/devices", {method:"POST",
+        headers:{...auth, "Content-Type":"application/json"},
+        body:JSON.stringify({person, devices:[{address:d.address, source:"ble", origin:"bonded"}]})}); }catch{}
+      if(r && (r.status===401||r.status===403)){ companionAuthFailed(); return; }
+      if(r && r.ok){
+        actionFeedback(fb, true, null, "✓ added"); row.remove();
+        if(!list.querySelector(".pair-dev-row")){
+          const e = document.createElement("div"); e.className = "empty";
+          e.textContent = "All paired devices are already added."; list.appendChild(e);
+        }
+      } else { add.disabled = false; actionFeedback(fb, false, "couldn't add — check the name"); }
+    };
+    row.appendChild(personIn); row.appendChild(add); list.appendChild(row);
+  });
+}
+// renderMobileBonded() is invoked only from the mobile post-ready boot; web modes never call it.
 
 // ---- Who's likely home — known-presence summary (live/central only, known-device-ui,
 // 2026-07-11) ----
@@ -9494,6 +9594,8 @@ const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); upd
     try{ document.getElementById("mode").innerHTML =
          companionToken() ? "source: <b>real home</b> (viewer)" : "source: <b>pairing</b>"; }catch{}
     renderNetwork(); renderRadar(); initCompanion();
+    renderStatus();   // item 8: re-run now the token cache is populated (the parse-time call no-op'd in companion)
+    renderMobileBonded();   // item 7: admin device's bonded-Bluetooth import (no-op unless role central + plugin)
   }
   (await provider.history()).forEach(handle); provider.start(handle);
 })();
@@ -11715,10 +11817,16 @@ try {
     var list = $("egressList"), sum = $("egressSummary"), note = $("egressNote");
     var demoNote = $("egressDemoNote");
     if(!list || !sum) return;
-    var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
+    // Item 8: a companion viewer with a token reads the SAME statusInfo.features (populated by
+    // renderStatus's companion branch), so the egress rows show real state instead of "no hub
+    // connected". The ACTUATING master switch stays live-only: POST /api/system/toggles/egress is
+    // require_local+root (loopback), which even a paired 'central' token can't pass — so companion
+    // gets the honest read-only receipt (button hidden), never a dead/misleading toggle.
+    var _egCompanionRead = (M === "companion" && typeof companionToken === "function" && !!companionToken());
+    var feats = ((M === "live" || _egCompanionRead) && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
       ? statusInfo.features : null;
     var egMasterBtn = $("egressMasterBtn"), egMasterFb = $("egressMasterFb");
-    if(feats && typeof feats.egress_allowed === "boolean"){
+    if(M === "live" && feats && typeof feats.egress_allowed === "boolean"){
       wireSysToggleMaster(egMasterBtn, egMasterFb, "egress", feats.egress_allowed,
         "Egress: allowed", "Egress: blocked",
         "Master switch — blocks every egress path below at once, even if a feature is individually enabled. Tap to block.",
@@ -11885,14 +11993,17 @@ try {
   function renderSensing(){
     var list = $("sensingList");
     if(!list) return;
-    var feats = (M === "live" && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
+    // Item 8: companion viewer reads the same statusInfo.features so the collector rows show real
+    // state; the actuating master toggle stays live-only (require_local+root — see renderEgress).
+    var _snCompanionRead = (M === "companion" && typeof companionToken === "function" && !!companionToken());
+    var feats = ((M === "live" || _snCompanionRead) && statusInfo && statusInfo.features && typeof statusInfo.features === "object")
       ? statusInfo.features : null;
     var snMasterBtn = $("sensingMasterBtn"), snMasterFb = $("sensingMasterFb");
     // Privacy tab (gearSecPrivacy): a second instance of the SAME network_sensing master
     // toggle, surfaced where the real controls now live — same wireSysToggleMaster() call,
     // same fail-hidden gate, just a different pair of DOM nodes.
     var privSnBtn = $("privSensingBtn"), privSnFb = $("privSensingFb");
-    if(feats && typeof feats.sensing_allowed === "boolean"){
+    if(M === "live" && feats && typeof feats.sensing_allowed === "boolean"){
       wireSysToggleMaster(snMasterBtn, snMasterFb, "network_sensing", feats.sensing_allowed,
         "Sensing: allowed", "Sensing: paused",
         "Master switch — pauses the optional collectors below at once (the base LAN presence scan is unaffected). Tap to pause.",
@@ -11913,7 +12024,7 @@ try {
     // available===false: the raw socket bind itself failed on the most recent
     // attempt (e.g. non-root proot lacking CAP_NET_BIND_SERVICE) -- distinct from a
     // quiet LAN, which is available===true with zero devices seen.
-    var avail = (M === "live" && statusInfo && statusInfo.availability && typeof statusInfo.availability === "object")
+    var avail = ((M === "live" || _snCompanionRead) && statusInfo && statusInfo.availability && typeof statusInfo.availability === "object")
       ? statusInfo.availability : null;
     list.textContent = "";
     SENSING_ITEMS.forEach(function(it){
@@ -12119,9 +12230,15 @@ try {
     var pause = $("privacyPauseBtn"), note = $("sensingLevelNote");
     if(!seg || !posture) return;
     var live = (M === "live");
-    // demo/companion: illustrative only — highlight the privacy-first default (Presence),
-    // buttons disabled, honest note that the real control runs on the hub.
-    var cur = live ? deriveTier() : "presence";
+    // Item 2/8: a companion viewer shows the HOME's REAL sensing level, read-only — from the
+    // server-derived hub_level in status.features (so it doesn't re-implement deriveTier, which
+    // needs the live-only sysInfo). Falls back to Presence only until the hub reports it. Demo stays
+    // the illustrative Presence example. Buttons stay disabled for companion (writes run on the hub).
+    var _tierCompanion = (M === "companion" && typeof companionToken === "function" && !!companionToken()
+                          && statusInfo && statusInfo.features && typeof statusInfo.features === "object");
+    var _hubLevel = (_tierCompanion && TIER_ORDER.indexOf(statusInfo.features.hub_level) >= 0)
+                    ? statusInfo.features.hub_level : null;
+    var cur = live ? deriveTier() : (_hubLevel || "presence");
     var locked = !live || tierBusy || killBusy;
     var btns = seg.querySelectorAll(".seg-btn");
     Array.prototype.forEach.call(btns, function(b){
@@ -12146,7 +12263,9 @@ try {
         ? (tierBusy ? "applying…"
            : cur === "off" ? "Everything is paused."
            : "Privacy pause drops one level instantly.")
-        : "Live control runs on the hub (local panel). Default is Presence — cameras start off.";
+        : _tierCompanion
+          ? "This is your home's sensing level, set on the hub. Choose what THIS device shares below."
+          : "Live control runs on the hub (local panel). Default is Presence — cameras start off.";
     }
   }
   (function(){
@@ -13107,6 +13226,9 @@ try {
       try{ _sr(on); }catch(e){}
       if(on && !wsDown){ wsDown = true; wsSince = Date.now(); wsDrops++; }
       if(!on && wsDown) wsDown = false;
+      // Item 6 (mobile health screen): expose live-socket liveness so the shim's on-device
+      // Connection check can report it. Boolean only — no payloads, no identifiers.
+      try{ window.__wavrWsDown = wsDown; }catch(e){}
     };
   }
 

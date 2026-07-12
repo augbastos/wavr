@@ -317,12 +317,16 @@ def test_status_shape_and_no_secrets():
             # system-toggles egress/sensing masters (default-ON, operator-actuatable from
             # the local loopback UI) + the network-doctor auto-fix flag (default-OFF).
             "egress_allowed", "sensing_allowed", "net_doctor_autofix",
+            # server mirror of deriveTier() for the mobile companion sensing tile.
+            "hub_level",
         }
         assert set(body["features"]) == expected_features
-        # Every feature is a bool flag EXCEPT connectors_active, an int count.
+        # Every feature is a bool flag EXCEPT connectors_active (int) and hub_level
+        # (str tier off/presence/precise).
         assert all(isinstance(v, bool) for k, v in body["features"].items()
-                   if k != "connectors_active")
+                   if k not in ("connectors_active", "hub_level"))
         assert isinstance(body["features"]["connectors_active"], int)
+        assert body["features"]["hub_level"] in ("off", "presence", "precise")
 
         assert set(body["house"]) == {"floors", "rooms", "people"}
         assert body["house"]["floors"] >= 1
@@ -365,6 +369,8 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "dhcp_fp": False, "rogue_dhcp": False, "health_resolvers": False,
             # system-toggles + net-doctor: egress/sensing default-ON, autofix default-OFF.
             "egress_allowed": True, "sensing_allowed": True, "net_doctor_autofix": False,
+            # deriveTier() mirror: manager auto-starts (running) with cameras boot-OFF -> presence.
+            "hub_level": "presence",
             # gateway-MAC-identity tracker is the one default-ON feature
             # (zero-egress, on-box -- inventory feature #2).
             "gateway_monitor": True,

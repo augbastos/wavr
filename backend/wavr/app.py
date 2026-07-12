@@ -3,18 +3,21 @@ from __future__ import annotations
 import asyncio
 import copy
 import functools
+import hashlib
 import hmac
+import io
 import ipaddress
 import logging
 import os
 import re
 import sqlite3
+import tarfile
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -78,7 +81,7 @@ from wavr.assistant_store import AssistantEngineStore
 from wavr.api_assistant import build_assistant_router
 from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
-from wavr.devices import DeviceStore
+from wavr.devices import DeviceStore, VALID_CONSENT
 from wavr.pairing import PairingManager
 from wavr.pair_requests import PairApprovalManager
 from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope
@@ -130,6 +133,36 @@ def _load_device_catalog() -> list:
     except Exception:
         logging.warning("device catalog unavailable for HA import", exc_info=True)
         return []
+
+
+# OTA (Augusto sign-off): the pinned/hashed/web-only/next-launch update channel a
+# paired companion polls (GET /api/app/manifest + GET /api/app/bundle below).
+# Deliberately the SAME static-shell file set the "/" "/index.html"
+# "/manifest.webmanifest" "/sw.js" "/icon.svg" "/measure.html" routes already
+# serve individually -- never /vendor (the large, frozen three.js payload --
+# re-bundling it would bloat every update for content that never changes) and,
+# non-negotiably, never the mobile shim/lib/native code that HOLDS the pin: an
+# OTA channel may ship a new dashboard but must never be able to rewrite its
+# own verifier. Version is `__version__` (the same version string /api/status
+# and /api/companion/health already disclose) -- monotonic by the package's own
+# release discipline, not a separate counter this feature invents.
+_OTA_ASSET_NAMES = ("index.html", "manifest.webmanifest", "sw.js", "icon.svg", "measure.html")
+
+
+@functools.lru_cache(maxsize=1)
+def _build_ota_bundle() -> dict:
+    """Gzip-tar the OTA-eligible web assets + hash/size the result. Cached
+    (process-lifetime -- the frontend shell doesn't change while a server is
+    running) so GET /api/app/manifest and GET /api/app/bundle always agree
+    byte-for-byte without re-reading disk on every call."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name in _OTA_ASSET_NAMES:
+            path = _INDEX.parent / name
+            if path.exists():
+                tar.add(path, arcname=name)
+    data = buf.getvalue()
+    return {"data": data, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "testclient"})
@@ -2149,6 +2182,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def healthz():
         return {"ok": True, "version": __version__}
 
+    def _hub_level() -> str:
+        # Server mirror of index.html's deriveTier() (frontend/index.html's own
+        # TIER_ORDER/TIER_META region): "off" if the system isn't running,
+        # "precise" if any REGISTERED camera source is enabled, else "presence".
+        # `_cameras.list()` (not manager.status() alone) is the same "which
+        # sources are cameras" cross-reference the frontend's own
+        # cameraSourceList() does against GET /api/cameras.
+        st = manager.status()
+        if not st["running"]:
+            return "off"
+        cam_names = {c["name"] for c in _cameras.list()}
+        any_cam_enabled = any(s["enabled"] for s in st["sources"] if s["name"] in cam_names)
+        return "precise" if any_cam_enabled else "presence"
+
     @app.get("/api/status")
     async def status():
         # READ-ONLY, NO SECRETS: sources are name+active only (no rtsp/mac), features
@@ -2262,6 +2309,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # deliberately blocked that whole class from the System tab.
                 "egress_allowed": _connectors.egress_allowed(),
                 "sensing_allowed": _connectors.sensing_allowed(),
+                # Mobile companion reconciliation (2026-07-11): the server-side
+                # mirror of index.html's own deriveTier() (off/presence/precise),
+                # so a companion's #sensingLevelTile can show "your home is
+                # sensing: <hub_level>" from ONE source of truth instead of
+                # re-deriving the same rule twice. off = system not running;
+                # precise = at least one registered camera source is enabled;
+                # presence = running with no camera enabled.
+                "hub_level": _hub_level(),
             },
             "house": {
                 "floors": len(_house.get("floors", [])),
@@ -2384,6 +2439,22 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # byte with the get_house_status MCP tool (wavr.mcp) -- see its docstring.
         return await _compute_house_status(window_minutes)
 
+    def _caller_consent(request: Request) -> str:
+        # Resolve the REQUESTING device's own consent tri-color (devices.
+        # VALID_CONSENT). Root (the loopback operator) has no Device row -- its
+        # participation is the master egress/sensing toggle
+        # (POST /api/system/toggle), not this per-device axis, so it always
+        # reads "green" (full), byte-identical to this route's pre-consent
+        # behaviour. Everything else re-verifies the SAME bearer token the
+        # loopback_or_authed middleware already checked (one more hashed
+        # lookup) because request.state carries only role/scopes, never the
+        # specific Device row this needs.
+        if getattr(request.state, "role", None) == "root" or _devices is None:
+            return "green"
+        token = parse_bearer(request.headers.get("authorization"))
+        device = _devices.verify(token) if token else None
+        return (device.consent if device else None) or "green"
+
     @app.post("/api/presence/register-companion")
     async def register_companion(request: Request, label: str = Body(..., embed=True),
                                  _=Depends(require_authenticated),
@@ -2403,6 +2474,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # honest, expected outcome (not rooted / IP not yet in the table), not
         # an error, so the mobile side can show a clear message rather than a
         # generic failure.
+        #
+        # CONSENT ENFORCEMENT (Augusto sign-off, mobile-as-presence-beacon):
+        # "red" was previously a client-side-only promise (the shim just never
+        # called this route) -- a patched/compromised client could keep
+        # registering after withdrawal. It is now enforced HERE too, so RED is
+        # a real server-side guarantee, not just a UI state. "yellow" still
+        # counts as present (the mac is real LAN traffic either way) but never
+        # gets a NAME attached -- "green" is the ONLY level that writes an
+        # identity row, i.e. contributes to honest, NAMED who's-home.
+        consent = _caller_consent(request)
+        if consent == "red":
+            return {"mac_registered": False, "reason": "consent-withdrawn"}
         try:
             who = sanitize_name(label)
         except ValueError as exc:
@@ -2411,6 +2494,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         mac = await _resolve_companion_mac(host) if host else None
         if not mac:
             return {"mac_registered": False, "reason": "no-arp-resolution"}
+        if consent == "yellow":
+            # Presence WITHOUT the name label: deliberately skip the identity
+            # write (that write is what attaches a name) -- the device still
+            # shows up as anonymous presence via the normal network scan, it
+            # just never gets a person label in the identity registry.
+            return {"mac_registered": True, "label": None, "mac_prefix": mac_prefix(mac)}
         _identity_store.add(mac, who, source="network", origin="companion")
         return {"mac_registered": True, "label": who, "mac_prefix": mac_prefix(mac)}
 
@@ -2428,6 +2517,127 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             return {"mac_unregistered": False, "reason": "no-arp-resolution"}
         removed = _identity_store.delete(mac)
         return {"mac_unregistered": removed, "mac_prefix": mac_prefix(mac)}
+
+    def _self_device(request: Request):
+        """Resolve the caller's OWN Device row from its bearer token, or None.
+        Root has no row (handled by each caller separately -- some routes 409 on
+        root, others treat it as a distinct case). Shared by
+        GET/POST /api/consent + GET /api/devices/me so all three self-resolve
+        identically (never a body/query device_id -- a device can only ever act
+        on itself)."""
+        if _devices is None:
+            return None
+        token = parse_bearer(request.headers.get("authorization"))
+        return _devices.verify(token) if token else None
+
+    @app.get("/api/consent")
+    async def get_consent(request: Request, _=Depends(require_authenticated),
+                          __=Depends(require_scope("presence:read"))):
+        # Closes the dangling call the shim has made since day one (wavr-mobile-
+        # shim.js's postConsent 404s until this exists) -- self-resolved from the
+        # caller's OWN bearer token, never a body device_id. Root has no
+        # per-device consent row (it's the box itself); its equivalent lever is
+        # the hub-wide POST /api/system/toggle, so this 409s rather than
+        # fabricating a value -- tested so the loopback dashboard (which never
+        # calls this route) can't accidentally crash if it ever did.
+        if getattr(request.state, "role", None) == "root":
+            raise HTTPException(status_code=409, detail="use /api/system/toggle")
+        device = _self_device(request)
+        if device is None:
+            raise HTTPException(status_code=403, detail="invalid or revoked token")
+        return {"device_id": device.device_id, "level": device.consent or "green"}
+
+    @app.post("/api/consent")
+    async def set_consent(request: Request, level: str = Body(..., embed=True),
+                          _=Depends(require_authenticated),
+                          __=Depends(require_scope("presence:write"))):
+        # The write half of the same self-resolved axis. 200 {device_id, level}
+        # is what the shim's postConsent already expects on success (it treats
+        # anything else as a retry, never a re-pair). Enforcement of what a
+        # given level actually DOES lives at register_companion (and mirrors
+        # into the identity registry immediately -- no restart needed).
+        if getattr(request.state, "role", None) == "root":
+            raise HTTPException(status_code=409, detail="use /api/system/toggle")
+        if level not in VALID_CONSENT:
+            raise HTTPException(status_code=422,
+                                detail=f"invalid consent level: {level!r} (expected one of "
+                                       f"{sorted(VALID_CONSENT)})")
+        device = _self_device(request)
+        if device is None:
+            raise HTTPException(status_code=403, detail="invalid or revoked token")
+        _devices.set_consent(device.device_id, level)
+        return {"device_id": device.device_id, "level": level}
+
+    @app.get("/api/devices/me")
+    async def devices_me(request: Request, _=Depends(require_authenticated)):
+        # Read-back of the caller's OWN role/name -- lets a paired companion
+        # show "Admin device" / "Member device" without the 403-inference hack
+        # the shim's detectRole() previously had to do. can_view's role set
+        # (root/central/user) is exactly what require_authenticated already
+        # gates, so no extra scope needed beyond authentication itself.
+        role = getattr(request.state, "role", None)
+        if role == "root":
+            return {"device_id": None, "role": "root", "name": None}
+        device = _self_device(request)
+        if device is None:
+            raise HTTPException(status_code=403, detail="invalid or revoked token")
+        return {"device_id": device.device_id, "role": device.role, "name": device.name}
+
+    @app.get("/api/companion/health")
+    async def companion_health(request: Request, _=Depends(require_authenticated),
+                               __=Depends(require_scope("presence:read"))):
+        # Device+network health check for a companion (item 6): deliberately NOT
+        # a reuse of GET /api/health (control-scope, active public-DNS-resolver
+        # egress -- wrong trust tier for a plain 'user'). Every field here is a
+        # PASSIVE self-report of state this process already holds -- zero new
+        # I/O, zero egress, no ping/DNS. `my_presence_registered` resolves the
+        # caller's own mac the SAME server-side-ARP way register_companion does
+        # and checks whether an identity row exists for it (true only at
+        # "green" consent -- "yellow"/"red" honestly read false here, matching
+        # register_companion's own no-name-label / dropped behaviour).
+        st = manager.status()
+        active_count = sum(1 for s in st["sources"] if s["active"])
+        last_frame_age_s = None
+        ts_values = [d["ts"] for d in latest.values() if d.get("ts")]
+        if ts_values:
+            try:
+                newest = max(datetime.fromisoformat(t) for t in ts_values)
+                now = datetime.now(newest.tzinfo or timezone.utc)
+                last_frame_age_s = max(0.0, (now - newest).total_seconds())
+            except ValueError:
+                last_frame_age_s = None   # malformed ts -- honestly unknown, never crash
+        host = request.client.host if request.client else None
+        mac = await _resolve_companion_mac(host) if host else None
+        my_presence_registered = bool(mac and _identity_store.get(mac) is not None)
+        return {
+            "system_running": st["running"],
+            "sources_active_count": active_count,
+            "core_version": __version__,
+            "my_presence_registered": my_presence_registered,
+            "ws_clients": _hub.subscriber_count(),
+            "last_frame_age_s": last_frame_age_s,
+        }
+
+    @app.get("/api/app/manifest")
+    async def app_manifest(_=Depends(require_authenticated),
+                           __=Depends(require_scope("presence:read"))):
+        # OTA (item 9, Augusto sign-off): web-assets-only version pointer. Gated
+        # presence:read -- 'agent' (mcp-only scope) can never reach this, exactly
+        # like every other presence:read route.
+        bundle = _build_ota_bundle()
+        return {"version": __version__, "sha256": bundle["sha256"],
+                "size": bundle["size"], "url": "/api/app/bundle"}
+
+    @app.get("/api/app/bundle")
+    async def app_bundle(_=Depends(require_authenticated),
+                         __=Depends(require_scope("presence:read"))):
+        # The manifest's `sha256`/`size` are computed over this EXACT byte
+        # sequence (same cached build) -- a client that hashes what it downloads
+        # will always match. gzip, never a bare tar -- content-encoding-free
+        # (media_type IS the encoding here, no extra header needed) so a
+        # pinned-TLS native client can size/verify before ever touching disk.
+        bundle = _build_ota_bundle()
+        return Response(content=bundle["data"], media_type="application/gzip")
 
     @app.post("/api/core/pin")
     async def set_core_pin(pin: str = Body(..., embed=True), _=Depends(require_local),
