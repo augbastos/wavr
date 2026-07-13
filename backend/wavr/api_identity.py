@@ -56,7 +56,8 @@ _MAX_DEVICES_PER_BATCH = 128
 
 def build_identity_router(store, bonded_reader=None, ensure_source=None,
                           write_deps=None, casa_state_provider=None,
-                          device_meta=None) -> APIRouter:
+                          device_meta=None, known_store=None,
+                          net_service=None) -> APIRouter:
     """`store` -- IdentityStore. `bonded_reader` -- async () -> [{address, name}]
     (the OS bonded enumeration; None => bonded read disabled -> []). `ensure_source`
     -- optional sync callback invoked after a 'ble' device is registered so app.py
@@ -67,7 +68,15 @@ def build_identity_router(store, bonded_reader=None, ensure_source=None,
     None, the ALREADY-fused house-level "casa" room (e.g. `_fusion.state("casa")`);
     None => known-presence reports no network-source evidence for this cycle.
     `device_meta` -- optional wavr.device_meta.DeviceMeta, read via `.all()` for the
-    known-presence route's freshness check; None => no rows => everything absent."""
+    known-presence route's freshness check; None => no rows => everything absent.
+    `known_store`/`net_service` -- optional wavr.known_store.KnownStore /
+    NetworkInventoryService (the same pair api_inventory.py's POST /api/inventory/
+    known writes through). When BOTH are wired, registering a 'network'-source
+    device here (the admin naming/assigning an already-recognized house device to
+    a person) ALSO marks that MAC known -- this is two already-explicit admin
+    actions (assigning a device to a person, recognizing it) wired together, not a
+    new auto-trust path. Either left None => this cross-wire is a no-op (byte-
+    identical to before), so it's opt-in per app.py wiring, never implicit."""
     router = APIRouter()
     wdeps = list(write_deps) if write_deps else [Depends(_deps_not_wired)]
 
@@ -152,6 +161,14 @@ def build_identity_router(store, bonded_reader=None, ensure_source=None,
         for addr, who, source, origin, details in prepared:
             store.add(addr, who, source, origin, details=details)
             added_sources.add(source)
+            # Naming/assigning a 'network'-source device to a person IS the admin
+            # recognizing it -- mirror api_inventory.py's POST /api/inventory/known
+            # so an already-registered house device stops re-alerting as rogue.
+            # Only wired when both stores are given (app.py's explicit opt-in);
+            # never on DELETE below -- un-labeling must not silently re-arm.
+            if source == "network" and known_store is not None and net_service is not None:
+                known_store.set_known(addr, True)
+                net_service.apply_known_change(addr, True)
         # Live: bring up the BLE source now if the first BLE device just landed on
         # an install that had none (network is always-on already).
         if ensure_source is not None and "ble" in added_sources:

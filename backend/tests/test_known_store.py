@@ -255,3 +255,79 @@ def test_app_post_known_works_with_local_header():
                    json={"mac": "24:0a:c4:aa:bb:cc", "known": True})
     assert r.status_code == 200
     assert ks.is_known("24:0a:c4:aa:bb:cc") is True
+
+
+# ---- POST /api/inventory/known/bulk ("Trust all N devices") -------------------
+
+def test_bulk_marks_every_currently_unknown_device():
+    ks = KnownStore(":memory:")
+    svc = _service()   # WINDOWS_ARP: 1 allowlisted (gateway not counted -- see below), 2 unknown
+    asyncio.run(svc.scan_once())
+    unknown_before = [d.mac for d in svc.latest_inventory() if not d.known]
+    assert unknown_before   # sanity: fixture actually has unknown devices
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc, known_store=ks))
+    with TestClient(app) as c:
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 200
+    assert r.json() == {"marked": len(unknown_before)}
+    for mac in unknown_before:
+        assert ks.is_known(mac) is True
+    assert all(d.known for d in svc.latest_inventory())   # cache patched immediately
+
+
+def test_bulk_is_idempotent_second_call_marks_zero():
+    ks = KnownStore(":memory:")
+    svc = _service()
+    asyncio.run(svc.scan_once())
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc, known_store=ks))
+    with TestClient(app) as c:
+        c.post("/api/inventory/known/bulk")
+        r = c.post("/api/inventory/known/bulk")
+    assert r.json() == {"marked": 0}
+
+
+def test_bulk_drops_all_current_rogue_alerts():
+    ks = KnownStore(":memory:")
+    svc = _service()
+    asyncio.run(svc.scan_once())
+    assert svc.recent_alerts()   # sanity: unknown devices alerted
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc, known_store=ks))
+    with TestClient(app) as c:
+        c.post("/api/inventory/known/bulk")
+        alerts = c.get("/api/alerts").json()["alerts"]
+    assert alerts == []
+    assert svc.recent_alerts() == []
+
+
+def test_bulk_absent_without_known_store():
+    svc = _service()
+    asyncio.run(svc.scan_once())
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc))   # no known_store
+    with TestClient(app) as c:
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 404
+
+
+def test_app_bulk_requires_local_header():
+    dm = DeviceMeta(":memory:")
+    ks = KnownStore(":memory:")
+    app = create_app(sources=[], camera_store=CameraStore(":memory:"),
+                     device_meta=dm, known_store=ks)
+    with TestClient(app) as c:                    # no X-Wavr-Local header
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 403
+
+
+def test_app_bulk_works_with_local_header():
+    dm = DeviceMeta(":memory:")
+    ks = KnownStore(":memory:")
+    app = create_app(sources=[], camera_store=CameraStore(":memory:"),
+                     device_meta=dm, known_store=ks)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 200
+    assert "marked" in r.json()

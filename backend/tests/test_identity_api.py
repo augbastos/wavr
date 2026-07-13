@@ -1,7 +1,11 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from wavr.app import create_app
 from wavr.identity_store import IdentityStore
+from wavr.known_store import KnownStore
+from wavr.netinventory_service import NetworkInventoryService
 
 
 def _client(tmp_path, seed=None, bonded=None):
@@ -192,3 +196,69 @@ def test_post_with_details_true_is_reflected_in_known_presence(tmp_path):
         })
         devices = c.get("/api/identity/devices").json()["devices"]
         assert devices[0]["details"] is True
+
+
+# ---- cluster E: registering a 'network' device also marks it known ------------
+# (audit fix: naming/assigning an already-recognized house device did NOT stop
+# its rogue-device alert -- "known" only meant the static allowlist/explicit
+# POST /api/inventory/known. Registering it here is a second already-explicit
+# admin action; wiring the two together is not a new auto-trust path.)
+
+def test_register_network_source_marks_known_and_suppresses_alert(tmp_path):
+    async def _scan():
+        return """
+Interface: 192.168.0.10 --- 0x5
+  Internet Address      Physical Address      Type
+  192.168.0.23          AA-BB-CC-DD-EE-FF     dynamic
+"""
+    identity_store = IdentityStore(str(tmp_path / "id.db"))
+    ks = KnownStore(":memory:")
+    inv = NetworkInventoryService(known_macs=set(), scan=_scan, interval=0,
+                                  known_provider=ks.known_macs)
+    asyncio.run(inv.scan_once())
+    assert any(a.mac == "aa:bb:cc:dd:ee:ff" for a in inv.recent_alerts())   # unknown -> alerts
+
+    app = create_app(sources=[], identity_store=identity_store,
+                     known_store=ks, net_inventory=inv)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        r = c.post("/api/identity/devices", json={
+            "person": "alice",
+            "devices": [{"address": "aa:bb:cc:dd:ee:ff", "source": "network"}],
+        })
+        assert r.status_code == 200
+        assert ks.is_known("aa:bb:cc:dd:ee:ff") is True
+        alerts = c.get("/api/alerts").json()["alerts"]
+        assert all(a["mac"] != "aa:bb:cc:dd:ee:ff" for a in alerts)   # dropped immediately
+
+    asyncio.run(inv.scan_once())   # next scan cycle also stays quiet
+    assert all(a.mac != "aa:bb:cc:dd:ee:ff" for a in inv.recent_alerts())
+
+
+def test_register_ble_source_does_not_mark_known(tmp_path):
+    # Only 'network'-source registrations cross-wire into known_store -- a BLE
+    # registration is a different modality with no rogue-device alert concept.
+    identity_store = IdentityStore(str(tmp_path / "id.db"))
+    ks = KnownStore(":memory:")
+    app = create_app(sources=[], identity_store=identity_store, known_store=ks)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        r = c.post("/api/identity/devices", json={
+            "person": "alice",
+            "devices": [{"address": "aa:bb:cc:dd:ee:ff", "source": "ble"}],
+        })
+        assert r.status_code == 200
+    assert ks.is_known("aa:bb:cc:dd:ee:ff") is False
+
+
+def test_delete_does_not_rearm_known_state(tmp_path):
+    # Un-labeling (opting a device out of the identity registry) must NOT
+    # silently flip it back to unknown -- only an explicit POST /api/inventory/
+    # known (or /known/bulk) toggles known state off.
+    identity_store = IdentityStore(str(tmp_path / "id.db"))
+    ks = KnownStore(":memory:")
+    ks.set_known("aa:bb:cc:dd:ee:ff", True)
+    identity_store.add("aa:bb:cc:dd:ee:ff", "alice", "network", "manual")
+    app = create_app(sources=[], identity_store=identity_store, known_store=ks)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        r = c.delete("/api/identity/devices/aa:bb:cc:dd:ee:ff")
+        assert r.status_code == 200
+    assert ks.is_known("aa:bb:cc:dd:ee:ff") is True

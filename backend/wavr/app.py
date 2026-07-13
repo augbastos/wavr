@@ -1676,7 +1676,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             ensure_source=_ensure_ble_source,
             write_deps=[Depends(require_local), Depends(require_scope("control"))],
             casa_state_provider=lambda: latest.get("casa"),
-            device_meta=_device_meta),
+            device_meta=_device_meta,
+            known_store=_known_store, net_service=_inventory),
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     def _connector_catalog() -> list[dict]:
