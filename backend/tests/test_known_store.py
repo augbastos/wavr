@@ -331,3 +331,58 @@ def test_app_bulk_works_with_local_header():
         r = c.post("/api/inventory/known/bulk")
     assert r.status_code == 200
     assert "marked" in r.json()
+
+
+# ---- set_known_many / apply_known_change_many (batched scale fix) --------------
+
+def test_set_known_many_marks_all_in_one_call(tmp_path):
+    s = _store(tmp_path)
+    n = s.set_known_many(["24-0A-C4-AA-BB-CC", "de:ad:be:ef:00:01"], True)
+    assert n == 2
+    assert s.known_macs() == {"24:0a:c4:aa:bb:cc", "de:ad:be:ef:00:01"}
+
+
+def test_set_known_many_skips_invalid_mac_without_raising(tmp_path):
+    s = _store(tmp_path)
+    n = s.set_known_many(["24:0a:c4:aa:bb:cc", "not-a-mac"], True)
+    assert n == 1                                    # bad entry skipped, not fatal
+    assert s.known_macs() == {"24:0a:c4:aa:bb:cc"}
+
+
+def test_set_known_many_empty_is_noop(tmp_path):
+    s = _store(tmp_path)
+    assert s.set_known_many([], True) == 0
+    assert s.known_macs() == set()
+
+
+async def test_apply_known_change_many_clears_alerts_and_patches_cache():
+    svc = _service()
+    await svc.scan_once()
+    unknown = [d.mac for d in svc.latest_inventory() if not d.known]
+    assert len(unknown) >= 2                          # fixture has >1 unknown
+    svc.apply_known_change_many(unknown, True)
+    assert all(d.known for d in svc.latest_inventory())
+    assert svc.recent_alerts() == []
+
+
+# ---- trust-vs-scan race fix (audit MEDIUM) ------------------------------------
+
+async def test_trust_landing_during_in_flight_scan_does_not_realert():
+    """An operator trusting a device WHILE a scan is in flight must not have that
+    device re-alerted for a full cycle. Simulate the trust landing mid-scan by
+    mutating the known set inside the scan transport that scan_once awaits between
+    its start-of-scan and end-of-scan known-set reads."""
+    known: set[str] = set()
+    target = "24:0a:c4:aa:bb:cc"
+
+    async def _scan_then_trust() -> str:
+        # Stands in for POST /api/inventory/known landing during the await.
+        known.add(target)
+        return WINDOWS_ARP
+
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_scan_then_trust,
+                                  interval=0, known_provider=lambda: known)
+    await svc.scan_once()
+    by_mac = {d.mac: d for d in svc.latest_inventory()}
+    assert by_mac[target].known is True                        # fresh known set won
+    assert all(a.mac != target for a in svc.recent_alerts())   # never re-alerted

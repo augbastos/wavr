@@ -308,7 +308,8 @@ class NetworkInventoryService:
         into the rogue-alert log. Called by the background loop; also directly
         callable (deterministic) for tests."""
         pins = self._type_pins()
-        devices = await scan_inventory(known_macs=self._dynamic_known(), scan=self._scan,
+        known_at_start = self._dynamic_known()
+        devices = await scan_inventory(known_macs=known_at_start, scan=self._scan,
                                        pins=pins, resolve=self._make_hostname_resolver(),
                                        gateway=self._gateway_hook())
         if self._port_scan_on():
@@ -345,6 +346,20 @@ class NetworkInventoryService:
         # (like the port pass), so it is gated the same way -- see `_sensing_on`.
         if self._latency_enabled and self._sensing_on():
             devices = await self._annotate_latency(devices)
+        # Trust-vs-scan race fix (audit MEDIUM): `known` on every Device here was
+        # resolved from `known_at_start`, snapshotted BEFORE the ~seconds of awaits
+        # above. If the operator hit POST /api/inventory/known ("Trust"/"Trust all")
+        # WHILE this scan was in flight, apply_known_change already patched the live
+        # _inventory/_alerts -- but writing `devices` (built from the stale set) to
+        # self._inventory below, then running _record_rogues on it, would clobber
+        # that patch and RE-ALERT the just-trusted device for one full ~30s cycle
+        # ("trust doesn't stick"). Re-derive from a FRESH read (the KnownStore is
+        # already authoritative) so both the cache and the rogue check agree with
+        # what the operator just did. Only pays the O(n) rebuild when a known-change
+        # actually landed mid-scan.
+        known_now = self._dynamic_known()
+        if known_now != known_at_start:
+            devices = [replace(d, known=(d.mac in known_now)) for d in devices]
         self._inventory = devices
         self._last_scan_ts = datetime.now(timezone.utc).isoformat()
         self._observe_gateway(devices)
@@ -665,6 +680,24 @@ class NetworkInventoryService:
             self._alerts = [a for a in self._alerts if a.mac != mac]
         self._inventory = [
             replace(d, known=known) if d.mac == mac else d
+            for d in self._inventory
+        ]
+
+    def apply_known_change_many(self, macs, known: bool) -> None:
+        """Batched `apply_known_change` for a whole set of MACs at once: ONE
+        O(n) inventory rebuild + ONE alert-list filter for the entire set,
+        instead of the per-MAC O(n) rebuild the single-device method does (which
+        the bulk "Trust all N" route called in a loop -> O(n*U), pathological at
+        airport scale). Same semantics as calling apply_known_change once per
+        MAC, just without re-walking the whole inventory U times."""
+        macset = {m.strip().replace("-", ":").lower() for m in macs}
+        if not macset:
+            return
+        self._alerted -= macset
+        if known:
+            self._alerts = [a for a in self._alerts if a.mac not in macset]
+        self._inventory = [
+            replace(d, known=known) if d.mac in macset else d
             for d in self._inventory
         ]
 

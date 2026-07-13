@@ -217,6 +217,19 @@ def test_get_network_inventory_keeps_is_gateway_only_when_true():
     assert "is_gateway" not in out2["devices"][0]
 
 
+def test_get_network_inventory_caps_list_but_count_is_true_total():
+    # Scale audit: a huge LAN must not serialize thousands of devices into one
+    # agent tool result. The list is capped; `count` stays the TRUE total so the
+    # agent still knows the real size (count > len(devices) => clipped).
+    from wavr.mcp import _INVENTORY_AGENT_MAX_DEVICES
+    n = _INVENTORY_AGENT_MAX_DEVICES + 50
+    devices = [{"ip": f"192.168.1.{i}", "vendor": "unknown", "device_type": "phone",
+                "type_confidence": "low", "known": False} for i in range(n)]
+    out = get_network_inventory(lambda: devices)
+    assert len(out["devices"]) == _INVENTORY_AGENT_MAX_DEVICES
+    assert out["count"] == n                       # true total, not the clipped length
+
+
 def test_get_network_inventory_none_provider_is_disabled_shape():
     # Not wired (e.g. WAVR_NET_INVENTORY off, or a minimal build_mcp_server caller that
     # never passed network_inventory_fn) -> an honest empty list, never a crash.
