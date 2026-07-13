@@ -318,6 +318,13 @@ def get_ha_entities(ha_client: HAEntitiesProvider | None) -> list[dict]:
 _INVENTORY_AGENT_CORE_FIELDS = ("ip", "vendor", "device_type", "type_confidence", "known")
 _INVENTORY_AGENT_OPTIONAL_FIELDS = ("make", "model", "os")
 
+# Cap the agent-facing device list (scale audit): a 5000-device airport LAN
+# would otherwise serialize ~1 MB / hundreds-of-thousands of tokens into one
+# tool result, past any model's context window. `count` stays the TRUE total so
+# the agent knows the real size (count > len(devices) => the list was clipped).
+# Mirrors the occupancy-history `_AGENT_OCCUPANCY_MAX_HOURS`/limit clamps.
+_INVENTORY_AGENT_MAX_DEVICES = 200
+
 
 def _minimize_device_for_agent(device: dict) -> dict:
     """One device dict (the `GET /api/inventory` / `_device_view` shape) -> the
@@ -345,12 +352,21 @@ def get_network_inventory(inventory_fn) -> dict:
     projection (`GET /api/inventory`, the human dashboard, is UNCHANGED and stays
     fully rich). `inventory_fn` is a zero-arg callable returning the same list of
     device dicts `inventory_view` produces (this tool never triggers a scan itself,
-    only reads the current cache). `None` (not wired) -> `{"devices": [], "count":
-    0}`, never a crash."""
+    only reads the current cache). The `devices` list is CAPPED at
+    `_INVENTORY_AGENT_MAX_DEVICES` so a huge LAN can't blow past the agent's
+    context window; `count` is always the TRUE total (a caller reads
+    count > len(devices) as "the list was clipped"). `None` (not wired) ->
+    `{"devices": [], "count": 0}`, never a crash."""
     if inventory_fn is None:
         return {"devices": [], "count": 0}
-    devices = [_minimize_device_for_agent(d) for d in (inventory_fn() or [])]
-    return {"devices": devices, "count": len(devices)}
+    raw = inventory_fn() or []
+    total = len(raw)
+    devices = [_minimize_device_for_agent(d) for d in raw[:_INVENTORY_AGENT_MAX_DEVICES]]
+    # `count` is the TRUE total; when it exceeds len(devices) the list was capped
+    # (an agent reads count > len(devices) as "truncated"). Additive `count`-vs-
+    # length divergence only happens past the cap, so every ≤cap caller is
+    # byte-identical to before.
+    return {"devices": devices, "count": total}
 
 
 # Phase-2A verify FIX 3 (LOW): unlike GET /api/alerts (the human dashboard, which

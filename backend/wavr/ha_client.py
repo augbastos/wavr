@@ -35,6 +35,25 @@ from typing import Callable
 # trailing '\n', which would let a smuggled newline slip past a `.match()` check.
 _HA_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Blocks HTTP redirects entirely (identical pattern to connectors/http.py's
+    _NoRedirect / sources/onvif.py's). Defence-in-depth: the default urllib
+    opener follows 3xx and re-sends the request headers -- here that includes
+    `Authorization: Bearer <HA long-lived token>` (full home-automation control,
+    incl. locks). A compromised/malicious HA, or a LAN MitM injecting a 302 on
+    the plain-HTTP-over-LAN path this client documents, could otherwise steer the
+    credentialed request to an attacker host and have urllib forward the token.
+    Returning None makes urllib treat the redirect as terminal -- no follow, no
+    header leaked anywhere. Matches the no-redirect discipline every other
+    credential-bearing egress path in this codebase already uses."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
 # A GET transport takes (url, headers) and returns the raw response body (bytes or str).
 # Default is _urllib_get below; tests inject a fake that returns canned /api/states JSON.
 FetchFn = Callable[[str, dict], object]
@@ -58,7 +77,7 @@ def _urllib_get(url: str, headers: dict, timeout: float = 5.0) -> bytes:
     """Default GET transport: a plain stdlib GET with the caller-supplied headers (which
     include `Authorization: Bearer <token>`). No third-party HTTP dependency."""
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (local LAN URL)
+    with _NO_REDIRECT_OPENER.open(req, timeout=timeout) as resp:  # noqa: S310 (local LAN URL, redirects blocked)
         return resp.read()
 
 
@@ -66,7 +85,7 @@ def _urllib_post(url: str, headers: dict, body: bytes, timeout: float = 5.0) -> 
     """Default POST transport: a plain stdlib POST of `body` with the caller-supplied
     headers (Bearer token + JSON content-type). No third-party HTTP dependency."""
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (local LAN URL)
+    with _NO_REDIRECT_OPENER.open(req, timeout=timeout) as resp:  # noqa: S310 (local LAN URL, redirects blocked)
         return resp.read()
 
 

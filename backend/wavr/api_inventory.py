@@ -262,14 +262,16 @@ def build_inventory_router(service: NetworkInventoryService,
         async def mark_all_known():
             # Admin-initiated bulk trust: "Trust all N devices" for the CURRENT
             # inventory snapshot only -- never an auto-trust window. Same CSRF
-            # gate (name_deps) as the single-device route above; one write per
-            # currently-unknown device, same known_store + service sync each.
-            marked = 0
-            for d in service.latest_inventory():
-                if not d.known:
-                    known_store.set_known(d.mac, True)
-                    service.apply_known_change(d.mac, True)
-                    marked += 1
-            return {"marked": marked}
+            # gate (name_deps) as the single-device route above. BATCHED (scale
+            # audit): one `set_known_many` (single sqlite commit/fsync) + one
+            # `apply_known_change_many` (single O(n) inventory rebuild) instead of
+            # the old per-device loop, which was O(n*U) rebuilds + a commit-per-
+            # device fsync storm that froze the server for seconds on a large LAN.
+            unknown = [d.mac for d in service.latest_inventory() if not d.known]
+            if not unknown:
+                return {"marked": 0}
+            known_store.set_known_many(unknown, True)
+            service.apply_known_change_many(unknown, True)
+            return {"marked": len(unknown)}
 
     return router
