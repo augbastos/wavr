@@ -401,23 +401,85 @@
     tokenSet: tokenSet,
     onPaired: onPaired,                 // capture our device_id from the /api/pair response
     get role(){ return _role; },        // "central" | "user" | null  (null treated as viewer)
-    listBondedDevices: listBondedDevices,   // item 7: read-only bonded-BT list (null when native plugin absent)
+    listBondedDevices: listBondedDevices,   // item 7: read-only bonded-BT list -> status object (never a dead null)
+    addAllBonded: addAllBonded,             // bulk consent-first import: ONE confirm -> register all bonded devices
     ready: ready
   };
 
   // Item 7 — read this phone's ALREADY-BONDED Bluetooth devices via the sibling WavrBluetooth plugin
-  // (read-only: no BLE scan, no location). Resolves an array of {address,label} on success, [] when the
-  // phone has no bonds, and NULL when the capability is unavailable (no plugin / call failed) so the
-  // caller renders an honest "not available" instead of an empty list. Never logs addresses.
+  // (read-only: no BLE scan, no location, never a connect).
+  // Resolves a STATUS OBJECT (never a bare null->dead-end) so the caller renders honest states:
+  //   {state:'list', devices:[{address,label}]}  usable, bonded set (possibly empty)
+  //   {state:'permission-needed'}                 BLUETOOTH_CONNECT (API 31+) not granted after a prompt
+  //   {state:'bluetooth-off'}                     adapter is powered off — ask the user to enable it
+  //   {state:'unavailable'}                       no plugin / no adapter / unexpected failure
+  // Runtime permission is checked/requested FIRST ('na' below API 31 needs no prompt). READ-ONLY bonded
+  // set: no BLE scan, no location. Never logs a MAC or a device name.
   function listBondedDevices(){
-    if(!(WavrBluetooth && typeof WavrBluetooth.listBonded === "function")) return Promise.resolve(null);
-    return Promise.resolve(WavrBluetooth.listBonded()).then(function(r){
-      var list = (r && Array.isArray(r.devices)) ? r.devices : (Array.isArray(r) ? r : null);
-      if(!Array.isArray(list)) return null;
-      return list.map(function(d){
-        return { address: (d && d.address) || "", label: (d && (d.label || d.name)) || "" };
-      }).filter(function(d){ return !!d.address; });
-    }).catch(function(){ return null; });
+    if(!(WavrBluetooth && typeof WavrBluetooth.listBonded === "function")) return Promise.resolve({ state: "unavailable" });
+    function usable(state){ return state === "granted" || state === "na"; }
+    function readBonded(){
+      return Promise.resolve(WavrBluetooth.listBonded()).then(function(r){
+        var raw = (r && Array.isArray(r.devices)) ? r.devices : [];
+        var devices = raw.map(function(d){
+          return { address: (d && d.address) || "", label: (d && (d.label || d.name)) || "" };
+        }).filter(function(d){ return !!d.address; });
+        return { state: "list", devices: devices };
+      }, function(err){
+        var code = err && err.code;
+        if(code === "BT_OFF") return { state: "bluetooth-off" };
+        if(code === "PERMISSION_DENIED") return { state: "permission-needed" };
+        return { state: "unavailable" };   // NO_ADAPTER / anything else
+      });
+    }
+    function check(){
+      if(typeof WavrBluetooth.checkPermissions !== "function") return Promise.resolve("granted");
+      return Promise.resolve(WavrBluetooth.checkPermissions())
+        .then(function(p){ return (p && p.bluetooth) || "granted"; }, function(){ return "granted"; });
+    }
+    return check().then(function(state){
+      if(usable(state)) return readBonded();
+      if(typeof WavrBluetooth.requestPermissions !== "function") return { state: "permission-needed" };
+      return Promise.resolve(WavrBluetooth.requestPermissions()).then(function(p){
+        var after = (p && p.bluetooth) || state;
+        return usable(after) ? readBonded() : { state: "permission-needed" };
+      }, function(){ return { state: "permission-needed" }; });
+    });
+  }
+
+  // [C2] Bulk consent-first import: after ONE confirm, register EVERY bonded device of THIS phone as a
+  // LABEL under `person` (defaults to this device's own presence label). HONEST SCOPE — a bonded MAC is a
+  // name so your home can recognise the device, NOT live presence (the hub's radios decide that). Sequential
+  // loop-POST /api/identity/devices so one failure never aborts the rest. Resolves {added,skipped}. The
+  // per-device add path stays available in the tile; this is the one-consent-brings-all primary UX. Never
+  // logs a MAC, name, or the token.
+  function addAllBonded(person){
+    return listBondedDevices().then(function(status){
+      if(!status || status.state !== "list" || !status.devices || !status.devices.length){
+        return { added: 0, skipped: 0, state: (status && status.state) || "unavailable" };
+      }
+      var name = String(person != null ? person : (_presenceLabel || "")).trim();
+      var n = status.devices.length;
+      var ask = "Add " + n + " Bluetooth device" + (n === 1 ? "" : "s") + " paired to this phone to Wavr" +
+                (name ? " as “" + name + "”" : "") + "?\n\n" +
+                "This adds their names so your home can recognise them. It does NOT track live location. " +
+                "You can remove them any time on your hub.";
+      var ok = false; try{ ok = window.confirm(ask); }catch(_){ ok = false; }
+      if(!ok) return { added: 0, skipped: n, cancelled: true };
+      if(!_token || !_base) return { added: 0, skipped: n, state: "not-paired" };
+      var added = 0, skipped = 0, chain = Promise.resolve();
+      status.devices.forEach(function(d){
+        chain = chain.then(function(){
+          if(!d || !d.address){ skipped++; return; }
+          return netFetch(_base + "/api/identity/devices", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + _token, "Content-Type": "application/json" },
+            body: JSON.stringify({ person: name, devices: [{ address: d.address, source: "ble", origin: "bonded" }] })
+          }).then(function(r){ if(r && r.ok) added++; else skipped++; }, function(){ skipped++; });
+        });
+      });
+      return chain.then(function(){ return { added: added, skipped: skipped }; });
+    });
   }
 
   // Foreground/resume trigger for detectRole: re-check our role when the app returns to the fore.
@@ -1505,6 +1567,9 @@
   function normConsent(v){ return (v === "green" || v === "yellow" || v === "red") ? v : "green"; }
 
   var _consentUis = [];        // every rendered consent control (header pill + node-screen copy)
+  // [A2] Registered privacy-receipt nodes (the live "shares … / shares nothing" sentence). renderConsent
+  // re-paints these in place on every level change, so the tile/details sentence updates WITH the pills.
+  var _consentReceipts = [];
   var _consentPending = false; // true while the CURRENT level is NOT yet confirmed by a 2xx from the hub
   var _consentGen = 0;         // bumped on every change so stale retries/responses are ignored
   var _consentRetry = null;
@@ -1708,6 +1773,13 @@
       u.btn.setAttribute("aria-label", "Consent: " + label + ". Tap to reduce, hold two seconds to withdraw.");
       u.btn.classList.toggle("pending", !!_consentPending);
     }
+    // [A2] Re-paint the registered privacy receipts (tile + details) so the live sentence tracks the level.
+    if(document.body){ _consentReceipts = _consentReceipts.filter(function(p){ return document.body.contains(p); }); }
+    for(var j = 0; j < _consentReceipts.length; j++){
+      var rp = _consentReceipts[j];
+      rp.textContent = privacyReceiptText();
+      try{ rp.style.setProperty("--consent-color", meta.color); }catch(_){}
+    }
   }
 
   // TAP = decrease one step (green->yellow->red, wraps red->green). HOLD 2s = jump straight to RED (GDPR
@@ -1835,6 +1907,7 @@
     var p = el("p", "wavrm-receipt", privacyReceiptText());
     try{ p.style.setProperty("--consent-color", (CONSENT[_consent] || CONSENT.green).color); }catch(_){}
     card.appendChild(p);
+    _consentReceipts.push(p);   // [A2] renderConsent re-paints this sentence in place on every level change
     return p;
   }
 
@@ -1848,6 +1921,23 @@
     var rl = roleLabel(); if(rl) card.appendChild(el("p", "wavrm-sub", rl));
     // Complement (iii): the one-glance "what this device shares now" receipt.
     injectReceipt(card);
+    // [A1] This overlay is the PERMANENT config home (reachable anytime from the status chip), so the
+    // device-scope SENDING control lives here too — behaviour is changeable from the menu, not only the
+    // header/tile. Same registered tri-color control (makeConsentControl -> _consentUis), so it stays in
+    // lockstep with every other copy; renderConsent() below paints its colour+label + the receipt above.
+    card.appendChild(el("span", "wavrm-lab", "This device — what it sends"));
+    var sendRow = el("div", "wavrm-inrow");
+    sendRow.appendChild(el("span", "wavrm-inrow-l", "Tap to reduce · hold to turn off"));
+    sendRow.appendChild(makeConsentControl().btn);
+    card.appendChild(sendRow);
+    // Ghost: re-open the affirmative contribute chooser DIRECTLY (bypasses the once-only _contribOnboarded
+    // gate — safe: its taps only call changeConsent + the idempotent markContribOnboarded). onDone returns
+    // here; the "Not now"/red branch still routes to showOut by design (deliberate turn-off).
+    var changeBtn = el("button", "wavrm-btn ghost", "Change what this device does"); changeBtn.type = "button";
+    changeBtn.setAttribute("data-tip", "Re-open the choice of how much this device shares with your home.");
+    changeBtn.onclick = function(){ showContributeOnboarding(function(){ showDetails(); }); };
+    card.appendChild(changeBtn);
+    renderConsent();   // paint the new control + receipt at their current level
     var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", "Your name on this device"));
     var input = el("input", "wavrm-input"); input.type = "text"; input.autocomplete = "off";
     input.maxLength = 48;   // FIX-C3: cap the display label (textContent + JSON.stringify already injection-safe)
@@ -2086,14 +2176,25 @@
   }
   function applyOta(manifest){
     if(!(WavrUpdate && typeof WavrUpdate.download === "function")) return;
-    if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Updating…"; _otaUi.disabled = true; }
-    Promise.resolve(WavrUpdate.download({ manifest: manifest })).then(function(){
-      return typeof WavrUpdate.apply === "function" ? WavrUpdate.apply({}) : null;   // apply = next-launch activation
-    }).then(function(){
-      if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Restart to finish"; _otaUi.disabled = false; }
-    }, function(){
+    // [G] Guard: the FROZEN download contract needs {url, sha256, size, version}. Missing any field ->
+    // do not attempt (a half-formed manifest would only reject with INVALID_ARGS).
+    if(!(manifest && manifest.version && manifest.sha256 && manifest.size)){
       if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Update failed"; _otaUi.disabled = false; }
-    });
+      return;
+    }
+    // Resolve the bundle URL to an ABSOLUTE pinned-central URL (manifest.url may be relative or absent).
+    // The plugin refuses any host:port other than the stored central's — this only fills the host in.
+    var burl = (manifest && manifest.url) || "/api/app/bundle";
+    if(burl.charAt(0) === "/") burl = _base + burl;
+    if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Updating…"; _otaUi.disabled = true; }
+    Promise.resolve(WavrUpdate.download({ url: burl, sha256: manifest.sha256, size: manifest.size, version: manifest.version }))
+      .then(function(){
+        return typeof WavrUpdate.apply === "function" ? WavrUpdate.apply({ version: manifest.version }) : null;   // next-launch activation
+      }).then(function(){
+        if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Restart to finish"; _otaUi.disabled = false; }
+      }, function(){
+        if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Update failed"; _otaUi.disabled = false; }
+      });
   }
 
   // ================= ITEM 3: FIRST-OPEN CONTRIBUTE ONBOARDING (affirmative-tap only) ================
@@ -2136,11 +2237,18 @@
     var tile = document.getElementById("sensingLevelTile"); if(!tile) return;
     if(document.getElementById("wavrm-consent-tile")){ renderConsent(); return; }   // idempotent
     var box = el("div", ""); box.id = "wavrm-consent-tile";
-    box.appendChild(el("span", "wavrm-ct-lab", "This device"));
+    // [A2] OWN sub-head in SENDING vocab, visually separated so it doesn't read as part of the admin house
+    // control above. The tile shows how much of your HOME Wavr senses (admin-only, read-only here); THIS
+    // box is device-scope — what THIS device sends about you.
+    box.appendChild(el("span", "wavrm-ct-lab", "This device — what it sends"));
+    box.appendChild(el("p", "wavrm-sub",
+      "The level above is how much of your home Wavr senses. This is what THIS device sends about you."));
     var row = el("div", "wavrm-inrow");
     row.appendChild(el("span", "wavrm-inrow-l", "Tap to reduce · hold to turn off"));
     row.appendChild(makeConsentControl().btn);
     box.appendChild(row);
+    injectReceipt(box);   // [A2] live "shares … / shares nothing" sentence directly under the control;
+                          // registered so renderConsent re-paints it in place on every level change
     tile.appendChild(box);
     renderConsent();
   }
@@ -2156,6 +2264,9 @@
     injectRolePill();      // item 1: Admin/Member indicator
     injectConsentTile();   // item 2: device-consent row inside #sensingLevelTile (with the hub level)
     pollManifest();        // complement (ii): check for a newer web bundle over the pinned transport
+    // [G] Confirm an applied OTA bundle is healthy now that the dashboard chrome is up, so a good bundle
+    // is NOT auto-reverted on a later launch. Idempotent + a no-op when nothing is pending.
+    try{ if(WavrUpdate && typeof WavrUpdate.markLaunchOk === "function") WavrUpdate.markLaunchOk(); }catch(_){}
   }
   // First-open gates run BEFORE the dashboard, in order: What's-New (on a version change) -> contribute
   // onboarding (once). Each is affirmative and dismissible; only then is the dashboard revealed. The
