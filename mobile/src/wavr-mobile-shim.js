@@ -678,6 +678,31 @@
   function last6(fp){ var h = normHex(fp); return h.length >= 6 ? h.slice(-6) : ""; }
   function fpDisplay(fp){ return String(fp == null ? "" : fp).toUpperCase(); }   // full, uppercase colon-hex
 
+  // FIX-E1b PINNED DERIVATION -- MUST stay byte-identical to the backend Python:
+  //   input   = <fp_hex_lowercase_no_colons> + "|" + <pair_code>              (ASCII/UTF-8)
+  //   digest  = SHA-256(input)                                                (32 bytes)
+  //   verify6 = ( first 4 bytes, big-endian uint32 ) mod 1000000, zero-padded to 6 decimal digits
+  // Binding the 6-digit to the EXISTING short-TTL rotating pair_code (from /api/pair-code) makes it NOT
+  // offline-grindable: a MitM must grind within the code's ~2-min TTL (the accepted local-wifi tradeoff).
+  // Both the probed fp and the pair_code arrive over the UNVERIFIED channel, but the derivation is anchored
+  // by the user comparing to the 6-digit the HUB computes from its OWN real cert -- an attacker's probed
+  // cert yields a different verify6, so a rushed user cannot pin it. This is the CONVENIENCE tier; a QR
+  // full-256-bit machine-compare is the later strong tier (see the QR-SCAN HOOK in showVerify).
+  // Returns a Promise<string(6 digits)>, or null when secure crypto / inputs are unavailable (fail-closed).
+  function computeVerify6(probedFp, pairCode){
+    if(!(window.crypto && window.crypto.subtle && window.TextEncoder)) return null;
+    var fpHex = normHex(probedFp).toLowerCase();                 // lowercase hex, NO colons (normalized)
+    if(!fpHex || pairCode == null || pairCode === "") return null;
+    var bytes = new TextEncoder().encode(fpHex + "|" + String(pairCode));   // ASCII/UTF-8
+    return window.crypto.subtle.digest("SHA-256", bytes).then(function(buf){
+      var d = new Uint8Array(buf);
+      var u32 = ((d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]) >>> 0;   // first 4 bytes, big-endian
+      var s = String(u32 % 1000000);
+      while(s.length < 6) s = "0" + s;
+      return s;
+    });
+  }
+
   // Reveal index.html's own 8-digit code form (#companionPair). initCompanion() also does this on
   // the post-ready boot; this is idempotent belt-and-suspenders against boot ordering.
   function revealCodeEntry(){
@@ -850,50 +875,79 @@
     card.appendChild(btn); card.appendChild(msg);
   }
 
-  // ----- Screen 2: verify (out-of-band fingerprint compare). Pins only on an ACTIVE last-6 match. -----
+  // ----- Screen 2: verify (out-of-band 6-DIGIT compare). Pins only on an ACTIVE derived match. -----
+  // PINNED-DERIVATION flow (replaces the old typed-hex-last-6 challenge; NO hex is shown anywhere):
+  //   1. probe the cert -> PROBED fingerprint (the sole trust anchor; used only inside the derivation).
+  //   2. fetch /api/pair-code -> the hub's short-TTL rotating pair_code. The body ALSO carries verify6 +
+  //      cert_fingerprint: BOTH are DELIBERATELY IGNORED as trust anchors -- a MitM controls this body --
+  //      mirroring the discipline that already ignores body cert_fingerprint in the pair-request flow.
+  //   3. derive verify6_local = SHA-256(probed_fp | pair_code) on-device (computeVerify6).
+  //   4. the user types the 6-digit the HUB shows on its own screen; we live-enable ("digita e entra")
+  //      ONLY on a full match. An attacker's probed cert yields a different verify6, so the hub's real
+  //      6-digit cannot pin the attacker's cert -- the whole reason this screen exists.
+  // A non-matching full entry surfaces an honest hard-stop message (typo OR interception); there is NO
+  // "trust anyway", NO silent proceed, and NO fallback to a weaker/grindable pin. Works for the 'user' role.
   function showVerify(){
     var card = ensureOverlay("verify");
-    card.appendChild(el("h2", "wavrm-h", "Verify the hub's certificate"));
+    card.appendChild(el("h2", "wavrm-h", "Verify your hub"));
     card.appendChild(el("p", "wavrm-sub",
-      "This is the SHA-256 fingerprint of the certificate presented by " + _base + ". It has not been trusted yet."));
-    var fpEl = fpBlock("reading…"); card.appendChild(fpEl);
-    // FIX-E4: point the user at where the hub actually shows this value -- its own Pair device panel.
-    // (App-side copy only; do not reference the web flow's browser security warning.)
-    card.appendChild(el("p", "wavrm-sub",
-      "On your Wavr hub's own dashboard open Settings, then Pair device. That panel shows the hub's " +
-      "certificate fingerprint. Check it matches the value above, character for character."));
+      "Your Wavr hub shows a 6-digit code on its own screen (open Settings, then Pair device). " +
+      "Type that code below so this phone can confirm it is really talking to your hub."));
     card.appendChild(el("p", "wavrm-warn",
-      "If they do not match, stop. Someone may be intercepting your network. Do not continue."));
-    // FIX-E1: ACTIVE challenge replaces the passive checkbox. The user must type the hub's real last-6;
-    // it is compared to the PROBED cert's own last-6, so a MitM cert cannot be pinned by a rushed user.
+      "Only use the code shown on the hub's own screen. If the codes never match, stop — " +
+      "someone may be intercepting your network."));
+
     var f = el("label", "wavrm-field");
-    f.appendChild(el("span", "wavrm-lab",
-      "Type the last 6 characters of the fingerprint shown on your Wavr hub (Settings, Pair device)"));
-    var codeIn = el("input", "wavrm-input"); codeIn.type = "text"; codeIn.autocomplete = "off";
-    codeIn.spellcheck = false; codeIn.autocapitalize = "characters"; codeIn.maxLength = 12;
-    codeIn.placeholder = "3F9A2C"; codeIn.setAttribute("aria-label", "last 6 fingerprint characters");
+    f.appendChild(el("span", "wavrm-lab", "Enter the 6-digit code shown on your hub"));
+    var codeIn = el("input", "wavrm-input"); codeIn.type = "text";
+    codeIn.inputMode = "numeric"; codeIn.setAttribute("inputmode", "numeric");
+    codeIn.setAttribute("pattern", "[0-9]*"); codeIn.autocomplete = "off"; codeIn.spellcheck = false;
+    codeIn.maxLength = 6; codeIn.placeholder = "000000";
+    codeIn.setAttribute("aria-label", "6-digit code shown on your hub");
     f.appendChild(codeIn); card.appendChild(f);
-    // The presence label is NOT collected here anymore -- it is collected once at showRequestPairing()
-    // (Gate B), right after this pin, before register-companion. F-EMPTYLABEL stays satisfied because that
-    // screen requires a non-empty name. This screen is purely the out-of-band certificate compare.
-    var pinBtn = el("button", "wavrm-btn", "Pin & continue"); pinBtn.type = "button"; pinBtn.disabled = true;
-    pinBtn.setAttribute("data-tip", "Trusts this exact certificate. Enabled only when the last 6 characters you typed match the hub's own screen.");
+
+    // The presence label is NOT collected here -- it is collected once at showRequestPairing() (Gate B),
+    // right after this pin. This screen is purely the out-of-band certificate compare.
+    var pinBtn = el("button", "wavrm-btn", "Verify & connect"); pinBtn.type = "button"; pinBtn.disabled = true;
+    pinBtn.setAttribute("data-tip", "Trusts this hub. Enabled only when the 6-digit code you typed matches the one derived from the hub's own certificate.");
     var backBtn = el("button", "wavrm-btn ghost", "Back"); backBtn.type = "button";
     var msg = el("p", "wavrm-msg", "");
-    var fp = null, expect = "";
-    function recompute(){ pinBtn.disabled = !(fp && expect.length === 6 && normHex(codeIn.value) === expect); }
-    codeIn.oninput = recompute;
+
+    // fp = PROBED cert fingerprint (anchor). pairCode = short-TTL rotating code (closure only; NEVER
+    // rendered, logged, or persisted). expect6 = the 6 digits we compare the entry to, derived once.
+    var fp = null, pairCode = null, expect6 = null, deriving = false;
+    function typed(){ return (codeIn.value || "").replace(/[^0-9]/g, ""); }
+    function recompute(){ pinBtn.disabled = !(expect6 && typed().length === 6 && typed() === expect6); }
+    // Derive verify6_local once BOTH the probed fp and the pair_code are known (async SHA-256). Fail-closed.
+    function deriveExpect(){
+      if(deriving || expect6 || !fp || pairCode == null) return;
+      var p = computeVerify6(fp, pairCode);
+      if(!p){ msg.className = "wavrm-msg err"; msg.textContent = "This device can't verify securely. Update the app."; return; }
+      deriving = true;
+      p.then(function(v){ expect6 = v; deriving = false; recompute(); },
+             function(){ deriving = false; msg.className = "wavrm-msg err"; msg.textContent = "Couldn't verify the code. Try again."; });
+    }
+    codeIn.oninput = function(){
+      recompute();
+      // Honest hard-stop on a FULL non-matching entry (typo OR interception). No proceed control exists;
+      // the only way forward is a code that actually derives from the probed cert.
+      if(expect6 && typed().length === 6 && typed() !== expect6){
+        msg.className = "wavrm-msg err";
+        msg.textContent = "That code doesn't match your hub. Re-check the hub's screen. If it never matches, someone may be intercepting your network — stop.";
+      } else if(msg.className === "wavrm-msg err" && (typed().length < 6)){
+        msg.textContent = ""; msg.className = "wavrm-msg";
+      }
+    };
     pinBtn.onclick = function(){
       if(pinBtn.disabled) return;
-      if(!fp || expect.length !== 6 || normHex(codeIn.value) !== expect) return;   // defence in depth
-      _pinnedFp = fp;
-      _coreName = _pendingCoreName || _base;                  // Task 6: friendly Core name (mDNS pick or base)
+      if(!fp || !expect6 || typed() !== expect6) return;   // defence in depth: never pin without a derived match
+      _pinnedFp = fp;                                       // anchor = the PROBED cert, never a body value
+      _coreName = _pendingCoreName || _base;                // Task 6: friendly Core name (mDNS pick or base)
       pinBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Saving…";
       Promise.all([ persistPairing(_base, fp, null),
                     secureSet(K_CORE_NAME, _coreName) ]).then(function(){
-        // Gate A done (cert pinned via the out-of-band last-6). Gate B (authorization) is now the
-        // approve-on-Core flow -- the operator taps Approve on the hub instead of the user typing a code.
-        // The 8-digit code path stays one tap away inside showRequestPairing() as a fallback.
+        // Gate A done (cert pinned via the out-of-band 6-digit derivation). Gate B (authorization) is the
+        // approve-on-Core flow; the 8-digit code path stays one tap away inside showRequestPairing().
         showRequestPairing();
       }, function(){
         _pinnedFp = null;                                    // durable write failed: do NOT pretend paired
@@ -904,27 +958,49 @@
     };
     backBtn.onclick = function(){ showSetup(); };
     card.appendChild(pinBtn); card.appendChild(backBtn);
-    // Back-to-discovery: a discovery user who reaches verify by picking a hub must not be stranded at the
-    // manual-IP setup screen (the plain Back goes there). When automatic discovery is available, offer a
-    // second ghost path straight back to the hub list.
+    // Back-to-discovery: a discovery user who reached verify by picking a hub must not be stranded at the
+    // manual-IP setup screen (plain Back goes there). Offer a second ghost path straight back to the list.
     if(zeroconfAvailable()){
       var discBtn = el("button", "wavrm-btn ghost", "Back to hub list"); discBtn.type = "button";
       discBtn.onclick = function(){ showChooseCore(); };
       card.appendChild(discBtn);
     }
     card.appendChild(msg);
+
+    // QR-SCAN HOOK (Phase-2 STRONG tier -- NOT built here; needs the camera): slot a bundled on-device
+    // scanner button here that reads the hub's QR carrying the FULL SHA-256 and MACHINE-compares the entire
+    // 256-bit fingerprint to `fp` (no typing, no TTL grind window). Frames processed on-device only, never
+    // stored or transmitted; still under the isNative guard; ships only after an egress sign-off.
+
     if(!WavrNet || typeof WavrNet.probe !== "function"){
-      fpEl.textContent = "(unavailable)"; msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available.";
-      return;
+      msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available."; return;
     }
+    // 1) Probe the cert -> PROBED fingerprint. Never rendered as hex; used only inside the derivation.
     WavrNet.probe({ url: _base }).then(function(r){
       fp = (r && r.fingerprint) || null;
-      expect = last6(fp);
-      fpEl.textContent = fp ? fpDisplay(fp) : "(no certificate presented)";   // textContent, never logged
-      recompute();
+      if(!fp){ msg.className = "wavrm-msg err"; msg.textContent = "The hub presented no certificate. Check the address."; return; }
+      deriveExpect();
     }).catch(function(){
-      fpEl.textContent = "(unreachable)"; msg.className = "wavrm-msg err";
+      msg.className = "wavrm-msg err";
       msg.textContent = "Could not reach " + _base + ". Check the address and that the hub is on.";
+    });
+    // 2) Fetch the hub's short-TTL rotating pair_code over the (still-unverified) pinned transport. body.verify6
+    // and body.cert_fingerprint are IGNORED as anchors (a MitM controls the body); we derive locally from the
+    // PROBED cert. pair_code is a binding input, not a credential: never rendered, logged, or persisted.
+    netFetch(_base + "/api/pair-code", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "user" })
+    }).then(function(res){
+      if(!res || !res.ok) throw new Error("pair-code status " + (res ? res.status : "?"));
+      return res.json();
+    }).then(function(body){
+      pairCode = body && body.code;                          // rotating short-TTL code; closure only
+      if(pairCode == null || pairCode === ""){ msg.className = "wavrm-msg err"; msg.textContent = "Your hub didn't return a pairing code. Try again."; return; }
+      deriveExpect();
+    }).catch(function(err){
+      if(err && err.code === "PIN_MISMATCH") return;         // no pin yet, but keep the discipline
+      msg.className = "wavrm-msg err";
+      msg.textContent = "Couldn't get a code from " + _base + ". Check the hub is on and try again.";
     });
   }
 
