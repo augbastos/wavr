@@ -2340,6 +2340,7 @@
               <!-- Stage 3b (§7#13): instant client-side filter over the rows below -->
               <input id="devSearch" class="cat-search dev-search" type="search"
                      placeholder="search device (name, IP, vendor…)" aria-label="search device on the network">
+              <div id="devCountNote" class="net-hint" hidden></div>
               <div id="devList" class="dev-list" aria-live="polite"></div>
             </div>
           </div>
@@ -5031,6 +5032,19 @@ function renderNetwork(){
   // as the rename state above; the identity registry it writes is the SAME consent registry
   // wavr.known_presence composes house-level "who's home" over (see renderKnownPresence()).
   let assigningMac = null, assigningValue = "";
+  // Scale (airport-grade LANs): cache the last inventory so the search box can
+  // re-filter + re-render from memory with NO re-fetch, and CAP how many device
+  // rows we ever build into the DOM. Rendering every device was ~17 nodes each --
+  // at 5000 devices that is ~85k DOM nodes torn down and rebuilt every 15s, which
+  // froze the tab. Now we build at most DEV_RENDER_CAP rows and let search reach
+  // the rest. Covers every real home unchanged (homes rarely exceed ~150 devices).
+  let _lastDevices = [], _lastRogue = [], _lastNetId = new Map();
+  const DEV_RENDER_CAP = 500;
+  const devCountNote = document.getElementById("devCountNote");
+  function devSearchText(d){
+    return [d.name, d.display_name, d.hostname, d.vendor, d.device_type, d.ip, d.mac]
+      .filter(Boolean).join(" ").toLowerCase();
+  }
   async function refresh(){
     let inv, al, identityDevices = [];
     // Mobile: route the central reads through the native pinned fetch (base = stored central) so the
@@ -5067,6 +5081,14 @@ function renderNetwork(){
     // without needing a separate hide-pass; a genuinely new occurrence gets a new key and
     // reappears normally.
     const rogue   = (Array.isArray(al && al.alerts) ? al.alerts : []).filter(a => !isAlertDismissed(alertKeyOf(a)));
+    _lastDevices = devices; _lastRogue = rogue; _lastNetId = netIdentityByMac;
+    repaint();
+  }
+  // Render the cached inventory + alerts. Called by refresh() after a fetch AND by the
+  // search box (window.__wavrRepaintDev) to re-filter from memory with NO re-fetch --
+  // so typing in search never re-pulls the (potentially multi-MB) inventory payload.
+  function repaint(){
+    const devices = _lastDevices, rogue = _lastRogue, netIdentityByMac = _lastNetId;
     // E-front: bulk-trust — only counts kind==='rogue_device' sightings (a real MAC each),
     // same restriction as the per-row "this is mine" button below; gateway_identity/rogue_dhcp
     // are network-level events with no single device to allowlist. Live-only for now, same
@@ -5102,8 +5124,14 @@ function renderNetwork(){
     window.__wavrInventory?.(devices);   // Stage-2 hook: Detected matches this SAME payload against the catalog
     // Inventory is opt-in (WAVR_NET_INVENTORY=1); an empty list means it isn't collecting.
     hint.hidden = devices.length > 0;
+    // Filter (from the search box, in memory) then CAP, then build into ONE
+    // DocumentFragment appended in a single reflow -- never 5000 live appendChilds.
+    const _q = (window.__wavrDevQ || "");
+    const _matches = _q ? devices.filter(d => devSearchText(d).indexOf(_q) >= 0) : devices;
+    const _shown = _matches.slice(0, DEV_RENDER_CAP);
     devList.textContent = "";
-    devices.forEach(d => {
+    const _frag = document.createDocumentFragment();
+    _shown.forEach(d => {
       const row = document.createElement("div"); row.className = "dev-row";
       // Stage 3b (§7#8/#13): row addressable for the profile drill-down + search. The full
       // MAC rides a data attribute only — the display stays masked, reveal is on-demand.
@@ -5311,8 +5339,24 @@ function renderNetwork(){
       tag.textContent = d.known ? "known" : "unknown";
       row.appendChild(dtypeIconEl(d.device_type, d.type_confidence, false, d.known === false));   // v2: type icon column
       row.appendChild(left); row.appendChild(tag);
-      devList.appendChild(row);
+      _frag.appendChild(row);
     });
+    devList.appendChild(_frag);
+    devList.dataset.total = String(devices.length);   // TRUE device count for the top-bar chip (rows are capped)
+    // Honest "showing X of N" note whenever the list is capped or a search narrows it,
+    // so a capped list never reads as "these are all your devices".
+    if(devCountNote){
+      if(_matches.length > _shown.length){
+        devCountNote.hidden = false;
+        devCountNote.textContent = "Showing " + _shown.length + " of " + _matches.length +
+          (_q ? " matches" : " devices") + " — use search to find a specific device.";
+      } else if(_q && _matches.length !== devices.length){
+        devCountNote.hidden = false;
+        devCountNote.textContent = _matches.length + " of " + devices.length + " devices match.";
+      } else {
+        devCountNote.hidden = true;
+      }
+    }
     // Rogue alerts newest first (service returns newest last; ISO ts sorts lexicographically).
     rogue.sort((a,b) => String(b.ts||"").localeCompare(String(a.ts||"")));
     alertList.textContent = "";
@@ -5425,6 +5469,7 @@ function renderNetwork(){
     });
   }
   window.__wavrNetRefresh = refresh;   // v2: the drill-down type-pin re-renders through this same poll path
+  window.__wavrRepaintDev = repaint;   // scale: search box re-filters from cache (no re-fetch)
   refresh(); setInterval(refresh, 15000);
 }
 if(!window.WAVR_MOBILE) renderNetwork();   // mobile: deferred to the post-ready boot (token cache is empty at parse time)
@@ -10167,7 +10212,10 @@ try {
       var devListMon = document.getElementById("devList");
       if(devListMon){
         var mirrorRede = function(){
-          var n = devListMon.querySelectorAll(".dev-row").length;
+          // Rendered rows are capped for scale (see renderNetwork), so prefer the TRUE
+          // total the render stamps on #devList; fall back to the row count if absent.
+          var total = parseInt(devListMon.dataset.total || "", 10);
+          var n = isNaN(total) ? devListMon.querySelectorAll(".dev-row").length : total;
           if(!n){ pillRede.hidden = true; return; }   // no inventory yet — no badge, no guess
           setPill(pillRede, "Network: " + n + " device" + (n > 1 ? "s" : ""), "ok");
         };
@@ -13020,8 +13068,12 @@ try {
     }
   }
   if(devSearchEl) devSearchEl.addEventListener("input", function(){
-    devQ = norm(devSearchEl.value.trim());
-    applyDevSearch();
+    // Scale: filter the FULL cached device array + re-render a capped window (no
+    // re-fetch), so search reaches devices beyond the render cap. Falls back to the
+    // old post-render CSS hide only before the Network tab has first rendered.
+    window.__wavrDevQ = devSearchEl.value.trim().toLowerCase();
+    if(window.__wavrRepaintDev){ window.__wavrRepaintDev(); }
+    else { devQ = norm(devSearchEl.value.trim()); applyDevSearch(); }
   });
 
   // =====================================================================
