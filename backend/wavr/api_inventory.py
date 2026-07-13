@@ -46,7 +46,15 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  scan onward; known=false re-arms it (it
                                  alerts again if it resurfaces unknown). See
                                  `NetworkInventoryService.apply_known_change`.
-Both PUTs and the known POST are only registered when their store
+  * POST /api/inventory/known/bulk -- no body -> marks every device in the
+                                 CURRENT inventory snapshot that is currently
+                                 unknown as known (loops the same set_known +
+                                 apply_known_change pair as the single-device
+                                 route above). Returns `{marked: N}`. The
+                                 admin-initiated "Trust all N devices" bulk
+                                 action -- a one-shot snapshot, never an
+                                 auto-trust window.
+Both PUTs and the known POST(s) are only registered when their store
 (`device_meta`/`known_store` respectively) is given, and are gated by
 `name_deps` (the app's require_local CSRF guard), same rule as every other
 state-changing route.
@@ -249,5 +257,19 @@ def build_inventory_router(service: NetworkInventoryService,
             # already makes it authoritative for the NEXT scan regardless.
             service.apply_known_change(mac_norm, known)
             return entry
+
+        @router.post("/api/inventory/known/bulk", dependencies=list(name_deps or []))
+        async def mark_all_known():
+            # Admin-initiated bulk trust: "Trust all N devices" for the CURRENT
+            # inventory snapshot only -- never an auto-trust window. Same CSRF
+            # gate (name_deps) as the single-device route above; one write per
+            # currently-unknown device, same known_store + service sync each.
+            marked = 0
+            for d in service.latest_inventory():
+                if not d.known:
+                    known_store.set_known(d.mac, True)
+                    service.apply_known_change(d.mac, True)
+                    marked += 1
+            return {"marked": marked}
 
     return router

@@ -104,10 +104,16 @@
   .tpill.down{color:var(--danger);border-color:rgba(232,114,106,.4);}
   .tpill.down .p-dot{background:var(--danger);}
   .tpill.off .p-dot{background:var(--dim);}
-  /* Approve-on-Core header pill — amber (attention/pending-decision), same family as
-     .help-btn[aria-pressed=true]/.help-banner, never the reserved live/primary green. */
-  .pa-pill{color:var(--warn);border-color:rgba(232,161,58,.45);cursor:pointer;}
-  .pa-pill .p-dot{background:var(--warn);}
+  /* Fix F5: Approve-on-Core is now a badge-dot on the gear icon (replaces the old #pairApprovePill
+     header pill) — amber (attention/pending-decision), same family as .help-btn[aria-pressed=true]/
+     .help-banner, never the reserved live/primary green. Applied to BOTH gear entry points
+     (.topbar-gear on phone, .nav-item#gearNavBtn on tablet/desktop) so it's visible at every
+     breakpoint; toggled by renderPairApprove(). The actual approve/deny surface is unchanged:
+     #pairApprove, the always-on-top-of-content banner (aria-live="assertive" already announces
+     it to screen readers the instant it appears, independent of this dot). */
+  .has-pending{position:relative;}
+  .has-pending::after{content:"";position:absolute;top:2px;right:2px;width:9px;height:9px;
+    border-radius:50%;background:var(--warn);border:2px solid var(--surface);}
   .chip-privacy{cursor:pointer;color:var(--dim);}
   .chip-privacy svg{color:var(--accent);flex:none;}
   .chip-privacy:hover{color:var(--text);border-color:var(--line-strong);}
@@ -121,16 +127,16 @@
   /* UX HIGH #1: the live cloud-vendor addendum reads as its own line, same "two separate
      sentences in two elements" precedent as the egress summary's demo note (P6 fix 3). */
   .privacy-pop-asst{display:block;margin-top:8px;color:var(--warn);}
-  /* #house / #mode keep their exact class names — JS overwrites className on #house. */
+  /* #house keeps its exact class name — JS overwrites className on it. (Fix F7: the sibling
+     #mode span is gone — see its removal note at the MODE constant definition in the main
+     script; this comment used to also cover .mode, now deleted as dead CSS.) */
   .house{font-size:.75rem;font-weight:600;padding:5px 12px;border-radius:999px;
          border:1px solid var(--line);background:var(--elevated);white-space:nowrap;
          transition:color .25s ease-out,border-color .25s ease-out;}
   .house.home{color:var(--accent);border-color:rgba(61,181,74,.4);}
   .house.away{color:var(--dim);}
   .house.stale{opacity:.6;}
-  .mode{font-size:.75rem;color:var(--dim);white-space:nowrap;}
-  .mode b{color:var(--accent);font-weight:560;}
-  .topbar-gear{display:none;width:44px;height:44px;flex:none;align-items:center;justify-content:center;
+  .topbar-gear{position:relative;display:none;width:44px;height:44px;flex:none;align-items:center;justify-content:center;
                background:var(--elevated);border:1px solid var(--line);border-radius:10px;
                color:var(--dim);cursor:pointer;}
   .topbar-gear svg{width:20px;height:20px;}
@@ -1065,9 +1071,17 @@
      Amber (--warn) is the "egress possible / data in flight" color; green stays
      reserved for local/confident (§3). No new perpetual animations.
      ============================================================================ */
-  /* topbar egress echo — visible ONLY while the narrator is actually sending (§9) */
-  .tpill.egress{color:var(--warn);border-color:rgba(232,161,58,.55);}
-  .tpill.egress .p-dot{background:var(--warn);}
+  /* Fix F3: egress echo — visible ONLY while the narrator is actually sending (§9). Was a
+     .tpill in the scroll-contingent .status-pills row; now a fixed top-center toast (same
+     transient-overlay grammar as .tip-pop — fixed position, decorative, pointer-events:none —
+     so "sending to the cloud" can never be scrolled out of view on phone, see F2). */
+  .egress-toast{position:fixed;top:max(10px, env(safe-area-inset-top));left:50%;
+    transform:translateX(-50%);z-index:400;display:inline-flex;align-items:center;gap:6px;
+    padding:6px 14px;border-radius:999px;background:var(--elevated);
+    border:1px solid rgba(232,161,58,.55);color:var(--warn);font-size:.75rem;
+    font-variant-numeric:tabular-nums;box-shadow:0 6px 20px rgba(0,0,0,.35);
+    pointer-events:none;}
+  .egress-toast .p-dot{width:6px;height:6px;border-radius:50%;background:var(--warn);flex:none;}
   /* narrator double-confirm: structurally distinct from every other control (§9) */
   .narrate-confirm{margin-top:12px;padding:12px 14px;background:rgba(232,161,58,.09);
                    border:1px solid rgba(232,161,58,.45);border-radius:10px;}
@@ -1376,14 +1390,16 @@
     .nav-label{display:block;font-size:.6rem;letter-spacing:.02em;}
     .nav-item.active::before{left:14px;right:14px;top:0;bottom:auto;width:auto;height:2px;}
     .topbar-brand{display:flex;}
+    /* Fix F8: icon badge only on phone — the "Wavr" wordmark is redundant chrome next to the
+       gear/pill row on the narrowest viewports (the .logo-badge icon alone still identifies it). */
+    .topbar-brand .brand-name{display:none;}
     .topbar-gear{display:inline-flex;}
-    /* P5 fix 4: edge-fade mask — pills past the right edge read as "scroll for more",
-       never as truncation. The privacy chip itself is the 2nd pill in DOM order, so it
-       survives even the narrowest phone without scrolling. */
-    .status-pills{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;
-                  mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);
-                  -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);}
-    .status-pills::-webkit-scrollbar{display:none;}
+    /* Fix F2: the old nowrap/overflow-x/edge-fade-mask override (P5 fix 4) is REMOVED — it could
+       scroll #pillEgress and the pairing pill off-screen with no visual hint one existed. Phone
+       now inherits the SAME flex-wrap:wrap the desktop/tablet .status-pills already uses (:96),
+       so the row simply grows to a 2nd line instead of hiding pills behind a horizontal scroll.
+       (#pillEgress has since moved to its own top-center toast and no longer lives in this row
+       at all — see .egress-toast below — so this is belt-and-suspenders for whatever's left.) */
     main.content{padding-bottom:calc(70px + env(safe-area-inset-bottom));}
     .tab-panel.active{padding:12px;}
     /* P4 fix 5: on the phone, the ROOMS cards (who/where) come BEFORE the big 3D map,
@@ -1401,7 +1417,6 @@
        icon + "private" — so the trust guarantee stays legible, NEVER icon-only. */
     .chip-privacy .chip-label{display:none;}
     .chip-privacy .chip-label-short{display:inline;}
-    .mode{display:none;}
   }
   /* ---------------- Touch target sizing + iOS zoom-on-focus fix ---------------- */
   @media (pointer:coarse){
@@ -1828,7 +1843,7 @@
   .core-alert-dismiss:hover,.core-alert-dismiss:focus{color:var(--text);border-color:var(--dim);outline:none;}
   /* Network tab's own explain/dismiss panel (mode-agnostic twin of .core-alerts-pop, which lives
      inside the ?core-only #corePanel and can't be reused directly outside kiosk mode): a normal
-     in-flow disclosure under the "Intrusion alerts" header, not a floating overlay. */
+     in-flow disclosure under the "Security & network alerts" header, not a floating overlay. */
   .net-alerts-pop{margin:6px 0 10px;padding:clamp(8px,1.4vh,14px);border-radius:12px;
                   background:var(--elevated);border:1px solid var(--line);}
   .net-alerts-pop .core-alerts-pop-head{margin:0 0 4px;}
@@ -1962,7 +1977,8 @@
       <div class="status-pills">
         <span id="house" class="house" aria-live="polite"></span>
         <!-- P5 fix 4: the privacy trust chip is the 2nd pill — ahead of every optional/hidden
-             pill — so it can never scroll off-screen on the phone's nowrap pill row (§9). -->
+             pill (§9). Fix F2: the phone row no longer scrolls at all (wraps like desktop/
+             tablet), so this ordering is now belt-and-suspenders rather than load-bearing. -->
         <!-- P6 fix 2: aria-label carries the full guarantee for AT on every viewport; the
              visible label swaps to the short "private" (chip-label-short) below 420px. -->
         <button id="privacyChip" class="tpill chip-privacy" type="button" aria-expanded="false" aria-controls="privacyPop" aria-label="Nothing leaves home — privacy guarantee">
@@ -1972,35 +1988,25 @@
         <button id="demoPill" class="tpill demo-pill" type="button" hidden
                 aria-expanded="false" aria-controls="demoIntro"
                 title="Demo — sample data. Tap to learn more."><i class="p-dot" aria-hidden="true"></i><span class="p-txt">demo</span></button>
-        <span id="pillInternet" class="tpill" hidden><i class="p-dot"></i><span class="p-txt">Internet</span></span>
-        <span id="pillSensores" class="tpill" hidden><i class="p-dot"></i><span class="p-txt">Sensors</span></span>
         <!-- P4 fix 6: network-status badge — mirrors the Network tab; tapping opens it -->
         <button id="pillRede" class="tpill chip-nav" type="button" hidden
                 title="Network status — tap to open the Network tab"><i class="p-dot"></i><span class="p-txt">Network</span></button>
-        <!-- Stage 3b (§9): transient topbar echo while the narrator is sending — the one
-             amber "data in flight" moment, distinct from the permanent green/local chip. -->
-        <span id="pillEgress" class="tpill egress" hidden role="status"><i class="p-dot" aria-hidden="true"></i><span class="p-txt">sending to the cloud…</span></span>
-        <!-- Approve-on-Core: header pill mirrors the #pairApprove banner state (live/central +
-             multidevice-gated, populated by renderPairApprove()). Tap scrolls the banner into view. -->
-        <button id="pairApprovePill" class="tpill pa-pill" type="button" hidden
-                aria-label="Devices waiting to connect — tap to review"><i class="p-dot" aria-hidden="true"></i><span class="p-txt" id="pairApprovePillTxt">1 waiting</span></button>
-        <span class="mode" id="mode"></span>
-        <button id="companionExit" class="ctl small" type="button" hidden>Disconnect</button>
       </div>
-      <!-- v2 tooltips: persistent Help Mode toggle — the touch-newcomer path into the
-           context-help popovers (hover/focus/long-press cover the other inputs). Visible
-           at every breakpoint; hidden with the rest of the chrome in pairing-mode. -->
-      <button class="topbar-gear help-btn" id="helpModeBtn" type="button" aria-pressed="false"
-              aria-label="Help mode" data-tip="Help mode — tap any control to see what it does">
-        <svg aria-hidden="true"><use href="#ic-help"/></svg>
-      </button>
       <button class="topbar-gear" id="gearTopBtn" type="button" aria-label="Settings"
               data-tip="Settings — house editor, pairing, privacy and about">
         <svg aria-hidden="true"><use href="#ic-gear"/></svg>
       </button>
     </header>
+    <!-- Fix F3: "sending to the cloud…" transient toast — moved OUT of .status-pills (a row
+         that could scroll horizontally on phone, see F2) into a fixed top-center overlay, same
+         transient-overlay grammar as .tip-pop (fixed position, fade, decorative/pointer-events:
+         none). Toggled by the SAME setSending() in renderNarrate() — only the CSS class + DOM
+         position changed, not the on/off logic. -->
+    <div id="pillEgress" class="egress-toast" hidden role="status">
+      <i class="p-dot" aria-hidden="true"></i><span class="p-txt">sending to the cloud…</span>
+    </div>
     <!-- v2 tooltips: Help Mode banner — visible only while Help Mode is on -->
-    <div id="helpBanner" class="help-banner" hidden role="status" aria-live="polite">Help mode is on — tap any control to see what it does. Tap ? again to turn it off.</div>
+    <div id="helpBanner" class="help-banner" hidden role="status" aria-live="polite">Help mode is on — tap any control to see what it does. Turn it off again in Settings → About.</div>
     <!-- P5 fix 1: honest copy — the narrator is the only egress in the CORE flow; the other
          opt-in egress paths (ntfy/MQTT/HA/MCP) exist but ship OFF, and the Sistema dashboard
          is the live receipt of what's actually enabled.
@@ -2266,6 +2272,16 @@
 
       <!-- ==================== NETWORK ==================== -->
       <section class="tab-panel" id="panel-rede" data-tab="rede" role="tabpanel" aria-labelledby="tab-rede">
+        <!-- Fix F6: companion-viewer "Disconnect" relocated here from the always-visible topbar
+             pill row (was #companionExit sitting bare in .status-pills) -- a single-purpose,
+             companion-only action belongs with the rest of this viewer's network chrome, not
+             in the permanent header. Wrapper tile stays hidden until initCompanion() reveals it
+             (viewer mode with a token), same reveal call as before -- see :3581. -->
+        <div id="companionConn" class="net tile" hidden>
+          <div class="tile-head"><h2>Connection</h2></div>
+          <p class="net-sub">You're viewing this home as a paired companion.</p>
+          <button id="companionExit" class="ctl small" type="button">Disconnect</button>
+        </div>
         <!-- Who's likely home — known-presence summary (2026-07-11, known-device-ui). Composed
              PURELY from devices already ASSIGNED to a person via "assign person" on the Devices
              list below + the already-fused house-level network signal (wavr.known_presence) --
@@ -2289,7 +2305,7 @@
                changes, so search/filter/observer wiring below is unaffected. -->
           <div class="net-cols">
             <div class="net-col net-col-alerts">
-              <h4>Intrusion alerts <span id="netAlertCount" class="net-alert-count"></span></h4>
+              <h4>Security &amp; network alerts <span id="netAlertCount" class="net-alert-count"></span></h4>
               <!-- Tap the count above -> explain each alert (what/severity/room in plain language)
                    and dismiss/acknowledge it (persisted client-side so the same instance won't
                    reappear); wired by initNetAlertsPop(). Mode-agnostic twin of the Core Panel's
@@ -2308,6 +2324,15 @@
             </div>
             <div class="net-col">
               <h4>Devices on the network <span id="devFb" class="action-fb" aria-live="polite"></span></h4>
+              <!-- E-front: bulk-trust — POST /api/inventory/known/bulk (backend contract), same
+                   CSRF/name_deps gate as the per-row "this is mine" button below. Visible only
+                   when the current rogue list has at least one kind==='rogue_device' sighting
+                   (a real MAC to mark) — never for network-level gateway_identity/rogue_dhcp
+                   events, which have no single device to allowlist. -->
+              <div class="controls-row trust-all-row">
+                <button id="trustAllBtn" type="button" class="ctl small" hidden></button>
+                <span id="trustAllFb" class="action-fb" aria-live="polite"></span>
+              </div>
               <!-- Stage 3b (§7#13): instant client-side filter over the rows below -->
               <input id="devSearch" class="cat-search dev-search" type="search"
                      placeholder="search device (name, IP, vendor…)" aria-label="search device on the network">
@@ -2330,7 +2355,7 @@
                consistent so the example matches the real hierarchy a hub user will see. -->
           <div class="net-cols">
             <div class="net-col net-col-alerts">
-              <h4>Intrusion alerts<span class="ex-badge">example</span></h4>
+              <h4>Security &amp; network alerts<span class="ex-badge">example</span></h4>
               <div class="alert-list">
                 <div class="alert-row">
                   <span class="at">intruder? — new device 03:12</span>
@@ -2604,6 +2629,11 @@
               <button id="egressMasterBtn" type="button" class="ctl switch small" role="switch" hidden></button>
               <span id="egressMasterFb" class="action-fb" aria-live="polite"></span>
             </div>
+            <!-- Fix D: an admin (central) companion now sees System/Health/Doctor, but the egress
+                 + network-sensing MASTER switches stay loopback-root-only by security design (see
+                 the eg-master-row comment above) — this one-line note is the only thing that
+                 explains that absence to an admin who otherwise sees a full System tab. -->
+            <p id="egressCompanionNote" class="panel-note" hidden>Blocking egress/sensing entirely can only be done on the Core device itself.</p>
             <p id="egressSummary" class="egress-summary na">—</p>
             <!-- P6 fix 3: demo note lives here, SEPARATE from the permanent guarantee that
                  renderEgress() writes into #egressSummary — never conflated in one sentence. -->
@@ -3173,6 +3203,18 @@
     <div class="tile" id="gearSobre" aria-labelledby="sobre-h">
       <div class="tile-head"><h2 id="sobre-h">About</h2></div>
       <p class="panel-note">Wavr — multi-modal home presence sensing, local-first · AGPL-3.0 license<span id="sobreVersion"></span><span id="sobreMode"></span></p>
+      <!-- Fix F4: Help Mode relocated here from the always-visible topbar gear icon (was a
+           permanent 44px icon button next to Settings, for a rarely-toggled accessibility aid).
+           Same #helpModeBtn id/class/data-tip -- the existing tooltip-system wiring (aria-pressed
+           toggling, .help-btn[aria-pressed=true] amber state) re-queries the DOM and needs no
+           change; this is a pure relocation + a visible text label. -->
+      <div class="controls-row" id="helpModeRow">
+        <button class="ctl small help-btn" id="helpModeBtn" type="button" aria-pressed="false"
+                aria-label="Help mode" data-tip="Help mode — tap any control to see what it does">
+          <svg aria-hidden="true"><use href="#ic-help"/></svg> Help mode
+        </button>
+        <span class="hint">Turns any tap on a control into a quick explanation instead of the action.</span>
+      </div>
       <!-- Stage 3b (§7#14): PWA install — revealed only if the browser fires
            beforeinstallprompt; dismissible; gracefully absent where unsupported. -->
       <div class="controls-row" id="pwaRow" hidden>
@@ -3445,6 +3487,44 @@ function companionAuthFailed(){        // token revoked/expired (401/403) -> cle
   companionClearToken();
   try{ location.reload(); }catch{}
 }
+// Cluster D (admin-companion System tab): the shim's window.WAVR_MOBILE.role hint is a UX
+// signal only -- the backend's GET /api/devices/me (Bearer-authed) is the ONE authoritative
+// read of this companion's role, same as every other write path in this file. Resolved lazily
+// and cached (not polled): null = not checked yet, "central"/"user" = confirmed, false =
+// checked and not central (or no token yet). A 'user' companion NEVER sees these controls --
+// only require_local+control backend routes ever run for it, and those already 403 a non-
+// central peer, so this is UI-honesty, not the security boundary.
+let companionRoleCache = null;
+function companionIsCentral(){
+  if(companionRoleCache === null){
+    if(MODE!=="companion" || !companionToken()) return false;   // nothing to resolve yet
+    companionRoleCache = false;      // provisional -- guards against re-entrant fetches while in flight
+    const __nf = (path, opt)=> window.WAVR_MOBILE
+      ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+      : fetch(location.origin + path, opt);
+    __nf("/api/devices/me", {headers:{"Authorization":"Bearer "+companionToken()}})
+      .then(async r=>{
+        if(r.status===401||r.status===403){ companionAuthFailed(); return; }
+        const j = await r.json();
+        companionRoleCache = (j && j.role) || false;
+        // Repaint now that the role is known: renderControls (gated, sets up its own poll)
+        // + a fresh /api/status fetch, whose window.__wavrStatus hook repaints the paint-only
+        // Health/Doctor tiles (same "refresh it when the system panel refreshes" contract the
+        // 3s renderControls poll already uses at the bottom of this function).
+        renderControls();
+        if(typeof refreshStatus === "function") refreshStatus();
+        // Fix C-front (a): this doubles as the "role SETTLE" hook for the bonded-Bluetooth
+        // tile -- renderMobileBonded() itself is idempotent (rebuilds its list from scratch,
+        // no listeners left dangling) and still gates on the shim's own m.role==='central' +
+        // listBondedDevices capability check, so a plain-web companion or a non-central device
+        // stays a no-op here; this only surfaces the tile in-session for a mobile admin whose
+        // backend-confirmed role just resolved.
+        if(typeof renderMobileBonded === "function") renderMobileBonded();
+      })
+      .catch(()=>{ companionRoleCache = null; });   // transient failure -- allow a retry on next paint
+  }
+  return companionRoleCache === "central";
+}
 // Companion data provider: Bearer-authed history + ticketed WS (same contract as WebSocketProvider).
 function CompanionProvider(token){
   // Mobile: base = stored central, fetch = native pinned fetch, WS = native pinned socket (the
@@ -3533,9 +3613,12 @@ function initCompanion(){
     return;
   }
   // --- VIEWER MODE: reveal the read-only "disconnect" control (network panel is rendered by renderNetwork) ---
+  // Fix F6: relocated into the Rede tab panel (was a bare topbar button) -- the wrapping
+  // #companionConn tile carries the hidden state now; the button itself has none of its own.
   const exit = document.getElementById("companionExit");
+  const exitTile = document.getElementById("companionConn");
   if(exit){
-    exit.hidden = false;
+    if(exitTile) exitTile.hidden = false;
     exit.onclick = ()=>{ companionClearToken(); try{ location.reload(); }catch{} };
   }
   // Stage-1 tab shell: #network now lives permanently inside the "Rede" tab panel, so the
@@ -3558,10 +3641,10 @@ function __wavrMakeProvider(){
   return provider;
 }
 if(!window.WAVR_MOBILE) __wavrMakeProvider();
-document.getElementById("mode").innerHTML =
-    MODE==="live"      ? "source: <b>real home</b> (local)"
-  : MODE==="companion" ? (companionToken() ? "source: <b>real home</b> (viewer)" : "source: <b>pairing</b>")
-  :                      "source: <b>demo</b> (sample data)";
+// Fix F7: the standalone topbar #mode span is gone — this exact "source: real home/viewer/
+// demo" text is already shown in Settings → Sobre (sobreModeEl, see the gear-panel init
+// below); pairing state itself is still fully conveyed by the existing pairing-mode body
+// class (hides nav chrome), which never depended on this element.
 // Content-first reorder (item 2): the config panels below the divider are all live-only
 // (or companion-only for #network), so only reveal the divider itself in live mode.
 if(MODE==="live"){
@@ -3812,13 +3895,29 @@ renderStatus();
 
 // ---- Control plane (Plano A / live only): global on/off + per-source on/off ----
 async function renderControls(){
-  if(MODE!=="live") return;               // the control plane is a backend feature
+  // Fix D: an admin (central) companion also gets the System tab -- confirmed via the
+  // authoritative GET /api/devices/me read (companionIsCentral), never the shim's role hint
+  // alone. A 'user' companion keeps this whole tile hidden (companionIsCentral() is false).
+  const companionCentral = MODE==="companion" && companionIsCentral();
+  if(MODE!=="live" && !companionCentral) return;   // the control plane is a backend feature
   document.getElementById("controls").hidden = false;
+  // Mobile: route through the native pinned fetch (base = stored central) so the companion
+  // Bearer token never hits the app's own https://localhost -- same __nf pattern as
+  // renderStatus/renderNetwork. Absent the hook, __nf is exactly the original same-origin fetch.
+  const companionAuth = companionCentral ? {"Authorization":"Bearer "+companionToken()} : null;
+  const __nf = (path, opt)=> window.WAVR_MOBILE
+    ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+    : fetch(location.origin + path, opt);
   // Fix #1 (source toggles look dead): no longer swallows a failed POST into a silent
   // "success" — a network error or a 403 (missing local-admin scope) resolves to null so
   // every caller below can tell a real write from a no-op and surface it instead of lying.
-  const post = (url,body)=> fetch(location.origin+url,{method:"POST",
-    headers:{"Content-Type":"application/json","X-Wavr-Local":"1"}, body:JSON.stringify(body)})
+  // Fix D: companion branch sends the Bearer instead of the loopback-only X-Wavr-Local header
+  // (require_local admits root+X-Wavr-Local OR an authenticated central peer, see app.py).
+  const post = (url,body)=> __nf(url,{method:"POST",
+    headers: companionCentral
+      ? Object.assign({"Content-Type":"application/json"}, companionAuth)
+      : {"Content-Type":"application/json","X-Wavr-Local":"1"},
+    body:JSON.stringify(body)})
     .catch(()=>null);
   // Fix #3 (honest unavailable state): /api/system already returns {enabled,active} per
   // source (sourcemanager.py) — active=false while enabled=true means the source's task
@@ -3844,7 +3943,11 @@ async function renderControls(){
   // can read it (the exact "toggles silently fail" complaint this is meant to fix).
   const srcError = {};
   async function refresh(){
-    let s; try{ s = await (await fetch(location.origin+"/api/system")).json(); }catch{ return; }
+    let s; try{
+      const r = await __nf("/api/system", companionAuth?{headers:companionAuth}:undefined);
+      if(companionAuth && (r.status===401||r.status===403)){ companionAuthFailed(); return; }
+      s = await r.json();
+    }catch{ return; }
     window.__wavrSystem?.(s);   // Stage-2 hook: Dispositivos→Ativos badge/rows share this payload
     const sys = document.getElementById("sysToggle");
     const sysFb = document.getElementById("sysFb");
@@ -4689,8 +4792,8 @@ renderCoreLockAdmin();
 // ---- Narration (Plano A / live only) ----
 // Stage 3b (§9): the narrator is the app's ONLY egress, so its trigger is structurally
 // distinct from every other control — a two-step confirm before POST /api/narrate, and a
-// transient non-green "sending to the cloud…" indicator (echoed briefly in the topbar)
-// while the request is actually in flight. The fixed egress-note stays visible throughout.
+// transient non-green "sending to the cloud…" indicator (echoed briefly in a top-center toast,
+// Fix F3) while the request is actually in flight. The fixed egress-note stays visible throughout.
 function renderNarrate(){
   const card = document.getElementById("narrate");
   if(!card) return;
@@ -4722,7 +4825,7 @@ function renderNarrate(){
     if(pill){
       clearTimeout(pill._t);
       if(on) pill.hidden = false;
-      else pill._t = setTimeout(()=>{ pill.hidden = true; }, 1200);   // brief topbar echo after the send
+      else pill._t = setTimeout(()=>{ pill.hidden = true; }, 1200);   // brief top-center toast after the send
     }
   }
   // Step 1: "Generate summary" only ARMS the explicit confirm — it never sends by itself.
@@ -4902,6 +5005,8 @@ function renderNetwork(){
   const alertList = document.getElementById("alertList");
   const hint = document.getElementById("netHint");
   const devFb = document.getElementById("devFb");
+  const trustAllBtn = document.getElementById("trustAllBtn");
+  const trustAllFb = document.getElementById("trustAllFb");
   // Device-rename edit state (item: device naming) — kept outside refresh() so the 15s poll
   // doesn't wipe an in-progress edit; only one device can be renamed at a time.
   let editingMac = null, editingValue = "", editingJustOpened = false;
@@ -4945,6 +5050,38 @@ function renderNetwork(){
     // without needing a separate hide-pass; a genuinely new occurrence gets a new key and
     // reappears normally.
     const rogue   = (Array.isArray(al && al.alerts) ? al.alerts : []).filter(a => !isAlertDismissed(alertKeyOf(a)));
+    // E-front: bulk-trust — only counts kind==='rogue_device' sightings (a real MAC each),
+    // same restriction as the per-row "this is mine" button below; gateway_identity/rogue_dhcp
+    // are network-level events with no single device to allowlist. Live-only for now, same
+    // X-Wavr-Local CSRF gate as the per-row button (both call the identical backend name_deps).
+    const rogueDeviceN = rogue.filter(a => (a.kind || "rogue_device") === "rogue_device").length;
+    if(trustAllBtn){
+      if(MODE==="live" && rogueDeviceN > 0){
+        trustAllBtn.hidden = false;
+        trustAllBtn.textContent = "Trust all " + rogueDeviceN + " device" + (rogueDeviceN===1 ? "" : "s") + " shown";
+        trustAllBtn.setAttribute("aria-label", "mark all " + rogueDeviceN + " unknown devices as known");
+        trustAllBtn.onclick = async ()=>{
+          trustAllBtn.disabled = true;
+          let r;
+          try{
+            r = await fetch(location.origin+"/api/inventory/known/bulk",
+              {method:"POST", headers:{"X-Wavr-Local":"1"}});
+          }catch{}
+          if(r && r.ok){
+            let marked = 0;
+            try{ marked = (await r.json()).marked ?? 0; }catch{}
+            actionFeedback(trustAllFb, true, null, "✓ marked " + marked + " known");
+            refresh();
+          } else {
+            trustAllBtn.disabled = false;
+            actionFeedback(trustAllFb, false, "update failed");
+          }
+        };
+      } else {
+        trustAllBtn.hidden = true;
+        trustAllBtn.onclick = null;
+      }
+    }
     window.__wavrInventory?.(devices);   // Stage-2 hook: Detected matches this SAME payload against the catalog
     // Inventory is opt-in (WAVR_NET_INVENTORY=1); an empty list means it isn't collecting.
     hint.hidden = devices.length > 0;
@@ -5275,7 +5412,7 @@ function renderNetwork(){
 }
 if(!window.WAVR_MOBILE) renderNetwork();   // mobile: deferred to the post-ready boot (token cache is empty at parse time)
 
-// ---- Network tab: tap "Intrusion alerts (n)" -> explain + dismiss each one, in EVERY mode
+// ---- Network tab: tap "Security & network alerts (n)" -> explain + dismiss each one, in EVERY mode
 // (live/companion), not just the ?core kiosk face -- #netAlertCount previously only got a
 // count from Core Panel's CORE_MODE-gated renderCoreAlerts(), so outside that mode it stayed a
 // permanently-empty dead span. Runs unconditionally (cheap DOM listener wiring); harmless if
@@ -5618,8 +5755,12 @@ async function renderPairApprove(){
   let seed; try{ seed = await probe.json(); }catch{ seed = {}; }
 
   const banner  = document.getElementById("pairApprove");
-  const pill    = document.getElementById("pairApprovePill");
-  const pillTxt = document.getElementById("pairApprovePillTxt");
+  // Fix F5: the header pill is gone -- a badge-dot on BOTH gear entry points (phone topbar +
+  // desktop/tablet sidenav) replaces it; the banner itself is unchanged (already the first
+  // thing inside <main>, aria-live="assertive", so it's never actually hidden inside Settings).
+  const gearBadges = [document.getElementById("gearTopBtn"), document.getElementById("gearNavBtn")]
+    .filter(Boolean);
+  const setGearBadge = (on)=> gearBadges.forEach(b => b.classList.toggle("has-pending", on));
   const paH     = document.getElementById("paH");
   const paMeta  = document.getElementById("paMeta");
   const paCode  = document.getElementById("paCode");
@@ -5634,7 +5775,7 @@ async function renderPairApprove(){
   const paApprove = document.getElementById("paApprove");
   const paFb    = document.getElementById("paFb");
   const paMore  = document.getElementById("paMore");
-  if(!banner || !pill || !pillTxt || !paH || !paMeta || !paCode || !paFp || !confirmBox || !actionsBox ||
+  if(!banner || !paH || !paMeta || !paCode || !paFp || !confirmBox || !actionsBox ||
      !paYes || !paNo || !paDeny || !paApprove || !paMore || !paConfirmInput) return;
 
   let requests = [];        // last-polled pending list, oldest-first (server insertion order)
@@ -5696,7 +5837,7 @@ async function renderPairApprove(){
   function render(){
     if(!requests.length){
       banner.hidden = true;
-      pill.hidden = true;
+      setGearBadge(false);
       heroId = null;
       return;
     }
@@ -5711,8 +5852,7 @@ async function renderPairApprove(){
     }
     renderMore(requests.filter(r=>r.request_id!==hero.request_id));
     banner.hidden = false;
-    pill.hidden = false;
-    pillTxt.textContent = requests.length===1 ? "1 waiting" : (requests.length + " waiting");
+    setGearBadge(true);
   }
   async function poll(){
     if(document.hidden) return;             // perf: skip network work while this tab isn't visible
@@ -5784,7 +5924,9 @@ async function renderPairApprove(){
     confirmBox.hidden = true; paCode.hidden = false; actionsBox.hidden = false;
     poll();
   };
-  pill.onclick = ()=>{ banner.scrollIntoView({block:"center"}); };
+  // Fix F5: no more pill to scroll-to-on-click -- the banner is already the first thing inside
+  // <main> (visible on every tab, aria-live="assertive"), so the gear badge is a pure attention
+  // cue rather than a navigation target.
 
   requests = Array.isArray(seed && seed.requests) ? seed.requests : [];
   coreFp = (typeof (seed && seed.cert_fingerprint) === "string") ? seed.cert_fingerprint : "";
@@ -5938,10 +6080,21 @@ renderIdentity();
 // Guarded by the shim contract: window.WAVR_MOBILE + role 'central' + listBondedDevices. Absent it —
 // which is ALL THREE web modes (loopback/companion-web/demo) and any non-admin device — this is a
 // no-op and #mobileBtImport stays hidden, so web behavior is byte-identical. Reads bonds from the
-// native sibling plugin (no BLE scan, no location), diffs against GET /api/identity/devices, and
-// registers ONE at a time, consent-first, over the pinned Bearer transport. Router-level require_central
-// + admin already gates the POST server-side (a user tablet 403s). Honest limitation: a phone-bonded MAC
-// is a LABEL enriching the registry — live presence still depends on the hub's own radios.
+// native sibling plugin (no BLE scan, no location), diffs against GET /api/identity/devices,
+// PRIMARILY via the one-consent addAllBonded() bulk import (Fix C-front c); per-device add stays
+// available as the secondary path. Router-level require_central + admin already gates the POST
+// server-side (a user tablet 403s). Honest limitation: a phone-bonded MAC is a LABEL enriching
+// the registry — live presence still depends on the hub's own radios.
+// Fix C-front (b): listBondedDevices() failing is not one undifferentiated "unavailable" —
+// distinguish permission-needed / bluetooth-off (both recoverable, retry in place) from a
+// genuinely absent capability, from whatever detail the native plugin's thrown error carries.
+// Degrades safely to the old honest "not available" copy if the shim gives no detail at all.
+function classifyBtUnavailable(err){
+  const detail = String((err && (err.code || err.message)) || "").toLowerCase();
+  if(/permission/.test(detail)) return "permission-needed";
+  if(/bluetooth.*(off|disabled|not enabled|not on)|(disabled|off).*bluetooth/.test(detail)) return "bluetooth-off";
+  return "not-available";
+}
 async function renderMobileBonded(){
   const m = window.WAVR_MOBILE;
   if(!(m && MODE==="companion" && m.role==="central" && typeof m.listBondedDevices==="function")) return;
@@ -5952,13 +6105,29 @@ async function renderMobileBonded(){
   const auth = {"Authorization":"Bearer "+companionToken()};
   const __nf = (path, opt)=> m.netFetch(m.base + path, opt);
   box.hidden = false;
-  let bonded;
-  try{ bonded = await m.listBondedDevices(); }catch{ bonded = null; }
-  if(bonded === null){                        // capability unavailable — honest, not an empty list
+  let bonded, btErr = null;
+  try{ bonded = await m.listBondedDevices(); }catch(e){ bonded = null; btErr = e; }
+  if(bonded === null){                        // capability unavailable — honest, never a silent empty list
     list.textContent = "";
-    const e = document.createElement("div"); e.className = "empty";
-    e.textContent = "Bluetooth device import isn't available on this device.";
-    list.appendChild(e); return;
+    const reason = classifyBtUnavailable(btErr);
+    if(reason === "permission-needed" || reason === "bluetooth-off"){
+      const p = document.createElement("p"); p.className = "net-hint";
+      p.textContent = reason === "permission-needed"
+        ? "Wavr needs Bluetooth permission on this phone to see devices already paired to it."
+        : "Bluetooth is off on this phone.";
+      const retry = document.createElement("button"); retry.type = "button"; retry.className = "ctl small";
+      retry.textContent = reason === "permission-needed" ? "Grant Bluetooth access" : "Turn on Bluetooth and retry";
+      // Both states are recoverable in place: calling listBondedDevices() again gives the OS a
+      // fresh chance to prompt for permission, or picks up Bluetooth being turned back on in
+      // Settings meanwhile -- renderMobileBonded() is idempotent (Fix C-front a), safe to re-run.
+      retry.onclick = ()=> renderMobileBonded();
+      list.appendChild(p); list.appendChild(retry);
+    } else {
+      const e = document.createElement("div"); e.className = "empty";
+      e.textContent = "Bluetooth device import isn't available on this device.";
+      list.appendChild(e);
+    }
+    return;
   }
   const registered = new Set();
   try{
@@ -5973,6 +6142,24 @@ async function renderMobileBonded(){
     const e = document.createElement("div"); e.className = "empty";
     e.textContent = bonded.length ? "All paired devices are already added." : "No paired Bluetooth devices found on this phone.";
     list.appendChild(e); return;
+  }
+  // Fix C-front (c): PRIMARY UX — one consent covers every bonded device at once (bulk-consent
+  // contract: the shim's addAllBonded() does the consent prompt + the POST /api/identity/devices
+  // loop natively). Only shown when there's something fresh to add; per-device rows below stay as
+  // the secondary, one-at-a-time path (e.g. to label devices individually before adding).
+  if(typeof m.addAllBonded === "function"){
+    const addAllRow = document.createElement("div"); addAllRow.className = "controls-row";
+    const addAllBtn = document.createElement("button"); addAllBtn.type = "button"; addAllBtn.className = "ctl";
+    addAllBtn.textContent = "Add all " + fresh.length + " to Wavr";
+    addAllBtn.onclick = async ()=>{
+      addAllBtn.disabled = true;
+      let result;
+      try{ result = await m.addAllBonded(); }catch{ result = null; }
+      if(result){ actionFeedback(fb, true, null, "✓ added"); renderMobileBonded(); }
+      else { addAllBtn.disabled = false; actionFeedback(fb, false, "couldn't add — try again"); }
+    };
+    addAllRow.appendChild(addAllBtn);
+    list.appendChild(addAllRow);
   }
   fresh.forEach(d => {
     const row = document.createElement("div"); row.className = "pair-dev-row";
@@ -6004,7 +6191,9 @@ async function renderMobileBonded(){
     row.appendChild(personIn); row.appendChild(add); list.appendChild(row);
   });
 }
-// renderMobileBonded() is invoked only from the mobile post-ready boot; web modes never call it.
+// renderMobileBonded() is invoked from the mobile post-ready boot, PLUS re-invoked (idempotent)
+// whenever companionIsCentral() resolves the backend-confirmed role (Fix C-front a, see its
+// resolve callback near companionToken()) -- web modes never call it either way.
 
 // ---- Who's likely home — known-presence summary (live/central only, known-device-ui,
 // 2026-07-11) ----
@@ -9591,10 +9780,14 @@ const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); upd
     // companion/demo web) not a byte of it executes, so the three web modes stay byte-identical.
     await Promise.race([window.WAVR_MOBILE.ready, new Promise(r=>setTimeout(r,8000))]);
     __wavrMakeProvider();
-    try{ document.getElementById("mode").innerHTML =
-         companionToken() ? "source: <b>real home</b> (viewer)" : "source: <b>pairing</b>"; }catch{}
+    // Fix F7: #mode removed (see the parse-time site above) -- nothing to re-run here now.
     renderNetwork(); renderRadar(); initCompanion();
     renderStatus();   // item 8: re-run now the token cache is populated (the parse-time call no-op'd in companion)
+    renderControls(); // Fix D: re-run now companionToken() is populated -- the parse-time call short-circuited
+                       // on MODE!=="live" before the Keystore cache landed, so companionIsCentral()'s GET
+                       // /api/devices/me check never fired; this call is what actually kicks it off for a
+                       // native-mobile admin companion (a browser companion already had the token synchronously
+                       // at the first parse-time call, so this is a no-op re-check there).
     renderMobileBonded();   // item 7: admin device's bonded-Bluetooth import (no-op unless role central + plugin)
   }
   (await provider.history()).forEach(handle); provider.start(handle);
@@ -9895,17 +10088,16 @@ try {
     return { act: ss.querySelectorAll(".h.active").length, total: rows.length };
   };
   if(typeof MODE !== "undefined" && MODE === "live"){
+    // Fix F1: #pillInternet/#pillSensores (dead topbar pills — Sistema tab already shows this
+    // exact data, and the phone-nowrap row could hide them entirely, see F2) are gone; this
+    // mirror now ONLY feeds the Rede tab's #redeInternet tile, its one remaining consumer.
     var statusInternetEl = document.getElementById("statusInternet");
-    var pillInternet = document.getElementById("pillInternet");
     var redeInternetTile = document.getElementById("redeInternet");
     var redeInternetLine = document.getElementById("redeInternetLine");
     if(statusInternetEl){
       var mirrorInternet = function(){
         var txt = statusInternetEl.textContent || "";
         if(!txt) return;
-        var cls = statusInternetEl.classList.contains("ok") ? "ok"
-                : statusInternetEl.classList.contains("down") ? "down" : "off";
-        setPill(pillInternet, cls === "ok" ? "Internet OK" : cls === "down" ? "Internet down" : "Internet", cls);
         if(redeInternetTile) redeInternetTile.hidden = false;
         if(redeInternetLine){
           redeInternetLine.className = statusInternetEl.className;
@@ -9915,17 +10107,6 @@ try {
       new MutationObserver(mirrorInternet).observe(statusInternetEl,
         {childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class"]});
       mirrorInternet();
-    }
-    var statusSourcesEl = document.getElementById("statusSources");
-    var pillSensores = document.getElementById("pillSensores");
-    if(statusSourcesEl){
-      var mirrorSources = function(){
-        var c = window.__wavrCountActiveSources();   // P5 fix 11: shared counter
-        if(!c) return;
-        setPill(pillSensores, "Sensors " + c.act + "/" + c.total, c.act > 0 ? "ok" : "off");
-      };
-      new MutationObserver(mirrorSources).observe(statusSourcesEl, {childList: true, subtree: true});
-      mirrorSources();
     }
   }
 
@@ -11817,6 +11998,12 @@ try {
     var list = $("egressList"), sum = $("egressSummary"), note = $("egressNote");
     var demoNote = $("egressDemoNote");
     if(!list || !sum) return;
+    // Fix D: only an admin (central) companion needs the "why is the master switch missing"
+    // explainer — a plain 'user' companion never sees the System tab at all (the whole
+    // #controls/#healthCheck/#doctorCheck group stays hidden for it), so the note would be
+    // noise there.
+    var companionNote = $("egressCompanionNote");
+    if(companionNote) companionNote.hidden = !(M === "companion" && companionIsCentral());
     // Item 8: a companion viewer with a token reads the SAME statusInfo.features (populated by
     // renderStatus's companion branch), so the egress rows show real state instead of "no hub
     // connected". The ACTUATING master switch stays live-only: POST /api/system/toggles/egress is
@@ -12338,7 +12525,7 @@ try {
   (function(){ var b = $("watchToggle"); if(b) b.addEventListener("click", watchToggle); })();
   // dashboard-topbar: #coreWatchPill (Core Panel ambient-face quick control) mirrors
   // #watchToggle's rendered text/class 1:1 (same MutationObserver technique the topbar's
-  // #pillInternet/#pillRede badges already use elsewhere) and forwards its click to the
+  // #pillRede badge already uses elsewhere) and forwards its click to the
   // SAME watchToggle() above, so the two controls can never drift out of sync.
   (function(){
     var srcBtn = $("watchToggle"), mirror = $("coreWatchPill");
@@ -12870,7 +13057,10 @@ try {
   function renderHealthTile(){
     var tile = $("healthCheck");
     if(!tile) return;
-    tile.hidden = (M !== "live");
+    // Fix D: admin (central) companion also gets the Health check tile -- companionIsCentral()
+    // reads the SAME GET /api/devices/me-confirmed cache renderControls uses; a 'user'
+    // companion (or an unresolved/unconfirmed companion) keeps it hidden.
+    tile.hidden = !(M === "live" || (M === "companion" && companionIsCentral()));
     var state = healthResolversState();
     var cr = $("healthConfirmResolvers");
     if(cr) cr.hidden = (state === "off");
@@ -12990,7 +13180,19 @@ try {
       // comment above. Never add a poll/interval around this fetch. cache:"no-store" so a
       // repeat click always re-triggers a real check instead of risking a stale browser-
       // cached GET response (this route can have a genuine external side effect per call).
-      fetch(location.origin + "/api/health", { headers: { "X-Wavr-Local": "1" }, cache: "no-store" })
+      // Fix D: admin companion sends its Bearer instead of the loopback-only X-Wavr-Local
+      // header (require_local admits root+X-Wavr-Local OR an authenticated central peer);
+      // native mobile routes through the pinned fetch so the token never hits app https://localhost.
+      (function(){
+        var companionCentral = (M === "companion" && companionIsCentral());
+        var headers = companionCentral
+          ? { "Authorization": "Bearer " + companionToken() }
+          : { "X-Wavr-Local": "1" };
+        var __nf = window.WAVR_MOBILE
+          ? function(p,o){ return window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + p, o); }
+          : function(p,o){ return fetch(location.origin + p, o); };
+        return __nf("/api/health", { headers: headers, cache: "no-store" });
+      })()
         .then(function(r){ if(!r.ok) throw new Error(String(r.status)); return r.json(); })
         .then(function(d){
           renderHealthResult(d || {});
@@ -13051,7 +13253,8 @@ try {
   function renderDoctorTile(){
     var tile = $("doctorCheck");
     if(!tile) return;
-    tile.hidden = (M !== "live");
+    // Fix D: same admin-companion allowance as renderHealthTile above.
+    tile.hidden = !(M === "live" || (M === "companion" && companionIsCentral()));
   }
   function doctorLbl(id){
     return String(id == null ? "" : id).replace(/_/g, " ").replace(/:/g, ": ");
@@ -13113,8 +13316,19 @@ try {
       // other half. When the hub has it off, the route still runs (diagnose-only) and every
       // fixable item comes back as a suggestion instead -- exactly as renderDoctorResult shows it,
       // never assumed as fixed.
-      fetch(location.origin + "/api/health/doctor?auto_fix=true",
-            { headers: { "X-Wavr-Local": "1" }, cache: "no-store" })
+      // Fix D: admin companion sends its Bearer instead of the loopback-only X-Wavr-Local
+      // header (same require_local rule as the Health check above); native mobile routes
+      // through the pinned fetch so the token never hits app https://localhost.
+      (function(){
+        var companionCentral = (M === "companion" && companionIsCentral());
+        var headers = companionCentral
+          ? { "Authorization": "Bearer " + companionToken() }
+          : { "X-Wavr-Local": "1" };
+        var __nf = window.WAVR_MOBILE
+          ? function(p,o){ return window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + p, o); }
+          : function(p,o){ return fetch(location.origin + p, o); };
+        return __nf("/api/health/doctor?auto_fix=true", { headers: headers, cache: "no-store" });
+      })()
         .then(function(r){ if(!r.ok) throw new Error(String(r.status)); return r.json(); })
         .then(function(d){
           renderDoctorResult(d || {});
