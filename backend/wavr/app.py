@@ -3345,9 +3345,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # its certificate warning BEFORE accepting. A pairing-time TLS MitM presents a
             # different self-signed cert -> different fingerprint -> the operator sees the
             # mismatch and stops. `cryptography` is not imported (pure-stdlib fingerprint).
-            from wavr.tls import cert_fingerprint, resolved_cert_path
+            from wavr.tls import cert_fingerprint, resolved_cert_path, verification_code
             fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
-            return {"code": _pairing.mint_code(role), "cert_fingerprint": fingerprint}
+            code = _pairing.mint_code(role)
+            # Convenience-tier 6-digit, bound to THIS code so it rotates with it
+            # (pinned derivation, see wavr.tls.verification_code). None if the cert
+            # fingerprint itself couldn't be read (e.g. no cert on disk yet) --
+            # same fail-open-to-None shape cert_fingerprint already uses, so the
+            # shim can fall back to the (still-shown) full fingerprint compare.
+            verify6 = verification_code(fingerprint, code) if fingerprint else None
+            return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6}
 
         # "Approve on the Core" (design 2026-07-11). Two routers, two DIFFERENT auth
         # boundaries -- the exact split api_peers.py/api_nodes.py already use:

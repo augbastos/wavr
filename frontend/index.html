@@ -862,6 +862,10 @@
   .pair-code-box{border:1px solid var(--line);border-radius:8px;padding:11px 13px;margin:0 0 14px;
     max-width:52ch;}
   .pa-code-box{background:var(--bg);}
+  /* The 6-digit verify code is the hero of the pairing tile (Settings > Devices) — the same
+     accent-border precedent as the approval-banner compare code, so the primary path reads as
+     unmistakably primary next to the demoted 8-digit fallback below it. */
+  .pair-verify-box{border-color:var(--accent);background:var(--bg);}
   .pair-compare-code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     font-size:2rem;font-weight:700;letter-spacing:.25em;color:var(--accent);
     font-variant-numeric:tabular-nums;user-select:all;}
@@ -2839,6 +2843,18 @@
       </form>
       <p class="pair-hint" style="margin:-4px 0 10px">A live code rotates automatically while this
         panel is open — just open the companion on the device and enter it.</p>
+      <!-- Friendly verify6 hero: backend derives verify6 = SHA-256(cert_fp_hex|pair_code) mod
+           1e6, so it's bound to THIS pair-code's short TTL (not offline-grindable) and stays
+           byte-identical whenever an older backend omits the field — the box just stays
+           hidden and the 8-digit flow below is the only thing shown, exactly like today. This
+           is the PRIMARY glanceable anchor; the raw 8-digit code remains as a fallback and the
+           raw hex fingerprint moves into the disclosure below (still there for the QR/technical
+           path). -->
+      <div id="pairVerifyBox" class="pair-code-box pair-verify-box" hidden>
+        <span class="pair-fp-label">Hub verification code</span>
+        <code id="pairVerify6" class="pair-compare-code" aria-live="polite"></code>
+        <span class="pair-hint">On your phone, enter this 6-digit code to pair.</span>
+      </div>
       <div id="pairCodeBox" class="pair-code-box" hidden>
         <span id="pairCode" class="pair-code" aria-live="polite"></span>
         <span id="pairCountdown" class="pair-countdown" aria-hidden="true"></span>
@@ -2851,15 +2867,16 @@
            the browser, so the operator verifies it by hand. This fingerprint comes from the
            TRUSTED loopback response; on the phone, tap the certificate warning → View
            certificate and confirm the SHA-256 matches. A mismatch = someone is intercepting
-           the pairing — do NOT continue. -->
-      <div id="pairFingerprintBox" class="pair-fp-box" hidden>
-        <span class="pair-fp-label">Verify the certificate on the phone</span>
+           the pairing — do NOT continue. Collapsed by default now that the 6-digit verify code
+           above is the primary path; still one tap away for the technical/QR route. -->
+      <details id="pairFingerprintBox" class="pair-fp-box why" hidden>
+        <summary>Show advanced fingerprint</summary>
         <p class="pair-fp-hint">On the phone, when you see the security warning, tap it →
           <b>View certificate</b> and confirm the SHA-256 fingerprint matches:</p>
         <code id="pairFingerprint" class="pair-fp" aria-live="polite"></code>
         <p class="pair-fp-warn">If it does <b>not</b> match, stop. Someone may be intercepting
           your network; do not tap “Continue”.</p>
-      </div>
+      </details>
       <h4 class="pair-sub">Authorized devices</h4>
       <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
     </div>
@@ -5640,6 +5657,8 @@ async function renderPairing(){
   const cdFill = cdBar ? cdBar.querySelector("i") : null;
   const fpBox  = document.getElementById("pairFingerprintBox");
   const fpEl   = document.getElementById("pairFingerprint");
+  const verifyBox = document.getElementById("pairVerifyBox");
+  const verifyEl  = document.getElementById("pairVerify6");
   const CODE_TTL_MS = 120000, REFRESH_AT_MS = 20000;   // mint a fresh code with ~20s left
   let rotTimer = null, rotExpiresAt = 0, rotRole = "user", rotBusy = false;
 
@@ -5659,6 +5678,15 @@ async function renderPairing(){
     codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
     codeBox.hidden = false;
     rotExpiresAt = Date.now() + CODE_TTL_MS;
+    // Friendly 6-digit verify code (backend-derived, bound to THIS pair-code's short TTL) is
+    // the primary glanceable anchor. Only rendered when the response actually carries it, so
+    // a backend that doesn't send verify6 yet leaves this hidden and changes nothing else.
+    if(verifyBox && verifyEl){
+      const v6 = (typeof d.verify6 === "string" || typeof d.verify6 === "number")
+                 ? String(d.verify6).replace(/\D/g,"").padStart(6,"0").slice(-6) : "";
+      verifyEl.textContent = v6 ? (v6.slice(0,3) + " " + v6.slice(3)) : "";  // textContent — server value
+      verifyBox.hidden = !v6;
+    }
     // Out-of-band MitM defense (audit #1): show the live cert fingerprint so the operator
     // can verify it against the phone's browser certificate warning. Only shown when the
     // backend actually serves TLS and could read the cert (null on plain-HTTP loopback).
@@ -9800,7 +9828,24 @@ const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); upd
 // and caches only the static shell, so registration triggers zero external requests.
 // Fully guarded so a failure can never break the dashboard or the simulator self-switch.
 try {
-  if ("serviceWorker" in navigator && window.isSecureContext) {
+  // In the native app (Capacitor) the bundled assets ARE the offline copy, so a service
+  // worker only adds a cache-first shell that MASKS app updates: across an in-place APK
+  // install Android keeps the WebView's Cache Storage, so the SW keeps serving the old
+  // index.html and a freshly-bundled build looks identical. In native we therefore SKIP
+  // registration AND actively tear down any SW + caches a prior build left behind, so the
+  // WebView always renders the freshly-bundled assets. The web PWA (demo/loopback in a
+  // real browser) keeps the SW exactly as before.
+  var __isNativeApp = !!window.WAVR_MOBILE ||
+    !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  if (__isNativeApp) {
+    if ("serviceWorker" in navigator && navigator.serviceWorker.getRegistrations) {
+      navigator.serviceWorker.getRegistrations()
+        .then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});
+    }
+    if (window.caches && caches.keys) {
+      caches.keys().then((ks) => ks.forEach((k) => caches.delete(k))).catch(() => {});
+    }
+  } else if ("serviceWorker" in navigator && window.isSecureContext) {
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("sw.js").catch(() => {});
     });

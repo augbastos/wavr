@@ -131,6 +131,43 @@ def fingerprint_from_pem(pem: str) -> str | None:
     return None if der is None else format_fingerprint(der)
 
 
+def verification_code(fingerprint_hex: str, pair_code: str) -> str:
+    """6-digit CONVENIENCE-tier verification code binding a cert fingerprint to the
+    live rotating pairing code (pinned derivation, 2026-07-13 companion pairing):
+
+        input  = <fp_hex_lowercase_no_colons> + "|" + <pair_code>
+        digest = SHA-256(input)                                          (32 bytes)
+        code   = (first 4 bytes of digest, big-endian uint32) mod 1_000_000,
+                 zero-padded to 6 decimal digits
+
+    Binding to `pair_code` -- the SAME short-TTL code `/api/pair-code` already
+    mints -- means this 6-digit isn't offline-grindable: a MitM would have to
+    brute-force it within that code's ~2-minute TTL, the accepted tradeoff for a
+    number short enough to type on a phone keyboard. This is deliberately NOT the
+    strong anchor -- `cert_fingerprint`/`format_fingerprint` (full 256-bit,
+    eyeball- or QR-compared) remains the source of truth; `verify6` only makes the
+    common case faster to check without weakening it, since a mismatch still
+    hard-fails to the existing interception screen exactly like a fingerprint
+    mismatch would.
+
+    `fingerprint_hex` may be given either in the colon-separated, uppercase form
+    `cert_fingerprint`/`format_fingerprint` return (e.g. "AB:CD:...") or as plain
+    hex, and in either case is normalized to lowercase-no-colons here -- so the
+    backend and any caller that re-derives from a differently-formatted source
+    (e.g. a browser's own colon/uppercase cert display) always hash the SAME
+    bytes for the SAME certificate.
+
+    STRONG TIER (not built here): a full-256-bit fingerprint compare over a QR
+    code, for camera-equipped pairing. `verification_code` is only the
+    lower-friction convenience tier; leave the QR/camera path for later.
+    """
+    normalized = fingerprint_hex.replace(":", "").lower()
+    input_string = f"{normalized}|{pair_code}"
+    digest = hashlib.sha256(input_string.encode("utf-8")).digest()
+    n = int.from_bytes(digest[:4], "big") % 1_000_000
+    return f"{n:06d}"
+
+
 def _default_remote_fetch(host: str, port: int, timeout: float) -> str:
     """Real network TOFU-fetch: connect and return the PEM of whatever
     certificate the peer presents, WITHOUT validating it against any CA --
