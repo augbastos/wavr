@@ -359,8 +359,8 @@
   // Never blocks boot; never throws; never logs id/role/token.
   var _roleInFlight = false;
   function detectRole(){
-    if(_roleInFlight) return;                 // coalesce overlapping triggers (boot / reconnect / resume)
-    if(!_token || !_base || !WavrNet) return; // nothing to ask without a token+base+bridge
+    if(_roleInFlight) return;                            // coalesce overlapping triggers (boot / reconnect / resume)
+    if(!_token || !_base || !_attached || !WavrNet) return; // no token+base+bridge, or DETACHED (left Wavr) -> resolve no role
     _roleInFlight = true;
     var next;   // stays UNDEFINED unless we get a DEFINITIVE answer -> undefined means "keep cache"
     netFetch(_base + "/api/devices", { method: "GET", headers: { "Authorization": "Bearer " + _token } })
