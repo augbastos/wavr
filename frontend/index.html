@@ -3565,6 +3565,14 @@ function CompanionProvider(token){
   const base = __m ? __m.base : location.origin;
   const __fetch = (u,o)=> __m ? __m.netFetch(u,o) : fetch(u,o);
   const auth = { "Authorization": "Bearer " + token };
+  // Staleness watchdog state (companion-only): a socket can sit "open" while frames silently
+  // stop (dropped route, sleeping Core) — track the last frame time and stop claiming "live"
+  // after 60s of silence. The provider contract has no stop/teardown, so the interval is
+  // created once per provider (guarded) and duplicate start() calls never stack intervals.
+  let lastFrameTs = 0;      // ms timestamp of the last received frame (0 = none yet)
+  let wsOpen = false;       // true from socket creation until its onclose fires
+  let staleFlagged = false; // watchdog raised the reconnecting indicator; cleared on next frame
+  let staleTimer = null;    // the single per-provider watchdog interval
   return {
     async history(){
       try{
@@ -3578,14 +3586,32 @@ function CompanionProvider(token){
       try{
         const r = await __fetch(base+"/api/ws-ticket",{method:"POST",headers:auth});   // mint a short-lived WS ticket
         if(r.status===401||r.status===403){ companionAuthFailed(); return; }
-        if(!r.ok){ setTimeout(()=>this.start(onEvent), 2000); return; }
+        // Retry paths must surface the degraded state (same setter ws.onclose uses) — a silent
+        // retry leaves stale data presented as live while the ticket mint keeps failing.
+        if(!r.ok){ setReconnecting(true); setTimeout(()=>this.start(onEvent), 2000); return; }
         ticket = (await r.json()).ticket;
-      }catch{ setTimeout(()=>this.start(onEvent), 2000); return; }
+      }catch{ setReconnecting(true); setTimeout(()=>this.start(onEvent), 2000); return; }
       const proto = location.protocol==="https:" ? "wss://" : "ws://";     // ws/wss chosen from page protocol
       const ws = __m ? __m.netWebSocket(__m.base.replace(/^http/,"ws") + "/ws/live?ticket=" + encodeURIComponent(ticket))
                      : new WebSocket(proto + location.host + "/ws/live?ticket=" + encodeURIComponent(ticket));
-      ws.onmessage = (m)=> onEvent(JSON.parse(m.data));
-      ws.onclose = ()=> { if(!companionAuthFailedOnce){ setReconnecting(true); setTimeout(()=> this.start(onEvent), 1500); } };
+      wsOpen = true; lastFrameTs = Date.now();   // fresh socket: give it a full silence window before flagging
+      ws.onmessage = (m)=> {
+        lastFrameTs = Date.now();
+        if(staleFlagged){ staleFlagged = false; setReconnecting(false); }   // frames flow again — drop the watchdog's claim
+        onEvent(JSON.parse(m.data));
+      };
+      ws.onclose = ()=> { wsOpen = false; if(!companionAuthFailedOnce){ setReconnecting(true); setTimeout(()=> this.start(onEvent), 1500); } };
+      // Staleness watchdog: a socket that is "open" but silent for >60s must stop claiming "live".
+      // Flip the same reconnecting indicator on — do NOT close/reopen the socket (onclose owns real
+      // reconnects); the next received frame clears it above.
+      if(staleTimer === null){
+        staleTimer = setInterval(()=>{
+          if(wsOpen && !staleFlagged && (Date.now() - lastFrameTs) > 60000){
+            staleFlagged = true;
+            setReconnecting(true);
+          }
+        }, 15000);
+      }
     },
   };
 }
