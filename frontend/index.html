@@ -828,6 +828,8 @@
   .pair-role select{background:var(--elevated);color:var(--text);border:1px solid var(--line);
                     border-radius:8px;padding:8px 11px;font-size:.82rem;}
   .pair-code-box{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:2px 0 14px;}
+  .pair-qr-box{flex-direction:column;align-items:flex-start;gap:8px;}
+  .pair-qr-img{background:#fff;padding:10px;border-radius:10px;image-rendering:pixelated;display:block;}
   .pair-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
              font-size:1.7rem;letter-spacing:.18em;color:var(--accent);
              font-variant-numeric:tabular-nums;user-select:all;}
@@ -2844,6 +2846,18 @@
       </form>
       <p class="pair-hint" style="margin:-4px 0 10px">A live code rotates automatically while this
         panel is open — just open the companion on the device and enter it.</p>
+      <!-- QR strong anchor (chosen 2026-07-14): encodes {url, FULL cert fingerprint, code}.
+           The phone SCANS it and pins the full 256-bit fingerprint (not offline-grindable), so a
+           pairing-time MitM can't forge a cert that matches a short typed code. This is the
+           PRIMARY path; verify6 + the raw fingerprint below stay as the typeable fallback.
+           Rendered only when the backend serves a cert fingerprint (TLS); on plain-HTTP loopback
+           it stays hidden and the typed-code flow shows, changing nothing else. -->
+      <div id="pairQrBox" class="pair-code-box pair-qr-box" hidden>
+        <img id="pairQrImg" class="pair-qr-img" width="184" height="184"
+             alt="Pairing QR code — scan with the Wavr app">
+        <span class="pair-hint">Scan this with the Wavr app to pair securely — no typing, and it
+          pins the hub's full certificate so no one can intercept.</span>
+      </div>
       <!-- Friendly verify6 hero: backend derives verify6 = SHA-256(cert_fp_hex|pair_code) mod
            1e6, so it's bound to THIS pair-code's short TTL (not offline-grindable) and stays
            byte-identical whenever an older backend omits the field — the box just stays
@@ -5615,6 +5629,23 @@ const _wavrMultideviceOff = (MODE==="live")
 // The backend routes (/api/pair-code, /api/devices) only exist when WAVR_MULTIDEVICE=1;
 // when they 404 (or the backend is unreachable) the whole panel stays hidden, so
 // single-device installs never see it. Never shows in Plano B (demo).
+// Lazy-load the self-hosted QR generator (vendor/qrcode.js, MIT — no CDN) ONCE, only when the
+// pairing panel actually needs to draw a QR. Resolves to the global `qrcode` factory. Kept out
+// of the boot path so a single-device install (no pairing) never fetches it.
+let _qrLibPromise = null;
+function _ensureQRCode(){
+  if(window.qrcode) return Promise.resolve(window.qrcode);
+  if(_qrLibPromise) return _qrLibPromise;
+  _qrLibPromise = new Promise((resolve, reject)=>{
+    const s = document.createElement("script");
+    s.src = "vendor/qrcode.js";           // same origin — nothing leaves home
+    s.onload = ()=> window.qrcode ? resolve(window.qrcode) : reject(new Error("qrcode global missing"));
+    s.onerror = ()=> { _qrLibPromise = null; reject(new Error("failed to load vendor/qrcode.js")); };
+    document.head.appendChild(s);
+  });
+  return _qrLibPromise;
+}
+
 async function renderPairing(){
   if(MODE!=="live") return;                 // live-only; never in Plano B (demo)
   if(await _wavrMultideviceOff) return;     // proven off via /api/status — skip the doomed probe (no console 404)
@@ -5739,6 +5770,26 @@ async function renderPairing(){
       const fp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
       fpEl.textContent = fp;                 // textContent — server-provided fingerprint
       fpBox.hidden = !fp;
+    }
+    // QR strong anchor (chosen 2026-07-14): encode {url, FULL fingerprint, code} so the phone
+    // can SCAN it and pin the full 256-bit cert (not offline-grindable) instead of typing a
+    // short code. Only when the backend served a real fingerprint (TLS); on plain-HTTP loopback
+    // it stays hidden and the typed 6-digit/8-digit flow is the path, changing nothing else.
+    const qrBox = document.getElementById("pairQrBox");
+    const qrImg = document.getElementById("pairQrImg");
+    if(qrBox && qrImg){
+      const qrFp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
+      if(qrFp && d.code){
+        const payload = JSON.stringify({v:1, u:location.origin, fp:qrFp, c:String(d.code)});
+        _ensureQRCode().then((qr)=>{
+          const q = qr(0, "M");              // type 0 = auto-size for the data, error-correction M
+          q.addData(payload); q.make();
+          qrImg.src = q.createDataURL(5, 8); // cellSize 5px, quiet-zone 8 modules → ~184px, white bg
+          qrBox.hidden = false;
+        }).catch(()=>{ qrBox.hidden = true; });   // lib missing → fall back to the typed code
+      } else {
+        qrBox.hidden = true;
+      }
     }
     if(cdBar) cdBar.hidden = false;
     actionFeedback(pairFb, true);
