@@ -5,6 +5,7 @@ as test_app.py), and monkeypatches `_local_ipv4` so a fixed "192.168.1.x" is in-
 Exercises the REAL middleware + route guards, verifying the security-audit fixes:
 C1 (device-route role gate), M2 (WS/HTTP subnet), M3 (pair reachability), revocation.
 """
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -200,3 +201,57 @@ def test_ws_ticket_is_single_use(app):
     with pytest.raises(WebSocketDisconnect):     # reused ticket rejected
         with peer.websocket_connect(f"/ws/live?ticket={t}"):
             pass
+
+
+# --- revoke-latency fix: _stream_live drops a revoked companion on a wall-clock cadence ---
+# Driven on a REAL event loop via asyncio.run, NOT the TestClient: Starlette's WS test
+# transport steps the app in lockstep with client I/O, so a free-running server timer
+# (asyncio.wait_for) never advances there and the quiet-hub path can't be exercised. These
+# unit tests hit _stream_live directly with a fake socket + a real asyncio.Queue.
+
+class _FakeWS:
+    def __init__(self): self.sent = 0
+    async def send_json(self, item): self.sent += 1
+
+class _Dev:
+    def __init__(self, revoked): self.revoked = revoked
+
+
+def test_stream_live_drops_on_quiet_hub_after_revoke():
+    from wavr.app import _stream_live
+
+    async def scenario():
+        q = asyncio.Queue()                       # stays EMPTY -> a silent hub
+        state = {"revoked": False}
+        ws = _FakeWS()
+        task = asyncio.create_task(
+            _stream_live(ws, q, "dev1", lambda did: _Dev(state["revoked"]), 0.05))
+        await asyncio.sleep(0.02)                 # loop parks on the empty queue
+        state["revoked"] = True                   # revoke while zero frames flow
+        await asyncio.wait_for(task, timeout=1.0) # must return on the wall-clock recheck
+        return ws.sent
+
+    # The old `n % 50` throttle parked on `await q.get()` forever here (0 frames) and would
+    # hang; the wall-clock recheck severs the stream having sent nothing.
+    assert asyncio.run(scenario()) == 0
+
+
+def test_stream_live_loopback_root_ignores_revoke():
+    from wavr.app import _stream_live
+
+    async def scenario():
+        q = asyncio.Queue()
+        ws = _FakeWS()
+        # did is None (loopback root): get_device would END the stream if ever called, so a
+        # still-running task proves the revoke check is skipped for root, exactly as before.
+        task = asyncio.create_task(_stream_live(ws, q, None, lambda did: None, 0.02))
+        await asyncio.sleep(0.1)                  # several recheck intervals elapse
+        alive = not task.done()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return alive
+
+    assert asyncio.run(scenario()) is True
