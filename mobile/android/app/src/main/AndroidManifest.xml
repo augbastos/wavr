@@ -69,6 +69,14 @@
          ACCESS_WIFI_STATE and INTERNET above are already present and cover its other needs. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- WavrScan (QR pairing): the camera is used ONLY on the pairing screen to scan the hub's
+         QR (full cert fingerprint + short-TTL code) via getUserMedia + on-device jsQR decode.
+         Frames are decoded in the WebView and NEVER stored or transmitted (same zero-egress
+         invariant as the rest of the app). required=false so a camera-less device still installs
+         and uses the typed-code fallback. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <!-- WavrBluetooth (READ-ONLY bonded-device enrichment for the admin phone): reads
          BluetoothAdapter.bondedDevices only — the user's OWN already-paired hardware — to
          label the Core's identity registry. NEVER scans, discovers, or connects.
