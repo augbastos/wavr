@@ -113,6 +113,37 @@ _CATALOG_PATH = _VENDOR_DIR / "device-catalog.json"
 # sweep (a soft, non-security signal) is cached.
 _HOUSE_STATUS_ROUTINE_TTL_S = 5.0
 
+# Wall-clock cadence at which an open /ws/live stream re-checks the companion's
+# revoked flag (see the live() loop). Bounds revocation latency: a revoked device's
+# stream drops within this window regardless of frame cadence -- even on a silent
+# hub, where the old frame-COUNT throttle (n % 50) never fired because the loop was
+# parked on `await q.get()`. Small enough to feel prompt, large enough that the
+# per-tick DeviceStore read is negligible for a handful of paired companions.
+_WS_REVOKE_RECHECK_S = 2.0
+
+
+async def _stream_live(ws, q, did, get_device, recheck_s):
+    """Pump hub frames to an accepted /ws/live socket, severing the stream within
+    `recheck_s` of the companion being revoked. The revoked flag is re-read on a WALL-CLOCK
+    cadence -- `q.get()` is bounded by a timeout -- so a SILENT hub (no frames at all) still
+    drops a revoked device; the old frame-COUNT throttle parked forever on `await q.get()`
+    and never rechecked. `did` is None for loopback root: no revoke check, streams until the
+    socket closes. `get_device(did)` -> Device|None (None, or a truthy `.revoked`, ends it).
+    A WebSocketDisconnect from send_json propagates to the caller, which owns unsubscribe."""
+    last_check = 0.0
+    while True:
+        try:
+            await ws.send_json(await asyncio.wait_for(q.get(), recheck_s))
+        except asyncio.TimeoutError:
+            pass   # no frame this interval -- fall through to the revoke re-check
+        if did is not None:
+            now = asyncio.get_running_loop().time()
+            if now - last_check >= recheck_s:
+                last_check = now
+                dev = get_device(did)
+                if dev is None or dev.revoked:
+                    return
+
 # 2C: cadence of the opt-in daily-digest scheduler task (see _digest_loop below) --
 # one composition+send pass every 24h. Gated on the SEPARATE "digest" connector row
 # (default-OFF), so this constant only controls the wakeup cadence, never whether
@@ -3413,15 +3444,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 return
         await ws.accept()
         q = _hub.subscribe()
+        # M1 (revoke latency): the stream loop re-checks the revoked flag on a wall-clock
+        # cadence (see _stream_live). did is None for loopback root -> no check; _devices is
+        # always present when did is set (multidevice on), but guard the attribute read anyway.
+        get_device = _devices.get if _devices is not None else None
         try:
-            n = 0
-            while True:
-                await ws.send_json(await q.get())
-                n += 1
-                if did is not None and n % 50 == 0:   # M1: drop an open stream on revoke
-                    dev = _devices.get(did)
-                    if dev is None or dev.revoked:
-                        break
+            await _stream_live(ws, q, did, get_device, _WS_REVOKE_RECHECK_S)
         except WebSocketDisconnect:
             pass
         finally:
