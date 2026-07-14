@@ -305,7 +305,28 @@ class FusionEngine:
         # occupied=True with confidence<threshold is already a legal, shipped state).
         # live_count == 0 (a present source explicitly counting nobody) does NOT pull
         # occupied -- `0 > 0` is False.
-        raw_occupied = confidence >= self._threshold or (live_count is not None and live_count > 0)
+        # FUSION-C: a fresh, PRESENT presence-only source (network/BLE/wifi_csi/sim/pir/node
+        # -- everything that DETECTS presence but cannot COUNT, i.e. NOT in COUNTING_MODALITIES)
+        # pulls `occupied` True even when the blended confidence sits below threshold. These
+        # sources honestly know "someone is here" (never how many, never precisely where); the
+        # privacy-default "Presence" tier (network + Bluetooth, cameras OFF) blends at most
+        # weight*present_confidence = 0.5*0.8 = 0.40 for network (0.7*0.7 = 0.49 for BLE) --
+        # BOTH hard-below the 0.50 occupancy threshold. So WITHOUT this pull a camera-less home
+        # can NEVER read occupied: a person's own phone/laptop on the LAN would show "Empty
+        # home / no presence detected" forever, which is exactly the field bug this fixes. Same
+        # shape as FUSION-A and the vacate-dwell HOLD: `confidence` is NOT touched (the UI keeps
+        # rendering the honest low %), only the boolean flips. Vacancy still runs the asymmetric
+        # dwell below, and the release is honest -- when every presence-only source reports
+        # present=False (after the source-side grace smooths a single missed scan), the pull
+        # lets go and the room vacates. This is presence semantics only; `confidence`, count,
+        # targets and the intrusion path are all unchanged.
+        house_present = any(
+            e.presence and decays.get(m, 0.0) > 0.0
+            for m, e in events.items() if m not in COUNTING_MODALITIES
+        )
+        raw_occupied = (confidence >= self._threshold
+                        or (live_count is not None and live_count > 0)
+                        or house_present)
         occupied, pending_s = self._debounce_occupancy(room, raw_occupied, ref)
         parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
         explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
