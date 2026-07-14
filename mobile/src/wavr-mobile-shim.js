@@ -887,6 +887,9 @@
   //      6-digit cannot pin the attacker's cert -- the whole reason this screen exists.
   // A non-matching full entry surfaces an honest hard-stop message (typo OR interception); there is NO
   // "trust anyway", NO silent proceed, and NO fallback to a weaker/grindable pin. Works for the 'user' role.
+  // ⚠️ DEAD PATH (kept for reference only): NOTHING calls showVerify() anymore. Pairing is QR-scan-only
+  // (showScanPair, the stronger full-fingerprint anchor). The /api/pair-code fetch below is admin/loopback-
+  // only and 403s a LAN phone, so this typed-verify6 flow could never complete — it was removed from the UI.
   function showVerify(){
     var card = ensureOverlay("verify");
     card.appendChild(el("h2", "wavrm-h", "Verify your hub"));
@@ -1035,8 +1038,9 @@
     return _jsqrPromise;
   }
 
-  // Screen: collect the presence name, then open the camera. Reached as the PRIMARY step after picking /
-  // entering a hub. "Type the 6-digit code instead" drops to showVerify for hubs too old to show a QR.
+  // Screen: collect the presence name, then open the camera. The ONLY pairing path — QR scan pins the hub's
+  // FULL cert fingerprint (not a grindable typed code). The old "type the 6-digit code" fallback was removed:
+  // its /api/pair-code fetch is admin/loopback-only (403 for a LAN phone), so it was a dead, misleading path.
   function showScanPair(){
     var card = ensureOverlay("scanPair");
     card.appendChild(el("h2", "wavrm-h", "Scan your hub's QR"));
@@ -1059,9 +1063,6 @@
       startCameraScan(name);
     };
     card.appendChild(scanBtn);
-    var typeBtn = el("button", "wavrm-btn ghost", "Type the 6-digit code instead"); typeBtn.type = "button";
-    typeBtn.onclick = function(){ showVerify(); };
-    card.appendChild(typeBtn);
     var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
     back.onclick = function(){ if(zeroconfAvailable()){ showChooseCore(); } else { showSetup(); } };
     card.appendChild(back);
@@ -1092,7 +1093,7 @@
     cancel.onclick = function(){ stop(); showScanPair(); };
     card.appendChild(cancel); card.appendChild(msg);
     if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
-      msg.className = "wavrm-msg err"; msg.textContent = "This device has no camera API. Type the 6-digit code instead."; return;
+      msg.className = "wavrm-msg err"; msg.textContent = "This device can't open a camera to scan the pairing QR."; return;
     }
     _ensureJsQR().then(function(fn){
       jsQRfn = fn;
@@ -1121,8 +1122,8 @@
       var denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError" || e.name === "NotFoundError");
       msg.className = "wavrm-msg err";
       msg.textContent = denied
-        ? "Camera access was denied or unavailable. Allow the camera for Wavr, or type the 6-digit code instead."
-        : "Couldn't open the camera. Type the 6-digit code instead.";
+        ? "Camera access is off. Allow the camera for Wavr, then go back and scan again."
+        : "Couldn't open the camera. Check no other app is using it, then go back and scan again.";
       var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
       back.onclick = function(){ showScanPair(); }; card.appendChild(back);
     });
