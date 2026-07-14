@@ -11214,7 +11214,17 @@ try {
     matched.forEach(function(x){ frag.appendChild(buildDetCard(x.d, x.m)); });
     if(unmatched.length){
       frag.appendChild(elc("h4", "det-sub", "No catalog match (" + unmatched.length + ")"));
-      unmatched.forEach(function(x){ frag.appendChild(buildUnknownCard(x.d, x.m)); });
+      // Scale: building a card per unmatched device froze the tab at airport scale
+      // (5000 devices = 5000 cards). Cap the render; the header count stays the TRUE
+      // total, and the Network tab's searchable list reaches every device.
+      var DET_UNMATCHED_CAP = 300;
+      var unmShown = unmatched.slice(0, DET_UNMATCHED_CAP);
+      unmShown.forEach(function(x){ frag.appendChild(buildUnknownCard(x.d, x.m)); });
+      if(unmatched.length > unmShown.length){
+        frag.appendChild(elc("p", "det-scan-err",
+          "Showing " + unmShown.length + " of " + unmatched.length +
+          " unmatched devices — use the Network tab to search the full list."));
+      }
     }
     if(reachErrs.length){
       frag.appendChild(elc("p", "det-scan-err",
