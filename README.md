@@ -5,7 +5,7 @@
 
 **Your home, understood — without giving it away.**
 
-![Wavr — the home that knows who's home. Privacy-first presence sensing that runs 100% on your local network, shown next to the Command Center dashboard](docs/img/card-hero.png)
+![Wavr — live per-room presence on a 3D map of your own home, fused from network, Bluetooth and camera, running 100% on your local network](docs/hero.gif)
 
 Wavr is a local, explainable, privacy-first presence and network dashboard for your home — one you
 (and your agents) can actually query. It fuses several sensing modalities into a single *explainable*
