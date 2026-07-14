@@ -369,11 +369,36 @@ def test_presence_only_source_leaves_count_unknown():
     rs = f.update(ev("casa", "network", True, 0.6))
     assert rs.person_count is None
     assert rs.sources[0]["count"] is None
-    # known-presence invariant #1: a network-only casa event can never produce
-    # occupied=False with person_count>0 (structurally impossible -- network isn't
-    # in COUNTING_MODALITIES) and `occupied` here follows ONLY the confidence-vs-
-    # threshold debounce (weight 0.5 * confidence 0.6 = 0.30 < threshold 0.5, first
-    # reading -> vacant), never a fabricated headcount pulling it True.
+    # known-presence invariant #1: a network-only casa event never FABRICATES a headcount
+    # (network isn't in COUNTING_MODALITIES) -- person_count stays None above. It DOES, per
+    # FUSION-C, pull `occupied` True from the honest presence signal even though the blended
+    # confidence (weight 0.5 * confidence 0.6 = 0.30) sits below the 0.50 threshold: "someone
+    # is here" is exactly what a presence-only source knows. `confidence` stays the honest low
+    # value; only the boolean flips (same shape as FUSION-A's count-pull + the vacate-dwell).
+    assert rs.occupied is True
+    assert rs.confidence == 0.3
+
+
+def test_fusion_c_presence_only_below_threshold_still_occupied():
+    # FUSION-C / empty-home fix: the privacy-default "Presence" tier (network + Bluetooth,
+    # cameras OFF) blends BELOW the occupancy threshold (network 0.5*0.8 = 0.40, BLE
+    # 0.7*0.7 = 0.49, both < 0.50), so before this fix a camera-less home could NEVER read
+    # occupied -- a person's own phone/laptop on the LAN showed "Empty home" forever. A
+    # fresh, PRESENT presence-only source now pulls occupied True while keeping the honest
+    # sub-threshold confidence and never fabricating a headcount.
+    for modality, conf in [("network", 0.8), ("ble", 0.7), ("pir", 0.6), ("wifi_csi", 0.5)]:
+        f = FusionEngine()
+        rs = f.update(ev("casa", modality, True, conf))
+        assert rs.occupied is True, f"{modality} present should pull occupied True"
+        assert rs.confidence < f._threshold, f"{modality} confidence should stay honest sub-threshold"
+        assert rs.person_count is None, f"{modality} must never fabricate a headcount"
+
+
+def test_fusion_c_absent_presence_only_is_not_occupied():
+    # The pull is PRESENCE-gated: a presence-only source reporting present=False (nobody
+    # seen) must NOT pull occupied -- the house reads empty when everyone's devices leave.
+    f = FusionEngine()
+    rs = f.update(ev("casa", "network", False, 0.0))
     assert rs.occupied is False
 
 

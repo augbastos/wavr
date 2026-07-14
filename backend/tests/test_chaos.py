@@ -80,13 +80,17 @@ def test_wifi_drop_goes_vacant_only_when_all_trusted_sources_gone():
 
 
 def test_wifi_drop_collapses_a_lone_network_signal_to_zero():
-    # Network is coarse (weight 0.5) so it never alone-occupies a room, but its
-    # confidence must visibly collapse to zero once the source drops out.
+    # Network is coarse (weight 0.5); while a device is PRESENT it now pulls occupied True
+    # (FUSION-C, the empty-home fix), but the instant the source drops out its confidence
+    # must visibly collapse to zero AND the room must vacate. vacate_s=0 disables the
+    # asymmetric occupancy dwell (own tests in test_fusion.py) so this exercises the raw
+    # presence->boolean crossing: present -> occupied, source gone -> vacant.
     net_only = [e for e in wifi_drop() if e.modality == "network"]
-    pairs = _replay(net_only)
+    pairs = _replay(net_only, engine=FusionEngine(vacate_s=0))
     assert pairs[0][1].confidence > 0.0                      # some signal while present
+    assert pairs[0][1].occupied is True                      # FUSION-C: a present device occupies
     assert pairs[-1][1].confidence == 0.0                    # collapsed to nothing
-    assert pairs[-1][1].occupied is False
+    assert pairs[-1][1].occupied is False                    # and vacated once the source dropped
 
 
 # ---- 2. camera-flicker ----
