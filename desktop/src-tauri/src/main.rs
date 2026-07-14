@@ -38,7 +38,7 @@
 //   1. spawn  `python -m wavr.serve`  (from WAVR_BACKEND_DIR so its load_dotenv() finds
 //      ./.env) as a child process, remembered so we can kill it on quit,
 //   2. (HTTPS mode, Windows) install the scoped WebView2 cert pin BEFORE any navigation,
-//   3. poll   <scheme>://127.0.0.1:<port>/api/state  until it answers, then navigate the
+//   3. poll   <scheme>://127.0.0.1:<port>/healthz  until it answers, then navigate the
 //      window from the "Starting…" placeholder to the live dashboard,
 //   4. tray:  Open Wavr / Quit; closing the window hides to tray (sensing keeps running),
 //      Quit kills the backend child so the process exits and GPU VRAM is released.
@@ -342,7 +342,9 @@ fn spawn_backend() -> std::io::Result<Child> {
 /// mode this waits for the cert file to appear, then probes with the pinned agent.
 fn wait_healthy(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    let probe = format!("{}/api/state", backend_url());
+    // /healthz is token-exempt (see backend/wavr/app.py's _TOKEN_EXEMPT_PATHS); /api/state
+    // is scope-gated, so probing it would 401 forever when WAVR_LOCAL_TOKEN is set.
+    let probe = format!("{}/healthz", backend_url());
 
     if scheme() == "https" {
         // The backend writes cert.pem before uvicorn binds, so once the port answers the
@@ -501,13 +503,26 @@ fn describe_alert(alert: &serde_json::Value) -> (String, String) {
 /// `wait_healthy()`. `https_agent` is cached across calls (lazily built once the cert is
 /// readable) so we are not re-doing a TLS handshake setup on every poll tick.
 fn fetch_alerts(url: &str, https_agent: &mut Option<ureq::Agent>) -> Option<Vec<serde_json::Value>> {
+    // /api/alerts is scope-gated (NOT token-exempt like /healthz), so when
+    // WAVR_LOCAL_TOKEN is set the backend requires it even on loopback. Send it via
+    // X-Wavr-Token -- the header app.py's token middleware reads. Trimmed to mirror
+    // wavr.config's `os.getenv("WAVR_LOCAL_TOKEN", "").strip()`; empty = disabled.
+    let token = effective("WAVR_LOCAL_TOKEN").unwrap_or_default().trim().to_string();
     let text = if scheme() == "https" {
         if https_agent.is_none() {
             *https_agent = pinned_cert_der().map(pinned_https_agent);
         }
-        https_agent.as_ref()?.get(url).call().ok()?.into_string().ok()?
+        let mut req = https_agent.as_ref()?.get(url);
+        if !token.is_empty() {
+            req = req.set("X-Wavr-Token", &token);
+        }
+        req.call().ok()?.into_string().ok()?
     } else {
-        ureq::get(url).timeout(Duration::from_secs(5)).call().ok()?.into_string().ok()?
+        let mut req = ureq::get(url).timeout(Duration::from_secs(5));
+        if !token.is_empty() {
+            req = req.set("X-Wavr-Token", &token);
+        }
+        req.call().ok()?.into_string().ok()?
     };
     let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
     parsed.get("alerts")?.as_array().cloned()
