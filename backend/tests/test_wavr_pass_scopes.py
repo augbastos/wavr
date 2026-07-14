@@ -17,11 +17,26 @@
 `authorize()` itself is untouched by this feature (still covered by its own
 tests in test_multidevice.py) -- only `access_for` (the new one-verify ->
 (role, scopes) sibling) is exercised here.
+
+Phase 2A / B4 (below, its own section) adds the AGENT principal type + per-tool
+MCP scopes: `wavr.devices`'s nullable `tool_scopes` column (same idiom as
+`scopes`), `wavr.auth`'s `effective_tool_scopes()`/`tool_call_allowed()`/
+`access_for_scoped()` (a NEW three-tuple sibling of `access_for` -- `access_for`
+itself stays untouched, same precedent as `authorize()` above), and the app.py
+route-level bound: 'agent' is absent from both `can_view`/`can_change_state`
+role tuples, so it gets NOTHING from the ordinary HTTP API -- only `/mcp`,
+further bounded there by its tool-name allow-list (see test_mcp_http.py for the
+`/mcp` gate-4.5 enforcement itself).
 """
 from fastapi.testclient import TestClient
 
 from wavr.app import create_app
-from wavr.auth import SCOPES, DEFAULT_SCOPES, access_for, effective_scopes, has_scope
+from wavr.auth import (
+    SCOPES, DEFAULT_SCOPES, access_for, effective_scopes, has_scope,
+    AGENT_READ_TOOL_SCOPE, AGENT_ACTUATOR_TOOL_SCOPE, AGENT_DEFAULT_TOOL_SCOPE,
+    MCP_TOOL_NAMES, DEFAULT_AGENT_TOOL_SCOPES, access_for_scoped,
+    effective_tool_scopes, tool_call_allowed,
+)
 from wavr.devices import DeviceStore
 from wavr.storage import Storage
 from wavr.camera_store import CameraStore
@@ -323,3 +338,235 @@ def test_null_scope_user_and_central_route_parity_end_to_end(tmp_path, monkeypat
     # admin -- user default lacks it; central default has it.
     assert user_peer.get("/api/devices", headers=user_auth).status_code == 403
     assert central_peer.get("/api/devices", headers=central_auth).status_code == 200
+
+
+# =============================================================================
+# Wavr Pass (Phase 2A / B4) -- the AGENT principal type + per-tool MCP scopes.
+# Covers wavr.devices's `tool_scopes` column, wavr.auth's tool-scope resolution
+# functions, and app.py's route-level bound for the new role. The `/mcp`
+# gate-4.5 enforcement itself (the actual tools/call refusal) is covered in
+# test_mcp_http.py, which owns the real MCP-session integration harness.
+# =============================================================================
+
+# --------------------------------------------------------------------------- #
+# devices.py: nullable `tool_scopes` column -- add()/verify()/list()/get() round
+# trip, mirroring the `scopes` column's own tests above exactly.
+# --------------------------------------------------------------------------- #
+def test_add_default_tool_scopes_is_null(tmp_path):
+    store = _store(tmp_path)
+    _id, token = store.add("mcp-agent", "agent")
+    assert store.verify(token).tool_scopes is None
+
+
+def test_add_explicit_tool_scopes_round_trips_through_verify_list_get(tmp_path):
+    store = _store(tmp_path)
+    device_id, token = store.add("mcp-agent", "agent",
+                                 tool_scopes=frozenset({"list_rooms", "get_alerts"}))
+    assert store.verify(token).tool_scopes == frozenset({"list_rooms", "get_alerts"})
+    assert store.get(device_id).tool_scopes == frozenset({"list_rooms", "get_alerts"})
+    listed = {d.device_id: d for d in store.list()}
+    assert listed[device_id].tool_scopes == frozenset({"list_rooms", "get_alerts"})
+
+
+def test_add_explicit_empty_tool_scopes_is_distinct_from_null(tmp_path):
+    store = _store(tmp_path)
+    _id, token = store.add("mcp-agent", "agent", tool_scopes=frozenset())
+    dev = store.verify(token)
+    assert dev.tool_scopes == frozenset()
+    assert dev.tool_scopes is not None
+
+
+def test_valid_roles_includes_agent():
+    from wavr.devices import VALID_ROLES
+    assert "agent" in VALID_ROLES
+
+
+def test_tool_scopes_migration_idempotent_across_repeated_init_same_file(tmp_path):
+    # Mirrors test_migration_idempotent_across_repeated_init_same_file (Phase 1,
+    # for `scopes`) exactly, for the NEW `tool_scopes` column: re-init on the
+    # SAME db file must be a no-op (never a duplicate-column error), and a
+    # pre-existing row's NULL tool_scopes must still read back as None.
+    path = str(tmp_path / "mig.db")
+    store1 = DeviceStore(path)
+    device_id, token = store1.add("mcp-agent", "agent")
+    store1.close()
+
+    store2 = DeviceStore(path)
+    store3 = DeviceStore(path)
+    cols = [r["name"] for r in store3._conn.execute("PRAGMA table_info(devices)")]
+    assert cols.count("tool_scopes") == 1
+
+    dev = store2.verify(token)
+    assert dev is not None and dev.device_id == device_id and dev.tool_scopes is None
+    store2.close()
+    store3.close()
+
+
+# --------------------------------------------------------------------------- #
+# auth.py: effective_tool_scopes / tool_call_allowed -- pure logic, no I/O.
+# --------------------------------------------------------------------------- #
+def test_effective_tool_scopes_non_agent_roles_are_unrestricted():
+    # The tool-name axis doesn't apply to root/central/user at all -- None
+    # ("not restricted"), even if a device somehow carried an explicit grant.
+    for role in ("root", "central", "user", None):
+        assert effective_tool_scopes(role, None) is None
+        assert effective_tool_scopes(role, frozenset({"list_rooms"})) is None
+
+
+def test_effective_tool_scopes_agent_null_resolves_to_coarse_default():
+    # Phase-2A verify FIX 4 (MEDIUM, least-privilege default): the DEFAULT agent
+    # grant is the COARSE, current-state-only set -- NOT the full read set.
+    resolved = effective_tool_scopes("agent", None)
+    assert resolved == AGENT_DEFAULT_TOOL_SCOPE
+    assert resolved == DEFAULT_AGENT_TOOL_SCOPES["agent"]
+    assert resolved == frozenset({
+        "list_rooms", "get_room_context", "get_house_status"})
+    assert "call_ha_service" not in resolved       # actuation opt-in, never default
+    # The household PII/tracking crown jewels are opt-in ONLY -- excluded from
+    # the default even though get_network_inventory/get_alerts/
+    # query_occupancy_history are minimized (FIX 1/2/3) and get_ha_entities
+    # never was (HA friendly_name can name a person or a device).
+    # Phase-2B re-threat FIX 1 (MEDIUM): get_house_map joins that excluded set
+    # too -- its room `id` encodes the room name and it ships polygon geometry
+    # (the floor plan itself), which a coarse cloud/default agent doesn't need.
+    for excluded in ("get_alerts", "get_network_inventory",
+                     "query_occupancy_history", "get_ha_entities", "get_house_map"):
+        assert excluded not in resolved
+
+
+def test_agent_default_tool_scope_is_a_strict_subset_of_read_scope():
+    # AGENT_READ_TOOL_SCOPE (every read tool) stays available as the name an
+    # admin grants EXPLICITLY to widen an agent -- it is no longer the default.
+    assert AGENT_DEFAULT_TOOL_SCOPE < AGENT_READ_TOOL_SCOPE
+    assert AGENT_DEFAULT_TOOL_SCOPE != AGENT_READ_TOOL_SCOPE
+
+
+def test_agent_actuator_scope_is_read_scope_plus_call_ha_service():
+    assert AGENT_ACTUATOR_TOOL_SCOPE == AGENT_READ_TOOL_SCOPE | {"call_ha_service"}
+    assert AGENT_ACTUATOR_TOOL_SCOPE == MCP_TOOL_NAMES
+
+
+def test_effective_tool_scopes_agent_explicit_overrides_default():
+    assert effective_tool_scopes("agent", frozenset()) == frozenset()
+    assert effective_tool_scopes("agent", frozenset({"call_ha_service"})) == \
+        frozenset({"call_ha_service"})
+
+
+def test_tool_call_allowed_none_means_unrestricted():
+    assert tool_call_allowed(None, "call_ha_service") is True
+    assert tool_call_allowed(None, "anything_at_all") is True
+
+
+def test_tool_call_allowed_fails_closed_on_an_explicit_set():
+    assert tool_call_allowed(frozenset({"list_rooms"}), "list_rooms") is True
+    assert tool_call_allowed(frozenset({"list_rooms"}), "call_ha_service") is False
+    assert tool_call_allowed(frozenset(), "list_rooms") is False   # empty = deny-all
+
+
+# --------------------------------------------------------------------------- #
+# auth.access_for_scoped: the three-tuple sibling of access_for -- root/central/
+# user get byte-identical (role, scopes) plus a new `tool_scopes=None`; 'agent'
+# additionally resolves its tool-name allow-list in the SAME one-verify pass.
+# --------------------------------------------------------------------------- #
+def test_access_for_scoped_loopback_is_root_with_none_everything(tmp_path):
+    store = _store(tmp_path)
+    assert access_for_scoped("127.0.0.1", LOCAL_IP, None, store) == ("root", None, None)
+
+
+def test_access_for_scoped_matches_access_for_for_central_and_user(tmp_path):
+    store = _store(tmp_path)
+    _id_c, tok_c = store.add("central-dev", "central")
+    _id_u, tok_u = store.add("user-dev", "user")
+    for token in (tok_c, tok_u):
+        role2, scopes2 = access_for("192.168.1.55", LOCAL_IP, token, store)
+        role3, scopes3, tool_scopes3 = access_for_scoped(
+            "192.168.1.55", LOCAL_IP, token, store)
+        assert (role3, scopes3) == (role2, scopes2)
+        assert tool_scopes3 is None      # unrestricted by the tool-name axis
+
+
+def test_access_for_scoped_agent_resolves_tool_scopes(tmp_path):
+    store = _store(tmp_path)
+    _id, token = store.add("mcp-agent", "agent")
+    role, scopes, tool_scopes = access_for_scoped("192.168.1.55", LOCAL_IP, token, store)
+    assert role == "agent"
+    assert scopes == DEFAULT_SCOPES["agent"]
+    # Phase-2A verify FIX 4: NULL tool_scopes resolves to the COARSE default,
+    # not the full read set (that now requires an explicit grant -- see
+    # test_agent_explicit_broad_grant_can_still_reach_all_read_tools_live in
+    # test_mcp_http.py).
+    assert tool_scopes == AGENT_DEFAULT_TOOL_SCOPE
+
+
+def test_access_for_scoped_agent_explicit_tool_scopes_override_default(tmp_path):
+    store = _store(tmp_path)
+    _id, token = store.add("mcp-agent", "agent", tool_scopes=frozenset({"list_rooms"}))
+    _role, _scopes, tool_scopes = access_for_scoped(
+        "192.168.1.55", LOCAL_IP, token, store)
+    assert tool_scopes == frozenset({"list_rooms"})
+
+
+def test_access_for_scoped_denies_before_any_scope_talk_off_subnet(tmp_path):
+    store = _store(tmp_path)
+    _id, token = store.add("mcp-agent", "agent")
+    assert access_for_scoped("10.0.0.5", LOCAL_IP, token, store) == (None, None, None)
+
+
+def test_access_for_scoped_revoked_token_denies(tmp_path):
+    store = _store(tmp_path)
+    device_id, token = store.add("mcp-agent", "agent")
+    store.revoke(device_id)
+    assert access_for_scoped("192.168.1.55", LOCAL_IP, token, store) == (None, None, None)
+
+
+# --------------------------------------------------------------------------- #
+# app.py wiring: the route-level bound for 'agent' -- NOTHING but /mcp. Proves
+# "a bounded capability set, not the whole API" holds at the ROUTE layer too,
+# independent of the /mcp per-tool gate (test_mcp_http.py).
+# --------------------------------------------------------------------------- #
+def test_agent_role_denied_every_ordinary_api_route(tmp_path, monkeypatch):
+    # An agent device (seeded directly -- POST /api/pair-code deliberately still
+    # only mints central/user codes; an operator promotes an already-paired
+    # device to 'agent' via the EXISTING POST /api/devices/{id}/role instead)
+    # gets NOTHING from the ordinary HTTP API: 'agent' is absent from BOTH
+    # can_view's and can_change_state's role tuples (auth.py), so
+    # require_authenticated/require_local/require_scope(...) all deny it.
+    db_path = str(tmp_path / "agent_route.db")
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", db_path)
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    seed_store = DeviceStore(db_path)
+    _id, token = seed_store.add("mcp-agent", "agent")
+    seed_store.close()
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    auth = {"Authorization": f"Bearer {token}"}
+    assert peer.get("/api/state", headers=auth).status_code == 403          # presence:read
+    assert peer.get("/api/inventory", headers=auth).status_code == 403      # network:read
+    assert peer.get("/api/cameras", headers=auth).status_code == 403        # camera:view
+    assert peer.post("/api/system/toggle", json={"on": True},
+                     headers=auth).status_code == 403                       # control
+    assert peer.get("/api/devices", headers=auth).status_code == 403        # admin
+
+
+def test_agent_role_promoted_via_existing_devices_role_route(tmp_path, monkeypatch):
+    # The admin-gated POST /api/devices/{id}/role route (unchanged by this
+    # feature) already accepts 'agent' now that it's in VALID_ROLES -- an
+    # operator can promote an already-paired 'user' device without any new
+    # route. The promoted device's scopes/tool_scopes stay whatever they were
+    # (NULL if never explicitly granted) -- set_role touches ONLY the role
+    # column (devices.py's own documented invariant) -- so it falls back to the
+    # 'agent' role defaults automatically.
+    app = _md_app(tmp_path, monkeypatch)
+    peer, auth = _pair(app, "user")
+    central = TestClient(app, headers=CSRF)
+    devices = central.get("/api/devices").json()["devices"]
+    device_id = devices[0]["device_id"]
+    r = central.post(f"/api/devices/{device_id}/role", json={"role": "agent"})
+    assert r.status_code == 200
+    assert r.json()["role"] == "agent"
+    # The SAME token, now role=agent, loses ordinary API access on its very next
+    # request (no re-pair, no new token needed).
+    assert peer.get("/api/state", headers=auth).status_code == 403

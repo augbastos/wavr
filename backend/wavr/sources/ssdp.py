@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import ipaddress
 import re
 import socket
@@ -51,6 +52,7 @@ import urllib.request as _urllib_request
 from typing import AsyncIterator, Awaitable, Callable
 
 from wavr.data.deviceclass import hostname_type
+from wavr.sources._dhcp_raw import open_with_timeout
 
 SSDP_GROUP = "239.255.255.250"
 SSDP_PORT = 1900
@@ -190,13 +192,26 @@ def parse_upnp_description(xml_text: str) -> dict:
     }
 
 
+_TUNNELED_PUBLIC_IPV6 = (
+    ipaddress.ip_network("2002::/16"),   # 6to4 -- embeds a public IPv4 host
+    ipaddress.ip_network("2001::/32"),   # Teredo -- embeds a public IPv4 host
+)
+
+
 def _is_lan_location(url: str) -> bool:
     """True only if `url`'s host is a literal private/loopback/link-local IP
     address -- the SSRF guard for the optional LOC-XML fetch. A DNS hostname
     (not a bare IP literal) is treated as UNSAFE and refused: without a
     scoped local resolver there is no guarantee it resolves on-LAN, and
     Wavr's zero-cloud-egress invariant means never taking that risk on a
-    string an untrusted LAN device chose."""
+    string an untrusted LAN device chose.
+
+    6to4 (2002::/16) and Teredo (2001::/32) are explicitly rejected even
+    though stdlib `ipaddress` reports `is_private is True` for both: each
+    encodes/tunnels an arbitrary PUBLIC IPv4 endpoint, so accepting them
+    would let an unauthenticated LAN SSDP NOTIFY point Wavr's LOC-XML GET at
+    a real off-LAN host -- a zero-egress bypass despite passing the literal
+    `is_private` check."""
     try:
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme != "http":
@@ -206,6 +221,8 @@ def _is_lan_location(url: str) -> bool:
             return False
         ip = ipaddress.ip_address(host)
     except ValueError:
+        return False
+    if any(ip in net for net in _TUNNELED_PUBLIC_IPV6):
         return False
     return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
 
@@ -255,9 +272,18 @@ def _open_multicast_socket(group: str, port: int) -> socket.socket:
 async def _default_listen() -> AsyncIterator[tuple[bytes, str]]:
     """Default real transport: join the SSDP multicast group and yield every
     datagram received (READ-ONLY -- never sends an M-SEARCH). See
-    sources.mdns._default_listen for the identical executor-thread rationale."""
+    sources.mdns._default_listen for the identical executor-thread rationale.
+
+    The socket()/bind()/IP_ADD_MEMBERSHIP open itself runs off the event loop
+    via `_dhcp_raw.open_with_timeout` (same seam as dhcp/dhcp_fp/camera) --
+    unlike the bounded per-recv executor call below, an unguarded synchronous
+    bind() here could stall the event loop thread outright on a device where
+    that call hangs instead of failing fast (see `_dhcp_raw` module
+    docstring for the observed G9 field bug this pattern fixes)."""
     loop = asyncio.get_event_loop()
-    sock = _open_multicast_socket(SSDP_GROUP, SSDP_PORT)
+    sock = await open_with_timeout(
+        functools.partial(_open_multicast_socket, SSDP_GROUP, SSDP_PORT),
+        f"UDP/{SSDP_PORT} multicast bind (SSDP)")
     sock.settimeout(1.0)
     try:
         while True:

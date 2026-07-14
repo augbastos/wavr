@@ -3,7 +3,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from wavr.api_inventory import build_inventory_router
+from wavr.api_inventory import build_inventory_router, inventory_view
 from wavr.config import load_config
 from wavr.device_meta import DeviceMeta
 from wavr.netinventory import Device
@@ -161,6 +161,75 @@ def test_scan_once_tolerates_a_broken_device_meta_store():
     svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0, device_meta=BoomMeta())
     devices = asyncio.run(svc.scan_once())          # must not raise
     assert devices                                   # scan still completed
+
+
+# ---- PERF: seen_many/get_many batch the N+1 (one call per scan/request, not
+# one round-trip per device) + the sqlite write moves off the event loop -------
+
+def test_scan_once_calls_seen_many_once_not_seen_per_device():
+    calls = {"seen": 0, "seen_many": 0}
+
+    class SpyMeta(DeviceMeta):
+        def seen(self, mac):
+            calls["seen"] += 1
+            return super().seen(mac)
+
+        def seen_many(self, macs):
+            calls["seen_many"] += 1
+            return super().seen_many(macs)
+
+    dm = SpyMeta(":memory:")
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0, device_meta=dm)
+    asyncio.run(svc.scan_once())
+    assert calls["seen_many"] == 1     # ONE batched call for the whole scan cycle
+    assert calls["seen"] == 0          # not one round-trip per device (N+1 fixed)
+    for mac in ("a4:83:e7:11:22:33", "24:0a:c4:aa:bb:cc", "de:ad:be:ef:00:01"):
+        assert dm.get(mac) is not None   # still recorded correctly
+
+
+async def test_record_seen_offloads_the_write_to_a_thread(monkeypatch):
+    # The sqlite write must run via asyncio.to_thread (so a slow disk can't
+    # stall the scan loop's own event loop), not directly inline -- verify the
+    # wiring, not just the end state.
+    from wavr import netinventory_service as nis
+    dm = DeviceMeta(":memory:")
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0, device_meta=dm)
+    offloaded = []
+    orig_to_thread = asyncio.to_thread
+
+    async def spy_to_thread(func, *a, **kw):
+        offloaded.append(func)
+        return await orig_to_thread(func, *a, **kw)
+
+    monkeypatch.setattr(nis.asyncio, "to_thread", spy_to_thread)
+    await svc.scan_once()
+    assert offloaded == [dm.seen_many]
+    assert dm.get("a4:83:e7:11:22:33") is not None   # the offloaded write still landed
+
+
+def test_inventory_view_calls_get_many_once_not_get_per_device():
+    calls = {"get": 0, "get_many": 0}
+
+    class SpyMeta(DeviceMeta):
+        def get(self, mac):
+            calls["get"] += 1
+            return super().get(mac)
+
+        def get_many(self, macs):
+            calls["get_many"] += 1
+            return super().get_many(macs)
+
+    dm = SpyMeta(":memory:")
+    dm.set_name("a4:83:e7:11:22:33", "MacBook")   # set_name() itself calls get() once -- unrelated
+    svc = _service()
+    asyncio.run(svc.scan_once())               # 3 devices in latest_inventory()
+    calls["get"] = calls["get_many"] = 0        # isolate what inventory_view() itself does
+    views = inventory_view(svc, dm)
+    assert calls["get_many"] == 1               # ONE batched call, regardless of device count
+    assert calls["get"] == 0                    # not one round-trip per device (the N+1)
+    assert len(views) == 3
+    by_mac = {v["mac"]: v for v in views}
+    assert by_mac["a4:83:e7:11:22:33"]["name"] == "MacBook"
 
 
 def test_inventory_endpoint_merges_name_and_seen_fields():
@@ -325,10 +394,10 @@ def test_mdns_hostname_alone_fills_device_hostname_and_drives_recognition():
     dev = next(d for d in svc.latest_inventory() if d.mac == "de:ad:be:ef:00:01")
     assert dev.hostname == "esp32-kitchen-sensor"
     assert dev.device_type == "esp_dev"
-    # hostname_type() candidates are NOT capped -- unlike a lone self-report
-    # (device_type key) or a lone OUI verdict, an unspoofed hostname match
-    # is already "high" alone (recog.py's existing, unchanged rule).
-    assert dev.type_confidence == "high"
+    # FUSION-C: hostname is `self_report` family (a DHCP/mDNS-announced, spoofable
+    # name) -- a LONE hostname caps at "medium" like every sibling self-description
+    # (bonjour/upnp/snmp/netbios), restored to "high" only by a 2nd agreeing family.
+    assert dev.type_confidence == "medium"
     assert dev.sources[0]["signal"] == "hostname"
 
 
@@ -354,7 +423,8 @@ def test_ssdp_friendly_name_alone_fills_device_hostname_and_drives_recognition()
     dev = next(d for d in svc.latest_inventory() if d.mac == "de:ad:be:ef:00:01")
     assert dev.hostname == "Living Room Sonos"
     assert dev.device_type == "speaker"
-    assert dev.type_confidence == "high"
+    # FUSION-C: lone self-reported hostname caps at "medium" (see the mDNS test above).
+    assert dev.type_confidence == "medium"
 
 
 def test_collector_signal_for_unmapped_ip_is_dropped_not_invented():
@@ -679,3 +749,50 @@ async def test_dhcp_fp_status_reflects_real_collector_after_bind_failure():
     status = svc.dhcp_fp_status()
     assert status["available"] is False
     assert "PermissionError" in status["reason"]
+
+
+# ---- system-toggles sensing master: suppresses the OPTIONAL collectors only ---
+
+async def test_sensing_master_off_suppresses_mdns_and_port_scan_but_not_base_inventory():
+    # Both an enabled passive collector (mdns) and the active port pass would
+    # normally run -- injecting sensing_allowed=lambda: False must suppress
+    # both while the base ARP inventory (a device for every WINDOWS_ARP row)
+    # still populates untouched.
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera", "make": "Wyze"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake, port_scan=True,
+                                   sensing_allowed=lambda: False)
+    devices = await svc.scan_once()
+    assert fake.calls == 0                                  # collector never invoked
+    assert len(devices) == 3                                # base inventory unaffected
+    dev = next(d for d in devices if d.mac == "24:0a:c4:aa:bb:cc")
+    assert dev.device_type != "camera"                      # mdns signal never applied
+    assert dev.open_ports == ()                              # port pass never ran
+
+
+async def test_sensing_master_on_by_default_never_regresses_existing_behaviour():
+    # No sensing_allowed kwarg passed (every pre-existing test/call site) ->
+    # byte-identical to before this feature: the collector still runs.
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera", "make": "Wyze"}})
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake)
+    await svc.scan_once()
+    assert fake.calls == 1
+
+
+async def test_sensing_master_flips_live_no_restart_needed():
+    # Read fresh every scan_once() -- a toggle takes effect on the very next
+    # cycle, exactly like known_provider/ha_store (no restart, revocable).
+    fake = _FakeCollector({"192.168.0.23": {"device_type": "camera", "make": "Wyze"}})
+    state = {"on": True}
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_fake_scan, interval=0,
+                                   mdns_enabled=True, mdns=fake,
+                                   sensing_allowed=lambda: state["on"])
+    await svc.scan_once()
+    assert fake.calls == 1                 # sensing on -> collector ran
+    state["on"] = False
+    await svc.scan_once()
+    assert fake.calls == 1                 # sensing off on the very next cycle -> not called again
+    state["on"] = True
+    await svc.scan_once()
+    assert fake.calls == 2                 # flips back on with no restart

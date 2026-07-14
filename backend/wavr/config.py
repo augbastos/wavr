@@ -76,6 +76,28 @@ class Config:
     # Anthropic Claude (/v1/messages) -- cloud.
     anthropic_api_key: str
     anthropic_model: str
+    # Wavr Assistant (Phase 2B): the bounded-MCP-tool-loop engine picker
+    # (backend.wavr.assistant_engine / assistant_store / api_assistant). The
+    # persisted selection lives in AssistantEngineStore (survives restart,
+    # admin-changeable without editing .env); this is only the FALLBACK when no
+    # selection row exists yet, mirroring how ConnectorStore's override falls back
+    # to an env flag. Default "wavr_assistant" -- the local/zero-egress built-in,
+    # same idiom as net_gateway_monitor defaulting ON.
+    assistant_engine_default: str
+    # Bounded agent-loop caps for the assistant's tool loop (ALL 6 engines run
+    # through this loop when asked a question -- only the underlying LLM call and
+    # the reachable MCP-tool scope differ per engine). Small, fixed defaults; no
+    # UI for these in v1, env-only, mirrors e.g. cam_unhealthy_secs being a plain
+    # float field with no dedicated screen.
+    assistant_max_tool_steps: int
+    assistant_tool_timeout: float
+    # `local_llm` engine (Phase 2B): a SEPARATE OpenAI-compatible endpoint from
+    # `openai_base_url` above -- deliberately independent config so pointing
+    # WAVR_OPENAI_BASE_URL at a cloud endpoint never silently also reclassifies
+    # this always-local picker entry. Defaults to Ollama's own OpenAI-compat `/v1`
+    # surface on loopback (zero egress by construction, no key needed).
+    assistant_local_llm_base_url: str
+    assistant_local_llm_model: str
     house_map: str
     mmwave_port: str
     mmwave_room: str
@@ -91,6 +113,23 @@ class Config:
     identity_enabled: bool
     # Multi-device client auth (ADR-0006) — opt-in, all default to loopback-only.
     multidevice: bool
+    # Cross-instance peer pairing (2026-07-09 design spec, Phase 1) — opt-in, default
+    # OFF, and REQUIRES multidevice (a peer identity IS a multidevice central identity;
+    # app.py refuses to start if this is on without multidevice). When on, app.py mounts
+    # the public (redeem) + loopback-root admin (discovered/observe/confirm/list/unpair)
+    # + peer-reachable reverse-leg (link-back) peer routers and starts this instance's
+    # own mDNS `_wavr._tcp` self-advertise (C1-fix reshape).
+    peers_enabled: bool
+    # Sensor NODES (design 2026-07-11) -- opt-in, default OFF, and REQUIRES multidevice
+    # (same rationale as peers_enabled: a node is a LAN device that needs multidevice's
+    # LAN bind + local TLS, not a loopback-only concept). When on, app.py mounts the
+    # public (enroll) + node-authed data-plane (telemetry/heartbeat/reactivate) + the
+    # loopback-root admin (mint-code/list/disable/revoke) node routers.
+    nodes_enabled: bool
+    # Human-readable name this instance presents to peers: the mDNS TXT display name and
+    # the `name` this instance sends as `requester_name`/`peer_name` during pairing.
+    # Default "Wavr"; set WAVR_INSTANCE_NAME to distinguish e.g. "Desktop" from "Core".
+    instance_name: str
     bind_host: str
     tls_cert: str
     tls_key: str
@@ -183,6 +222,12 @@ class Config:
     # auto-learn the first-seen gateway MAC, persisted across restarts.
     net_gateway_monitor: bool
     net_gateway_known_macs: set[str]
+    # network-doctor auto-fix (WAVR_NET_DOCTOR_AUTOFIX) -- opt-in, default OFF.
+    # Two-factor gate WITH the route's own per-call `auto_fix=true` query param
+    # (see GET /api/health/doctor): either false means every fixable candidate
+    # renders as a suggestion only, nothing executes. Diagnose-only is the
+    # default install behaviour.
+    net_doctor_autofix: bool
     # Health-check ladder (defensive-inventory #12) -- extra operator-configured
     # targets on top of the fixed gateway + public-resolver checks. Empty by
     # default (no extra egress beyond the resolver checks themselves).
@@ -234,6 +279,31 @@ class Config:
     # attack primitive. DEFAULT-OFF. Triple-gated at the route (flag + require_local +
     # per-call confirm), inventory-only target denylist, auto-expiry, MCP-excluded.
     net_blocking: bool
+    # A4 house memory (wavr.occupancy_log): an append-only, EDGE-TRIGGERED per-room
+    # occupancy log feeding routine baselines + "unusual for this hour" (B2/A10 later).
+    # DEFAULT ON -- unlike the active-egress/active-probe flags above, this writes
+    # nothing but what Storage.insert_state already persists (occupied/confidence, per
+    # ADR-0002) plus the honest `person_count` (A1); identity is never logged. Set
+    # WAVR_OCCUPANCY_LOG=0 to disable. `occupancy_retention_days` bounds how long a row
+    # lives (a bulk DELETE runs after every insert); <= 0 disables pruning.
+    occupancy_log_enabled: bool
+    occupancy_retention_days: float
+    # A9 fall/no-motion suspicion (RESEARCH-GRADE, ADR-0003) -- opt-in, DEFAULT OFF (it is
+    # explicitly non-medical-grade, so it must never surprise an operator who never asked
+    # for it). `fall_dwell_s` is the ONLY other knob (A9 requirement #2): how long a "lying
+    # outside every marked bed/rest zone" reading must persist before wavr.fall_detect fires
+    # one edge-triggered `fall_suspected` alert. See wavr.fall_detect for the dwell/flicker
+    # rule and the mandatory disclaimer every alert carries.
+    fall_detect_enabled: bool
+    fall_dwell_s: float
+    # Watch house-LEVEL intrusion loudness (WAVR_WATCH_INTRUSION_LOUD) -- default OFF.
+    # The house-level aggregate (sum of per-room counts > known-present, room=None) has a
+    # real false-positive risk (a person in a doorway double-counted by two rooms inflates
+    # the sum), so by default it is INFORMATIONAL: surfaced in /api/watch, /api/house-status
+    # and the C4 HA house-level binary_sensor, but it does NOT emit the high-severity alert
+    # into GET /api/alerts. Set to 1 to make the house-level signal loud (emit that alert).
+    # The per-room intrusion signal (more reliable, less double-count) is ALWAYS emitted.
+    watch_intrusion_loud: bool
 
 
 def load_config() -> Config:
@@ -299,6 +369,20 @@ def load_config() -> Config:
         # Anthropic Claude (cloud).
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         anthropic_model=os.getenv("WAVR_ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+        # Wavr Assistant engine picker (Phase 2B) -- unknown values fall back to
+        # "wavr_assistant" (never crash on a typo; the picker/store still guard the
+        # actual gate). See assistant_engine.ENGINE_IDS for the fixed 6-id set.
+        assistant_engine_default=(
+            os.getenv("WAVR_ASSISTANT_ENGINE", "wavr_assistant").strip().lower()
+            if os.getenv("WAVR_ASSISTANT_ENGINE", "wavr_assistant").strip().lower()
+            in ("wavr_assistant", "local_llm", "openai", "anthropic", "gemini", "manual")
+            else "wavr_assistant"
+        ),
+        assistant_max_tool_steps=int(os.getenv("WAVR_ASSISTANT_MAX_STEPS", "4")),
+        assistant_tool_timeout=float(os.getenv("WAVR_ASSISTANT_TOOL_TIMEOUT_S", "10.0")),
+        assistant_local_llm_base_url=os.getenv(
+            "WAVR_ASSISTANT_LOCAL_LLM_URL", "http://localhost:11434/v1"),
+        assistant_local_llm_model=os.getenv("WAVR_ASSISTANT_LOCAL_LLM_MODEL", "llama3.2"),
         # F1: default to a bare cwd-relative "house.json" (mirrors db_path="wavr.db"
         # above) so PUT /api/house works out-of-the-box instead of 409-ing for every
         # fresh install. The env override is preserved; an operator who explicitly sets
@@ -324,6 +408,13 @@ def load_config() -> Config:
         # exactly as today. `bind_host` is only honoured when multidevice is on; the
         # TLS paths are empty until Phase 2 (self-signed cert generation).
         multidevice=os.getenv("WAVR_MULTIDEVICE", "").lower() in ("1", "true", "yes"),
+        # Peer pairing (Phase 1): default OFF. create_app additionally refuses to start
+        # if this is on without multidevice (peer identity IS a central identity).
+        peers_enabled=os.getenv("WAVR_PEERS_ENABLED", "").lower() in ("1", "true", "yes"),
+        # Sensor nodes (design 2026-07-11): default OFF. create_app additionally refuses
+        # to start if this is on without multidevice (mirrors peers_enabled above).
+        nodes_enabled=os.getenv("WAVR_NODES_ENABLED", "").lower() in ("1", "true", "yes"),
+        instance_name=os.getenv("WAVR_INSTANCE_NAME", "Wavr"),
         bind_host=os.getenv("WAVR_BIND", "127.0.0.1"),
         tls_cert=os.getenv("WAVR_TLS_CERT", ""),
         tls_key=os.getenv("WAVR_TLS_KEY", ""),
@@ -394,6 +485,9 @@ def load_config() -> Config:
             m.strip().replace("-", ":").lower()
             for m in os.getenv("WAVR_NET_GATEWAY_MACS", "").split(",") if m.strip()
         },
+        # network-doctor auto-fix -- opt-in, default OFF (see field docstring above).
+        net_doctor_autofix=os.getenv("WAVR_NET_DOCTOR_AUTOFIX", "").strip().lower()
+            in ("1", "true", "yes"),
         # Health-check ladder: extra targets beyond gateway + public resolvers.
         health_extra_targets=tuple(
             s.strip() for s in os.getenv("WAVR_HEALTH_EXTRA_TARGETS", "").split(",") if s.strip()
@@ -421,4 +515,18 @@ def load_config() -> Config:
         api_v1=os.getenv("WAVR_API_V1", "").lower() in ("1", "true", "yes", "on"),
         # A5.2 ARP blocking -- default OFF (active-LAN-attack primitive, triple-gated).
         net_blocking=os.getenv("WAVR_NET_BLOCKING", "").lower() in ("1", "true", "yes", "on"),
+        # A4 house memory -- default ON (derived-only, same disclosure class as
+        # Storage.insert_state's existing room_states table); 60-day default retention.
+        occupancy_log_enabled=os.getenv("WAVR_OCCUPANCY_LOG", "1").strip().lower()
+            in ("1", "true", "yes", "on"),
+        occupancy_retention_days=float(os.getenv("WAVR_OCCUPANCY_RETENTION_DAYS", "60")),
+        # A9 fall/no-motion (research-grade, ADR-0003): default OFF. Default dwell 60s --
+        # long enough that a normal floor-sit/stretch/play session doesn't trip it, short
+        # enough to still be a useful "check in" prompt; NOT VERIFIED against real falls,
+        # tune per household via WAVR_FALL_DWELL_S.
+        fall_detect_enabled=os.getenv("WAVR_FALL_DETECT", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+        fall_dwell_s=float(os.getenv("WAVR_FALL_DWELL_S", "60")),
+        watch_intrusion_loud=os.getenv("WAVR_WATCH_INTRUSION_LOUD", "").strip().lower()
+            in ("1", "true", "yes", "on"),
     )

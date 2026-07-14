@@ -7,7 +7,7 @@ time is injected (no real waiting), and there is no real network.
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from wavr.auth import authorize, can_change_state, can_view, in_subnet, parse_bearer
@@ -114,7 +114,11 @@ def test_add_rejects_invalid_role(tmp_path):
     store = _store(tmp_path)
     with pytest.raises(ValueError):
         store.add("x", "admin")
-    assert VALID_ROLES == {"central", "user"}
+    # Phase 2A / B4 added 'agent' (the bounded MCP-client principal) as the third
+    # grantable role -- see test_wavr_pass_scopes.py for its scope/tool-scope
+    # behaviour. This assertion is intentionally exact so any FUTURE role addition
+    # is a deliberate, reviewed edit here too, not a silent widening.
+    assert VALID_ROLES == {"central", "user", "agent"}
 
 
 # --------------------------------------------------------------------------- #
@@ -286,7 +290,9 @@ def _router_client(tmp_path):
     app = FastAPI()
     app.include_router(build_pair_router(store, pairing))
     app.include_router(build_ws_ticket_router(store, pairing))
-    app.include_router(build_devices_router(store))
+    # DELETE now defaults to a FAIL-CLOSED sentinel (audit #13) when delete_deps is
+    # omitted; pass a no-op allow so these logic tests can exercise revoke directly.
+    app.include_router(build_devices_router(store, delete_deps=[Depends(lambda: None)]))
     return TestClient(app), store, pairing
 
 

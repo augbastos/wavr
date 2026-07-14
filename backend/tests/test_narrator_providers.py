@@ -40,7 +40,10 @@ class _FakeResp:
 
 
 def _patch_urlopen(monkeypatch, response, captured):
-    def fake_urlopen(req, timeout=None):
+    # narrator._post_json routes through the module-level _NO_REDIRECT_OPENER
+    # (redirect-blocking hardening) rather than the bare urllib.request.urlopen,
+    # so the transport seam the tests patch is that opener's .open().
+    def fake_open(req, timeout=None):
         captured["url"] = req.full_url
         captured["timeout"] = timeout
         # urllib title-cases header keys; normalise to lower for assertions.
@@ -48,7 +51,8 @@ def _patch_urlopen(monkeypatch, response, captured):
         captured["body"] = json.loads(req.data.decode("utf-8"))
         return _FakeResp(response)
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("wavr.narrator._NO_REDIRECT_OPENER",
+                        SimpleNamespace(open=fake_open))
 
 
 # --------------------------------------------------------------------------- #
@@ -228,7 +232,9 @@ def test_api_key_never_in_http_error(monkeypatch):
     def boom(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
 
-    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    # Patch the opener seam (same as _patch_urlopen) so this stays hermetic --
+    # no real network call to the OpenAI endpoint.
+    monkeypatch.setattr("wavr.narrator._NO_REDIRECT_OPENER", SimpleNamespace(open=boom))
     gen = make_openai_generate("https://api.openai.com/v1", "sk-super-secret", "m")
     with pytest.raises(urllib.error.HTTPError) as ei:
         gen("p")

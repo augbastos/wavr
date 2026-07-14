@@ -1,6 +1,8 @@
 # Rust build output
 src-tauri/target/
-src-tauri/Cargo.lock
+# Cargo.lock IS tracked: wavr-desktop is an application (binary) crate, not a library, so
+# the lockfile is committed for reproducible builds (pinned transitive dependency versions
+# across CI and local builds) rather than gitignored as library crates conventionally are.
 
 # generated icons (regenerate with `npm run icon`)
 src-tauri/icons/*.png

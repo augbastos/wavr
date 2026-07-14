@@ -108,11 +108,91 @@ def cert_fingerprint(cert_path: str) -> str | None:
         pem = Path(cert_path).read_text(encoding="ascii", errors="ignore")
     except OSError:
         return None
-    der = _first_cert_der(pem)
-    if der is None:
-        return None
+    return fingerprint_from_pem(pem)
+
+
+def format_fingerprint(der: bytes) -> str:
+    """SHA-256 of DER cert bytes as uppercase colon-separated hex (browser
+    cert-viewer style). The single formatting authority shared by
+    fingerprint_from_pem (disk/PEM path) and peer_client's per-call TLS pin
+    check (live-socket DER path) so the two can never silently desync."""
     digest = hashlib.sha256(der).hexdigest().upper()
     return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
+def fingerprint_from_pem(pem: str) -> str | None:
+    """SHA-256 fingerprint of the first `CERTIFICATE` block in `pem`, formatted
+    uppercase colon-separated hex (browser-style). None if no parseable block.
+    Extracted from `cert_fingerprint` (Phase 1 peer-pairing, 2026-07-09) so a
+    PEM fetched over the network (see `remote_cert_fingerprint`) can be
+    fingerprinted the same way as one read from disk -- one formatting rule,
+    two sources."""
+    der = _first_cert_der(pem)
+    return None if der is None else format_fingerprint(der)
+
+
+def verification_code(fingerprint_hex: str, pair_code: str) -> str:
+    """6-digit CONVENIENCE-tier verification code binding a cert fingerprint to the
+    live rotating pairing code (pinned derivation, 2026-07-13 companion pairing):
+
+        input  = <fp_hex_lowercase_no_colons> + "|" + <pair_code>
+        digest = SHA-256(input)                                          (32 bytes)
+        code   = (first 4 bytes of digest, big-endian uint32) mod 1_000_000,
+                 zero-padded to 6 decimal digits
+
+    Binding to `pair_code` -- the SAME short-TTL code `/api/pair-code` already
+    mints -- means this 6-digit isn't offline-grindable: a MitM would have to
+    brute-force it within that code's ~2-minute TTL, the accepted tradeoff for a
+    number short enough to type on a phone keyboard. This is deliberately NOT the
+    strong anchor -- `cert_fingerprint`/`format_fingerprint` (full 256-bit,
+    eyeball- or QR-compared) remains the source of truth; `verify6` only makes the
+    common case faster to check without weakening it, since a mismatch still
+    hard-fails to the existing interception screen exactly like a fingerprint
+    mismatch would.
+
+    `fingerprint_hex` may be given either in the colon-separated, uppercase form
+    `cert_fingerprint`/`format_fingerprint` return (e.g. "AB:CD:...") or as plain
+    hex, and in either case is normalized to lowercase-no-colons here -- so the
+    backend and any caller that re-derives from a differently-formatted source
+    (e.g. a browser's own colon/uppercase cert display) always hash the SAME
+    bytes for the SAME certificate.
+
+    STRONG TIER (not built here): a full-256-bit fingerprint compare over a QR
+    code, for camera-equipped pairing. `verification_code` is only the
+    lower-friction convenience tier; leave the QR/camera path for later.
+    """
+    normalized = fingerprint_hex.replace(":", "").lower()
+    input_string = f"{normalized}|{pair_code}"
+    digest = hashlib.sha256(input_string.encode("utf-8")).digest()
+    n = int.from_bytes(digest[:4], "big") % 1_000_000
+    return f"{n:06d}"
+
+
+def _default_remote_fetch(host: str, port: int, timeout: float) -> str:
+    """Real network TOFU-fetch: connect and return the PEM of whatever
+    certificate the peer presents, WITHOUT validating it against any CA --
+    validation is the caller's job (compare the resulting fingerprint against
+    an admin-confirmed value). Pure stdlib `ssl`."""
+    import ssl
+    return ssl.get_server_certificate((host, port), timeout=timeout)
+
+
+def remote_cert_fingerprint(host: str, port: int, timeout: float = 5.0,
+                             fetch=None) -> str | None:
+    """SHA-256 fingerprint of the certificate `host:port` presents RIGHT NOW,
+    for the peer-pairing exchange (Phase 1): the admin compares this against
+    the peer's own on-screen fingerprint before the pairing is trusted. `fetch`
+    is injectable ((host, port, timeout) -> PEM str); the default makes a real
+    TLS connection and returns whatever cert is presented, unvalidated -- this
+    function is the TOFU probe, not the trust decision. Returns None on any
+    connection failure or unparseable response (never raises -- a peer that's
+    offline or mid-reboot is an honest 'can't fingerprint yet', not a crash)."""
+    fetcher = fetch or _default_remote_fetch
+    try:
+        pem = fetcher(host, port, timeout)
+    except Exception:
+        return None
+    return fingerprint_from_pem(pem)
 
 
 def _first_cert_der(pem: str) -> bytes | None:

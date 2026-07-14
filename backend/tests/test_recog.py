@@ -288,6 +288,27 @@ def test_all_outputs_stay_inside_the_taxonomy():
         assert recognize(signals).device_type in DEVICE_TYPES
 
 
+# ---- FUSION-C: hostname is `self_report`, capped at medium ALONE like its siblings --
+
+def test_lone_hostname_is_medium_not_high():
+    # hostname is a DHCP/mDNS-announced, spoofable name -- same self_report family as
+    # upnp/bonjour/ha/snmp/netbios (all capped "medium" alone). It was drifting from the
+    # module's own documented threat model by seeding "high"; this locks the fix.
+    ident = recognize({"hostname": "office-printer"})
+    assert ident.device_type == "printer"
+    assert ident.confidence == "medium"
+
+
+def test_hostname_plus_second_family_restores_high():
+    # A 2nd, INDEPENDENT-family signal (port_hint -> `observed`) AGREEING with hostname
+    # restores "high" via the normal family-gated consensus bump. 8009 (Google Cast
+    # control) and the "chromecast" hostname pattern both resolve to streaming_stick.
+    ident = recognize({"hostname": "living-room-chromecast", "open_ports": [8009]})
+    assert ident.device_type == "streaming_stick"
+    assert ident.confidence == "high"
+    assert {s["signal"] for s in ident.sources} == {"hostname", "port_hint"}
+
+
 # ---- guess_device_type is a stable thin wrapper ---------------------------------
 
 def test_wrapper_matches_recognize():

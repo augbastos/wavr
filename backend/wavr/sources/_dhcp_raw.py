@@ -106,16 +106,26 @@ def reset_open_guards() -> None:
     _raw_open_timed_out = False
 
 
-async def open_with_timeout(opener: Callable[[], socket.socket], what: str) -> socket.socket:
-    """Run a blocking socket-open callable (socket()+setsockopt()+bind(), all
-    synchronous) in the default executor and bound its wall-clock time to
-    `OPEN_TIMEOUT` -- see module docstring. A timeout is re-raised as
-    `OSError` so every caller's existing `except (PermissionError, OSError)`
-    handling (already covers "port in use") also covers "open never
-    returned" without any new except clause at the call site. The executor
-    thread itself cannot be forcibly killed if `opener` truly never returns
-    (stdlib limitation) -- but the event loop is never blocked by it, which
-    is the actual hang this fixes.
+async def open_with_timeout(opener: Callable[[], socket.socket], what: str,
+                             timeout: float | None = None) -> socket.socket:
+    """Run a blocking open/read callable (originally socket()+setsockopt()+bind(),
+    also reused by wavr.sources.camera for RTSP capture open()/read() -- same
+    "syscall that should return promptly but has been observed to stall
+    instead" shape) in the default executor and bound its wall-clock time to
+    `timeout` (defaults to module-level `OPEN_TIMEOUT` when omitted -- see
+    module docstring). A timeout is re-raised as `OSError` so every caller's
+    existing `except (PermissionError, OSError)` handling (already covers
+    "port in use") also covers "open never returned" without any new except
+    clause at the call site. The executor thread itself cannot be forcibly
+    killed if `opener` truly never returns (stdlib limitation) -- but the
+    event loop is never blocked by it, which is the actual hang this fixes.
+
+    `timeout` is a plain parameter, not read from the module global at
+    def-time -- an existing caller doing
+    `monkeypatch.setattr(_dhcp_raw, "OPEN_TIMEOUT", ...)` and calling this
+    with no `timeout` arg keeps working unchanged; only a caller that
+    explicitly passes its own `timeout` (e.g. camera.py's multi-second RTSP
+    budget vs. this module's near-instant socket-syscall budget) diverges.
 
     If `what` has already timed out once in this process, this raises OSError
     immediately WITHOUT calling `run_in_executor` again -- retrying an opener
@@ -126,13 +136,14 @@ async def open_with_timeout(opener: Callable[[], socket.socket], what: str) -> s
             f"{what} previously timed out opening in this process; not retrying "
             "(would leak another background thread)")
     loop = asyncio.get_event_loop()
+    bound = OPEN_TIMEOUT if timeout is None else timeout
     try:
-        return await asyncio.wait_for(loop.run_in_executor(None, opener), timeout=OPEN_TIMEOUT)
+        return await asyncio.wait_for(loop.run_in_executor(None, opener), timeout=bound)
     except asyncio.TimeoutError as exc:
         _timed_out_openers.add(what)
         raise OSError(
-            f"{what} did not complete within {OPEN_TIMEOUT}s "
-            "(a conflicting process likely already holds this socket/port)"
+            f"{what} did not complete within {bound}s and will not be retried "
+            "in this process"
         ) from exc
 
 

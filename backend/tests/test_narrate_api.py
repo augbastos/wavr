@@ -1,5 +1,18 @@
+import pytest
 from fastapi.testclient import TestClient
 from wavr.app import create_app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_wavr_db(monkeypatch, tmp_path):
+    # Isolate every narrate test onto a FRESH ConnectorStore instead of the dev-shared
+    # cwd "wavr.db" (config.py default). The narrate route gates on the "narrator"
+    # connector's override; a workflow that runs the real backend and toggles connectors
+    # (e.g. a Playwright UI hunt) can revoke it in the shared db, which then 503s these
+    # tests -- pure state pollution, not a code bug. A per-test WAVR_DB removes the
+    # coupling to any real db file.
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "narrate.db"))
+
 
 def _client(narrator=None):
     app = create_app(sources=[], narrator=narrator)

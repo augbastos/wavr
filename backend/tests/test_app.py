@@ -11,6 +11,7 @@ from wavr.fusion import FusionEngine
 from wavr.sources.simulated import SimulatedSource
 from wavr.camera_store import CameraStore
 from wavr.device_meta import DeviceMeta
+from wavr.events import SensingEvent
 
 
 def build_client(client=None, device_meta=None, health_check=None, health_resolvers=None):
@@ -73,7 +74,11 @@ def test_state_returns_latest_per_room():
         assert state  # at least one room
         any_room = next(iter(state.values()))
         assert set(any_room.keys()) == {"room", "occupied", "confidence", "vitals",
-                                        "sources", "targets", "identities", "explanation", "ts"}
+                                        "sources", "targets", "identities", "person_count",
+                                        "explanation", "ts",
+                                        # precision ladder (additive): the resolution axis,
+                                        # distinct from confidence — how DETAILED, not how SURE.
+                                        "precision_level", "precision_pct", "precision_next"}
 
 
 def test_state_exposes_identities_only_when_flag_on():
@@ -298,14 +303,32 @@ def test_status_shape_and_no_secrets():
             # ADR-0008 Slice 1: in-app READ-ONLY MCP-over-HTTP inbound listener (bool;
             # true only when wired + enabled). Default install -> False.
             "mcp_http",
+            # A4 house memory (wavr.occupancy_log) -- ON by default (derived-only,
+            # zero egress); surfaced so the Privacy & Egress view honestly shows a
+            # local occupancy history is being kept.
+            "occupancy_log",
+            # Watch/Guard ("Vigia") -- in-memory toggle, default OFF.
+            "watch",
+            # Phase-2B re-threat FIX 3: the Wavr Assistant's cloud-egress kill
+            # switch ("assistant-cloud" connector) as a first-class trust-receipt
+            # fact -- true only when an admin has enabled it in Connectors.
+            # Default install -> False.
+            "assistant_cloud",
+            # system-toggles egress/sensing masters (default-ON, operator-actuatable from
+            # the local loopback UI) + the network-doctor auto-fix flag (default-OFF).
+            "egress_allowed", "sensing_allowed", "net_doctor_autofix",
+            # server mirror of deriveTier() for the mobile companion sensing tile.
+            "hub_level",
         }
         assert set(body["features"]) == expected_features
-        # Every feature is a bool flag EXCEPT connectors_active, an int count.
+        # Every feature is a bool flag EXCEPT connectors_active (int) and hub_level
+        # (str tier off/presence/precise).
         assert all(isinstance(v, bool) for k, v in body["features"].items()
-                   if k != "connectors_active")
+                   if k not in ("connectors_active", "hub_level"))
         assert isinstance(body["features"]["connectors_active"], int)
+        assert body["features"]["hub_level"] in ("off", "presence", "precise")
 
-        assert set(body["house"]) == {"floors", "rooms"}
+        assert set(body["house"]) == {"floors", "rooms", "people"}
         assert body["house"]["floors"] >= 1
         assert body["house"]["rooms"] >= 1
 
@@ -344,6 +367,10 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "tls": False, "ntfy": False, "internet_monitor": False,
             "mdns": False, "ssdp": False, "netbios": False, "snmp": False,
             "dhcp_fp": False, "rogue_dhcp": False, "health_resolvers": False,
+            # system-toggles + net-doctor: egress/sensing default-ON, autofix default-OFF.
+            "egress_allowed": True, "sensing_allowed": True, "net_doctor_autofix": False,
+            # deriveTier() mirror: manager auto-starts (running) with cameras boot-OFF -> presence.
+            "hub_level": "presence",
             # gateway-MAC-identity tracker is the one default-ON feature
             # (zero-egress, on-box -- inventory feature #2).
             "gateway_monitor": True,
@@ -361,6 +388,13 @@ def test_status_features_reflect_config_defaults(monkeypatch):
             "connectors_active": 0,
             # ADR-0008 Slice 1: MCP-over-HTTP listener off by default.
             "mcp_http": False,
+            # A4 house memory -- the other default-ON feature (derived-only, zero egress).
+            "occupancy_log": True,
+            # Watch/Guard ("Vigia") -- in-memory toggle, default OFF.
+            "watch": False,
+            # Phase-2B re-threat FIX 3: Wavr Assistant cloud-egress kill switch,
+            # default OFF.
+            "assistant_cloud": False,
         }
 
 
@@ -371,7 +405,9 @@ def test_status_house_counts_match_default_map(tmp_path, monkeypatch):
     # deterministically falls back to DEFAULT_MAP (1 floor, 3 rooms).
     monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nonexistent.json"))
     with build_client() as client:
-        assert client.get("/api/status").json()["house"] == {"floors": 1, "rooms": 3}
+        # `people` is the additive live house count; None here because the demo/sim
+        # camera does not emit a per-source count (only real camera/mmwave do).
+        assert client.get("/api/status").json()["house"] == {"floors": 1, "rooms": 3, "people": None}
 
 
 def test_status_source_list_matches_system_endpoint():
@@ -647,3 +683,182 @@ def test_refuse_publishes_decayed_state():
         assert last["occupied"] is False                   # honestly unoccupied
 
     asyncio.run(drive())
+
+
+# ---------------------------------------------------------------------------
+# PERF: SD-card write-wear gate (app.py's `_ingest`, `persist=changed`). Driven
+# deterministically via the `app.state.ingest` test seam (mirrors refuse_once
+# above) -- was previously completely untested; only a per-file diff-review
+# claim, no regression coverage.
+# ---------------------------------------------------------------------------
+
+def test_ingest_first_event_for_a_room_always_persists():
+    # No `prev` to compare against yet -- the very first fused reading for a room
+    # must always land in storage.
+    import asyncio
+    from datetime import datetime, timezone
+
+    storage = Storage(":memory:")
+    app = create_app(
+        sources=[], storage=storage, hub=Hub(),
+        fusion=FusionEngine(weights={"camera": 1.0}), camera_store=CameraStore(":memory:"),
+    )
+    ts = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+    ev = SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                      breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts)
+
+    asyncio.run(app.state.ingest(ev))
+    rows = [r for r in storage.recent(100) if r["room"] == "sala"]
+    assert len(rows) == 1
+
+
+def test_ingest_skips_persist_when_fused_state_is_unchanged():
+    # The whole point of the gate: a room re-asserting the SAME fused reading frame
+    # after frame must not INSERT a fresh sqlite row every time.
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    storage = Storage(":memory:")
+    app = create_app(
+        sources=[], storage=storage, hub=Hub(),
+        fusion=FusionEngine(weights={"camera": 1.0}), camera_store=CameraStore(":memory:"),
+    )
+    base = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _cam(ts):
+        return SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                            breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts)
+
+    async def drive():
+        await app.state.ingest(_cam(base.isoformat()))
+        await app.state.ingest(_cam((base + timedelta(seconds=1)).isoformat()))  # identical reading
+        await app.state.ingest(_cam((base + timedelta(seconds=2)).isoformat()))  # still identical
+
+    asyncio.run(drive())
+    rows = [r for r in storage.recent(100) if r["room"] == "sala"]
+    assert len(rows) == 1                                # 2nd/3rd identical frames NOT persisted
+
+
+def test_ingest_persists_when_person_count_changes_even_if_occupied_and_confidence_hold():
+    # The gate compares the FULL derived state, not just occupied/confidence (unlike
+    # the periodic re-fuse tick's narrower changed-check) -- a person_count-only
+    # change (2 -> 3, same presence/confidence) must still reach storage, or a real
+    # headcount change would silently vanish from /api/history.
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    storage = Storage(":memory:")
+    app = create_app(
+        sources=[], storage=storage, hub=Hub(),
+        fusion=FusionEngine(weights={"camera": 1.0}), camera_store=CameraStore(":memory:"),
+    )
+    base = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _cam(ts, count):
+        return SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                            breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts, count=count)
+
+    async def drive():
+        await app.state.ingest(_cam(base.isoformat(), 2))
+        await app.state.ingest(_cam((base + timedelta(seconds=1)).isoformat(), 3))
+
+    asyncio.run(drive())
+    rows = [r for r in storage.recent(100) if r["room"] == "sala"]
+    assert len(rows) == 2
+    assert rows[0]["sources"][0]["count"] == 2
+    assert rows[1]["sources"][0]["count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Sensor nodes (design 2026-07-11) wiring: default-OFF, requires multidevice,
+# in-subnet-exempt data plane, loopback-root-only admin plane. Exercises the REAL
+# app.py wiring (create_app), not the minimal harness in test_api_nodes.py.
+# ---------------------------------------------------------------------------
+
+def _nodes_app(tmp_path, monkeypatch, multidevice="1", nodes="1"):
+    if multidevice is None:
+        monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
+    else:
+        monkeypatch.setenv("WAVR_MULTIDEVICE", multidevice)
+    if nodes is None:
+        monkeypatch.delenv("WAVR_NODES_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("WAVR_NODES_ENABLED", nodes)
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "nodes-app.db"))
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    return create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+
+
+def test_nodes_enabled_requires_multidevice(tmp_path, monkeypatch):
+    # Prerequisite validation (mirrors peers_enabled's fail-fast in test_peers.py):
+    # a node is a LAN device that needs multidevice's LAN bind + local TLS.
+    monkeypatch.setenv("WAVR_NODES_ENABLED", "1")
+    monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "x-nodes.db"))
+    with pytest.raises(RuntimeError, match="requires WAVR_MULTIDEVICE"):
+        create_app(sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+                   storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+
+
+def test_nodes_routes_absent_by_default():
+    # Default-OFF: with WAVR_NODES_ENABLED unset (conftest's autouse fixture clears
+    # it for every test), the node routers are never mounted -- GET/POST /api/nodes*
+    # must 404, byte-identical to today (before nodes existed at all), never some
+    # auth-branch response (403/401).
+    with build_client() as client:
+        assert client.get("/api/nodes").status_code == 404
+        assert client.post("/api/nodes/enroll", json={"code": "x"}).status_code == 404
+        assert client.post("/api/nodes/telemetry", json={"seq": 1}).status_code == 404
+        assert client.post("/api/nodes/heartbeat").status_code == 404
+        assert client.post("/api/nodes/reactivate", json={"press_count": 1}).status_code == 404
+
+
+def test_nodes_routes_absent_when_flag_off_but_multidevice_on(tmp_path, monkeypatch):
+    # Multidevice ON, nodes explicitly OFF -> still not mounted -> 404 (mirrors
+    # test_peer_routes_absent_when_flag_off in test_peers.py).
+    app = _nodes_app(tmp_path, monkeypatch, nodes="0")
+    with TestClient(app) as client:
+        assert client.get("/api/nodes", headers=LOCAL).status_code == 404
+
+
+def test_node_admin_route_reachable_by_real_authed_root_only(tmp_path, monkeypatch):
+    # Exercises the REAL app.py wiring (require_local + require_root), not the
+    # test's own stand-in dependency -- proves admin_deps was actually threaded
+    # through (the router fails CLOSED, 403-ing everything, if app.py forgot it --
+    # see api_nodes._admin_deps_not_wired).
+    app = _nodes_app(tmp_path, monkeypatch)
+    root = TestClient(app)
+    # Root WITHOUT the CSRF header still cannot reach it (require_local's rule).
+    assert root.get("/api/nodes").status_code == 403
+    # Root WITH the CSRF header: a real authed-root reaches the admin route.
+    ok = root.get("/api/nodes", headers=LOCAL)
+    assert ok.status_code == 200 and ok.json() == {"nodes": []}
+
+    # A non-root caller (unauthenticated, forged in-subnet LAN peer) cannot reach it
+    # at all -- denied by the loopback_or_authed middleware before require_root/
+    # require_local even run.
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    assert peer.get("/api/nodes", headers=LOCAL).status_code == 403
+
+
+def test_node_data_plane_reachable_in_subnet_without_device_token(tmp_path, monkeypatch):
+    # The data-plane exemption (middleware) + in-handler node-token self-auth: an
+    # in-subnet LAN caller with NO DeviceStore token can reach /api/nodes/enroll
+    # (same deliberately-unauthenticated onboarding surface as /api/pair), and a
+    # subsequent telemetry call authenticates on the NODE bearer token alone.
+    app = _nodes_app(tmp_path, monkeypatch)
+    root = TestClient(app)
+    code = root.post("/api/nodes/enroll-code", headers=LOCAL, json={
+        "name": "n", "sensor_type": "ld2450", "room": "kitchen"}).json()["code"]
+
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    r = peer.post("/api/nodes/enroll", json={"code": code})
+    assert r.status_code == 200
+    token = r.json()["token"]
+    r = peer.post("/api/nodes/telemetry", headers={"Authorization": f"Bearer {token}"},
+                  json={"seq": 1, "presence": True})
+    assert r.status_code == 200 and r.json()["accepted"] is True
+    # The admin plane stays out of reach for this same unauthenticated peer.
+    assert peer.get("/api/nodes", headers=LOCAL).status_code == 403

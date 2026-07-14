@@ -91,10 +91,14 @@ def can_view(role: str | None) -> bool:
 # that ever raises an HTTPException) is a thin wrapper around `has_scope` below.
 # --------------------------------------------------------------------------- #
 
-# The grantable scopes (design spec §1). `mcp` is named now but only ENFORCED
-# from Phase 4 (`/mcp` stays unscoped through P1-P3) -- it's already a member of
-# `central`'s default set below so a future P4 enforcement point is byte-
-# identical for every already-paired central.
+# The grantable scopes (design spec §1). `mcp` was named in Phase 1 but stayed
+# unenforced through P1-P3 (`/mcp` itself carried no scope check at all -- any
+# authenticated in-subnet role, including `user`, reached every read tool).
+# Phase-2A verify FIX 5 ENFORCES it for the first time, at `wavr.mcp_http`'s
+# `_McpHttpGuard` (Gate 1.5): `mcp` was already a member of `central`'s default
+# set below (and `agent`'s, further down) so this enforcement point is byte-
+# identical for every already-paired central/agent; only `user` (whose default
+# never carried `mcp`) is newly denied.
 SCOPES = frozenset({
     "presence:read", "presence:write", "network:read", "camera:view",
     "control", "admin", "mcp",
@@ -134,6 +138,16 @@ DEFAULT_SCOPES: dict[str, frozenset[str] | "_AllScopes"] = {
     "user": frozenset({
         "presence:read", "presence:write", "network:read", "camera:view",
     }),
+    # Phase 2A / B4: the AGENT principal type gets NOTHING but the `mcp` scope --
+    # now ROUTE-ENFORCED (Phase-2A verify FIX 5, wavr.mcp_http's Gate 1.5), so
+    # this is what actually lets an agent reach /mcp at all. An agent has no
+    # presence/network/camera/control/admin route access at all --
+    # every require_scope("...")-gated route (and require_authenticated's can_view/
+    # require_local's can_change_state fallback, since "agent" is absent from both
+    # role tuples in this module) denies it, so its ONLY reachable surface is /mcp
+    # itself, further bounded there by its per-tool allow-list (effective_tool_
+    # scopes below) -- "a bounded capability set, not the whole API" at BOTH layers.
+    "agent": frozenset({"mcp"}),
 }
 
 
@@ -188,3 +202,148 @@ def access_for(peer_host, host_subnet, bearer_token, device_store):
     if device is None:
         return None, None
     return device.role, effective_scopes(device.role, device.scopes)
+
+
+# --------------------------------------------------------------------------- #
+# Wavr Pass (Phase 2A / B4) -- the AGENT principal type + per-tool MCP scopes.
+# A SEPARATE, finer-grained axis from SCOPES/DEFAULT_SCOPES above: those gate HTTP
+# ROUTES (has_scope/require_scope); this axis gates individual MCP TOOL NAMES for a
+# caller's `tools/call` over `/mcp` (enforced in mcp_http.py's `_McpHttpGuard`).
+# Deliberately a different vocabulary (tool names like "call_ha_service", not route
+# scopes like "control") so the two systems are never confused for each other, and
+# deliberately additive: this axis restricts ONLY the new 'agent' role -- every
+# pre-existing role (root/central/user) resolves it to None ("not restricted by
+# this axis at all"), so their behaviour calling /mcp is untouched by this feature.
+# --------------------------------------------------------------------------- #
+
+# Every MCP tool name a caller could ever be granted -- mirrors the @server.tool()
+# names registered in wavr.mcp.build_mcp_server. Kept here (not imported from
+# wavr.mcp) so auth.py stays free of the [mcp] extra's import chain, the same
+# discipline mcp.py itself uses for its own lazy SDK import.
+MCP_TOOL_NAMES = frozenset({
+    "list_rooms", "get_room_context", "get_house_map", "get_ha_entities",
+    "get_network_inventory", "get_alerts", "query_occupancy_history",
+    "get_house_status", "call_ha_service",
+})
+
+# Named tool-scope bundles an admin grants at pairing/promotion time (design brief
+# B4): READ-ONLY is every read tool, EXCLUDING the one write tool -- actuation is
+# opt-in, never in the default agent grant. ACTUATOR extends READ-ONLY with
+# call_ha_service, for an operator who explicitly wants an agent able to act
+# through Home Assistant -- that call is STILL separately gated by
+# WAVR_MCP_CONTROL + the HA service allowlist + the sensitive-domain refusal
+# inside call_ha_service itself (mcp.py); this bundle only decides whether the
+# CALL is reachable AT ALL for this caller, one gate among several.
+#
+# AGENT_READ_TOOL_SCOPE stays available as the name an admin grants EXPLICITLY
+# (via Device.tool_scopes) to widen an agent to every read tool -- it is no
+# longer the DEFAULT (see AGENT_DEFAULT_TOOL_SCOPE / DEFAULT_AGENT_TOOL_SCOPES
+# below, Phase-2A verify FIX 4).
+AGENT_READ_TOOL_SCOPE = MCP_TOOL_NAMES - {"call_ha_service"}
+AGENT_ACTUATOR_TOOL_SCOPE = MCP_TOOL_NAMES
+
+# Phase-2A verify FIX 4 (MEDIUM, least-privilege default): the DEFAULT agent grant
+# is COARSE, current-state-only -- current occupancy + the explainable room context
+# + the composed house-status verdict. It deliberately EXCLUDES every read tool
+# that leaks a household PII/tracking crown-jewel, even after the mcp.py-side
+# minimization (FIX 1/2/3) narrows each one's OWN field set:
+#   * query_occupancy_history -- a multi-week per-room timeline = "when is the
+#     house empty" (even clamped to 24h by FIX 2, still a live-presence signal a
+#     default cloud-relayed agent should not get for free).
+#   * get_network_inventory   -- a LAN device census (even minimized by FIX 1).
+#   * get_alerts               -- alert metadata (even minimized by FIX 3).
+#   * get_ha_entities          -- HA's OWN entity `friendly_name`, which often
+#     names a person or a specific device (see app.py's mcp-read Connectors
+#     disclosure: "HA entity list incl. entity names (which may name people/
+#     devices)") -- never minimized at all, so it stays out of the default too.
+#   * get_house_map            -- Phase-2B verify re-threat (MEDIUM): even
+#     mcp.py's own minimization (FIX C) only drops the floor/room/zone `name`
+#     label -- it still ships room `id` (which ENCODES the room name in every
+#     real house.json, e.g. "cozinha"/"quarto-1") plus the room's polygon
+#     GEOMETRY, i.e. the annotated floor plan. A cloud Q&A assistant does not
+#     need the floor plan to answer an occupancy question -- current occupancy
+#     via list_rooms/get_room_context/get_house_status is enough -- so this
+#     joins the crown-jewel set above, opt-in only.
+# Each of these five requires an EXPLICIT admin Device.tool_scopes grant to
+# reach -- exactly the same opt-in discipline call_ha_service already needs
+# (AGENT_ACTUATOR_TOOL_SCOPE). This matches the decision that a default
+# cloud-relayable agent gets current-occupancy only, not the history/inventory/
+# alerts/HA-entities/floor-plan crown jewels; an operator who wants more grants
+# AGENT_READ_TOOL_SCOPE (every read tool) or a hand-picked subset explicitly.
+AGENT_DEFAULT_TOOL_SCOPE = frozenset({
+    "list_rooms", "get_room_context", "get_house_status",
+})
+
+# Role -> default MCP tool-name allow-list (the tool-axis analog of DEFAULT_SCOPES).
+# Only 'agent' is restricted by this axis at all -- root/central/user calling /mcp
+# get every tool the TRANSPORT exposes (today: expose_control=False over HTTP, so
+# call_ha_service is absent for them regardless of any grant -- unchanged by this
+# feature) with no additional per-tool check, exactly as before. The sane default
+# for a newly agent-scoped device is the COARSE set above (Phase-2A verify FIX 4):
+# an operator must take a SEPARATE, explicit step (an explicit `Device.tool_scopes`
+# grant) to widen an agent to AGENT_READ_TOOL_SCOPE or AGENT_ACTUATOR_TOOL_SCOPE.
+DEFAULT_AGENT_TOOL_SCOPES: dict[str, frozenset[str]] = {
+    "agent": AGENT_DEFAULT_TOOL_SCOPE,
+}
+
+
+def effective_tool_scopes(role: str | None,
+                          explicit: frozenset[str] | None) -> frozenset[str] | None:
+    """The MCP tool-name allow-list in force for `role`, mirroring effective_scopes's
+    NULL-vs-explicit rule but for the tool-name axis. `explicit` is a device's own
+    stored `Device.tool_scopes`: non-None (even empty -- deny-all) wins outright;
+    NULL derives from `DEFAULT_AGENT_TOOL_SCOPES[role]`. Returns **None** for every
+    role this axis doesn't apply to (i.e. anything other than 'agent') so a caller
+    can tell "not restricted by this axis at all" (None) apart from "restricted to
+    nothing" (an explicit empty frozenset) -- mcp_http.py's gate treats these two
+    cases differently (None skips the per-tool check entirely; empty refuses every
+    tool call)."""
+    if role != "agent":
+        return None
+    if explicit is not None:
+        return explicit
+    return DEFAULT_AGENT_TOOL_SCOPES.get(role)
+
+
+def tool_call_allowed(tool_scopes: frozenset[str] | None, tool_name: str) -> bool:
+    """True iff `tool_name` may be called under `tool_scopes`. `tool_scopes is None`
+    means "this axis doesn't restrict the caller" (root/central/user, and any
+    future role this axis is never extended to) -> always True, i.e. unchanged
+    pre-existing behaviour. A frozenset (even empty) is a REAL allow-list ->
+    ordinary membership test, fails CLOSED for anything not explicitly listed."""
+    if tool_scopes is None:
+        return True
+    return tool_name in tool_scopes
+
+
+def access_for_scoped(peer_host, host_subnet, bearer_token, device_store):
+    """`access_for`'s three-way sibling: resolves the caller's MCP tool-name
+    allow-list (Phase 2A / B4) in the SAME one-verify pass, so app.py's middleware
+    needs only one `device_store.verify()` to populate `request.state.role`,
+    `.scopes`, AND `.tool_scopes`. Returns `(role, scopes, tool_scopes)` -- the
+    first two elements are computed IDENTICALLY to `access_for` for the same
+    inputs (byte-for-byte: same loopback/off-subnet/unknown-token/revoked-token
+    short circuits, same `effective_scopes` call); only the third element is new.
+    `tool_scopes` is **None** for every role except 'agent' (see
+    `effective_tool_scopes`), so root/central/user get `(role, scopes, None)` --
+    identical to how this axis simply didn't exist for them, the additive-only
+    proof for this feature.
+
+    `access_for` ITSELF IS UNCHANGED and remains the two-tuple its own tests
+    exercise (test_wavr_pass_scopes.py) -- this mirrors the exact precedent
+    `access_for` set over `authorize()`: a new function supersedes the old one at
+    app.py's ONE call site while the superseded function stays put, untouched,
+    for its own callers/tests."""
+    if peer_host in _LOOPBACK_HOSTS:
+        return "root", None, None
+    if not bearer_token:
+        return None, None, None
+    if not in_subnet(peer_host, host_subnet):
+        return None, None, None
+    device = device_store.verify(bearer_token)
+    if device is None:
+        return None, None, None
+    role = device.role
+    scopes = effective_scopes(role, device.scopes)
+    tool_scopes = effective_tool_scopes(role, device.tool_scopes)
+    return role, scopes, tool_scopes

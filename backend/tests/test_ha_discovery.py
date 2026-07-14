@@ -62,8 +62,14 @@ def test_all_expected_topics_and_count():
     for room in ROOMS:
         assert f"homeassistant/binary_sensor/wavr_{room}/config" in topics
         assert f"homeassistant/sensor/wavr_{room}_confidence/config" in topics
+        assert f"homeassistant/binary_sensor/wavr_{room}_intrusion/config" in topics
+        assert f"homeassistant/binary_sensor/wavr_{room}_routine_anomaly/config" in topics
     assert "homeassistant/binary_sensor/wavr_house/config" in topics
-    assert len(msgs) == len(ROOMS) * 2 + 1                       # 2 per room + house
+    assert "homeassistant/binary_sensor/wavr_house_intrusion/config" in topics
+    assert "homeassistant/sensor/wavr_house_status/config" in topics
+    # 4 per room (occupancy/confidence/intrusion/routine_anomaly) + 3 house-level
+    # (presence/intrusion/status) -- Build C4 added the intrusion/anomaly/status trio.
+    assert len(msgs) == len(ROOMS) * 4 + 3
 
 
 def test_everything_is_retained():
@@ -153,6 +159,67 @@ def test_room_with_wildcard_is_slugged_in_topic_and_object_id():
     assert cfg["name"] == "Kids#1 occupancy"     # human name keeps the raw room label
     for _, payload, _ in msgs:
         assert "#" not in json.loads(payload)["state_topic"]
+
+
+# ---- Build C4: intrusion / routine-anomaly / house-status discovery configs ----
+
+def test_per_room_intrusion_binary_sensor():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ROOMS)
+    cfg, retain = _payload(msgs, "homeassistant/binary_sensor/wavr_sala_intrusion/config")
+    assert retain is True
+    assert cfg["device_class"] == "safety"
+    assert cfg["state_topic"] == "wavr/watch/rooms/sala/intrusion"
+    assert cfg["payload_on"] == "ON" and cfg["payload_off"] == "OFF"
+    assert cfg["device"]["identifiers"] == ["wavr"]
+
+
+def test_per_room_routine_anomaly_binary_sensor():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ROOMS)
+    cfg, retain = _payload(msgs, "homeassistant/binary_sensor/wavr_quarto_routine_anomaly/config")
+    assert retain is True
+    assert cfg["device_class"] == "problem"
+    assert cfg["state_topic"] == "wavr/rooms/quarto/routine_anomaly"
+    assert cfg["payload_on"] == "ON" and cfg["payload_off"] == "OFF"
+
+
+def test_house_level_intrusion_binary_sensor_is_room_agnostic():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ROOMS)
+    cfg, retain = _payload(msgs, "homeassistant/binary_sensor/wavr_house_intrusion/config")
+    assert retain is True
+    assert cfg["device_class"] == "safety"
+    assert cfg["state_topic"] == "wavr/watch/house/intrusion"
+    for room in ROOMS:                              # never names a room
+        assert room not in cfg["state_topic"] and room not in cfg["name"]
+
+
+def test_house_status_sensor_shape():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ROOMS)
+    cfg, retain = _payload(msgs, "homeassistant/sensor/wavr_house_status/config")
+    assert retain is True
+    assert cfg["state_topic"] == "wavr/house/status"
+    assert cfg["value_template"] == "{{ value_json.status }}"
+    assert cfg["device_class"] == "enum"
+    assert set(cfg["options"]) == {"ok", "notice", "alert"}
+    assert cfg["json_attributes_topic"] == "wavr/house/status"
+    assert "reasons" in cfg["json_attributes_template"]
+    assert "score" in cfg["json_attributes_template"]
+
+
+def test_c4_entities_use_the_same_prefix():
+    msgs, publish = _record()
+    publish_ha_discovery(publish, ["sala"], prefix="casa")
+    intrusion, _ = _payload(msgs, "homeassistant/binary_sensor/wavr_sala_intrusion/config")
+    anomaly, _ = _payload(msgs, "homeassistant/binary_sensor/wavr_sala_routine_anomaly/config")
+    house_intr, _ = _payload(msgs, "homeassistant/binary_sensor/wavr_house_intrusion/config")
+    status, _ = _payload(msgs, "homeassistant/sensor/wavr_house_status/config")
+    assert intrusion["state_topic"] == "casa/watch/rooms/sala/intrusion"
+    assert anomaly["state_topic"] == "casa/rooms/sala/routine_anomaly"
+    assert house_intr["state_topic"] == "casa/watch/house/intrusion"
+    assert status["state_topic"] == "casa/house/status"
 
 
 def test_publisher_and_discovery_agree_on_slugged_state_topic():

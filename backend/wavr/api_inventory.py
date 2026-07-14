@@ -12,7 +12,13 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  fusion: `type_confidence` always; `make`,
                                  `model`, `os`, `hostname`, `open_ports`,
                                  `sources` only when populated. Every
-                                 pre-existing field is unchanged.
+                                 pre-existing field is unchanged. `display_name`
+                                 rides alongside `hostname` (only when
+                                 `hostname` is set): the router's DHCP
+                                 search-domain suffix stripped + separators
+                                 prettified (wavr.data.deviceclass.
+                                 display_hostname) -- what the Network tab
+                                 should render; `hostname` itself stays raw.
   * GET /api/alerts          -- rogue-device alerts (+ `type_confidence` +
                                  `kind: "rogue_device"`), merged chronologically
                                  with `dhcp_monitor`'s rogue/multiple-DHCP-server
@@ -20,7 +26,10 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  #7) and `gateway_monitor`'s gateway-identity
                                  change alerts (`kind: "gateway_identity"`,
                                  inventory feature #2) -- each omitted entirely (same as
-                                 before) when its monitor is None.
+                                 before) when its monitor is None. The merge/sort
+                                 itself lives in the module-level `merge_alerts()`
+                                 below (Build A10: also the network-layer input to
+                                 `wavr.house_status`, so the two never drift).
   * PUT /api/inventory/name  -- {mac, name} -> persists a friendly device name.
   * PUT /api/inventory/type  -- {mac, device_type} -> persists the user
                                  device-type pin (taxonomy value; null/"" to
@@ -37,7 +46,15 @@ dhcp_monitor=None)` returns a FastAPI APIRouter exposing:
                                  scan onward; known=false re-arms it (it
                                  alerts again if it resurfaces unknown). See
                                  `NetworkInventoryService.apply_known_change`.
-Both PUTs and the known POST are only registered when their store
+  * POST /api/inventory/known/bulk -- no body -> marks every device in the
+                                 CURRENT inventory snapshot that is currently
+                                 unknown as known (loops the same set_known +
+                                 apply_known_change pair as the single-device
+                                 route above). Returns `{marked: N}`. The
+                                 admin-initiated "Trust all N devices" bulk
+                                 action -- a one-shot snapshot, never an
+                                 auto-trust window.
+Both PUTs and the known POST(s) are only registered when their store
 (`device_meta`/`known_store` respectively) is given, and are gated by
 `name_deps` (the app's require_local CSRF guard), same rule as every other
 state-changing route.
@@ -49,11 +66,61 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException
 
+from wavr.data.deviceclass import display_hostname
 from wavr.device_meta import DeviceMeta, normalize_mac
 from wavr.netinventory_service import NetworkInventoryService
 
 
-def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
+def merge_alerts(service: NetworkInventoryService, *, dhcp_monitor=None,
+                 gateway_monitor=None, intrusion_log=None, fall_log=None,
+                 intrusion_house_loud: bool = False) -> list[dict]:
+    """The ONE merged, chronologically-sorted alert list every alert-consuming
+    surface reads: GET /api/alerts below, and (Build A10) `wavr.house_status`'s
+    network-layer input via app.py. Factored out so both call sites share
+    EXACTLY the same merge/omission rules -- never two copies that could drift.
+
+    Rogue-device sightings always carry "kind" (additive field -- every existing
+    consumer already only reads a subset of keys). Merged with the opt-in
+    rogue-DHCP-server alerts (collectors-lote2 #7), the opt-in gateway-identity
+    change alerts (inventory feature #2, `kind: "gateway_identity"`), Watch/Guard
+    intrusion alerts (`kind: "intrusion"`, severity "alert", room-level +
+    count-only -- never a target position or identity), and A9's fall/no-motion
+    suspicion alerts (`kind: "fall_suspected"`, severity "alert", room + duration
+    only, RESEARCH-GRADE per ADR-0003 -- see wavr.fall_detect) -- each source
+    omitted entirely (unchanged shape) when its monitor/log is None, same rule
+    as before.
+
+    The house-LEVEL intrusion alert (room=None, the sum-of-per-room aggregate) is
+    INFORMATIONAL by default: it double-counts a person in a doorway seen by two
+    rooms, so it does NOT ride this loud /api/alerts path unless
+    `intrusion_house_loud` (WAVR_WATCH_INTRUSION_LOUD) is on. It stays surfaced in
+    /api/watch, /api/house-status and the C4 HA house-level binary_sensor
+    regardless. The per-room intrusion signal (room set, more reliable, less
+    double-count) is ALWAYS emitted here -- unchanged."""
+    merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
+    if dhcp_monitor is not None:
+        merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
+    if gateway_monitor is not None:
+        merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
+    if intrusion_log is not None:
+        for a in intrusion_log.recent_alerts():
+            d = a.to_dict()
+            # House-level aggregate (room=None) is INFORMATIONAL by default: it double-
+            # counts a person in a doorway seen by two rooms, so its false-positive risk
+            # means it must NOT ride the loud /api/alerts notify path unless
+            # WAVR_WATCH_INTRUSION_LOUD is on. It stays visible in /api/watch,
+            # /api/house-status and the C4 HA house-level binary_sensor regardless. The
+            # per-room signal (room set, more reliable) is ALWAYS emitted -- unchanged.
+            if d.get("room") is None and not intrusion_house_loud:
+                continue
+            merged.append(d)
+    if fall_log is not None:
+        merged += [a.to_dict() for a in fall_log.recent_alerts()]
+    merged.sort(key=lambda a: a["ts"])
+    return merged
+
+
+def _device_view(d, meta: dict | None = None) -> dict:
     """Trim a Device to the fields the dashboard needs, merged with persisted
     metadata. `risks`/`open_ports`/`make`/`model`/`os`/`hostname`/`sources`
     are included only when populated -- i.e. only when the opt-in port pass
@@ -63,7 +130,13 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     Device but never reached this view before. A persisted user type-pin
     overrides device_type immediately (even between scans). `is_gateway` is
     included only when True and `latency_ms` only when the opt-in ping pass
-    measured one (both additive -- every existing field unchanged)."""
+    measured one (both additive -- every existing field unchanged).
+
+    `meta` is THIS device's already-looked-up {name, first_seen, last_seen,
+    device_type} dict (or None) -- the caller (`inventory_view`) fetches
+    every device's metadata in one batched `DeviceMeta.get_many()` call
+    instead of this function querying the store itself per device (that was
+    the N+1: one SELECT per device on GET /api/inventory, polled every 15s)."""
     view = {
         "mac": d.mac,
         "ip": d.ip,
@@ -84,13 +157,20 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
         view["os"] = d.os
     if d.hostname:
         view["hostname"] = d.hostname
+        # `display_name` is a DERIVED cleanup of `hostname` for the Network-tab
+        # label only (strips the router's DHCP search-domain suffix, prettifies
+        # separators) -- the raw `hostname` above is left untouched so anything
+        # keyed on the full string (wavr.data.deviceclass.hostname_type et al.)
+        # keeps seeing it. Omitted (not just None) when nothing survives cleanup.
+        cleaned = display_hostname(d.hostname)
+        if cleaned:
+            view["display_name"] = cleaned
     if d.sources:
         view["sources"] = [dict(s) for s in d.sources]
     if d.is_gateway:
         view["is_gateway"] = True
     if d.latency_ms is not None:
         view["latency_ms"] = d.latency_ms
-    meta = device_meta.get(d.mac) if device_meta else None
     view["name"] = meta["name"] if meta else None
     view["first_seen"] = meta["first_seen"] if meta else None
     view["last_seen"] = meta["last_seen"] if meta else None
@@ -103,33 +183,40 @@ def _device_view(d, device_meta: DeviceMeta | None = None) -> dict:
     return view
 
 
+def inventory_view(service: NetworkInventoryService,
+                   device_meta: DeviceMeta | None = None) -> list[dict]:
+    """The SAME per-device view GET /api/inventory returns -- factored out (mirrors
+    merge_alerts's one-function-many-callers precedent) so the MCP
+    get_network_inventory tool (wavr.mcp, via app.py's closure) and this route can
+    never drift. Reads whatever `service`'s already-scanned/cached inventory
+    currently holds -- NEVER triggers a rescan.
+
+    Metadata is fetched for every device in ONE batched `device_meta.get_many()`
+    call rather than one `get()` per device (N+1 fix: GET /api/inventory is
+    polled every 15s by the dashboard)."""
+    devices = service.latest_inventory()
+    meta_by_mac = device_meta.get_many(d.mac for d in devices) if device_meta else {}
+    return [_device_view(d, meta_by_mac.get(d.mac)) for d in devices]
+
+
 def build_inventory_router(service: NetworkInventoryService,
                             device_meta: DeviceMeta | None = None,
                             name_deps=None, dhcp_monitor=None,
-                            gateway_monitor=None, known_store=None) -> APIRouter:
+                            gateway_monitor=None, known_store=None,
+                            intrusion_log=None, fall_log=None,
+                            intrusion_house_loud=False) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/inventory")
     async def inventory():
-        return {"devices": [_device_view(d, device_meta) for d in service.latest_inventory()]}
+        return {"devices": inventory_view(service, device_meta)}
 
     @router.get("/api/alerts")
     async def alerts():
-        # Rogue-device sightings always carry "kind" (additive field -- every
-        # existing consumer already only reads a subset of keys). Merged with
-        # the opt-in rogue-DHCP-server alerts (collectors-lote2 #7), oldest
-        # first (same ordering `recent_alerts()` already returns), when a
-        # monitor is wired in; omitted entirely (unchanged shape) otherwise.
-        merged = [{"kind": "rogue_device", **a.to_dict()} for a in service.recent_alerts()]
-        if dhcp_monitor is not None:
-            merged += [a.to_dict() for a in dhcp_monitor.recent_alerts()]
-        # Gateway-identity change alerts (gateway-identity-rogue-dhcp, the inventory roadmap
-        # #2), `kind: "gateway_identity"`; omitted entirely when no monitor is
-        # wired in (unchanged shape), same rule as the dhcp merge above.
-        if gateway_monitor is not None:
-            merged += [a.to_dict() for a in gateway_monitor.recent_alerts()]
-        merged.sort(key=lambda a: a["ts"])
-        return {"alerts": merged}
+        return {"alerts": merge_alerts(service, dhcp_monitor=dhcp_monitor,
+                                       gateway_monitor=gateway_monitor,
+                                       intrusion_log=intrusion_log, fall_log=fall_log,
+                                       intrusion_house_loud=intrusion_house_loud)}
 
     if device_meta is not None:
         @router.put("/api/inventory/name", dependencies=list(name_deps or []))
@@ -170,5 +257,21 @@ def build_inventory_router(service: NetworkInventoryService,
             # already makes it authoritative for the NEXT scan regardless.
             service.apply_known_change(mac_norm, known)
             return entry
+
+        @router.post("/api/inventory/known/bulk", dependencies=list(name_deps or []))
+        async def mark_all_known():
+            # Admin-initiated bulk trust: "Trust all N devices" for the CURRENT
+            # inventory snapshot only -- never an auto-trust window. Same CSRF
+            # gate (name_deps) as the single-device route above. BATCHED (scale
+            # audit): one `set_known_many` (single sqlite commit/fsync) + one
+            # `apply_known_change_many` (single O(n) inventory rebuild) instead of
+            # the old per-device loop, which was O(n*U) rebuilds + a commit-per-
+            # device fsync storm that froze the server for seconds on a large LAN.
+            unknown = [d.mac for d in service.latest_inventory() if not d.known]
+            if not unknown:
+                return {"marked": 0}
+            known_store.set_known_many(unknown, True)
+            service.apply_known_change_many(unknown, True)
+            return {"marked": len(unknown)}
 
     return router

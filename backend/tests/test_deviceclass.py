@@ -9,6 +9,7 @@ from wavr.data.deviceclass import (
     CONFIDENCE_LEVELS,
     DEVICE_TYPES,
     HOSTNAME_PATTERNS,
+    display_hostname,
     hostname_type,
 )
 from wavr.data.oui import MOBILE_HEAVY_VENDORS, OUI_VENDORS, VENDOR_DEFAULT_TYPE
@@ -70,3 +71,31 @@ def test_hostname_regex_scopes_ambiguous_words():
     assert hostname_type("motv-something") is None
     # \bcam\b must not fire inside a name like "camila"
     assert hostname_type("camila-pc-") == "desktop"
+
+
+# ---- display_hostname: Network-tab label cleanup (derived, non-mutating) ------
+
+def test_display_hostname_strips_router_dhcp_search_domain_suffix():
+    # the real example: Vodafone Ultrahub appends its own search domain to
+    # every PTR answer -- pure router noise, never part of the device's name.
+    assert display_hostname("Xiaomi-12T-Pto.vodafone.ultrahub") == "Xiaomi 12T Pto"
+    assert display_hostname("amazon-abc.lan") == "Amazon Abc"
+
+
+def test_display_hostname_preserves_mixed_case_and_digit_model_tokens():
+    # "12T"/"8Gen1"/"C210" carry real model info -- never lowercased or split;
+    # a token that's already mixed-case (e.g. "Pto") is left exactly as-is too.
+    assert display_hostname("Pixel-8Gen1-Pro") == "Pixel 8Gen1 Pro"
+    assert display_hostname("Tapo-C210") == "Tapo C210"
+
+
+def test_display_hostname_dotless_hostname_is_unchanged():
+    # no dot to strip, no separators to collapse, and the token is already
+    # mixed-case (not a "plain word") so nothing gets re-cased either.
+    assert display_hostname("iPhone") == "iPhone"
+
+
+def test_display_hostname_empty_or_missing_is_none():
+    assert display_hostname(None) is None
+    assert display_hostname("") is None
+    assert display_hostname("   ") is None
