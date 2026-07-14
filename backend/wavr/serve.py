@@ -13,12 +13,24 @@ Two modes, decided by `WAVR_MULTIDEVICE`:
     plaintext (closes audit H2).
 
 Port comes from `WAVR_PORT` (default 8000).
+
+F1 (appsec re-audit, 2026-07): this module is NOT the one place a listening uvicorn
+socket opens -- the Dockerfile/docker-compose/scripts/wavr.ps1 all launch
+`uvicorn wavr.app:app` DIRECTLY, bypassing this launcher entirely (that used to be
+this module's own claim, and it was false). The global request-body-size cap
+(`MaxBodySizeMiddleware`) is therefore now applied in `wavr.app`, wrapping the
+MODULE-LEVEL `app` singleton itself, so every entry point -- this launcher included
+-- carries it by construction. `main()` below re-reads `WAVR_MAX_BODY_BYTES` at call
+time and updates that SAME instance's `_max_bytes` in place (never re-wraps), so a
+same-process env override still takes effect without a double-wrapped ASGI chain.
 """
 from __future__ import annotations
 
+import os
+
 import uvicorn
 
-from wavr.app import app
+from wavr.app import DEFAULT_MAX_BODY_BYTES, MaxBodySizeMiddleware, app
 from wavr.config import load_config
 
 
@@ -42,6 +54,15 @@ def main() -> None:
             "torch/ultralytics main-thread warm-up failed; camera detection may be unavailable",
             exc_info=True,
         )
+    # `app` (imported from wavr.app) is ALREADY wrapped in MaxBodySizeMiddleware at
+    # module level (F1) -- re-wrapping it here would double-apply the guard (harmless
+    # functionally, since an over-cap request would just be rejected by the outer
+    # layer before the inner one ever saw it, but two ASGI hops for every request for
+    # no benefit). Instead, re-read the env var at call time and update the SAME
+    # instance's `_max_bytes` in place, preserving WAVR_MAX_BODY_BYTES's late-binding
+    # configurability (e.g. a test that sets the env var right before calling main()).
+    bound_app = app
+    bound_app._max_bytes = int(os.getenv("WAVR_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES)))
     if cfg.multidevice:
         # LAN mode: HTTPS/WSS with a local cert. tls + cryptography are imported
         # ONLY here, so the default (off) path never needs the [tls] extra.
@@ -51,7 +72,7 @@ def main() -> None:
         local_ip = _local_ipv4() or "127.0.0.1"
         cert_file, key_file = ensure_cert(cfg.tls_cert, cfg.tls_key, local_ip)
         uvicorn.run(
-            app,
+            bound_app,
             host=cfg.bind_host,
             port=cfg.port,
             ssl_certfile=cert_file,
@@ -59,7 +80,7 @@ def main() -> None:
         )
     else:
         # Default: loopback-only plain HTTP, byte-identical to today.
-        uvicorn.run(app, host="127.0.0.1", port=cfg.port)
+        uvicorn.run(bound_app, host="127.0.0.1", port=cfg.port)
 
 
 if __name__ == "__main__":

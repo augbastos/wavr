@@ -114,6 +114,15 @@ class MainActivity : FragmentActivity() {
     /** True when the current main-frame navigation failed (so we keep retrying). */
     private var pageHadError = false
 
+    /**
+     * Host of the page currently loaded in the WebView, tracked on the main
+     * thread from the [WebViewClient] callbacks. The native bridge reads this to
+     * origin-gate every method — WebView.getUrl() can only be called on the UI
+     * thread, but the JavaBridge worker thread cannot, so we mirror it here.
+     * Null until the first navigation starts.
+     */
+    @Volatile private var currentHost: String? = null
+
     /** On-device camera -> loopback MJPEG source. Off by default. */
     private lateinit var cameraStreamer: CameraMjpegStreamer
 
@@ -205,6 +214,22 @@ class MainActivity : FragmentActivity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 pageHadError = false
+                // Mirror the loaded host for the native bridge's origin gate.
+                currentHost = url?.let { Uri.parse(it).host }
+            }
+
+            /**
+             * Keep the kiosk pinned to the trusted loopback Core. Any attempt to
+             * navigate the main WebView to a different host is refused, so a
+             * nav-away bug can never load a foreign page that could then reach
+             * the biometric / camera bridge. Returning true = "handled" (we do
+             * NOT load it); false = let the WebView load the trusted URL.
+             */
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                return !isTrustedHost(request?.url?.host)
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -488,6 +513,22 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Trusted-origin gate (shared by the WebViewClient + the native bridge)
+    // ---------------------------------------------------------------------
+
+    /** The self-signed loopback Core is the ONLY origin we trust. */
+    private fun isTrustedHost(host: String?): Boolean =
+        host == "localhost" || host == "127.0.0.1"
+
+    /**
+     * True iff the WebView is currently sitting on the trusted loopback Core
+     * origin. The native bridge calls this before every method so a page loaded
+     * on any other host (a nav-away bug) can never reach biometric or camera
+     * control.
+     */
+    private fun onTrustedOrigin(): Boolean = isTrustedHost(currentHost)
+
     // =====================================================================
     // Native bridge exposed to the Core panel as window.WavrNative
     // =====================================================================
@@ -509,11 +550,12 @@ class MainActivity : FragmentActivity() {
          * Never throws into JS; returns a safe fallback on any failure.
          */
         @JavascriptInterface
-        fun getSystemStatus(): String = readSystemStatus()
+        fun getSystemStatus(): String =
+            if (onTrustedOrigin()) readSystemStatus() else STATUS_FALLBACK
 
         /** True iff a strong biometric OR device credential is available+enrolled. */
         @JavascriptInterface
-        fun hasBiometric(): Boolean = isBiometricAvailable()
+        fun hasBiometric(): Boolean = onTrustedOrigin() && isBiometricAvailable()
 
         /**
          * Fire the system biometric/credential prompt. Returns immediately; the
@@ -522,6 +564,7 @@ class MainActivity : FragmentActivity() {
          */
         @JavascriptInterface
         fun requestAuth(title: String) {
+            if (!onTrustedOrigin()) return
             runOnUiThread {
                 try {
                     startBiometricPrompt(title)
@@ -543,6 +586,7 @@ class MainActivity : FragmentActivity() {
          */
         @JavascriptInterface
         fun setCamera(on: Boolean) {
+            if (!onTrustedOrigin()) return
             try {
                 cameraStreamer.setEnabled(on)
             } catch (t: Throwable) {
@@ -553,7 +597,9 @@ class MainActivity : FragmentActivity() {
         /** `{"on":Boolean,"lens":"back|front","port":8081[,"reason":"..."]}`. */
         @JavascriptInterface
         fun getCameraState(): String = try {
-            cameraStreamer.state()
+            if (!onTrustedOrigin())
+                "{\"on\":false,\"lens\":\"back\",\"port\":8081,\"reason\":\"error\"}"
+            else cameraStreamer.state()
         } catch (t: Throwable) {
             "{\"on\":false,\"lens\":\"back\",\"port\":8081,\"reason\":\"error\"}"
         }
@@ -561,6 +607,7 @@ class MainActivity : FragmentActivity() {
         /** Select the lens: "back" (default) or "front". Rebinds live if on. */
         @JavascriptInterface
         fun setCameraLens(lens: String) {
+            if (!onTrustedOrigin()) return
             try {
                 cameraStreamer.setLens(lens)
             } catch (t: Throwable) {
@@ -580,6 +627,8 @@ class MainActivity : FragmentActivity() {
          */
         @JavascriptInterface
         fun getDiscoveryState(): String = try {
+            if (!onTrustedOrigin())
+                return "{\"advertising\":false,\"serviceName\":\"$NSD_SERVICE_NAME\",\"type\":\"$NSD_TYPE_LABEL\"}"
             JSONObject().apply {
                 put("advertising", advertising)
                 put("serviceName", advertisedName)

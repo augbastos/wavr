@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
+from contextlib import suppress
 from datetime import datetime, timezone
 
 from wavr.data.deviceclass import DEVICE_TYPES
@@ -87,11 +89,36 @@ class DeviceMeta:
     call after that, without touching a previously-set name or pin.
     `set_name`/`set_type` are the only writes reachable from the HTTP API and
     never touch first_seen/last_seen. All are plain upserts so callers don't
-    need to pre-check existence."""
+    need to pre-check existence.
+
+    `seen_many`/`get_many` are the BATCH forms of `seen`/`get`: one sqlite
+    round-trip for many MACs instead of one per MAC. `get_many` is what GET
+    /api/inventory (polled every 15s) uses to avoid an N+1 SELECT-per-device;
+    `seen_many` is what the scan loop uses so one scan cycle is one commit,
+    not one per observed device (matters for SD-card write-wear on the G9).
+
+    All connection access is guarded by a lock (mirrors wavr.storage.Storage)
+    so `seen_many` can be driven from a thread pool (`asyncio.to_thread`,
+    keeping a slow disk off the event loop) without racing a same-loop
+    `get`/`set_name`/`set_type` call on the same connection."""
 
     def __init__(self, path: str = "wavr.db"):
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
+        # WAL + synchronous=NORMAL (same tuning as wavr.storage.Storage):
+        # commits no longer fsync the main db file on every write, only at
+        # WAL-checkpoint boundaries -- fewer/smaller flushes, which is the
+        # SD-card-wear/latency win on the G9. This trades "the last commit or
+        # two survives a power-cut" for throughput; acceptable here because
+        # device_meta is entirely re-derivable from the next scan (first_seen
+        # is the only thing a lost commit could set back, and only by one
+        # scan interval) -- never the source of truth for anything live.
+        # :memory: databases (used throughout the test suite) don't support
+        # WAL; suppressed the same way Storage already does.
+        with suppress(sqlite3.OperationalError):
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._conn.commit()
@@ -107,26 +134,56 @@ class DeviceMeta:
     def seen(self, mac: str) -> None:
         mac = normalize_mac(mac)
         now = _now()
-        self._conn.execute(
-            """INSERT INTO device_meta (mac, name, first_seen, last_seen)
-               VALUES (?, NULL, ?, ?)
-               ON CONFLICT(mac) DO UPDATE SET
-                   first_seen = COALESCE(device_meta.first_seen, excluded.first_seen),
-                   last_seen  = excluded.last_seen""",
-            (mac, now, now),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO device_meta (mac, name, first_seen, last_seen)
+                   VALUES (?, NULL, ?, ?)
+                   ON CONFLICT(mac) DO UPDATE SET
+                       first_seen = COALESCE(device_meta.first_seen, excluded.first_seen),
+                       last_seen  = excluded.last_seen""",
+                (mac, now, now),
+            )
+            self._conn.commit()
+
+    def seen_many(self, macs) -> None:
+        """Batch form of `seen()`: every MAC in `macs` upserted in ONE sqlite
+        transaction (one commit for the whole scan cycle instead of one per
+        device). Same per-MAC semantics as calling `seen()` once each
+        (first_seen set only the first time, last_seen always bumped) --
+        every MAC in this call shares the single timestamp taken at call
+        time. Malformed MACs are skipped rather than raising: this is fed
+        Device.mac values already produced by the scan pipeline, not raw
+        user input, and one bad entry must not drop the rest of the batch."""
+        now = _now()
+        norm = []
+        for mac in macs:
+            with suppress(ValueError):
+                norm.append(normalize_mac(mac))
+        if not norm:
+            return
+        norm = list(dict.fromkeys(norm))   # de-dupe, preserve order
+        with self._lock:
+            self._conn.executemany(
+                """INSERT INTO device_meta (mac, name, first_seen, last_seen)
+                   VALUES (?, NULL, ?, ?)
+                   ON CONFLICT(mac) DO UPDATE SET
+                       first_seen = COALESCE(device_meta.first_seen, excluded.first_seen),
+                       last_seen  = excluded.last_seen""",
+                [(mac, now, now) for mac in norm],
+            )
+            self._conn.commit()
 
     def set_name(self, mac: str, name: str) -> dict:
         mac = normalize_mac(mac)
         clean = sanitize_name(name)
-        self._conn.execute(
-            """INSERT INTO device_meta (mac, name, first_seen, last_seen)
-               VALUES (?, ?, NULL, NULL)
-               ON CONFLICT(mac) DO UPDATE SET name = excluded.name""",
-            (mac, clean),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO device_meta (mac, name, first_seen, last_seen)
+                   VALUES (?, ?, NULL, NULL)
+                   ON CONFLICT(mac) DO UPDATE SET name = excluded.name""",
+                (mac, clean),
+            )
+            self._conn.commit()
         return self.get(mac)
 
     def set_type(self, mac: str, device_type) -> dict:
@@ -135,28 +192,57 @@ class DeviceMeta:
         ValueError on a malformed MAC or a value outside the taxonomy."""
         mac = normalize_mac(mac)
         clean = sanitize_device_type(device_type)
-        self._conn.execute(
-            """INSERT INTO device_meta (mac, device_type, first_seen, last_seen)
-               VALUES (?, ?, NULL, NULL)
-               ON CONFLICT(mac) DO UPDATE SET device_type = excluded.device_type""",
-            (mac, clean),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO device_meta (mac, device_type, first_seen, last_seen)
+                   VALUES (?, ?, NULL, NULL)
+                   ON CONFLICT(mac) DO UPDATE SET device_type = excluded.device_type""",
+                (mac, clean),
+            )
+            self._conn.commit()
         return self.get(mac)
 
     def get(self, mac: str) -> dict | None:
         mac = normalize_mac(mac)
-        r = self._conn.execute(
-            "SELECT mac, name, first_seen, last_seen, device_type"
-            " FROM device_meta WHERE mac = ?",
-            (mac,),
-        ).fetchone()
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT mac, name, first_seen, last_seen, device_type"
+                " FROM device_meta WHERE mac = ?",
+                (mac,),
+            ).fetchone()
         return dict(r) if r else None
 
+    def get_many(self, macs) -> dict:
+        """Batch form of `get()`: one `SELECT ... WHERE mac IN (...)` for every
+        MAC in `macs` instead of one round-trip per MAC (the N+1 GET
+        /api/inventory was doing, polled every 15s). Returns {mac: {name,
+        first_seen, last_seen, device_type}} -- MACs not found (or malformed)
+        are simply absent, same as `get()` returning None for them."""
+        norm = []
+        for mac in macs:
+            with suppress(ValueError):
+                norm.append(normalize_mac(mac))
+        if not norm:
+            return {}
+        norm = list(dict.fromkeys(norm))   # de-dupe
+        placeholders = ",".join("?" * len(norm))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT mac, name, first_seen, last_seen, device_type"
+                f" FROM device_meta WHERE mac IN ({placeholders})",
+                norm,
+            ).fetchall()
+        return {
+            r["mac"]: {"name": r["name"], "first_seen": r["first_seen"],
+                       "last_seen": r["last_seen"], "device_type": r["device_type"]}
+            for r in rows
+        }
+
     def all(self) -> dict:
-        rows = self._conn.execute(
-            "SELECT mac, name, first_seen, last_seen, device_type FROM device_meta"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT mac, name, first_seen, last_seen, device_type FROM device_meta"
+            ).fetchall()
         return {
             r["mac"]: {"name": r["name"], "first_seen": r["first_seen"],
                        "last_seen": r["last_seen"], "device_type": r["device_type"]}
@@ -166,9 +252,10 @@ class DeviceMeta:
     def type_pins(self) -> dict:
         """All user device-type pins as {mac: device_type} (pinned MACs only)
         -- the shape wavr.netinventory's `pins` parameter expects."""
-        rows = self._conn.execute(
-            "SELECT mac, device_type FROM device_meta WHERE device_type IS NOT NULL"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT mac, device_type FROM device_meta WHERE device_type IS NOT NULL"
+            ).fetchall()
         return {r["mac"]: r["device_type"] for r in rows}
 
     def close(self) -> None:

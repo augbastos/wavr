@@ -50,6 +50,11 @@ class SensingEvent:
     ts: str                  # ISO-8601 UTC (+00:00)
     targets: tuple = ()      # tuple[Target, ...] — new optional last field
     identities: tuple = ()   # tuple[Identity, ...] — house-level "who is home"
+    # Per-source person COUNT (additive). Only counting-capable modalities set it:
+    # camera (Detection.count) and mmwave (len(targets)). Presence-only sources
+    # (network/ble/wifi_csi/sim) leave it None = count-unknown, NEVER 0 -- a source
+    # that cannot count must never assert a number it lacks (honesty).
+    count: int | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)

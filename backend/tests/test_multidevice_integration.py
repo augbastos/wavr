@@ -71,6 +71,33 @@ def test_pair_code_returns_live_cert_fingerprint(tmp_path, monkeypatch):
     assert len(body["cert_fingerprint"].split(":")) == 32
 
 
+def test_pair_code_response_includes_matching_verify6(tmp_path, monkeypatch):
+    # Additive companion to the fingerprint assertion above: /api/pair-code also
+    # carries `verify6`, the convenience-tier 6-digit derived from THIS response's
+    # own cert_fingerprint + code (pinned derivation, wavr.tls.verification_code) --
+    # never removes cert_fingerprint, which stays the strong out-of-band anchor.
+    from wavr.tls import cert_fingerprint, ensure_cert, verification_code
+
+    cert = str(tmp_path / "cert.pem")
+    key = str(tmp_path / "key.pem")
+    ensure_cert(cert, key, "192.168.1.1")
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "verify6.db"))
+    monkeypatch.setenv("WAVR_TLS_CERT", cert)
+    monkeypatch.setenv("WAVR_TLS_KEY", key)
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    central = TestClient(app)
+    body = central.post("/api/pair-code", json={"role": "user"}, headers=CSRF).json()
+
+    assert body["verify6"] == verification_code(cert_fingerprint(cert), body["code"])
+    assert len(body["verify6"]) == 6 and body["verify6"].isdigit()
+    # Response shape stays additive: the pre-existing keys are untouched.
+    assert set(body.keys()) == {"code", "cert_fingerprint", "verify6"}
+
+
 def test_user_role_cannot_change_state(app):
     peer, auth = _pair(app, "user")
     assert peer.post("/api/system/toggle", json={"on": True}, headers=auth).status_code == 403

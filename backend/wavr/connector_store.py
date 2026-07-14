@@ -166,6 +166,26 @@ class ConnectorStore:
             return None
         return "on" if row["enabled"] == 1 else "off"
 
+    def egress_allowed(self) -> bool:
+        """system-toggles master gate: True unless the operator has explicitly
+        flipped the reserved `sys:egress` row OFF from the System tab. Absent row
+        (the default -- nobody has ever touched the toggle) => True => every
+        existing egress chokepoint keeps its own pre-existing gate as the sole
+        decider, byte-identical to before this feature shipped. This is a GATE
+        ONLY -- an ALLOW here never grants egress a feature wasn't already
+        configured to attempt; it can only ADD a block on top."""
+        row = self.get("sys:egress")
+        return row is None or row["enabled"] == 1
+
+    def sensing_allowed(self) -> bool:
+        """system-toggles master gate for the active/passive network-sensing
+        collectors (port scan, mDNS/SSDP/NetBIOS/SNMP/DHCP-fp, latency probe).
+        Same default-ALLOW/absent-row contract as `egress_allowed` -- see there.
+        The base zero-egress ARP inventory scan is NOT gated by this (it is core
+        LAN-read presence, not an optional collector)."""
+        row = self.get("sys:sensing")
+        return row is None or row["enabled"] == 1
+
     def effective_active(self, id: str, env_active: bool) -> bool:
         """Effective GATE for a built-in feature: the persisted admin override WINS when
         present (a deliberate, loopback-admin action), else the env flag decides. An

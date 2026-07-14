@@ -160,7 +160,10 @@ def test_apply_recognition_fills_hostname_from_bonjour_when_ptr_absent():
     dev = apply_recognition(_bare_device(), bonjour={"hostname": "Living-Room-HomePod"})
     assert dev.hostname == "Living-Room-HomePod"
     assert dev.device_type == "speaker"
-    assert dev.type_confidence == "high"
+    # FUSION-C: hostname is `self_report` family (spoofable, same threat model as
+    # bonjour/upnp/snmp/netbios) -- a LONE hostname now caps at "medium" like every
+    # sibling self-description, restored to "high" only by a 2nd agreeing family.
+    assert dev.type_confidence == "medium"
     assert dev.sources[0]["signal"] == "hostname"
 
 
@@ -205,11 +208,61 @@ def test_apply_recognition_randomized_mac_with_self_report_hostname_beats_phone_
     # heuristic (see test_build_inventory_shape_and_fields above). Once its
     # OWN mDNS-announced name is wired into Device.hostname, recog's
     # hostname_type() candidate (weight 0.65) outranks random_mac (weight
-    # 0.2) and classifies at high confidence instead.
+    # 0.2) and classifies as esp_dev instead of phone. Confidence is "medium"
+    # (FUSION-C: a lone self_report-family hostname caps at medium, same as
+    # bonjour/upnp/snmp/netbios -- random_mac disagrees on type, so no 2nd
+    # agreeing family is present here to bump it to high).
     dev = apply_recognition(_bare_device(mac="02:11:22:33:44:55"),
                             bonjour={"hostname": "esp32-kitchen-sensor"})
     assert dev.hostname == "esp32-kitchen-sensor"
     assert dev.device_type == "esp_dev"
+    assert dev.type_confidence == "medium"
+
+
+# ---- hostname-laundering security check: bare free-text self-report -------
+# _self_report_hostname (netinventory.py) launders a bare mDNS/SSDP/SNMP/
+# NetBIOS friendly-name into Device.hostname BEFORE recognize() runs, with no
+# `device_type` field required at all -- so a rogue LAN host broadcasting a
+# trusted-sounding name (e.g. impersonating security-camera equipment) still
+# produces a hostname_type() candidate purely from free text. These tests
+# confirm that candidate is exactly what FUSION-C (recog.py:213-219) already
+# caps: a LONE self_report-family signal, with no independent-family (e.g.
+# oui) corroboration, can never reach "high" -- only "medium". Not just the
+# DHCP/PTR-resolved-hostname path: mDNS and NetBIOS/NBSTAT free text alone.
+
+def test_apply_recognition_bonjour_freetext_name_with_no_device_type_caps_at_medium():
+    # Rogue impersonation via mDNS: no "device_type" key at all, just a
+    # spoofable free-text advertised name that happens to pattern-match a
+    # security-relevant device type.
+    dev = apply_recognition(_bare_device(vendor="unknown"),
+                            bonjour={"hostname": "hikvision-nvr-cam"})
+    assert dev.hostname == "hikvision-nvr-cam"
+    assert dev.device_type == "camera"
+    assert dev.type_confidence == "medium"   # MUST NOT reach "high" alone
+
+
+def test_apply_recognition_netbios_freetext_name_with_no_device_type_caps_at_medium():
+    # Same laundering path via NetBIOS/NBSTAT (UDP 137) instead of mDNS --
+    # netbios's `name` field is likewise bare free text with no
+    # `device_type`, and must not reach "high" alone either.
+    dev = apply_recognition(_bare_device(vendor="unknown"),
+                            netbios={"name": "hikvision-nvr-cam"})
+    assert dev.hostname == "hikvision-nvr-cam"
+    assert dev.device_type == "camera"
+    assert dev.type_confidence == "medium"   # MUST NOT reach "high" alone
+
+
+def test_apply_recognition_freetext_name_reaches_high_only_with_independent_oui_family():
+    # Contrast case, proving the cap is doing real work rather than just
+    # never firing: the SAME hostname text only crosses into "high" once a
+    # genuinely INDEPENDENT-family signal (oui, from the MAC's own resolved
+    # vendor) also agrees on "camera" -- 2 distinct evidence families
+    # (self_report + oui), not the self_report family twice. This is the one
+    # legitimate path to "high" that the two tests above confirm a bare
+    # free-text name cannot reach by itself.
+    dev = apply_recognition(_bare_device(vendor="Hikvision"),
+                            bonjour={"hostname": "hikvision-nvr-cam"})
+    assert dev.device_type == "camera"
     assert dev.type_confidence == "high"
 
 

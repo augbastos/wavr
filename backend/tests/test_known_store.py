@@ -255,3 +255,134 @@ def test_app_post_known_works_with_local_header():
                    json={"mac": "24:0a:c4:aa:bb:cc", "known": True})
     assert r.status_code == 200
     assert ks.is_known("24:0a:c4:aa:bb:cc") is True
+
+
+# ---- POST /api/inventory/known/bulk ("Trust all N devices") -------------------
+
+def test_bulk_marks_every_currently_unknown_device():
+    ks = KnownStore(":memory:")
+    svc = _service()   # WINDOWS_ARP: 1 allowlisted (gateway not counted -- see below), 2 unknown
+    asyncio.run(svc.scan_once())
+    unknown_before = [d.mac for d in svc.latest_inventory() if not d.known]
+    assert unknown_before   # sanity: fixture actually has unknown devices
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc, known_store=ks))
+    with TestClient(app) as c:
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 200
+    assert r.json() == {"marked": len(unknown_before)}
+    for mac in unknown_before:
+        assert ks.is_known(mac) is True
+    assert all(d.known for d in svc.latest_inventory())   # cache patched immediately
+
+
+def test_bulk_is_idempotent_second_call_marks_zero():
+    ks = KnownStore(":memory:")
+    svc = _service()
+    asyncio.run(svc.scan_once())
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc, known_store=ks))
+    with TestClient(app) as c:
+        c.post("/api/inventory/known/bulk")
+        r = c.post("/api/inventory/known/bulk")
+    assert r.json() == {"marked": 0}
+
+
+def test_bulk_drops_all_current_rogue_alerts():
+    ks = KnownStore(":memory:")
+    svc = _service()
+    asyncio.run(svc.scan_once())
+    assert svc.recent_alerts()   # sanity: unknown devices alerted
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc, known_store=ks))
+    with TestClient(app) as c:
+        c.post("/api/inventory/known/bulk")
+        alerts = c.get("/api/alerts").json()["alerts"]
+    assert alerts == []
+    assert svc.recent_alerts() == []
+
+
+def test_bulk_absent_without_known_store():
+    svc = _service()
+    asyncio.run(svc.scan_once())
+    app = FastAPI()
+    app.include_router(build_inventory_router(svc))   # no known_store
+    with TestClient(app) as c:
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 404
+
+
+def test_app_bulk_requires_local_header():
+    dm = DeviceMeta(":memory:")
+    ks = KnownStore(":memory:")
+    app = create_app(sources=[], camera_store=CameraStore(":memory:"),
+                     device_meta=dm, known_store=ks)
+    with TestClient(app) as c:                    # no X-Wavr-Local header
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 403
+
+
+def test_app_bulk_works_with_local_header():
+    dm = DeviceMeta(":memory:")
+    ks = KnownStore(":memory:")
+    app = create_app(sources=[], camera_store=CameraStore(":memory:"),
+                     device_meta=dm, known_store=ks)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        r = c.post("/api/inventory/known/bulk")
+    assert r.status_code == 200
+    assert "marked" in r.json()
+
+
+# ---- set_known_many / apply_known_change_many (batched scale fix) --------------
+
+def test_set_known_many_marks_all_in_one_call(tmp_path):
+    s = _store(tmp_path)
+    n = s.set_known_many(["24-0A-C4-AA-BB-CC", "de:ad:be:ef:00:01"], True)
+    assert n == 2
+    assert s.known_macs() == {"24:0a:c4:aa:bb:cc", "de:ad:be:ef:00:01"}
+
+
+def test_set_known_many_skips_invalid_mac_without_raising(tmp_path):
+    s = _store(tmp_path)
+    n = s.set_known_many(["24:0a:c4:aa:bb:cc", "not-a-mac"], True)
+    assert n == 1                                    # bad entry skipped, not fatal
+    assert s.known_macs() == {"24:0a:c4:aa:bb:cc"}
+
+
+def test_set_known_many_empty_is_noop(tmp_path):
+    s = _store(tmp_path)
+    assert s.set_known_many([], True) == 0
+    assert s.known_macs() == set()
+
+
+async def test_apply_known_change_many_clears_alerts_and_patches_cache():
+    svc = _service()
+    await svc.scan_once()
+    unknown = [d.mac for d in svc.latest_inventory() if not d.known]
+    assert len(unknown) >= 2                          # fixture has >1 unknown
+    svc.apply_known_change_many(unknown, True)
+    assert all(d.known for d in svc.latest_inventory())
+    assert svc.recent_alerts() == []
+
+
+# ---- trust-vs-scan race fix (audit MEDIUM) ------------------------------------
+
+async def test_trust_landing_during_in_flight_scan_does_not_realert():
+    """An operator trusting a device WHILE a scan is in flight must not have that
+    device re-alerted for a full cycle. Simulate the trust landing mid-scan by
+    mutating the known set inside the scan transport that scan_once awaits between
+    its start-of-scan and end-of-scan known-set reads."""
+    known: set[str] = set()
+    target = "24:0a:c4:aa:bb:cc"
+
+    async def _scan_then_trust() -> str:
+        # Stands in for POST /api/inventory/known landing during the await.
+        known.add(target)
+        return WINDOWS_ARP
+
+    svc = NetworkInventoryService(known_macs=KNOWN, scan=_scan_then_trust,
+                                  interval=0, known_provider=lambda: known)
+    await svc.scan_once()
+    by_mac = {d.mac: d for d in svc.latest_inventory()}
+    assert by_mac[target].known is True                        # fresh known set won
+    assert all(a.mac != target for a in svc.recent_alerts())   # never re-alerted

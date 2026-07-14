@@ -173,7 +173,8 @@ class NetworkInventoryService:
                  hostname_resolve_enabled: bool = False, hostname_resolver=None,
                  latency_enabled: bool = False, ping=None,
                  gateway_detect_enabled: bool = False, gateway_detector=None,
-                 gateway_monitor=None, ha_store=None, known_provider=None):
+                 gateway_monitor=None, ha_store=None, known_provider=None,
+                 sensing_allowed=None):
         self._known = _norm_macs(known_macs)
         # Runtime known-MAC provider (wavr.known_store.KnownStore.known_macs) --
         # see the class docstring; None -> unchanged, static-allowlist-only
@@ -255,14 +256,33 @@ class NetworkInventoryService:
                 "hosts outside the known-MAC allowlist; set "
                 "WAVR_NET_SNMP_SCOPE=known (the default) to avoid this"
             )
+        # system-toggles sensing master (feature "system-toggles"): an OPTIONAL
+        # () -> bool callable (app.py wires ConnectorStore.sensing_allowed, read
+        # fresh every scan -- same "no restart, revocable" contract as
+        # known_provider/ha_store above). None -> always on (today's default,
+        # byte-identical, and every test double that doesn't pass this kwarg).
+        self._sensing_allowed = sensing_allowed
         self._inventory: list[Device] = []
+        # ISO-8601 UTC of the most recent completed scan_once() (None before the
+        # first scan). Feeds net_doctor's inventory-freshness check; not
+        # otherwise consumed by this service.
+        self._last_scan_ts: str | None = None
         self._alerts: list[RogueAlert] = []
         self._alerted: set[str] = set()   # MACs already alerted (edge-triggered)
         self._task: asyncio.Task | None = None
 
+    def _sensing_on(self) -> bool:
+        """system-toggles sensing master: True (on) unless the operator has
+        explicitly blocked network sensing from the System tab. Gates the
+        OPTIONAL active/passive collectors only (port scan, mDNS/SSDP/NetBIOS/
+        SNMP/DHCP-fp, latency) -- never the base ARP inventory scan itself."""
+        return self._sensing_allowed is None or self._sensing_allowed()
+
     def _port_scan_on(self) -> bool:
-        """OFF unless explicitly overridden (tests) or WAVR_NET_PORTSCAN is set."""
-        return port_scan_enabled() if self._port_scan is None else self._port_scan
+        """OFF unless explicitly overridden (tests) or WAVR_NET_PORTSCAN is set --
+        AND the system-toggles sensing master is on (see `_sensing_on`)."""
+        base = port_scan_enabled() if self._port_scan is None else self._port_scan
+        return base and self._sensing_on()
 
     def _port_scan_known_only_on(self) -> bool:
         """OFF unless explicitly overridden (tests) or WAVR_NET_PORTSCAN_SCOPE=known."""
@@ -288,7 +308,8 @@ class NetworkInventoryService:
         into the rogue-alert log. Called by the background loop; also directly
         callable (deterministic) for tests."""
         pins = self._type_pins()
-        devices = await scan_inventory(known_macs=self._dynamic_known(), scan=self._scan,
+        known_at_start = self._dynamic_known()
+        devices = await scan_inventory(known_macs=known_at_start, scan=self._scan,
                                        pins=pins, resolve=self._make_hostname_resolver(),
                                        gateway=self._gateway_hook())
         if self._port_scan_on():
@@ -321,12 +342,29 @@ class NetworkInventoryService:
                 )
                 for d in devices
             ]
-        if self._latency_enabled:
+        # system-toggles sensing master: latency actively TCP-connects each host
+        # (like the port pass), so it is gated the same way -- see `_sensing_on`.
+        if self._latency_enabled and self._sensing_on():
             devices = await self._annotate_latency(devices)
+        # Trust-vs-scan race fix (audit MEDIUM): `known` on every Device here was
+        # resolved from `known_at_start`, snapshotted BEFORE the ~seconds of awaits
+        # above. If the operator hit POST /api/inventory/known ("Trust"/"Trust all")
+        # WHILE this scan was in flight, apply_known_change already patched the live
+        # _inventory/_alerts -- but writing `devices` (built from the stale set) to
+        # self._inventory below, then running _record_rogues on it, would clobber
+        # that patch and RE-ALERT the just-trusted device for one full ~30s cycle
+        # ("trust doesn't stick"). Re-derive from a FRESH read (the KnownStore is
+        # already authoritative) so both the cache and the rogue check agree with
+        # what the operator just did. Only pays the O(n) rebuild when a known-change
+        # actually landed mid-scan.
+        known_now = self._dynamic_known()
+        if known_now != known_at_start:
+            devices = [replace(d, known=(d.mac in known_now)) for d in devices]
         self._inventory = devices
+        self._last_scan_ts = datetime.now(timezone.utc).isoformat()
         self._observe_gateway(devices)
         self._record_rogues(devices)
-        self._record_seen(devices)
+        await self._record_seen(devices)
         return devices
 
     def _get_mdns(self):
@@ -452,6 +490,11 @@ class NetworkInventoryService:
         Tolerant: a collector raising is logged (never its arguments -- the
         SNMP community string in particular is never logged) and simply
         contributes nothing, never aborts the scan."""
+        # system-toggles sensing master: suppresses every passive/active protocol
+        # collector below when the operator has blocked sensing from the System
+        # tab -- checked before the per-collector enabled flags, see `_sensing_on`.
+        if not self._sensing_on():
+            return {}
         if not (self._mdns_enabled or self._ssdp_enabled or self._netbios_enabled
                 or self._snmp_enabled or self._dhcp_fp_enabled):
             return {}
@@ -556,17 +599,23 @@ class NetworkInventoryService:
             _LOG.warning("ha_store.signals failed", exc_info=True)
             return {}
 
-    def _record_seen(self, devices) -> None:
+    async def _record_seen(self, devices) -> None:
         # Feature A: persist first-seen/last-seen for every observed MAC, not
-        # just rogue ones. Tolerant, same rule as the on_rogue callback -- a
-        # persistence failure must never break scanning.
+        # just rogue ones. ONE batched call (DeviceMeta.seen_many -- one sqlite
+        # commit for the whole scan cycle instead of one seen()+commit per
+        # device) run via asyncio.to_thread so the synchronous sqlite write
+        # never blocks THIS event loop, even on a slow/busy disk. Tolerant,
+        # same rule as the on_rogue callback -- a persistence failure (raised
+        # either by the write itself, or by a store that predates seen_many()
+        # and doesn't have it) must never break scanning, even though nothing
+        # gets recorded that cycle in the latter case.
         if not self._device_meta:
             return
-        for d in devices:
-            try:
-                self._device_meta.seen(d.mac)
-            except Exception:
-                _LOG.warning("device_meta.seen failed for %s", d.mac, exc_info=True)
+        macs = [d.mac for d in devices]
+        try:
+            await asyncio.to_thread(self._device_meta.seen_many, macs)
+        except Exception:
+            _LOG.warning("device_meta.seen_many failed for %d MACs", len(macs), exc_info=True)
 
     def _record_rogues(self, devices) -> None:
         ts = datetime.now(timezone.utc).isoformat()
@@ -634,9 +683,32 @@ class NetworkInventoryService:
             for d in self._inventory
         ]
 
+    def apply_known_change_many(self, macs, known: bool) -> None:
+        """Batched `apply_known_change` for a whole set of MACs at once: ONE
+        O(n) inventory rebuild + ONE alert-list filter for the entire set,
+        instead of the per-MAC O(n) rebuild the single-device method does (which
+        the bulk "Trust all N" route called in a loop -> O(n*U), pathological at
+        airport scale). Same semantics as calling apply_known_change once per
+        MAC, just without re-walking the whole inventory U times."""
+        macset = {m.strip().replace("-", ":").lower() for m in macs}
+        if not macset:
+            return
+        self._alerted -= macset
+        if known:
+            self._alerts = [a for a in self._alerts if a.mac not in macset]
+        self._inventory = [
+            replace(d, known=known) if d.mac in macset else d
+            for d in self._inventory
+        ]
+
     def latest_inventory(self) -> list[Device]:
         """The devices from the most recent scan (empty before the first)."""
         return list(self._inventory)
+
+    def last_scan_ts(self) -> str | None:
+        """ISO-8601 UTC of the most recent completed scan, or None if no scan
+        has run yet since startup."""
+        return self._last_scan_ts
 
     def recent_alerts(self, limit: int = 50) -> list[RogueAlert]:
         """The most recent rogue-device alerts, newest last."""

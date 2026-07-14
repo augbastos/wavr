@@ -5,6 +5,23 @@ import urllib.request
 from typing import Callable
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Blocks HTTP redirects entirely (identical pattern to connectors/http.py's
+    _NoRedirect). Defence-in-depth: `_post_json` attaches
+    `Authorization: Bearer <OpenAI/Anthropic/… key>` and the default urllib
+    opener follows 3xx re-sending headers, so a redirect from a compromised
+    endpoint (or an operator-set malicious base_url) could forward the API key to
+    the redirect target. Returning None makes the redirect terminal -- no follow,
+    no header leaked -- matching the no-redirect discipline every other
+    credential-bearing egress path in this codebase uses."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def build_prompt(state: dict, history: list) -> str:
     """Build a natural-language-summary prompt from DERIVED occupancy only. Never
     include raw vitals numbers, source internals, frames, MACs, or RTSP URLs — the
@@ -44,7 +61,7 @@ def _post_json(url: str, payload: dict, headers: dict | None = None,
     if headers:
         hdrs.update(headers)
     req = urllib.request.Request(url, data=data, headers=hdrs, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:   # nosec B310 (fixed https/http LAN)
+    with _NO_REDIRECT_OPENER.open(req, timeout=timeout) as resp:   # nosec B310 (fixed https/http LAN, redirects blocked)
         return json.loads(resp.read().decode("utf-8"))
 
 

@@ -23,6 +23,12 @@ class Hub:
     def unsubscribe(self, q: asyncio.Queue) -> None:
         self._subscribers.discard(q)
 
+    def subscriber_count(self) -> int:
+        """Current live-view subscriber count -- a bare int, never the queues
+        themselves. Passive/zero-cost read used by GET /api/companion/health's
+        `ws_clients` self-report (no egress, no new state)."""
+        return len(self._subscribers)
+
     async def publish(self, item: dict) -> None:
         # Non-blocking: never await a slow consumer. On a full queue, drop the oldest
         # frame to make room for the newest (bounded memory, backpressure-free).

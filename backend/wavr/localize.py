@@ -28,7 +28,16 @@ A camera sits at C = (pos_x, pos_y, height); its optical axis has azimuth `yaw`
 
 ACCURACY (be honest -- the whole point):
   * HOMOGRAPHY (accurate): a 4+-point image<->floor calibration gives a projective
-    map good to a few cm for a fixed camera. `homography_from_points` + `apply_h`.
+    map good to a few cm for a fixed camera AT THE PIXEL SIZE IT WAS SOLVED AT --
+    `homography_from_points` + `apply_h`. Its confidence is a MEASURED quality
+    (`homography_reprojection_error` + `homography_quality`), not a flat constant --
+    honest only past 4 correspondences (exactly 4 points make DLT an exact
+    interpolant, so the residual is ~0 regardless of how well the points were marked;
+    the walk-to-calibrate wizard's centroid+corners already gives 5+ for any
+    quadrilateral room). `localize`/`make_localizer` also REJECT the homography path
+    (falling back to a mount prior if any) when the live frame's pixel size doesn't
+    match the size the calibration was solved at -- a resolution change silently
+    mislocates every projected point otherwise.
   * MONOCULAR (approximate estimate): feet pixel + a mount PRIOR (height/tilt/pos/yaw
     /fov) intersected with the floor plane. Zero extra marking, but only as good as
     the prior -- a wrong tilt or mount position mislocates by tens of cm. Labelled
@@ -59,6 +68,12 @@ import numpy as np
 # Positional-quality hints per method. These scale a positioned Target's OWN
 # confidence (display / per-person), never the room's fused confidence. Deliberately
 # conservative for the estimate path so an uncalibrated dot never reads as certain.
+# Q_HOMOGRAPHY is the FALLBACK default for a homography whose calibration-time
+# reprojection residual isn't known (a pre-migration calibration row, or a homography
+# handed to `localize`/`make_localizer` directly without going through
+# `homography_quality`) -- the normal path (PUT /api/cameras/{name}/calibration)
+# computes a REAL per-camera quality from `homography_reprojection_error` and passes
+# it as `homography_quality=`, which overrides this constant.
 Q_HOMOGRAPHY = 0.85
 Q_MONOCULAR = 0.45
 
@@ -112,7 +127,13 @@ class LocalizeResult:
 def _finite_point(p) -> bool:
     try:
         return len(p) == 2 and all(math.isfinite(float(c)) for c in p)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: float() on a raw huge-magnitude JSON int (e.g. a `10**400`-
+        # shaped literal -- json.loads decodes it as an arbitrary-precision Python int,
+        # not a float) can't be widened to a C double. Same class housemap._finite
+        # guards; a non-finite-by-construction coordinate is just not finite, not a
+        # crash -- callers (homography_from_points via PUT /api/cameras/{name}/
+        # calibration) already turn a False here into a clean ValueError -> 422.
         return False
 
 
@@ -145,7 +166,16 @@ def homography_from_points(image_pts, floor_pts) -> np.ndarray:
     a = np.asarray(rows, dtype=float)
     # SVD: the homography is the right-singular vector of the smallest singular value.
     _, s, vh = np.linalg.svd(a)
-    if s[0] == 0 or (s[-1] / s[0]) < _DEGENERATE_SVAL_RATIO:
+    # Degeneracy = rank-deficiency, NOT "the solution direction has a small singular
+    # value". For an over-determined set (5+ points -> 9 singular values) that HAS an
+    # exact/near-exact homography, the smallest singular value s[-1] IS ~0 -- it is the
+    # solution/residual direction (vh[-1]) -- so testing s[-1] falsely rejects a perfect
+    # correspondence set as "degenerate". Rank-deficiency (collinear/coincident) instead
+    # drives the SECOND-smallest singular value to zero too. With exactly 4 points
+    # (2N=8 rows -> 8 singular values) the solution is the un-scored 9th right-vector, so
+    # s[-1] is the correct conditioning measure there.
+    deg_sval = s[-2] if len(s) >= 9 else s[-1]
+    if s[0] == 0 or (deg_sval / s[0]) < _DEGENERATE_SVAL_RATIO:
         raise ValueError("degenerate correspondences (collinear/coincident)")
     h = vh[-1].reshape(3, 3)
     if h[2, 2] == 0 or not math.isfinite(h[2, 2]):
@@ -165,6 +195,48 @@ def apply_h(h: np.ndarray, u: float, v: float) -> tuple[float, float] | None:
     if not (math.isfinite(x) and math.isfinite(y)):
         return None
     return float(x), float(y)
+
+
+def homography_reprojection_error(h: np.ndarray, image_pts, floor_pts) -> float:
+    """RMS reprojection error, in FLOOR METRES, of homography `h` against the SAME
+    correspondences it was solved from: for each (image, floor) pair, project the
+    image point through `h` and measure the distance to the actual floor point. This
+    is the calibration's REAL accuracy measurement (feeds `homography_quality` below)
+    -- HONEST CAVEAT: with exactly 4 points DLT is an exact interpolant, so the
+    residual is ~0 (float noise only) no matter how well the 4 points were actually
+    marked; >4 points (the walk-to-calibrate wizard gives centroid+corners, 5+ for any
+    quadrilateral room) is what makes this a meaningful over-determined fit. Returns
+    math.inf for an empty input or if any correspondence projects to infinity
+    (`apply_h` -> None) -- a degenerate projection is the worst possible fit, never a
+    fabricated low number."""
+    sq_errs = []
+    for (u, v), (x, y) in zip(image_pts, floor_pts):
+        p = apply_h(h, u, v)
+        if p is None:
+            return math.inf
+        sq_errs.append((p[0] - float(x)) ** 2 + (p[1] - float(y)) ** 2)
+    if not sq_errs:
+        return math.inf
+    return math.sqrt(sum(sq_errs) / len(sq_errs))
+
+
+# A residual of 0m -> quality 1.0, halving every _QUALITY_HALF_LIFE_M of additional
+# RMS error. 10cm is still a solid calibration for room-scale placement (quality
+# ~0.5); 30-40cm (e.g. a badly-marked corner) drops below 0.15 -- the same order as
+# the monocular path's honest inaccuracy, not a magic number.
+_QUALITY_HALF_LIFE_M = 0.10
+
+
+def homography_quality(residual_m: float) -> float:
+    """Map a homography's RMS reprojection residual (metres, from
+    `homography_reprojection_error`) to a 0..1 quality score -- a REAL measurement of
+    THIS calibration, not the flat `Q_HOMOGRAPHY` constant. Exponential decay so 0
+    residual -> 1.0, halving every `_QUALITY_HALF_LIFE_M`. A non-finite or negative
+    residual (a degenerate/malformed fit) -> 0.0, the worst honest score, never a
+    fabricated number."""
+    if not math.isfinite(residual_m) or residual_m < 0:
+        return 0.0
+    return float(2.0 ** (-residual_m / _QUALITY_HALF_LIFE_M))
 
 
 # --------------------------------------------------------------------------- #
@@ -246,20 +318,50 @@ def to_room_local(floor_xy: tuple[float, float], poly) -> tuple[float, float]:
     return (floor_xy[0] - mx, floor_xy[1] - my)
 
 
+def _frame_size_matches(img_size, calib_size) -> bool:
+    """True when the CURRENT frame's pixel dimensions equal the size the homography
+    was solved at, or when no calibrated size is known (back-compat: a homography
+    handed to `localize`/`make_localizer` directly, e.g. by a test or a pre-migration
+    calibration row, carries no stored img_w/img_h). A homography is a projective map
+    tied to specific pixel coordinates -- applying it to a frame at a DIFFERENT
+    resolution (the stream's resolution changed, or the calibration was solved at a
+    different capture size) silently mislocates every projected point, so a KNOWN
+    mismatch means REJECT the homography path (the caller falls back to the mount
+    prior if any) rather than presenting a wrong point as precise."""
+    if calib_size is None or calib_size[0] is None or calib_size[1] is None:
+        return True
+    try:
+        iw, ih = float(img_size[0]), float(img_size[1])
+        cw, ch = float(calib_size[0]), float(calib_size[1])
+    except (TypeError, ValueError, IndexError):
+        return False
+    return iw == cw and ih == ch
+
+
 def localize(feet_px, img_size, *, homography: np.ndarray | None = None,
-             mount: MountPose | None = None) -> LocalizeResult | None:
+             mount: MountPose | None = None,
+             homography_img_size: tuple[float, float] | None = None,
+             homography_quality: float | None = None) -> LocalizeResult | None:
     """Feet pixel -> FLOOR point, preferring the accurate homography over the
     approximate monocular prior. Returns None if neither path yields a floor point
     (no calibration/mount, or the ray misses the floor). The caller converts to
     room-local via `to_room_local` before building a Target.
+
+    `homography_img_size` is the (img_w, img_h) the homography was CALIBRATED at
+    (CalibrationStore's stored size); when given and it doesn't match this call's
+    `img_size` (the LIVE frame's actual pixel size), the homography path is rejected
+    (falls back to `mount` if present) -- see `_frame_size_matches`. `homography_quality`
+    is a per-camera MEASURED quality (0..1, from `homography_reprojection_error` +
+    `homography_quality()`) that overrides the flat `Q_HOMOGRAPHY` default when given.
     """
     if not _finite_point(feet_px):
         return None
     u, v = float(feet_px[0]), float(feet_px[1])
-    if homography is not None:
+    if homography is not None and _frame_size_matches(img_size, homography_img_size):
         p = apply_h(homography, u, v)
         if p is not None:
-            return LocalizeResult(p[0], p[1], Q_HOMOGRAPHY, "homography")
+            q = Q_HOMOGRAPHY if homography_quality is None else float(homography_quality)
+            return LocalizeResult(p[0], p[1], q, "homography")
     if mount is not None:
         try:
             img_w, img_h = float(img_size[0]), float(img_size[1])
@@ -271,7 +373,9 @@ def localize(feet_px, img_size, *, homography: np.ndarray | None = None,
     return None
 
 
-def make_localizer(room_poly, *, homography=None, mount: MountPose | None = None):
+def make_localizer(room_poly, *, homography=None, mount: MountPose | None = None,
+                    calib_img_size: tuple | None = None,
+                    homography_quality: float | None = None):
     """Build a per-camera localizer closure the camera source can call without knowing
     any geometry: ``(feet_px, img_size) -> (x, y, confidence) | None`` in ROOM-LOCAL
     metres (the frame events.Target.x/y carries + the map renders).
@@ -281,7 +385,13 @@ def make_localizer(room_poly, *, homography=None, mount: MountPose | None = None
     3x3 array, or None; `mount` a MountPose or None. Returns None (not a localizer) when
     NEITHER a usable homography nor a mount is given -- so the camera stays room-centred
     (honest fallback), never a fabricated (0,0). The returned closure returns None for a
-    feet pixel whose ray misses the floor, so a bad detection yields no point."""
+    feet pixel whose ray misses the floor, so a bad detection yields no point.
+
+    `calib_img_size` is the (img_w, img_h) the homography was solved at (pass the
+    CalibrationStore row's stored size) -- every call's LIVE `img_size` is checked
+    against it, and the homography path is rejected (never silently mislocating) on a
+    mismatch. `homography_quality` is the per-camera MEASURED quality (0..1) computed
+    at calibration time; omit it to fall back to the flat `Q_HOMOGRAPHY` default."""
     h = None
     if homography is not None:
         arr = np.asarray(homography, dtype=float)
@@ -291,7 +401,9 @@ def make_localizer(room_poly, *, homography=None, mount: MountPose | None = None
         return None
 
     def _loc(feet_px, img_size):
-        res = localize(feet_px, img_size, homography=h, mount=mount)
+        res = localize(feet_px, img_size, homography=h, mount=mount,
+                       homography_img_size=calib_img_size,
+                       homography_quality=homography_quality)
         if res is None:
             return None
         rx, ry = to_room_local((res.x, res.y), room_poly)

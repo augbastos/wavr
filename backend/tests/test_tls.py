@@ -7,10 +7,20 @@ tests both drive generation and parse the result back to assert its shape.
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtensionOID, NameOID
 
-from wavr.tls import CERT_CN, cert_fingerprint, ensure_cert, resolved_cert_path
+from wavr.tls import (
+    CERT_CN,
+    cert_fingerprint,
+    ensure_cert,
+    fingerprint_from_pem,
+    format_fingerprint,
+    remote_cert_fingerprint,
+    resolved_cert_path,
+    verification_code,
+)
 
 LOCAL_IP = "192.168.1.5"
 
@@ -157,6 +167,17 @@ def test_cert_fingerprint_matches_cryptography_sha256(tmp_path):
     assert got.replace(":", "") == expected                 # same bytes browsers show
 
 
+def test_format_fingerprint_matches_fingerprint_from_pem(tmp_path):
+    # format_fingerprint (DER bytes -> str) is the shared formatting authority
+    # peer_client's live-socket check calls directly; it must agree byte-for-byte
+    # with fingerprint_from_pem's PEM-path output for the same certificate.
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    pem = open(cert_path, encoding="ascii").read()
+    der = _load_cert(cert_path).public_bytes(serialization.Encoding.DER)
+    assert format_fingerprint(der) == fingerprint_from_pem(pem)
+
+
 def test_cert_fingerprint_none_for_missing_file(tmp_path):
     assert cert_fingerprint(str(tmp_path / "does-not-exist.pem")) is None
 
@@ -187,3 +208,107 @@ def test_defaults_used_when_no_paths_given(tmp_path, monkeypatch):
     assert _load_cert(out_cert) is not None
     import os
     assert os.path.exists(out_key)
+
+
+# --------------------------------------------------------------------------- #
+# fingerprint_from_pem / remote_cert_fingerprint (Phase 1 peer-pairing, 2026-07-09).
+# A real self-signed cert is generated via `ensure_cert` (same as every other
+# test above) rather than hand-typing base64 PEM bytes.
+# --------------------------------------------------------------------------- #
+def _generated_pem(tmp_path) -> str:
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    with open(cert_path, encoding="ascii") as fh:
+        return fh.read()
+
+
+def test_fingerprint_from_pem_matches_cert_fingerprint_shape(tmp_path):
+    pem = _generated_pem(tmp_path)
+    fp = fingerprint_from_pem(pem)
+    assert fp is not None
+    assert len(fp) == 32 * 3 - 1  # 32 hex-pairs, colon-joined
+    assert fp == fp.upper()
+
+
+def test_fingerprint_from_pem_agrees_with_cert_fingerprint(tmp_path):
+    # Same bytes, read from disk vs passed as a PEM string -> identical fingerprint.
+    cert_path, key_path = _paths(tmp_path)
+    ensure_cert(cert_path, key_path, LOCAL_IP)
+    with open(cert_path, encoding="ascii") as fh:
+        pem = fh.read()
+    assert fingerprint_from_pem(pem) == cert_fingerprint(cert_path)
+
+
+def test_fingerprint_from_pem_none_on_garbage():
+    assert fingerprint_from_pem("not a cert") is None
+
+
+def test_remote_cert_fingerprint_uses_injected_fetch(tmp_path):
+    pem = _generated_pem(tmp_path)
+
+    def fake_fetch(host, port, timeout):
+        assert (host, port) == ("192.168.1.57", 8443)
+        return pem
+
+    fp = remote_cert_fingerprint("192.168.1.57", 8443, fetch=fake_fetch)
+    assert fp == fingerprint_from_pem(pem)
+
+
+def test_remote_cert_fingerprint_none_on_connect_failure():
+    def failing_fetch(host, port, timeout):
+        raise OSError("connection refused")
+    assert remote_cert_fingerprint("10.0.0.99", 8443, fetch=failing_fetch) is None
+
+
+# --------------------------------------------------------------------------- #
+# verification_code (convenience-tier 6-digit, pinned derivation 2026-07-13):
+# input = <fp_hex_lowercase_no_colons> + "|" + <pair_code>, SHA-256, first 4
+# bytes big-endian mod 1_000_000, zero-padded to 6 digits.
+# --------------------------------------------------------------------------- #
+def test_verification_code_is_six_digits():
+    code = verification_code("AB:CD:EF:00:11:22", "12345678")
+    assert len(code) == 6
+    assert code.isdigit()
+
+
+def test_verification_code_deterministic_for_fixed_inputs():
+    fp = "AB:CD:EF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB"
+    pair_code = "87654321"
+    assert verification_code(fp, pair_code) == verification_code(fp, pair_code)
+
+
+def test_verification_code_changes_when_pair_code_rotates():
+    fp = "AB:CD:EF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB"
+    codes = {verification_code(fp, f"{i:08d}") for i in range(20)}
+    # 20 distinct rotating pair-codes against the SAME fingerprint should not all
+    # collapse onto one 6-digit value (would indicate pair_code isn't mixed in).
+    assert len(codes) > 1
+
+
+def test_verification_code_matches_independent_rederivation():
+    # Re-derive the PINNED spec by hand (not by calling the function under test)
+    # to guard against the implementation silently drifting from the contract
+    # the shim (JS) must reproduce byte-for-byte.
+    import hashlib
+
+    fp_colon = "AB:CD:EF:00:11:22:33:44"
+    pair_code = "00112233"
+    normalized = "abcdef0011223344"
+    digest = hashlib.sha256(f"{normalized}|{pair_code}".encode("utf-8")).digest()
+    expected = f"{int.from_bytes(digest[:4], 'big') % 1_000_000:06d}"
+    assert verification_code(fp_colon, pair_code) == expected
+
+
+def test_verification_code_normalizes_colon_and_case_to_same_result():
+    # Colon-uppercase (browser/cert_fingerprint style) and plain-lowercase-no-colon
+    # must hash to the SAME bytes -- normalization happens inside the helper so
+    # backend and shim can't silently diverge on formatting.
+    pair_code = "11112222"
+    assert (verification_code("AB:CD:EF:00", pair_code)
+            == verification_code("abcdef00", pair_code))
+
+
+def test_verification_code_changes_with_fingerprint():
+    pair_code = "99998888"
+    assert (verification_code("AB:CD:EF:00", pair_code)
+            != verification_code("AB:CD:EF:01", pair_code))

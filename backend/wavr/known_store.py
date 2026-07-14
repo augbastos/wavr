@@ -58,6 +58,13 @@ class KnownStore:
     def __init__(self, path: str = "wavr.db"):
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL + synchronous=NORMAL (matches storage.py/occupancy_log.py): the
+        # default rollback journal fsyncs on every commit, which -- when the bulk
+        # "Trust all N" route commits once per device -- was a fsync storm that
+        # froze the caller for seconds at airport scale. WAL amortizes that; the
+        # real fix is the ONE-commit `set_known_many` below.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -70,6 +77,31 @@ class KnownStore:
         )
         self._conn.commit()
         return {"mac": mac, "known": bool(known)}
+
+    def set_known_many(self, macs, known: bool = True) -> int:
+        """Bulk upsert of many MACs to the same known state -- ONE executemany +
+        ONE commit (one fsync) for the whole set, instead of the commit-per-MAC
+        the single `set_known` does. This is the fix for the "Trust all N
+        devices" bulk route (wavr.api_inventory): at airport scale it was
+        thousands of separate commits, each a full fsync, freezing the event
+        loop for seconds and hammering the disk. Malformed MACs are SKIPPED (not
+        raised) so one bad entry can't abort a whole bulk trust. Returns the
+        number of rows actually written."""
+        rows = []
+        for m in macs:
+            try:
+                rows.append((normalize_mac(m), 1 if known else 0))
+            except ValueError:
+                continue
+        if not rows:
+            return 0
+        self._conn.executemany(
+            """INSERT INTO known_devices (mac, known) VALUES (?, ?)
+               ON CONFLICT(mac) DO UPDATE SET known = excluded.known""",
+            rows,
+        )
+        self._conn.commit()
+        return len(rows)
 
     def is_known(self, mac: str) -> bool:
         mac = normalize_mac(mac)

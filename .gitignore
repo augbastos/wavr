@@ -37,6 +37,10 @@ _fable/
 logs/
 # Root-level backend restart logs (may carry home-layout PII: camera/room names).
 be_restart*.log
+# Ad-hoc debug stdout/stderr captures (a manual verify run dumped real live YOLO
+# camera-detection / occupancy data here — same PII class as the wavr.db-wal leak).
+_debug_*.log
+*_debug.log
 
 # local competitive research — contains real home-network PII (subnet/hostnames/VPN IPs);
 # keep OUT of this public repo until redacted (audit 2026-07-04)

@@ -29,3 +29,14 @@ def test_recent_limit_keeps_newest():
     rows = st.recent(limit=2)
     assert [r["ts"] for r in rows] == ["2026-07-01T10:00:03+00:00", "2026-07-01T10:00:04+00:00"]
     st.close()
+
+
+# ---- PRAGMA tuning (WAL + synchronous=NORMAL) -- SD-card wear/latency on the G9 -
+
+def test_file_backed_store_uses_wal_and_synchronous_normal(tmp_path):
+    st = Storage(str(tmp_path / "t.db"))
+    mode = st._conn.execute("PRAGMA journal_mode").fetchone()[0]
+    sync = st._conn.execute("PRAGMA synchronous").fetchone()[0]
+    assert mode.lower() == "wal"
+    assert sync == 1   # NORMAL (0=OFF, 1=NORMAL, 2=FULL)
+    st.close()

@@ -1,6 +1,6 @@
 [project]
 name = "wavr"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-or-later" }
 dependencies = [
@@ -21,6 +21,7 @@ mqtt = ["paho-mqtt>=2.0"]
 genai = ["google-generativeai>=0.7"]
 mmwave = ["pyserial>=3.5"]
 ble = ["bleak>=0.22"]
+mdns = ["zeroconf>=0.132"]
 mcp = ["mcp>=1.27"]
 tls = ["cryptography>=42"]
 

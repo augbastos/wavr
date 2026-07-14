@@ -47,12 +47,16 @@ async def _serial_frames(port: str) -> AsyncIterator[bytes]:
     pyserial is a lazy optional dep ([mmwave] extra)."""
     import serial                                    # lazy: optional [mmwave] extra
 
+    leftover = b""
+
     def _read_frame(s) -> bytes:
-        buf = b""
+        nonlocal leftover
+        buf = leftover
         while True:
             buf += s.read(64)
             i = buf.find(_HEADER)
             if i >= 0 and len(buf) >= i + 30:
+                leftover = buf[i + 30:]
                 return buf[i: i + 30]
             if len(buf) > 4096:
                 buf = buf[-64:]
@@ -94,6 +98,7 @@ class MmWaveSource:
                             confidence=0.9 if targets else 0.0,
                             ts=datetime.now(timezone.utc).isoformat(),
                             targets=targets,
+                            count=len(targets),   # discrete radar targets = person count
                         )
                         if self._interval:
                             await asyncio.sleep(self._interval)

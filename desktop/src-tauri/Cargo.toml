@@ -20,13 +20,36 @@ ureq = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 # Read the backend's cert.pem (PEM -> DER) so we can pin it by byte-equality.
 rustls-pemfile = "2"
+# A second launch focuses the existing window instead of racing a second `python -m
+# wavr.serve` for the same port (which would otherwise silently stall the new window on
+# the "Starting…" placeholder).
+tauri-plugin-single-instance = "2"
+# Native OS alerts for high-severity backend events (intrusion/fall/rogue-DHCP/gateway).
+# Used ONLY from Rust (a background poller of GET /api/alerts) -- never JS-invokable, so
+# it adds no capabilities/permissions surface for the webview.
+tauri-plugin-notification = "2"
+# Opt-in (default OFF) launch-on-login so the desktop can act as a durable always-on Core
+# node across reboots. Reconciled declaratively from WAVR_DESKTOP_AUTOSTART, same pattern
+# as WAVR_MULTIDEVICE -- Rust-only, no capabilities/permissions surface for the webview.
+tauri-plugin-autostart = "2"
 
-# Windows only: scoped WebView2 self-signed-cert trust via ServerCertificateErrorDetected.
+# Windows only: scoped WebView2 self-signed-cert trust via ServerCertificateErrorDetected,
+# plus a Job Object so the backend child is force-killed by the OS if this process ever
+# exits without running our own cleanup (crash, Task Manager kill, power loss handler).
 # webview2-com 0.38 + windows 0.61 match what Tauri 2.11 already pulls, so the
 # ICoreWebView2Controller handed back by `PlatformWebview::controller()` is the same type.
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"
-windows = { version = "0.61", features = ["Win32_Foundation"] }
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    # Enumerate the spawned backend's threads to resume the one CREATE_SUSPENDED thread
+    # AFTER Job Object assignment (confine_backend_to_job_object) -- closes the
+    # spawn -> assign TOCTOU race deterministically instead of racing a fast child.
+    "Win32_System_Diagnostics_ToolHelp",
+] }
 
 [profile.release]
 opt-level = "s"
