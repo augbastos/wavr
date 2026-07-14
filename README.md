@@ -5,6 +5,8 @@
 
 **Your home, understood — without giving it away.**
 
+![Wavr — the home that knows who's home. Privacy-first presence sensing that runs 100% on your local network, shown next to the Command Center dashboard](docs/img/card-hero.png)
+
 Wavr is a local, explainable, privacy-first presence and network dashboard for your home — one you
 (and your agents) can actually query. It fuses several sensing modalities into a single *explainable*
 `RoomState` per room: occupied or not, a confidence score, and the per-modality *why* behind it — over
@@ -33,6 +35,8 @@ Wavr is a small family of surfaces around one local fusion engine — pick the o
 - **Nodes** — cheap ESP32 + mmWave sensor nodes reporting presence over the pinned transport. Roadmap.
 - **MCP** — a read-only Model Context Protocol surface so your own agents can query presence over the LAN, with an opt-in, gated Home-Assistant control tool.
 
+![One brain, every screen — the same open core as a web dashboard, a Tauri desktop app, a certificate-pinned Android companion, and the always-on Core hub](docs/img/card-platforms.png)
+
 ![The Wavr Core ambient panel — a calm green-wave presence face over a dark screen, with glance-free status in the corners: clock, Core and network health, Wi-Fi signal and battery](docs/img/core-panel.png)
 
 *The Core ambient panel: a calm green-wave presence face with glance-free status — time, Core & network health, Wi-Fi and battery — running on a dedicated phone in a stand.*
@@ -45,6 +49,8 @@ Wavr is a small family of surfaces around one local fusion engine — pick the o
 
 Everything below ships in this tree and is tested (hardware is mock-tested where the physical device
 isn't required).
+
+![Presence that explains itself — camera, network scan and Bluetooth fused into one confidence score per room, on a 3D house map you draw yourself](docs/img/card-explainable.png)
 
 - **Multi-modal fusion** — a small `SensorSource` seam feeds one transparent fusion engine:
   - **Network scan** — presence from LAN device activity. Works today with **zero extra hardware**.
@@ -113,6 +119,8 @@ isn't required).
 - **Defensive LAN inventory ("Wavr Net")** — offline OUI vendor + device-type classification,
   rogue-device / gateway-MAC / rogue-DHCP alerts on a five-tier ladder, and opt-in port/speed/WOL
   utilities. Defensive only (ADR-0004) — Wavr never surveils a network the host isn't authorized on.
+
+![Ready for the agent era — a built-in MCP server turns the whole house into context any AI agent can query, read-only by design](docs/img/card-mcp.png)
 
 ## ⚠️ The honest limitations
 
