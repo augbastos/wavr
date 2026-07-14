@@ -735,7 +735,7 @@
       stopCoreWatch();
       _base = "https://" + core.host + ":" + core.port;
       _pendingCoreName = core.name;
-      showVerify();
+      showScanPair();   // QR scan is the PRIMARY pin+pair path; "type the code" stays one tap away inside it
     }
     function coreRow(core){
       var b = el("button", "wavrm-choice primary"); b.type = "button";
@@ -870,7 +870,7 @@
       if(!isHost(host)){ msg.className = "wavrm-msg err"; msg.textContent = "Enter a valid IP address."; return; }
       if(!isPort(p)){ msg.className = "wavrm-msg err"; msg.textContent = "Enter a valid port (1 to 65535)."; return; }
       _base = "https://" + host + ":" + p;
-      showVerify();
+      showScanPair();   // QR scan primary; the typed 6-digit path stays reachable from inside showScanPair
     };
     card.appendChild(btn); card.appendChild(msg);
   }
@@ -1002,6 +1002,203 @@
       msg.className = "wavrm-msg err";
       msg.textContent = "Couldn't get a code from " + _base + ". Check the hub is on and try again.";
     });
+  }
+
+  // ===== QR strong-anchor pairing (chosen 2026-07-14): scan the hub's QR instead of typing =====
+  // The hub's Pair-device screen (Settings -> Devices) renders a QR of {v, u, fp, c}:
+  //   u  = the hub's OWN origin -- DELIBERATELY IGNORED here. On a Core kiosk it is loopback
+  //        (https://localhost:8000), useless to a phone; we connect to _base, the address THIS device
+  //        already chose via mDNS discovery / manual entry. The QR supplies the ANCHOR, not the where.
+  //   fp = the FULL cert SHA-256 -> the trust anchor, MACHINE-compared to the probed cert (not a 6-digit
+  //        code a MitM can offline-grind while relaying).
+  //   c  = the same short-TTL 8-digit code the typed path redeems via POST /api/pair.
+  // Camera frames are decoded on-device (self-hosted jsQR) and NEVER stored or transmitted -- same
+  // zero-egress invariant as the rest of the app.
+  var _jsqrPromise = null;
+  function _jsqrCallable(){
+    var g = window.jsQR;
+    if(typeof g === "function") return g;
+    if(g && typeof g.default === "function") return g.default;   // some UMD builds expose {default:fn}
+    return null;
+  }
+  function _ensureJsQR(){
+    var have = _jsqrCallable();
+    if(have) return Promise.resolve(have);
+    if(_jsqrPromise) return _jsqrPromise;
+    _jsqrPromise = new Promise(function(resolve, reject){
+      var s = document.createElement("script");
+      s.src = "vendor/jsqr.js";                 // same origin -> nothing leaves the device
+      s.onload = function(){ var fn = _jsqrCallable(); fn ? resolve(fn) : reject(new Error("jsQR global not callable")); };
+      s.onerror = function(){ _jsqrPromise = null; reject(new Error("failed to load vendor/jsqr.js")); };
+      document.head.appendChild(s);
+    });
+    return _jsqrPromise;
+  }
+
+  // Screen: collect the presence name, then open the camera. Reached as the PRIMARY step after picking /
+  // entering a hub. "Type the 6-digit code instead" drops to showVerify for hubs too old to show a QR.
+  function showScanPair(){
+    var card = ensureOverlay("scanPair");
+    card.appendChild(el("h2", "wavrm-h", "Scan your hub's QR"));
+    card.appendChild(el("p", "wavrm-sub",
+      "On your Wavr hub, open Settings then Devices to show its pairing QR. Enter your name, then point the camera at it."));
+    var f = el("label", "wavrm-field");
+    f.appendChild(el("span", "wavrm-lab", "Your name on this device (shown as your presence at home)"));
+    var nameIn = el("input", "wavrm-input"); nameIn.type = "text"; nameIn.autocomplete = "off";
+    nameIn.maxLength = 48; nameIn.placeholder = "e.g., Augusto"; nameIn.value = _presenceLabel || "";
+    nameIn.setAttribute("aria-label", "your name on this device");
+    f.appendChild(nameIn); card.appendChild(f);
+    var msg = el("p", "wavrm-msg", "");
+    var scanBtn = el("button", "wavrm-btn", "Open camera to scan"); scanBtn.type = "button";
+    scanBtn.setAttribute("data-tip", "Scans the hub's QR: pins its full certificate and pairs, no typing.");
+    scanBtn.onclick = function(){
+      var name = (nameIn.value || "").trim();
+      if(!name){ msg.className = "wavrm-msg err"; msg.textContent = "Enter your name on this device."; return; }
+      _presenceLabel = name;
+      secureSet(K_PRESENCE_LABEL, name).catch(function(){});   // best-effort; display-only, not a credential
+      startCameraScan(name);
+    };
+    card.appendChild(scanBtn);
+    var typeBtn = el("button", "wavrm-btn ghost", "Type the 6-digit code instead"); typeBtn.type = "button";
+    typeBtn.onclick = function(){ showVerify(); };
+    card.appendChild(typeBtn);
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ if(zeroconfAvailable()){ showChooseCore(); } else { showSetup(); } };
+    card.appendChild(back);
+    card.appendChild(msg);
+  }
+
+  // Live camera scan: getUserMedia (Capacitor 8's BridgeWebChromeClient auto-requests the runtime CAMERA
+  // permission on this call) -> per-frame jsQR decode on a canvas. On a hit, hand the raw text to
+  // onScannedPayload. Always tears the stream down (cancel, success, or error) -> no camera left running.
+  function startCameraScan(name){
+    var card = ensureOverlay("cameraScan");
+    card.appendChild(el("h2", "wavrm-h", "Point at the hub's QR"));
+    var video = document.createElement("video");
+    video.setAttribute("playsinline", ""); video.muted = true; video.autoplay = true;
+    video.style.width = "100%"; video.style.maxWidth = "320px"; video.style.aspectRatio = "1 / 1";
+    video.style.objectFit = "cover"; video.style.borderRadius = "14px"; video.style.background = "#000";
+    card.appendChild(video);
+    var msg = el("p", "wavrm-msg", "Looking for the QR…");
+    var canvas = document.createElement("canvas");
+    var ctx = canvas.getContext("2d", { willReadFrequently: true });
+    var stream = null, raf = 0, done = false, jsQRfn = null;
+    function stop(){
+      done = true;
+      if(raf){ try{ cancelAnimationFrame(raf); }catch(_){} raf = 0; }
+      if(stream){ try{ stream.getTracks().forEach(function(t){ t.stop(); }); }catch(_){} stream = null; }
+    }
+    var cancel = el("button", "wavrm-btn ghost", "Cancel"); cancel.type = "button";
+    cancel.onclick = function(){ stop(); showScanPair(); };
+    card.appendChild(cancel); card.appendChild(msg);
+    if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
+      msg.className = "wavrm-msg err"; msg.textContent = "This device has no camera API. Type the 6-digit code instead."; return;
+    }
+    _ensureJsQR().then(function(fn){
+      jsQRfn = fn;
+      return navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    }).then(function(s){
+      if(done){ try{ s.getTracks().forEach(function(t){ t.stop(); }); }catch(_){} return; }   // cancelled mid-await
+      stream = s; video.srcObject = s;
+      var pv = video.play && video.play(); if(pv && pv.catch) pv.catch(function(){});
+      function tick(){
+        if(done) return;
+        if(video.readyState >= 2 && video.videoWidth){
+          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          var img = null;
+          try{ img = ctx.getImageData(0, 0, canvas.width, canvas.height); }catch(_){ img = null; }
+          if(img){
+            var r = jsQRfn(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+            if(r && r.data){ stop(); onScannedPayload(r.data, name); return; }
+          }
+        }
+        raf = requestAnimationFrame(tick);
+      }
+      raf = requestAnimationFrame(tick);
+    }).catch(function(e){
+      stop();
+      var denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError" || e.name === "NotFoundError");
+      msg.className = "wavrm-msg err";
+      msg.textContent = denied
+        ? "Camera access was denied or unavailable. Allow the camera for Wavr, or type the 6-digit code instead."
+        : "Couldn't open the camera. Type the 6-digit code instead.";
+      var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+      back.onclick = function(){ showScanPair(); }; card.appendChild(back);
+    });
+  }
+
+  // Parse the scanned payload, MACHINE-verify the hub's full cert against the QR fingerprint, pin, then
+  // redeem the code for a token over the pinned transport. Mirrors showVerify's pin + showRequestPairing's
+  // token-commit: a durable-write failure never pretends paired, a cert swap hard-fails on PIN_MISMATCH.
+  function onScannedPayload(text, name){
+    var p = null;
+    try{ p = JSON.parse(text); }catch(_){}
+    if(!p || !p.fp || p.c == null || p.c === ""){
+      scanHardFail("That QR isn't a Wavr pairing code. Open Settings then Devices on your hub and scan the QR shown there.", name, true);
+      return;
+    }
+    var qrFp = String(p.fp), code = String(p.c);
+    var card = ensureOverlay("scanVerify");
+    card.appendChild(el("div", "wavrm-spin", ""));
+    card.appendChild(el("h2", "wavrm-h", "Checking the hub…"));
+    var msg = el("p", "wavrm-msg", "Matching the hub's certificate…"); card.appendChild(msg);
+    if(!WavrNet || typeof WavrNet.probe !== "function"){
+      msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available."; return;
+    }
+    // Probe the ACTUAL cert at _base (the mDNS / manually chosen hub) and require it to EQUAL the scanned
+    // full fingerprint. A LAN MitM presents a different cert -> normHex mismatch -> hard stop, never pin.
+    WavrNet.probe({ url: _base }).then(function(r){
+      var probed = (r && r.fingerprint) || null;
+      if(!probed){ scanHardFail("The hub presented no certificate. Check you picked the right hub.", name, false); return; }
+      if(normHex(probed) !== normHex(qrFp)){
+        scanHardFail("The hub's certificate does NOT match the QR. Stop — someone may be intercepting your network. If it keeps happening, pair on your home Wi-Fi.", name, false);
+        return;
+      }
+      _pinnedFp = probed;                                    // anchor == the scanned full fp (machine-verified)
+      _coreName = _pendingCoreName || _base;
+      msg.className = "wavrm-msg"; msg.textContent = "Codes match. Connecting…";
+      // Persist the pin, then redeem the code over the PINNED transport (netFetch uses _pinnedFp). 403 =
+      // the code rotated/expired -> scan a fresh QR. A cert swap now hard-fails via PIN_MISMATCH.
+      persistPairing(_base, probed, null).then(function(){
+        return netFetch(_base + "/api/pair", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code, device_name: name })
+        });
+      }).then(function(res){
+        if(!res || !res.ok) throw new Error("pair status " + (res ? res.status : "?"));
+        return res.json();
+      }).then(function(body){
+        var token = body && body.token, deviceId = body && body.device_id;
+        if(!token){ scanHardFail("The hub accepted the code but sent no token. Scan a fresh QR.", name, false); return; }
+        persistPairing(_base, probed, token).then(function(){
+          _token = token;                                    // sync cache; the reload re-reads it from Keystore
+          try{ onPaired({ device_id: deviceId }); }catch(_){}
+          showConnecting("Connecting to " + (_coreName || "your home") + "…");
+          try{ location.reload(); }catch(_){}                // reboot straight into the dashboard viewer
+        }, function(){
+          _pinnedFp = null;                                  // durable write failed: do NOT pretend paired
+          scanHardFail("Couldn't save the pairing securely. Try again.", name, false);
+        });
+      }).catch(function(err){
+        if(err && err.code === "PIN_MISMATCH") return;       // netFetch already raised the hard-fail card
+        scanHardFail("Couldn't finish pairing at " + (_coreName || _base) + ". The code may have expired — scan a fresh QR.", name, false);
+      });
+    }).catch(function(){
+      scanHardFail("Couldn't reach the hub. Check it's on and you're on the same Wi-Fi, then scan again.", name, false);
+    });
+  }
+
+  function scanHardFail(text, name, isBadQr){
+    var card = ensureOverlay("scanFail");
+    card.appendChild(el("h2", "wavrm-h", isBadQr ? "That isn't a Wavr QR" : "Pairing stopped"));
+    card.appendChild(el("p", isBadQr ? "wavrm-sub" : "wavrm-warn", text));
+    var retry = el("button", "wavrm-btn", "Scan again"); retry.type = "button";
+    retry.onclick = function(){ startCameraScan(name); };
+    card.appendChild(retry);
+    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    back.onclick = function(){ showScanPair(); };
+    card.appendChild(back);
   }
 
   // ----- Connecting / reconnecting -----
@@ -1915,7 +2112,13 @@
     if(_presenceConfirmed) return "Connected to " + (_coreName || "your Core") + " as " + (_presenceLabel || "this device");
     return "Connected";
   }
-  function renderStatusChip(){ if(_statusChip){ _statusChip.textContent = statusText(); } }
+  function renderStatusChip(){
+    if(_statusChip){ _statusChip.textContent = statusText(); }
+    // The privacy receipt now shares the presence tri-state, so re-paint it on the same trigger
+    // (renderConsent only fires on LEVEL changes; this is the hook for presence-state changes).
+    if(document.body){ _consentReceipts = _consentReceipts.filter(function(p){ return document.body.contains(p); }); }
+    for(var i = 0; i < _consentReceipts.length; i++){ _consentReceipts[i].textContent = privacyReceiptText(); }
+  }
   function injectStatusChip(){
     if(!_token) return;
     var row = document.querySelector(".status-pills"); if(!row) return;
@@ -1977,7 +2180,14 @@
     var who = (_role === "central") ? "As an admin device, it can also change home settings." : "";
     if(_consent === "yellow")
       return "Right now this device shares that someone is home from here — anonymously, with no name. " + who;
-    return "Right now this device shares your presence at home as “" + (_presenceLabel || "this device") + "”. " + who;
+    // Green mirrors statusText's fail-closed tri-state (FIX-C2): the "shares your presence" CLAIM
+    // fires ONLY on a hub-confirmed mac_registered:true. Otherwise the device is only SET to share:
+    // say so plainly instead of claiming a presence the hub hasn't confirmed.
+    if(_presenceConfirmed)
+      return "Right now this device shares your presence at home as “" + (_presenceLabel || "this device") + "”. " + who;
+    if(_presenceError)
+      return "This device is set to share your presence at home, but your hub can't confirm it — no network presence. " + who;
+    return "This device is set to share your presence at home as “" + (_presenceLabel || "this device") + "” — your hub hasn't confirmed it yet. " + who;
   }
   function injectReceipt(card){
     var p = el("p", "wavrm-receipt", privacyReceiptText());
@@ -2395,7 +2605,7 @@
       } else {
         // caps chosen but not yet verified, or verify incomplete: an already-entered address resumes
         // straight to verify; otherwise offer discovery first (manual entry stays one tap away).
-        if(_base) showVerify(); else showChooseCore();
+        if(_base) showScanPair(); else showChooseCore();
       }
     });
   }
