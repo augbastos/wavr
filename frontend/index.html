@@ -12720,6 +12720,7 @@ try {
   // MAC is never printed unmasked in a new component.
   // =====================================================================
   var presenceStarted = false;
+  var presRetries = 0;   // A2.2 companion: bounded retries while the async token loads (see renderPresence)
   // The report's own device_type is the user PIN only (device_meta) — for unpinned
   // devices, borrow the fused type+confidence from the /api/inventory payload the
   // Network tab already polls (zero new fetches; falls back honestly when absent).
@@ -12772,9 +12773,18 @@ try {
     });
   }
   async function presenceRefresh(){
+    // A2.2 companion (Fix): route through the pinned central base + Bearer (same __nf pattern
+    // renderStatus/renderNetwork use), NOT the app's own https://localhost — on the companion a
+    // bare location.origin fetch hits the WebView, not the hub, so the report was always empty.
+    // network:read is granted to user AND central, so any paired companion sees the report.
+    var auth = (MODE==="companion" && companionToken()) ? {"Authorization":"Bearer "+companionToken()} : null;
+    var __nf = (path, opt)=> window.WAVR_MOBILE
+      ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+      : fetch(location.origin + path, opt);
     var r;
-    try{ r = await fetch(location.origin + "/api/presence/report"); }
+    try{ r = await __nf("/api/presence/report", auth?{headers:auth}:undefined); }
     catch(e){ return; }   // backend momentarily unreachable — keep last view
+    if(auth && (r.status===401||r.status===403)){ if(typeof companionAuthFailed==="function") companionAuthFailed(); return; }
     if(!r.ok){
       // route missing = a hub running pre-A2 code (404) — say so honestly instead
       // of rendering the error body as "0 devices tracked"
@@ -12812,7 +12822,19 @@ try {
     var tile = $("presenceReport");
     if(!tile) return;
     tile.hidden = false;   // visible in every mode (own honest note when not live, like egressPanel)
-    if(M !== "live"){ presenceOffState(); return; }
+    // A2.2 companion (Fix): a paired companion (user OR central — both hold network:read) pulls
+    // the real house-level report; demo / unpaired companion keeps the honest off-note.
+    if(M !== "live" && !(MODE==="companion" && companionToken())){
+      presenceOffState();
+      // On a companion the token loads async (Keystore) and usually isn't ready at this single
+      // boot-time call — without a retry the off-note latches forever (presenceStarted never
+      // arms). Re-poll ourselves (bounded ~20s) until the token resolves; renderPresence lives
+      // in a different scope than the companion role-settle hook, so retrying here is the fix.
+      if(MODE==="companion" && !companionToken() && !presenceStarted && presRetries < 40){
+        presRetries++; setTimeout(renderPresence, 500);
+      }
+      return;
+    }
     var note = $("presenceNote"); if(note) note.hidden = true;
     presenceRefresh();
     if(!presenceStarted){ presenceStarted = true; setInterval(presenceRefresh, 15000); }
