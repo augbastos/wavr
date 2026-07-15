@@ -86,6 +86,37 @@ def test_mask_rtsp_never_raises_on_malformed_url():
     assert _mask_rtsp("a@b://c") == "a@b://c"               # malformed shape -> returned unchanged, no raise
 
 
+def test_mask_rtsp_masks_a_password_containing_at():
+    # CREDENTIAL LEAK. _mask_rtsp split the authority on the FIRST "@", but the userinfo/host
+    # boundary is the LAST one (RFC 3986, and what ffmpeg does -- camera_url.py already
+    # rpartitions the same URL). A camera password containing "@" -- ordinary in real creds --
+    # had its TAIL shipped VERBATIM to every paired `user` via GET /api/cameras:
+    #   rtsp://user:p@ss@cam.local/stream  ->  rtsp://user:***@ss@cam.local/stream
+    #                                                          ^^ the password, in the clear
+    from wavr.app import _mask_rtsp
+    assert _mask_rtsp("rtsp://user:p@ss@cam.local/stream") == "rtsp://user:***@cam.local/stream"
+    assert _mask_rtsp("rtsp://user:s3nh@!@192.0.2.9/live") == "rtsp://user:***@192.0.2.9/live"
+    assert _mask_rtsp("rtsp://user:a@b@c@host/s") == "rtsp://user:***@host/s"
+    assert _mask_rtsp("rtsp://user:simples@host/s") == "rtsp://user:***@host/s"   # no regression
+    assert _mask_rtsp("rtsp://cam.local/stream") == "rtsp://cam.local/stream"     # no creds -> untouched
+    # onvif.py carries a DELIBERATE copy of this helper (so the source module has no app.py
+    # dependency) and had the identical bug. It must not drift back.
+    from wavr.sources.onvif import _mask_rtsp as _mask_onvif
+    assert _mask_onvif("rtsp://user:p@ss@cam.local/stream") == "rtsp://user:***@cam.local/stream"
+    assert _mask_onvif("a@b://c") == "a@b://c"
+
+
+def test_get_never_echoes_a_password_containing_at(tmp_path):
+    # The real exposure path, end to end: GET /api/cameras is readable by every paired user.
+    with _client(tmp_path, seed=[{"name": "cam_q", "room": "quarto",
+                                  "rtsp_url": "rtsp://user:p@ss@10.0.0.5/s1",
+                                  "confidence": 0.5}]) as c:
+        [cam] = c.get("/api/cameras").json()
+        assert "p@ss" not in cam["rtsp_url"]
+        assert "ss@" not in cam["rtsp_url"], "the password TAIL leaked past the mask"
+        assert cam["rtsp_url"] == "rtsp://user:***@10.0.0.5/s1"
+
+
 def test_post_name_with_slash_rejected(tmp_path):
     with _client(tmp_path) as c:
         r = c.post("/api/cameras", json={"name": "a/b", "room": "sala",

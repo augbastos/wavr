@@ -277,7 +277,18 @@ def _mask_rtsp(url: str) -> str:
         if "@" not in url or "://" not in url:
             return url
         scheme, rest = url.split("://", 1)
-        creds, host = rest.split("@", 1)
+        # rpartition = the LAST "@", which is the userinfo/host boundary per RFC 3986 (and
+        # what ffmpeg does). Splitting on the FIRST "@" leaked the password TAIL verbatim
+        # whenever the password itself contained an "@" (a common thing in camera creds):
+        # rtsp://user:p@ss@cam/stream masked to rtsp://user:***@ss@cam/stream -- "ss" shipped
+        # to every paired user via GET /api/cameras. camera_url.py already parses the same
+        # URL with rpartition; this is now consistent with it.
+        creds, at, host = rest.rpartition("@")
+        if not at:
+            # No "@" in the AUTHORITY (the "@" was in the scheme, e.g. "a@b://c"). rpartition
+            # never raises, so unlike the old split-unpack there is no ValueError to fall into
+            # the except below -- return unchanged explicitly, as the docstring promises.
+            return url
         if ":" in creds:
             user = creds.split(":", 1)[0]
             creds = f"{user}:***"
