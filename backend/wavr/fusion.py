@@ -262,6 +262,12 @@ class FusionEngine:
         sources = []
         vitals: dict = {}
         decays: dict[str, float] = {}  # modality -> trust multiplier, reused for target gating
+        # modality -> the event's OWN parsed ts. The count latch stamps itself with this, not
+        # with `ref`: stamping with `ref` re-dated the latch on every fuse that still saw a
+        # decay>0 counting event, so the stale_s bound measured from the last FUSE instead of
+        # from the last real COUNT and the latch outlived its documented window (see the stamp
+        # below).
+        event_ts: dict[str, datetime] = {}
         for modality, e in events.items():
             try:
                 e_ts = _as_utc(e.ts)
@@ -278,6 +284,7 @@ class FusionEngine:
             age_s = max(0.0, (ref - e_ts).total_seconds())
             decay, health = self._freshness(age_s)
             decays[modality] = decay
+            event_ts[modality] = e_ts
             mass = self._weights.get(modality, 0.5) * e.confidence * decay
             den += mass
             if e.presence:
@@ -301,6 +308,7 @@ class FusionEngine:
         # here (unknown, not a fabricated 0). `live_count` is the CURRENT frame's count;
         # the FUSION-B latch below decides the RoomState's actual `person_count`.
         live_count: int | None = None
+        live_count_ts = None   # the winning count event's OWN ts -- what the latch stamps with
         best_cw = -1.0
         for modality, e in events.items():
             if modality not in COUNTING_MODALITIES:
@@ -313,6 +321,7 @@ class FusionEngine:
             if w > best_cw:
                 best_cw = w
                 live_count = int(e.count)
+                live_count_ts = event_ts.get(modality)
 
         agreement = num / den if den > 0 else 0.0
         # Defensive clamp: a single out-of-range source confidence (negative or
@@ -390,7 +399,15 @@ class FusionEngine:
             self._count_latch.pop(room, None)
             person_count = None
         elif live_count is not None:
-            self._count_latch[room] = {"count": live_count, "targets": best_targets, "ts": ref}
+            # Stamp with the COUNT EVENT's own ts, never with `ref`. A counting source is
+            # allowed to be up to stale_s old and still vouch (decay>0), so stamping with
+            # `ref` re-dated the latch on EVERY fuse that still saw that same aging event:
+            # the stale_s bound then measured from the last FUSE, not from the last real
+            # COUNT, and a dead counting source + a chatty presence-only source could keep
+            # vouching for a headcount for ~2x stale_s. The docstring below promises the
+            # bound is stale_s — this is what makes that true.
+            self._count_latch[room] = {"count": live_count, "targets": best_targets,
+                                       "ts": live_count_ts or ref}
             person_count = live_count
         else:
             # FUSION-C FIX: `live_count is None` conflates TWO OPPOSITE states — a counting

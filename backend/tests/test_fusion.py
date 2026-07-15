@@ -591,6 +591,41 @@ def test_held_count_expires_after_stale_window():
     assert rs.person_count is None
 
 
+def _csi(room, ts):
+    return SensingEvent(room=room, modality="wifi_csi", presence=True, motion=0.0,
+                        breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts)
+
+
+def test_latch_bound_measures_from_the_count_not_from_the_last_fuse():
+    # The latch docstring promises the bound is stale_s. It stamped with `ref` (the fusion
+    # time), but a counting source may be up to stale_s old and STILL vouch (decay>0) -- so
+    # every fuse that saw the same aging count event re-dated the latch. The bound then
+    # measured from the last FUSE instead of from the last real COUNT, and a dead camera plus
+    # a chatty presence-only source kept vouching for a headcount for ~2x stale_s.
+    # test_held_count_expires_after_stale_window cannot catch this: it JUMPS the clock 0->100
+    # with no intermediate fuse. The bug only appears when you fuse THROUGH the window.
+    clock = {"t": _BASE}
+    f = FusionEngine(now_fn=lambda: clock["t"])
+    f.update(_camc("sala", True, 0.9, 2, ts=_at(0)))    # the ONLY real count, at t=0
+
+    # A chatty presence-only source fuses repeatedly INSIDE the window. Each of these fuses
+    # still sees the t=0 camera event at decay>0 -- exactly what used to re-date the latch.
+    for t in range(10, 90, 10):
+        clock["t"] = _BASE + timedelta(seconds=t)
+        held = f.update(_csi("sala", ts=_at(t)))
+        assert held.person_count == 2, f"t={t}: a camera inside stale_s still legitimately vouches"
+
+    # Past stale_s measured from the COUNT (t=0) the headcount must be gone, no matter how
+    # many fuses happened in between.
+    clock["t"] = _BASE + timedelta(seconds=95)
+    rs = f.update(_csi("sala", ts=_at(95)))
+    assert rs.occupied is True, "wifi_csi honestly still holds the room occupied"
+    assert rs.person_count is None, (
+        "the latch must expire stale_s after the COUNT, not after the last fuse -- "
+        "stamping with `ref` let a dead counting source vouch for ~2x stale_s"
+    )
+
+
 def test_count_latch_is_per_room_never_leaks_across_rooms():
     # The latch dict is keyed by room -- a count held for "sala" must never bleed
     # into "quarto" just because they're fused by the same engine instance.
