@@ -102,11 +102,30 @@ def _as_utc(value) -> datetime:
 
 
 class FusionEngine:
-    """Explainable fusion. Per room, confidence = agreement × strength, where
-    `agreement` is the fraction of trusted mass saying "present" and `strength`
-    is the best present evidence (weight × the source's own confidence). This stops
-    a lone weak source (e.g. coarse network) from ever reporting 100%, and lets a
-    trusted source dominate when modalities disagree.
+    """Explainable fusion. Per room, confidence = agreement × strength, where `strength`
+    is the best present evidence (weight × the source's own confidence × freshness decay).
+    This stops a lone weak source (e.g. coarse network) from ever reporting 100% — that
+    claim holds, and it is `strength` that delivers it.
+
+    HONEST NOTE on `agreement` (measured, not assumed): it is INERT in production and the
+    fused confidence is, in practice, exactly `strength`. `agreement` is num/den over
+    weight×confidence×decay mass, but EVERY first-party source emits confidence=0.0 when
+    it reports presence=False — so an absent source contributes mass=0 to the numerator
+    AND the denominator, drops out of the ratio entirely, and `agreement` is identically
+    1.0 whenever at least one source is present. Verified: camera(0.9, present) alone,
+    camera(0.9, present) + network(absent), and camera(0.9, present) + network(0.8,
+    present) all fuse to 0.9 — an absent source changes nothing. So there is NO
+    disagreement arbitration here today; no amount of contradicting first-party evidence
+    lowers the number.
+
+    That is arguably CORRECT rather than a gap, for the same reason TRUSTED_ABSENCE_
+    MODALITIES exists above: an absent source usually means "I cannot see them" (a still
+    person vanishing from radar, someone outside the camera's FOV), not "nobody is here" —
+    so it should not vote a present room down. It is recorded here so the next reader does
+    not trust a promise the code never kept. Wiring real arbitration would mean deciding
+    which absences are EVIDENCE (the TRUSTED_ABSENCE question) rather than mere silence —
+    a product decision, not a refactor. Each source's own reading still rides in
+    `sources[]`, so a disagreement is SURFACED to the UI, never silently resolved.
 
     Each source's trust is additionally scaled by a freshness decay: full weight
     while the reading is fresh, fading to zero once it is stale, so a source that
