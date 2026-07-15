@@ -70,6 +70,10 @@ def test_pair_code_returns_live_cert_fingerprint(tmp_path, monkeypatch):
     body = central.post("/api/pair-code", json={"role": "user"}, headers=CSRF).json()
     assert body["cert_fingerprint"] == cert_fingerprint(cert)
     assert len(body["cert_fingerprint"].split(":")) == 32
+    # P2 self-contained QR: the response also carries a LAN-reachable base (derived from the
+    # SAME _local_ip the peers-admin self_base_url uses), never a hardcoded/real address --
+    # here it's the monkeypatched _local_ipv4 fixture value, not a real home IP.
+    assert body["lan_url"] == "https://192.168.1.1:8000"
 
 
 def test_pair_code_response_includes_matching_verify6(tmp_path, monkeypatch):
@@ -96,7 +100,7 @@ def test_pair_code_response_includes_matching_verify6(tmp_path, monkeypatch):
     assert body["verify6"] == verification_code(cert_fingerprint(cert), body["code"])
     assert len(body["verify6"]) == 6 and body["verify6"].isdigit()
     # Response shape stays additive: the pre-existing keys are untouched.
-    assert set(body.keys()) == {"code", "cert_fingerprint", "verify6"}
+    assert set(body.keys()) == {"code", "cert_fingerprint", "verify6", "lan_url"}
 
 
 def test_user_role_cannot_change_state(app):

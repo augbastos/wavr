@@ -3385,7 +3385,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # same fail-open-to-None shape cert_fingerprint already uses, so the
             # shim can fall back to the (still-shown) full fingerprint compare.
             verify6 = verification_code(fingerprint, code) if fingerprint else None
-            return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6}
+            # LAN-reachable base for the QR builder (P2 self-contained QR): when this panel is
+            # viewed on the hub itself (kiosk/loopback), location.origin is 127.0.0.1/localhost --
+            # useless to a phone that scans the code cold. _local_ip is the SAME LAN address
+            # self_base_url already uses for the peers-admin router above; TLS is coupled 1:1 to
+            # multidevice (see serve.py), so "https" here is exactly as safe as line ~1675.
+            lan_url = f"https://{_local_ip}:{cfg.port}"
+            return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6,
+                    "lan_url": lan_url}
 
         # "Approve on the Core" (design 2026-07-11). Two routers, two DIFFERENT auth
         # boundaries -- the exact split api_peers.py/api_nodes.py already use:
