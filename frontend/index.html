@@ -5806,13 +5806,17 @@ async function renderPairing(){
     if(qrBox && qrImg){
       const qrFp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
       if(qrFp && d.code){
-        // P2 self-contained QR: prefer the backend's LAN-reachable lan_url over
-        // location.origin. This panel can be viewed ON the hub itself (kiosk/loopback), where
-        // location.origin is 127.0.0.1/localhost -- unreachable to the phone that scans the
-        // code. lan_url is derived server-side from the same address the peers-admin router
-        // already uses (never hardcoded here). Falls back to location.origin so an older
-        // backend that hasn't shipped lan_url yet still encodes a URL, unchanged from today.
-        const qrUrl = (typeof d.lan_url === "string" && d.lan_url) ? d.lan_url : location.origin;
+        // P2 self-contained QR: encode a phone-reachable base. Only override location.origin with
+        // the backend's lan_url when the CURRENT origin is NOT already a routable LAN IP: a bare
+        // loopback (127.x) or a hub-local hostname (dev.wavr.core kiosk, localhost, *.local) can't
+        // be scanned cold, so use lan_url; but when the panel is browsed from a real LAN address
+        // (192.168.x etc) that origin is proven-reachable by the viewing device -- keep it, so a
+        // multi-NIC/VPN host doesn't swap it for a different-interface lan_url (adversarial-verify
+        // hardening). lan_url is the same _local_ipv4()-derived address peers-admin uses, never
+        // hardcoded; falls back to location.origin for an older backend that omits lan_url.
+        const _oh = location.hostname;
+        const _originRoutable = /^\d{1,3}(\.\d{1,3}){3}$/.test(_oh) && !/^127\./.test(_oh) && _oh !== "0.0.0.0";
+        const qrUrl = (!_originRoutable && typeof d.lan_url === "string" && d.lan_url) ? d.lan_url : location.origin;
         const payload = JSON.stringify({v:1, u:qrUrl, fp:qrFp, c:String(d.code)});
         _ensureQRCode().then((qr)=>{
           const q = qr(0, "M");              // type 0 = auto-size for the data, error-correction M
