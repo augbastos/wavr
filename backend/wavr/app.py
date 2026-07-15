@@ -1176,9 +1176,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # see connectors/notify/digest.py's HONESTY note: reads NOTHING (not even
         # occupancy_log) when the gate is off, so a disabled digest is byte-identical
         # to before this feature existed.
-        if not _connectors.is_enabled("digest"):
-            return {"ok": False, "status": "disabled", "via": None}
         try:
+            # The gate lives INSIDE the try on purpose. It is a raw sqlite read
+            # (ConnectorStore.get -> SELECT, unguarded), and `wavr.db` is shared by five
+            # stores on SD-card-backed sqlite on a Core that runs for weeks -- "database is
+            # locked" is a real recurring error class there, not a theoretical one. Sitting
+            # one line ABOVE the try, a single blip propagated out of _digest_once, exited
+            # _digest_loop's `while True` (which has no guard of its own), and killed the
+            # scheduler for the whole process lifetime -- with ZERO log output: the task's
+            # exception was never retrieved, the strong reference kept it from being GC'd so
+            # asyncio's own "exception was never retrieved" fallback never fired, and the
+            # shutdown `suppress(CancelledError, Exception)` swallowed the last chance to see
+            # it. The tick runs once per 24h, so nothing ever retried. Same hazard the sibling
+            # _refuse_loop already guards deliberately.
+            # Gate semantics are unchanged: it is still evaluated FIRST and still reads
+            # NOTHING (not even occupancy_log) when the digest is off.
+            if not _connectors.is_enabled("digest"):
+                return {"ok": False, "status": "disabled", "via": None}
             now = datetime.now(timezone.utc)
             start = now - timedelta(seconds=_DIGEST_INTERVAL_S)
             house_status = await _compute_house_status()

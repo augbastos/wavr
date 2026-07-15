@@ -19,6 +19,7 @@ independent unit coverage.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 from wavr.app import create_app
 from wavr.camera_store import CameraStore
@@ -226,6 +227,36 @@ def test_digest_once_is_noop_when_digest_connector_disabled(monkeypatch):
     finally:
         monkeypatch.delenv("WAVR_TELEGRAM_TOKEN", raising=False)
         monkeypatch.delenv("WAVR_TELEGRAM_CHAT_ID", raising=False)
+
+
+def test_digest_once_survives_a_store_blip_instead_of_killing_the_scheduler(monkeypatch):
+    # "The gate above the guard". The digest's connector gate is a RAW sqlite read
+    # (ConnectorStore.get -> SELECT, unguarded) and it sat one line ABOVE the try that guards
+    # everything else in _digest_once. wavr.db is shared by five stores on SD-card-backed
+    # sqlite on a Core that runs for weeks, so "database is locked" is a real recurring error
+    # class there -- and a single blip propagated OUT of _digest_once, exited _digest_loop's
+    # unguarded `while True`, and killed the scheduler for the whole process lifetime with
+    # ZERO log output: the task's exception was never retrieved, the strong reference kept it
+    # from being GC'd so asyncio's own "exception was never retrieved" fallback never fired,
+    # and shutdown's suppress(CancelledError, Exception) ate the last chance to see it. The
+    # tick runs once per 24h, so nothing ever retried.
+    # Existing coverage drives _digest_once via the seam only and never proves it absorbs a
+    # raise -- which is exactly how this hid.
+    monkeypatch.setenv("WAVR_DB", ":memory:")
+    store = _telegram_enabled_store()
+    app = create_app(sources=[], storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
+                     net_inventory=_FakeInvService(), connector_store=store)
+
+    # Blip the gate AFTER create_app -- its own startup reads must succeed first.
+    def _locked(_cid):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(store, "is_enabled", _locked)
+
+    result = asyncio.run(app.state.digest_once())
+    assert result == {"ok": False, "status": "error", "via": None}, (
+        "a store blip must not escape _digest_once -- it exits _digest_loop's `while True` "
+        "and kills the daily digest for the whole process lifetime, with no log"
+    )
 
 
 def test_digest_once_sends_via_telegram_when_both_connectors_enabled(monkeypatch):
