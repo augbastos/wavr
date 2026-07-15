@@ -5806,7 +5806,14 @@ async function renderPairing(){
     if(qrBox && qrImg){
       const qrFp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
       if(qrFp && d.code){
-        const payload = JSON.stringify({v:1, u:location.origin, fp:qrFp, c:String(d.code)});
+        // P2 self-contained QR: prefer the backend's LAN-reachable lan_url over
+        // location.origin. This panel can be viewed ON the hub itself (kiosk/loopback), where
+        // location.origin is 127.0.0.1/localhost -- unreachable to the phone that scans the
+        // code. lan_url is derived server-side from the same address the peers-admin router
+        // already uses (never hardcoded here). Falls back to location.origin so an older
+        // backend that hasn't shipped lan_url yet still encodes a URL, unchanged from today.
+        const qrUrl = (typeof d.lan_url === "string" && d.lan_url) ? d.lan_url : location.origin;
+        const payload = JSON.stringify({v:1, u:qrUrl, fp:qrFp, c:String(d.code)});
         _ensureQRCode().then((qr)=>{
           const q = qr(0, "M");              // type 0 = auto-size for the data, error-correction M
           q.addData(payload); q.make();
