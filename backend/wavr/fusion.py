@@ -27,6 +27,31 @@ DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
 # counting-capable set is defined; keep in sync with the sources that set count.
 COUNTING_MODALITIES = frozenset({"camera", "mmwave"})
 
+# Modalities whose presence=False is TRUSTWORTHY evidence of absence, i.e. a real "I looked
+# and nobody is there" rather than "I lost them". This is a PHYSICS distinction, not a
+# freshness one, and it is what lets the FUSION-B latch tell a dropout from a live negative:
+#   * camera SEES the room -- a person who stops moving is still visible, so a fresh camera
+#     reporting empty genuinely means empty.
+#   * mmwave infers presence from motion/micro-motion -- a very still person VANISHES from
+#     it. A fresh mmwave presence=False is EXACTLY the dropout FUSION-B exists to bridge, so
+#     it must never be read as "empty" (that would re-introduce the count flicker).
+# Presence-only sources are absent by construction: they never vouch for a count, so their
+# negative has no latch to release.
+# HONEST COST of this gate (do not let this rot into an unstated limitation): an
+# mmwave-ONLY room -- the cheap, camera-free config -- keeps the bounded phantom. If the
+# radar's last count was N and a presence-only source then holds the room occupied, that N
+# (and its exact targets, which the precision ladder promotes back to position/100%) stands
+# for the stale_s window before it expires. There is NO fusion-layer fix: distinguishing "a
+# still person the radar lost" from "an empty room" is not information the merge has. The
+# only honest lever is source-side (e.g. LD2450 micro-motion/breathing keeping a still
+# person present). Camera rooms are cured; mmwave-only rooms are bounded, not cured.
+# NOTE a new counting modality added to COUNTING_MODALITIES defaults to absence-DISTRUST,
+# i.e. it fails toward the phantom, not toward honesty. Decide its absence semantics
+# deliberately; test_trusted_absence_is_a_subset_of_counting enforces the set relation.
+TRUSTED_ABSENCE_MODALITIES = frozenset({"camera"})
+assert TRUSTED_ABSENCE_MODALITIES <= COUNTING_MODALITIES, \
+    "TRUSTED_ABSENCE_MODALITIES must be a subset of COUNTING_MODALITIES"
+
 # PRECISION / RESOLUTION ladder -- the SECOND axis (how DETAILED an answer the
 # present+fresh evidence can honestly support), orthogonal to confidence (how SURE
 # someone is present). Finest detail each modality can HONESTLY deliver:
@@ -368,8 +393,38 @@ class FusionEngine:
             self._count_latch[room] = {"count": live_count, "targets": best_targets, "ts": ref}
             person_count = live_count
         else:
+            # FUSION-C FIX: `live_count is None` conflates TWO OPPOSITE states — a counting
+            # source that went SILENT (a dropout: stale/dead/no count this frame — the only
+            # thing FUSION-B exists to bridge, "we don't know") and a counting source that is
+            # AWAKE and explicitly reporting presence=False (a LIVE NEGATIVE — "we DO know:
+            # empty"). The loop above skips a fresh present=False counting source entirely
+            # (`if not (e.presence and decay > 0): continue`), so it lands here looking exactly
+            # like a dropout.
+            # Before FUSION-C the difference was academic: a sustained live negative dropped
+            # the blended confidence, `occupied` went False, and the `not occupied` branch
+            # cleared the latch. FUSION-C holds `occupied` True off ANY present presence-only
+            # source, which removed that release path — so a camera reporting EMPTY would keep
+            # vouching for a stale headcount, with the stale exact targets, which the precision
+            # ladder then promotes back to "position"/100%, for the whole stale_s window.
+            # Phantom people on the map of a room the camera says is empty.
+            # A live negative is STRONGER evidence than the stale_s timer: a source that is
+            # awake and says empty releases the latch NOW. The room may still read occupied
+            # (a presence-only source vouches for THAT honestly) but with person_count=None and
+            # no targets — "someone is home, we don't know how many" — which is exactly what a
+            # presence-only detection can honestly claim. A real dropout still latches.
+            # Only TRUSTED_ABSENCE_MODALITIES qualify: a fresh mmwave presence=False is a
+            # STILL PERSON vanishing from the radar (the very dropout FUSION-B bridges), not
+            # an empty room — reading it as a negative would re-introduce the count flicker.
+            counting_live_negative = any(
+                (not e.presence) and decays.get(m, 0.0) > 0.0
+                for m, e in events.items()
+                if m in COUNTING_MODALITIES and m in TRUSTED_ABSENCE_MODALITIES
+            )
             latch = self._count_latch.get(room)
-            if latch is not None and (ref - latch["ts"]).total_seconds() <= self._stale_s:
+            if counting_live_negative:
+                self._count_latch.pop(room, None)
+                person_count = None
+            elif latch is not None and (ref - latch["ts"]).total_seconds() <= self._stale_s:
                 person_count = latch["count"]
                 if not best_targets:
                     best_targets = list(latch["targets"])
