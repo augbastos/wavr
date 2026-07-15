@@ -489,7 +489,20 @@
   // resume): add @capacitor/app's appStateChange. Do NOT add that dependency pre-emptively.
   try{
     document.addEventListener("visibilitychange", function(){
-      if(document.visibilityState === "visible"){ detectRole(); reassertPresence(); pollManifest(); }   // Task 5 + OTA (ii) on resume
+      if(document.visibilityState === "visible"){
+        detectRole(); reassertPresence(); pollManifest();   // Task 5 + OTA (ii) on resume
+        // Reconnect-on-IP-change (P2): the socket may be DOWN because the pinned hub MOVED (DHCP renew)
+        // while we were backgrounded. index.html's reconnect loop only ever retries the STORED base
+        // (FIX-1's liveBase() reads it fresh, but NOTHING re-discovers a moved hub without a relaunch),
+        // so on resume-while-down re-run connectPinned: it re-probes the pinned base and, if unreachable,
+        // rediscoverPinned() browses _wavr._tcp for the SAME cert at a new address and updates _base (the
+        // base getter feeds window.WAVR_MOBILE.base, so index.html's next ws-ticket hits the new IP).
+        // Guarded on __wavrWsDown so it is a strict NO-OP during a healthy live session; restricted to a
+        // paired + ATTACHED dashboard device: a DETACHED "left Wavr" viewer also leaves __wavrWsDown truthy
+        // (its dead socket keeps closing) and must NOT be pulled back onto the dashboard; a sensor-only node
+        // drives no index.html socket so it never trips this anyway (belt-and-suspenders !capsSensorOnly).
+        if(_token && _attached && !capsSensorOnly() && window.__wavrWsDown){ connectPinned(function(){ hideOverlay(); }); }
+      }
     });
   }catch(_){}
 
