@@ -2047,6 +2047,15 @@
               data-tip="New devices — anything on your Wi-Fi you don't recognize yet">
         <svg aria-hidden="true"><use href="#ic-qmark"/></svg><span class="nav-label">New devices</span>
       </button>
+      <!-- What Wavr knows (feature #6): the trust screen -- reads GET /api/transparency
+           (presence:read) and answers "what does Wavr know, and what can leave my home?" in
+           plain language for a non-technical user. See #panel-transparencia + renderTransparency()
+           (defined right after renderHouseStatus(), same MODE gate/auth shape). -->
+      <button class="nav-item" id="tab-transparencia" type="button" data-tab="transparencia" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-transparencia" aria-label="What Wavr knows"
+              data-tip="What Wavr knows — an honest summary of sensing, cameras, and what leaves your home">
+        <svg aria-hidden="true"><use href="#ic-lock"/></svg><span class="nav-label">What Wavr knows</span>
+      </button>
     </div>
     <!-- Gear: sidebar footer (PC) / rail footer (tablet); on phone it moves to the topbar,
          never into the tab-bar (MASTER-SPEC §5 decision). -->
@@ -2934,6 +2943,46 @@
           <p class="panel-note" id="novNote" hidden></p>
         </div>
       </section>
+
+      <!-- ==================== WHAT WAVR KNOWS (feature #6): the trust screen -- an honest,
+           non-technical summary for someone who has never opened a settings panel. Reads
+           GET /api/transparency (presence:read) -- same MODE gate/auth shape as
+           renderHouseStatus() just above it in the script (live + an authenticated companion,
+           never simulated -- the public demo makes no backend calls, same invariant as the
+           System egress dashboard's own demo note). Every dynamic value below is server data,
+           rendered via createElement/textContent -- NEVER innerHTML. The "Good to know" tile
+           is the ONLY static content on this screen (two factual guarantees that hold
+           regardless of what the endpoint returns) -- see renderTransparency(). -->
+      <section class="tab-panel" id="panel-transparencia" data-tab="transparencia" role="tabpanel" aria-labelledby="tab-transparencia">
+        <div id="transTile" class="tile" aria-labelledby="trans-h">
+          <div class="tile-head"><h2 id="trans-h">What Wavr knows</h2><span class="hint">an honest summary, in plain language</span></div>
+          <p id="transLoading" class="empty" aria-live="polite">Loading…</p>
+          <div id="transBody" hidden>
+            <p id="transSensing" class="qc-headline" aria-live="polite"></p>
+            <p id="transSensingSub" class="qc-sub" aria-live="polite"></p>
+            <h4 class="pair-sub" id="transCamH" hidden>Cameras</h4>
+            <p id="transCamNone" class="empty" hidden>No cameras registered.</p>
+            <div id="transCameras" class="qc-rooms" aria-live="polite"></div>
+            <h4 class="pair-sub">In numbers</h4>
+            <p id="transCounts" class="qc-sub" aria-live="polite"></p>
+          </div>
+        </div>
+        <div id="transEgressTile" class="tile" hidden aria-labelledby="trans-eg-h">
+          <div class="tile-head"><h2 id="trans-eg-h">What leaves your home</h2><span class="hint">the honest list — nothing hidden</span></div>
+          <p id="transEgressSummary" class="egress-summary na">—</p>
+          <div id="transEgressList" class="egress-list" aria-live="polite"></div>
+        </div>
+        <div class="tile" aria-labelledby="trans-good-h">
+          <div class="tile-head"><h2 id="trans-good-h">Good to know</h2></div>
+          <div class="inv-card">
+            <ul class="inv-list">
+              <li><svg aria-hidden="true"><use href="#ic-camera"/></svg><span><b>Camera images are analyzed in memory and never saved.</b> Nothing is written to disk, and no frame ever leaves this device.</span></li>
+              <li><svg aria-hidden="true"><use href="#ic-lock"/></svg><span><b>Routines can turn things off, never back on.</b> A routine can pause sensing or switch off a camera, but re-enabling either one always takes your own action.</span></li>
+            </ul>
+          </div>
+        </div>
+        <p class="panel-note" id="transNote" hidden></p>
+      </section>
     </main>
   </div>
 </div>
@@ -3064,6 +3113,63 @@
       </details>
       <h4 class="pair-sub">Authorized devices</h4>
       <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
+    </div>
+    <!-- Guest pass (feature #8, guest mode 2026-07-16): the host mints a TIME-BOXED guest
+         invite -- POST /api/guest/invite {hours}, SAME require_local+admin gate as
+         /api/pair-code above, so this control is visible under the IDENTICAL condition as
+         the Pairing tile above it (MODE==="live" only -- never shown to any companion,
+         admin or not; see renderGuestInvite(), defined right after renderPairing()). The
+         guest scans the SAME QR/verify6/fingerprint compare as a normal pairing code
+         (byte-identical MitM defense, reusing pair-code-box/pair-qr-box/pair-verify-box/
+         pair-fp-box verbatim) and redeems at the SAME POST /api/pair -- the response just
+         additionally carries `expires_at`/`role:"guest"`. A guest device gets
+         presence:write ONLY (anonymous presence for the evening -- no house read, no
+         stream, no management) and its token dies on its own at the deadline, no revoke
+         needed; it still shows up in "Authorized devices" above like any paired device. -->
+    <div id="guestInvite" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="guest-h">Guest pass</h2><span class="hint">a temporary pass for a visitor</span></div>
+      <p class="pair-hint" style="margin:-2px 0 12px">Create a guest pass — they'll be counted
+        as home for the evening, can't see or control anything, and it expires on its own.</p>
+      <form id="guestForm" class="pair-form" aria-labelledby="guest-h">
+        <label class="pair-role">Expires in
+          <select name="hours" aria-label="guest pass duration">
+            <option value="2">2 hours</option>
+            <option value="4" selected>4 hours</option>
+            <option value="8">8 hours</option>
+            <option value="12">12 hours</option>
+          </select>
+        </label>
+        <button type="submit" class="ctl">Create guest pass</button>
+        <span id="guestFb" class="action-fb" aria-live="polite"></span>
+      </form>
+      <div id="guestQrBox" class="pair-code-box pair-qr-box" hidden>
+        <img id="guestQrImg" class="pair-qr-img" width="184" height="184"
+             alt="Guest pairing QR code — scan with the Wavr app">
+        <span class="pair-hint">Scan this with the Wavr app to let them in — no typing, and it
+          pins the hub's full certificate so no one can intercept.</span>
+      </div>
+      <div id="guestVerifyBox" class="pair-code-box pair-verify-box" hidden>
+        <span class="pair-fp-label">Hub verification code</span>
+        <code id="guestVerify6" class="pair-compare-code" aria-live="polite"></code>
+        <span class="pair-hint">On their phone, enter this 6-digit code to pair.</span>
+      </div>
+      <div id="guestCodeBox" class="pair-code-box" hidden>
+        <span id="guestCode" class="pair-code" aria-live="polite"></span>
+        <span id="guestCountdown" class="pair-countdown" aria-hidden="true"></span>
+        <button type="button" id="guestCopy" class="ctl small">Copy</button>
+        <span class="pair-hint">enter this code on their device · it refreshes itself, so a code
+          they are typing keeps working · local network only</span>
+      </div>
+      <div id="guestCountdownBar" class="pair-cd-bar" hidden><i></i></div>
+      <p id="guestExpiryNote" class="panel-note" hidden></p>
+      <details id="guestFingerprintBox" class="pair-fp-box why" hidden>
+        <summary>Show advanced fingerprint</summary>
+        <p class="pair-fp-hint">On their phone, when they see the security warning, tap it →
+          <b>View certificate</b> and confirm the SHA-256 fingerprint matches:</p>
+        <code id="guestFingerprint" class="pair-fp" aria-live="polite"></code>
+        <p class="pair-fp-warn">If it does <b>not</b> match, stop. Someone may be intercepting
+          your network; do not tap “Continue”.</p>
+      </details>
     </div>
     <!-- My devices — consent-first identity registry (2026-07-06 ethics decision).
          The registry holds ONLY devices the admin confirms: a Bluetooth device bonded to
@@ -5828,6 +5934,134 @@ function renderHouseStatus(){
 }
 renderHouseStatus();
 
+// ---- What Wavr knows (feature #6): the trust screen, GET /api/transparency ----
+// Same MODE gate/auth shape as renderHouseStatus() just above (live + an authenticated
+// companion, Bearer/presence:read -- root/central/user all carry that scope by default; a
+// guest device does NOT, so a guest's phone could never see this screen even if it somehow
+// reached the tab). Never fetched in simulated/demo -- same "this demo makes no backend
+// calls" invariant as the System egress dashboard's own #egressDemoNote. Every value below
+// is server data, rendered via createElement/textContent -- NEVER innerHTML.
+function renderTransparency(){
+  const tile = document.getElementById("transTile");
+  if(!tile) return;   // additive: a stale cached page without this markup just no-ops
+  const loading   = document.getElementById("transLoading");
+  const body      = document.getElementById("transBody");
+  const sensingEl = document.getElementById("transSensing");
+  const sensingSub= document.getElementById("transSensingSub");
+  const camH      = document.getElementById("transCamH");
+  const camNone   = document.getElementById("transCamNone");
+  const camList   = document.getElementById("transCameras");
+  const countsEl  = document.getElementById("transCounts");
+  const egTile    = document.getElementById("transEgressTile");
+  const egSum     = document.getElementById("transEgressSummary");
+  const egList    = document.getElementById("transEgressList");
+  const note      = document.getElementById("transNote");
+
+  function showNote(msg){
+    loading.hidden = true; body.hidden = true; egTile.hidden = true;
+    note.hidden = false; note.textContent = msg;
+  }
+
+  if(MODE!=="live" && MODE!=="companion"){
+    showNote("This demo has no hub connected — “What Wavr knows” needs a real Wavr hub.");
+    return;                                    // never a backend call in simulated/demo
+  }
+  if(MODE==="companion" && !companionToken()) return;  // companion pairing state: no token yet
+  const auth = MODE==="companion" ? {"Authorization":"Bearer "+companionToken()} : {"X-Wavr-Local":"1"};
+
+  // v2 egress icons' own visual language (System → "What can leave this home"): a badge per
+  // row is the primary signal — green/lock "stays home", amber/net "can leave". Built locally
+  // (not a call into the Stage-3b IIFE's own egRow/egBadge, which are private to that closure)
+  // but reuses the SAME .eg-row/.eg-icon/.eg-main/.eg-name/.eg-tag/.eg-state CSS classes, so
+  // this screen and System's dashboard read as one voice about egress.
+  function egRowEl(item){
+    const on = !!(item && item.on);
+    const row = document.createElement("div"); row.className = "eg-row";
+    const badge = document.createElement("span");
+    badge.className = "eg-icon " + (on ? "egress" : "local");
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    const use = document.createElementNS(NS, "use");
+    use.setAttribute("href", on ? "#ic-net" : "#ic-lock");
+    svg.appendChild(use); badge.appendChild(svg);
+    row.appendChild(badge);
+    const main = document.createElement("div"); main.className = "eg-main";
+    const nameLine = document.createElement("div"); nameLine.className = "eg-name";
+    nameLine.appendChild(document.createTextNode(String((item && item.channel) || "")));  // textContent-equivalent — server data
+    const tag = document.createElement("span");
+    tag.className = "eg-tag" + (on ? " on" : "");
+    tag.textContent = on ? "on" : "off";
+    nameLine.appendChild(tag);
+    main.appendChild(nameLine);
+    const state = document.createElement("span"); state.className = "eg-state";
+    state.textContent = String((item && item.detail) || "");    // textContent — server data
+    main.appendChild(state);
+    row.appendChild(main);
+    return row;
+  }
+
+  async function refresh(){
+    let r;
+    try{ r = await fetch(location.origin+"/api/transparency", {headers:auth}); }
+    catch{ return; }                           // backend momentarily unreachable — keep last view
+    if(MODE==="companion" && (r.status===401 || r.status===403)){ companionAuthFailed(); return; }
+    if(!r.ok){ showNote("Couldn't load this screen right now — try again in a moment."); return; }
+    let t; try{ t = await r.json(); }catch{ showNote("Couldn't load this screen right now — try again in a moment."); return; }
+
+    loading.hidden = true; note.hidden = true; body.hidden = false;
+
+    const sensingOn = t.sensing_on !== false;
+    sensingEl.className = "qc-headline " + (sensingOn ? "home" : "off");
+    sensingEl.textContent = sensingOn ? "Sensing is on" : "Sensing is off";
+    sensingSub.textContent = sensingOn
+      ? "Wavr is actively watching for presence."
+      : "Wavr is paused — nothing is sensing right now.";
+
+    const cameras = Array.isArray(t.cameras) ? t.cameras : [];
+    camList.textContent = "";
+    camH.hidden = cameras.length === 0;
+    camNone.hidden = cameras.length > 0;
+    cameras.forEach(function(c){
+      const row = document.createElement("div"); row.className = "qc-room-row";
+      const n = document.createElement("span"); n.className = "qc-room-name";
+      n.textContent = String((c && c.name) || "");   // textContent — server data
+      const on = !!(c && c.on);
+      const s = document.createElement("span");
+      s.className = "qc-room-state" + (on ? " occ" : "");
+      s.textContent = on ? "on" : "off";
+      row.appendChild(n); row.appendChild(s);
+      camList.appendChild(row);
+    });
+
+    const counts  = (t.counts && typeof t.counts === "object") ? t.counts : {};
+    const people  = Number(counts.people_known) || 0;
+    const devices = Number(counts.devices_seen) || 0;
+    const rooms   = Number(counts.rooms) || 0;
+    countsEl.textContent = people + " " + (people === 1 ? "person" : "people") + " known" +
+      " · " + devices + " " + (devices === 1 ? "device" : "devices") + " seen" +
+      " · " + rooms + " " + (rooms === 1 ? "room" : "rooms") + " mapped";
+
+    const egress = Array.isArray(t.egress) ? t.egress : [];
+    egTile.hidden = false;
+    egList.textContent = "";
+    egress.forEach(function(e){ egList.appendChild(egRowEl(e)); });
+    // Honesty gate: name what's actually on rather than a bare count — disclosure, not alarm.
+    const onRows = egress.filter(function(e){ return e && e.on; });
+    if(onRows.length === 0){
+      egSum.className = "egress-summary ok";
+      egSum.textContent = "Nothing leaves your home — everything runs on this device.";
+    } else {
+      egSum.className = "egress-summary warn";
+      egSum.textContent = onRows.map(function(e){ return e.channel; }).join(", ") +
+        (onRows.length === 1 ? " is" : " are") + " on — see below.";
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 20000);
+}
+renderTransparency();
+
 // One-shot read of GET /api/status.features.multidevice, shared by the three
 // multidevice-gated panels below (Pairing/Peers/Nodes). /api/devices, /api/peers and
 // /api/nodes are only mounted when WAVR_MULTIDEVICE=1 (backend/wavr/app.py) -- on a
@@ -6085,6 +6319,138 @@ async function renderPairing(){
   refresh(seed);                            // seed the list from the probe response we already read
 }
 renderPairing();
+
+// ---- Guest pass (feature #8, guest mode 2026-07-16) ----
+// Host mints a TIME-BOXED guest invite: POST /api/guest/invite {hours}. SAME require_local +
+// admin gate as /api/pair-code above, so this control is visible under the IDENTICAL condition
+// as the Pairing panel — MODE==="live" only, never shown to any companion (admin or not),
+// mirroring renderPairing()'s own gate exactly. The guest scans the SAME QR/verify6/fingerprint
+// compare as a normal pairing code (byte-identical MitM defense, reusing _ensureQRCode()) and
+// redeems at the SAME POST /api/pair — the response just additionally carries `expires_at`/
+// `role:"guest"`. Unlike the always-on Pairing panel (which auto-mints the moment it scrolls
+// into view), minting here only starts on an explicit "Create guest pass" tap — a guest pass is
+// an occasional, deliberate action, not a standing invite. Once started, the code auto-refreshes
+// before its own ~2-min redemption window expires (same tick()/mintOnce() idiom as renderPairing
+// above) and the "expires at" preview recomputes on every refresh; rotation stops the instant the
+// tile leaves the screen (same visibility guard as renderPairing's own tick()).
+function renderGuestInvite(){
+  if(MODE!=="live") return;                 // live-only; never companion or Plano B (demo) — mirrors renderPairing()'s own gate
+  const tile = document.getElementById("guestInvite");
+  if(!tile) return;                         // additive: a stale cached page without this markup just no-ops
+  (async ()=>{
+    if(await _wavrMultideviceOff) return;   // /api/guest/invite is mounted only under the SAME `if cfg.multidevice` block as /api/pair-code — proven off via /api/status, no doomed probe
+    tile.hidden = false;
+
+    const form       = document.getElementById("guestForm");
+    const fb         = document.getElementById("guestFb");
+    const qrBox       = document.getElementById("guestQrBox");
+    const qrImg       = document.getElementById("guestQrImg");
+    const verifyBox   = document.getElementById("guestVerifyBox");
+    const verifyEl    = document.getElementById("guestVerify6");
+    const codeBox     = document.getElementById("guestCodeBox");
+    const codeEl      = document.getElementById("guestCode");
+    const cdEl        = document.getElementById("guestCountdown");
+    const cdBar       = document.getElementById("guestCountdownBar");
+    const cdFill      = cdBar ? cdBar.querySelector("i") : null;
+    const fpBox       = document.getElementById("guestFingerprintBox");
+    const fpEl        = document.getElementById("guestFingerprint");
+    const copyBtn     = document.getElementById("guestCopy");
+    const expiryNote  = document.getElementById("guestExpiryNote");
+
+    const CODE_TTL_MS = 120000, REFRESH_AT_MS = 20000;   // same TTL as pair-code — mint a fresh code with ~20s left
+    let rotTimer = null, rotExpiresAt = 0, rotBusy = false;
+
+    function stopRotation(){ if(rotTimer){ clearInterval(rotTimer); rotTimer = null; } }
+
+    async function mintOnce(){
+      if(rotBusy) return;                   // never overlap a slow request with a tick
+      rotBusy = true;
+      const hours = Math.max(0.25, Math.min(24, Number(form.hours.value) || 4));  // mirrors the backend's own server-side clamp
+      let r, d;
+      try{
+        r = await fetch(location.origin+"/api/guest/invite",{method:"POST",
+          headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+          body:JSON.stringify({hours:hours})});
+        if(!r.ok) throw 0;                   // e.g. multidevice turned off mid-session
+        d = await r.json();
+      }catch{ actionFeedback(fb, false, "couldn't create the guest pass"); stopRotation(); rotBusy = false; return; }
+
+      codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
+      codeBox.hidden = false;
+      rotExpiresAt = Date.now() + CODE_TTL_MS;
+
+      const v6 = (typeof d.verify6 === "string" || typeof d.verify6 === "number")
+                 ? String(d.verify6).replace(/\D/g,"").padStart(6,"0").slice(-6) : "";
+      verifyEl.textContent = v6 ? (v6.slice(0,3) + " " + v6.slice(3)) : "";  // textContent — server value
+      verifyBox.hidden = !v6;
+
+      const fp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
+      fpEl.textContent = fp;                 // textContent — server-provided fingerprint
+      fpBox.hidden = !fp;
+
+      if(fp && d.code){
+        const _oh = location.hostname;
+        const _originRoutable = /^\d{1,3}(\.\d{1,3}){3}$/.test(_oh) && !/^127\./.test(_oh) && _oh !== "0.0.0.0";
+        const qrUrl = (!_originRoutable && typeof d.lan_url === "string" && d.lan_url) ? d.lan_url : location.origin;
+        const payload = JSON.stringify({v:1, u:qrUrl, fp:fp, c:String(d.code)});
+        _ensureQRCode().then((qr)=>{
+          const q = qr(0, "M");
+          q.addData(payload); q.make();
+          qrImg.src = q.createDataURL(5, 8);
+          qrBox.hidden = false;
+        }).catch(()=>{ qrBox.hidden = true; });   // lib missing → fall back to the typed code
+      } else {
+        qrBox.hidden = true;
+      }
+
+      // "Guest access expires at HH:MM" — plain local time, recomputed on every refresh (the
+      // preview always reads "if they pair right now, access runs until…"; the redeemed
+      // device's real deadline is stamped from the SAME `hours` at the moment they actually
+      // scan, within this code's own ~2-min window — see pairing.py's mint_guest_code).
+      if(typeof d.expires_at === "string" && d.expires_at){
+        const dt = new Date(d.expires_at);
+        if(!isNaN(dt.getTime())){
+          expiryNote.hidden = false;
+          expiryNote.textContent = "Guest access expires at " +
+            dt.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"}) + ".";
+        } else expiryNote.hidden = true;
+      } else expiryNote.hidden = true;
+
+      if(cdBar) cdBar.hidden = false;
+      actionFeedback(fb, true, "", "✓ guest pass ready");
+      rotBusy = false;
+    }
+
+    function tick(){
+      // Visibility guard: stop the instant the tile isn't shown (Settings closed, or this
+      // section scrolled out via display:none at the panel form factor) — same idiom as
+      // renderPairing()'s own tick(), so a valid guest code never lingers unattended.
+      if(tile.hidden || !tile.offsetParent){ stopRotation(); return; }
+      const leftMs = rotExpiresAt - Date.now();
+      const leftS  = Math.max(0, Math.ceil(leftMs/1000));
+      if(cdEl)   cdEl.textContent = leftS + "s";
+      if(cdFill) cdFill.style.width = Math.max(0, Math.min(100, (leftMs/CODE_TTL_MS)*100)) + "%";
+      if(leftMs <= REFRESH_AT_MS && !rotBusy) mintOnce();   // refresh before the current code dies
+    }
+
+    function startRotation(){
+      stopRotation();
+      mintOnce().then(()=>{ rotTimer = setInterval(tick, 1000); });
+    }
+
+    form.onsubmit = (e)=>{ e.preventDefault(); startRotation(); };
+    // Changing the duration while a pass is already live re-mints under the new hours
+    // immediately — same UX as renderPairing()'s role-change re-mint.
+    form.hours.onchange = ()=>{ if(rotTimer) startRotation(); };
+
+    copyBtn.onclick = ()=>{
+      const code = codeEl.textContent; if(!code) return;
+      try{ if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{}); }catch{}
+      copyBtn.textContent = "Copied"; setTimeout(()=>{ copyBtn.textContent = "Copy"; }, 1500);
+    };
+  })();
+}
+renderGuestInvite();
 
 // ---- Approve-on-Core pairing banner (live only, multidevice-gated, design 2026-07-11) ----
 // A companion that hasn't got a code yet asks the Core to let it in (POST /api/pair-request,
@@ -10912,7 +11278,7 @@ try {
 // (window.__wavrMap) that renderRadar() exposes at the end of its closure.
 (function(){
   "use strict";
-  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas", "quemcasa", "novos"];
+  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas", "quemcasa", "novos", "transparencia"];
   var content = document.getElementById("content");
   var navButtons = Array.prototype.slice.call(document.querySelectorAll(".nav-item[data-tab]"));
   var panels = {};
