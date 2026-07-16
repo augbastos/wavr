@@ -72,7 +72,7 @@ from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
 from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
-from wavr.identity_store import IdentityStore
+from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
@@ -1003,9 +1003,48 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         merged.update(_identity_store.as_ble_map())   # registry wins ties
         return merged
 
+    def _consent_of(device_id: str) -> str:
+        """This device's LIVE participation tri-color, for the identity registry's
+        consent gate. Fails CLOSED at every step: a grant we cannot READ is not a
+        grant we may act on.
+
+          * ROOT_DEVICE_ID -- the operator's own loopback box. It holds no Device
+            row by design (its lever is /api/system/toggle, hence the 409 on
+            /api/consent), so it is the one companion row that legitimately has no
+            level to look up.
+          * _devices is None -- multidevice is OFF (cfg.multidevice, :711). Identity
+            rows OUTLIVE that flag: a companion can have registered green, withdrawn
+            to red, and only then had multidevice disabled. Returning "green" here
+            (as this did until 2026-07-16) silently RESURRECTED the withdrawn name,
+            turning a feature flag into a consent override. With multidevice off
+            nothing can pair or register anyway, so the only rows this darkens are
+            exactly the leftovers that must stay dark.
+          * no Device row -- hard-deleted, or a row from another DB.
+
+        `consent or "green"` mirrors devices.Device.to_dict: NULL means "never
+        explicitly set", which resolves to green everywhere."""
+        if device_id == ROOT_DEVICE_ID:
+            return "green"
+        if _devices is None:
+            return "red"
+        device = _devices.get(device_id)
+        if device is None:
+            return "red"
+        return device.consent or "green"
+
+    # Make the registry consent-aware BEFORE anything reads it. Without this the
+    # tri-color would only ever be enforced where a row is WRITTEN, which is the
+    # bug this closes: the level is changed LATER (POST /api/consent), so a device
+    # registered green and then withdrawn to red kept feeding named presence.
+    _identity_store.set_consent_lookup(_consent_of)
+
     def _net_known_provider() -> dict:
-        merged = dict(cfg.net_known)
-        merged.update(_identity_store.as_net_map())
+        merged: dict[str, str | None] = dict(cfg.net_known)
+        # as_net_known (not as_net_map): the PRESENCE map, which also carries the
+        # {mac: None} "counted but never named" entries that yellow needs. The env
+        # allowlist has no consent axis -- it is the operator's own box -- so it
+        # stays as-is and the registry's live decision is layered on top.
+        merged.update(_identity_store.as_net_known())
         return merged
 
     manager = SourceManager(_ingest)
@@ -1407,6 +1446,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #    test can drive one deterministic push without waiting on cfg.refuse_interval.
     app.state.publish_derived_mqtt = _publish_derived_mqtt
     app.state.camera_health = _camera_health
+    #  * net_known_provider: the exact callable NetworkSource re-reads every scan
+    #    cycle, so a test can assert what a given consent level actually DELIVERS
+    #    to presence (counted? named?) without driving a real ARP scan.
+    app.state.net_known_provider = _net_known_provider
     #  * calib_sample: the walk-to-calibrate feet-pixel sink, so a test can record a
     #    coordinate and assert GET calib-sample surfaces it (never a frame -- ADR-0002).
     app.state.calib_sample = _calib_sample
@@ -2511,11 +2554,28 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # "red" was previously a client-side-only promise (the shim just never
         # called this route) -- a patched/compromised client could keep
         # registering after withdrawal. It is now enforced HERE too, so RED is
-        # a real server-side guarantee, not just a UI state. "yellow" still
-        # counts as present (the mac is real LAN traffic either way) but never
-        # gets a NAME attached -- "green" is the ONLY level that writes an
-        # identity row, i.e. contributes to honest, NAMED who's-home.
+        # a real server-side guarantee, not just a UI state.
+        #
+        # This route is only HALF the guarantee, and on its own it was the wrong
+        # half (fixed 2026-07-16): it decides what a level does at WRITE time, but
+        # the level is changed LATER by POST /api/consent. The durable enforcement
+        # is the registry's own read-time gate (IdentityStore.set_consent_lookup),
+        # which re-reads each device's live level on every scan cycle -- so a
+        # withdrawal applies to an already-written row without needing the client
+        # to send its DELETE. What is written here is the DATA-AT-REST half: green
+        # stores a name because the owner asked to be named; yellow stores an
+        # ANONYMOUS row -- present, never named -- so the name it declined is not
+        # sitting in the DB waiting for a gate to hold.
         consent = _caller_consent(request)
+        device = _self_device(request)
+        # The row MUST carry a link to whatever owns its consent level, or the
+        # read-time gate has nothing to ask and fails closed on it forever. Root
+        # legitimately has no Device row (_self_device returns None for it), so it
+        # gets the reserved sentinel rather than a NULL that would be
+        # indistinguishable from a pre-upgrade row. Never client-supplied: this
+        # comes from the bearer token the middleware already verified.
+        device_id = device.device_id if device else (
+            ROOT_DEVICE_ID if getattr(request.state, "role", None) == "root" else None)
         if consent == "red":
             return {"mac_registered": False, "reason": "consent-withdrawn"}
         try:
@@ -2527,12 +2587,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if not mac:
             return {"mac_registered": False, "reason": "no-arp-resolution"}
         if consent == "yellow":
-            # Presence WITHOUT the name label: deliberately skip the identity
-            # write (that write is what attaches a name) -- the device still
-            # shows up as anonymous presence via the normal network scan, it
-            # just never gets a person label in the identity registry.
+            # Presence WITHOUT the name: an ANONYMOUS row. This used to skip the
+            # write entirely, on the reasoning that the write is what attaches a
+            # name -- but the write is ALSO what makes the MAC known, and only a
+            # known MAC counts (sources/network.py: `known & seen`). So yellow
+            # delivered no name AND no presence: byte-identical to red, while the
+            # UI promised "counted as home, without a name". The row is the
+            # presence half; ANONYMOUS is the withheld-name half.
+            _identity_store.add_anonymous(mac, source="network", origin="companion",
+                                          device_id=device_id)
             return {"mac_registered": True, "label": None, "mac_prefix": mac_prefix(mac)}
-        _identity_store.add(mac, who, source="network", origin="companion")
+        _identity_store.add(mac, who, source="network", origin="companion",
+                            device_id=device_id)
         return {"mac_registered": True, "label": who, "mac_prefix": mac_prefix(mac)}
 
     @app.delete("/api/presence/register-companion")
@@ -2585,9 +2651,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                           __=Depends(require_scope("presence:write"))):
         # The write half of the same self-resolved axis. 200 {device_id, level}
         # is what the shim's postConsent already expects on success (it treats
-        # anything else as a retry, never a re-pair). Enforcement of what a
-        # given level actually DOES lives at register_companion (and mirrors
-        # into the identity registry immediately -- no restart needed).
+        # anything else as a retry, never a re-pair).
+        #
+        # Writing the column IS the enforcement, and nothing here needs to mirror
+        # into the identity registry: the registry reads this level LIVE on every
+        # scan cycle via _consent_of (IdentityStore.set_consent_lookup), keyed by
+        # the device_id its rows carry. So a withdrawal takes effect on the next
+        # cycle for rows written BEFORE it -- no restart, and no dependence on the
+        # client sending its DELETE (an offline or patched one never does).
+        # (This comment previously claimed a mirror that did not exist; the levels
+        # were in fact only ever applied at register-companion's write. 2026-07-16.)
         if getattr(request.state, "role", None) == "root":
             raise HTTPException(status_code=409, detail="use /api/system/toggle")
         if level not in VALID_CONSENT:
@@ -2624,9 +2697,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # PASSIVE self-report of state this process already holds -- zero new
         # I/O, zero egress, no ping/DNS. `my_presence_registered` resolves the
         # caller's own mac the SAME server-side-ARP way register_companion does
-        # and checks whether an identity row exists for it (true only at
-        # "green" consent -- "yellow"/"red" honestly read false here, matching
-        # register_companion's own no-name-label / dropped behaviour).
+        # and answers ONE question honestly: "is my device contributing presence
+        # right now?" -- so it reads the consent-gated presence map, not a raw row
+        # lookup. green -> True (counted, named), yellow -> True (counted, never
+        # named -- it IS contributing), red -> False (contributing nothing).
+        #
+        # It used to call _identity_store.get(), which is ungated, and its comment
+        # claimed "true only at green -- yellow/red honestly read false". Both
+        # halves were wrong once consent became read-time: a device that withdrew
+        # to red still had its row, so its OWN screen told its owner presence was
+        # registered while the hub counted it for nothing. A withdrawal screen must
+        # never be the last place the withdrawal is believed. (2026-07-16)
         st = manager.status()
         active_count = sum(1 for s in st["sources"] if s["active"])
         last_frame_age_s = None
@@ -2640,7 +2721,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 last_frame_age_s = None   # malformed ts -- honestly unknown, never crash
         host = request.client.host if request.client else None
         mac = await _resolve_companion_mac(host) if host else None
-        my_presence_registered = bool(mac and _identity_store.get(mac) is not None)
+        my_presence_registered = bool(mac and mac in _identity_store.as_net_known())
         return {
             "system_running": st["running"],
             "sources_active_count": active_count,
