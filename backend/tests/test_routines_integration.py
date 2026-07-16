@@ -108,6 +108,50 @@ def test_house_arrival_fires_a_routine_end_to_end():
         "a real house arrival (away -> home) ran the routine through the app"
 
 
+def test_house_condition_fires_without_mqtt_via_the_dedicated_tracker():
+    # Regression (QA-found): a routine with a {house: "home"} CONDITION must fire off the
+    # dedicated always-on house tracker, not the optional MQTT AwayMonitor (which is None
+    # on a Core with no MQTT/ntfy). Before the fix, house_home read the None _away ->
+    # UNKNOWN -> the routine silently never fired without MQTT.
+    store = RoutineStore(":memory:")
+    r = store.add("home welcome", "house_arrived", condition={"house": "home"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)   # no MQTT/ntfy -> _away is None
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            for _ in range(4):
+                app.state.routine_house.handle({"room": "sala", "occupied": False})  # away baseline
+            app.state.routine_house.handle({"room": "sala", "occupied": True})        # arrives -> home
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    assert store.get(r["id"])["last_fired"] is not None, \
+        "the house condition read the dedicated tracker, so it fired even without MQTT"
+
+
+def test_room_fill_fires_a_routine_end_to_end():
+    # "when the kitchen fills -> discreet mode", through the per-room edge detector fed
+    # off the ingest. First determination is the baseline (no edge); the flip fires.
+    store = RoutineStore(":memory:")
+    r = store.add("kitchen light", "room_occupied", trigger_params={"room": "cozinha"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            app.state.routine_rooms.handle("cozinha", False)   # baseline: empty
+            app.state.routine_rooms.handle("cozinha", True)    # fills -> edge
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    fired = store.get(r["id"])
+    assert fired["last_status"] == "ok" and fired["last_fired"], \
+        "a real room-fill (empty -> occupied) ran the routine through the app"
+
+
 def test_someone_elses_arrival_does_not_fire_my_routine():
     store = RoutineStore(":memory:")
     r = store.add("welcome me", "person_arrived", trigger_params={"person": "Augusto"},
