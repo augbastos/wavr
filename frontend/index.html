@@ -1524,13 +1524,25 @@
     .nav-brand{flex-direction:column;justify-content:center;gap:5px;padding:12px 4px;text-align:center;}
     .nav-brand .brand-name{font-size:.72rem;letter-spacing:.4px;}
     .nav-brand .brand-name small{display:none;}
-    .nav-tabs{padding:8px 5px;gap:5px;}
-    .nav-item{flex-direction:column;gap:3px;justify-content:center;padding:8px 2px;min-height:54px;
+    /* Overflow fix: the rail grew from 5 to 9 tabs (+Routines/Who's-home/New-devices/
+       What-Wavr-knows) this session and no longer fits 720px of kiosk height even after
+       tightening spacing below — Settings (.nav-foot, a sibling BELOW .nav-tabs) would get
+       squeezed against the last item or clipped off-screen with no way to reach the tabs
+       past it. .nav-tabs keeps its base flex:1;min-height:0 (line ~77) so it's a bounded
+       flex item, not one that grows to fit content; overflow-y:auto here makes IT (not the
+       whole .sidenav) the scroll container, so .nav-brand/.nav-foot stay pinned top/bottom
+       and every tab stays reachable regardless of how many more get added. Scrollbar hidden
+       to match the phone bottom-bar's own hidden-scrollbar idiom (:1455) — switchTab()'s
+       existing btn.scrollIntoView({block:"nearest"}) (already unconditional, not phone-gated)
+       brings the active tab into view on this axis too, no JS change needed. */
+    .nav-tabs{padding:6px 5px;gap:3px;overflow-y:auto;-ms-overflow-style:none;scrollbar-width:none;}
+    .nav-tabs::-webkit-scrollbar{display:none;}
+    .nav-item{flex:0 0 auto;flex-direction:column;gap:3px;justify-content:center;padding:6px 2px;min-height:46px;
               text-align:center;border-radius:9px;touch-action:manipulation;}
-    .nav-item svg{width:22px;height:22px;}
-    .nav-label{display:block;font-size:.62rem;letter-spacing:.02em;line-height:1.1;}
+    .nav-item svg{width:20px;height:20px;}
+    .nav-label{display:block;font-size:.6rem;letter-spacing:.02em;line-height:1.1;}
     .nav-item.active::before{left:12px;right:12px;top:0;bottom:auto;width:auto;height:2px;}
-    .nav-foot{padding:8px 5px;}
+    .nav-foot{padding:6px 5px;flex:none;}
 
     /* -------- HOME GRID: deterministic two-column instrument that fills the content height
        with NO page scroll. .inicio-grid becomes display:contents so its rooms-col + mapHome
