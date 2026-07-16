@@ -72,6 +72,7 @@ def test_person_arrival_fires_a_routine_end_to_end():
 
     async def _drive():
         async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()   # skip the boot presence-edge warm-up
             app.state.person_presence.update(set())          # boot baseline: nobody home
             app.state.person_presence.update({"Augusto"})    # Augusto arrives -> edge fires
             await asyncio.sleep(0.1)                          # let the dispatched action run
@@ -94,6 +95,7 @@ def test_house_arrival_fires_a_routine_end_to_end():
 
     async def _drive():
         async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()   # skip the boot presence-edge warm-up
             # Establish "away" as the determined baseline: away_grace (default 3)
             # consecutive vacant cycles. The first determination fires no edge (booting
             # away is not an arrival); the following occupied flip IS the arrival.
@@ -121,6 +123,7 @@ def test_house_condition_fires_without_mqtt_via_the_dedicated_tracker():
 
     async def _drive():
         async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()   # skip the boot presence-edge warm-up
             for _ in range(4):
                 app.state.routine_house.handle({"room": "sala", "occupied": False})  # away baseline
             app.state.routine_house.handle({"room": "sala", "occupied": True})        # arrives -> home
@@ -142,6 +145,7 @@ def test_room_fill_fires_a_routine_end_to_end():
 
     async def _drive():
         async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()   # skip the boot presence-edge warm-up
             app.state.routine_rooms.handle("cozinha", False)   # baseline: empty
             app.state.routine_rooms.handle("cozinha", True)    # fills -> edge
             await asyncio.sleep(0.1)
@@ -150,6 +154,29 @@ def test_room_fill_fires_a_routine_end_to_end():
     fired = store.get(r["id"])
     assert fired["last_status"] == "ok" and fired["last_fired"], \
         "a real room-fill (empty -> occupied) ran the routine through the app"
+
+
+def test_boot_warmup_suppresses_a_spurious_arrival():
+    # Review HIGH: at boot `latest` fills one room at a time, so a person already home in a
+    # not-yet-reported room would fire a spurious "arrived" when that room reports. The
+    # warm-up window suppresses presence edges until the trackers are house-complete. Here
+    # we DON'T mark warm, so the "arrival" must be suppressed.
+    store = RoutineStore(":memory:")
+    r = store.add("welcome", "person_arrived", trigger_params={"person": "Augusto"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            # deliberately NOT calling routines_mark_warm() -> boot warm-up is active
+            app.state.person_presence.update(set())
+            app.state.person_presence.update({"Augusto"})   # would be an arrival, but suppressed
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    assert store.get(r["id"])["last_fired"] is None, \
+        "no presence routine fires during the boot warm-up window"
 
 
 def test_someone_elses_arrival_does_not_fire_my_routine():
@@ -161,6 +188,7 @@ def test_someone_elses_arrival_does_not_fire_my_routine():
 
     async def _drive():
         async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()   # skip the boot presence-edge warm-up
             app.state.person_presence.update(set())
             app.state.person_presence.update({"Bea"})        # a DIFFERENT person arrives
             await asyncio.sleep(0.1)

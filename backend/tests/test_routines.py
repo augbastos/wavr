@@ -150,6 +150,53 @@ def test_schedule_fires_once_per_day_after_the_time():
     assert [x["id"] for x in eng.tick(datetime(2026, 7, 17, 23, 0), None)] == [r["id"]], "next day -> fires again"
 
 
+def test_tick_applies_the_condition_gate():
+    # Review HIGH: tick() used to ignore conditions. A schedule with a {house: home}
+    # condition must NOT fire when the house is away, and MUST fire when it is home.
+    s = _store()
+    r = s.add("home only", "schedule", trigger_params={"at": "00:00"},
+              condition={"house": "home"}, actions=[_light_action()])
+    s.set_enabled(r["id"], True)
+    away = RoutinesEngine(s, sensing_on=lambda: True, house_home=lambda: False)
+    assert away.tick(datetime(2026, 7, 16, 1, 0), False) == [], "condition away -> schedule skipped"
+    home = RoutinesEngine(s, sensing_on=lambda: True, house_home=lambda: True)
+    assert [x["id"] for x in home.tick(datetime(2026, 7, 16, 1, 0), True)] == [r["id"]]
+
+
+def test_away_by_time_does_not_fire_when_sensing_is_off():
+    # Review MEDIUM: "nobody home by X" asserts away, so it must not fire on an unknowable
+    # (sensing-off) state, even if the last latched house state was away.
+    s = _store()
+    r = s.add("nobody", "house_away_by_time", trigger_params={"by": "00:00"},
+              actions=[{"kind": "notify", "params": {"message": "x"}}])
+    s.set_enabled(r["id"], True)
+    off = RoutinesEngine(s, sensing_on=lambda: False, house_home=lambda: False)
+    assert off.tick(datetime(2026, 7, 16, 1, 0), False) == [], "sensing off -> away unknowable -> no fire"
+
+
+def test_schedule_does_not_refire_after_a_same_day_restart():
+    # Review MEDIUM: the once-per-day guard must survive a restart via the persisted
+    # last_fired, or a reboot after the schedule time re-fires it the same day.
+    s = _store()
+    r = s.add("night", "schedule", trigger_params={"at": "23:00"},
+              actions=[{"kind": "set_watch", "params": {"on": True}}])
+    s.set_enabled(r["id"], True)
+    s.mark_fired(r["id"], datetime(2026, 7, 16, 23, 0).isoformat(), "ok")  # already fired today
+    fresh = RoutinesEngine(s, sensing_on=lambda: True)                     # post-restart: empty _fired_day
+    assert fresh.tick(datetime(2026, 7, 16, 23, 30), None) == [], "persisted last_fired blocks the re-fire"
+    assert [x["id"] for x in fresh.tick(datetime(2026, 7, 17, 23, 30), None)] == [r["id"]], "next day fires"
+
+
+def test_non_house_condition_is_rejected_at_write_time():
+    # Review LOW: a condition the engine can't evaluate used to be accepted and then
+    # silently fail OPEN. It must be rejected up front instead.
+    with pytest.raises(ValueError):
+        _store().add("x", "house_arrived", condition={"person": "aug", "state": "home"},
+                     actions=[_light_action()])
+    with pytest.raises(ValueError):
+        _store().add("x", "house_arrived", condition={"house": "maybe"}, actions=[_light_action()])
+
+
 def test_away_by_time_fires_only_when_house_is_away():
     s = _store()
     r = s.add("nobody", "house_away_by_time", trigger_params={"by": "00:00"},
