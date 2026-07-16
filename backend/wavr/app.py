@@ -158,6 +158,10 @@ _DIGEST_INTERVAL_S = 24 * 3600.0
 # the matching stays pure (only a fired routine touches a sink). Test seam:
 # app.state.routines_tick fires one pass without waiting on this interval.
 _ROUTINES_INTERVAL_S = 30.0
+# How long after startup to suppress routine PRESENCE edges (see the warm-up note where
+# the edge callbacks are defined): long enough for every room to report at least once so
+# the trackers are primed from a house-complete state, not a partial boot snapshot.
+_ROUTINES_WARMUP_S = 8.0
 
 
 def _load_device_catalog() -> list:
@@ -501,9 +505,22 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _notify(msg)
         if _connectors.is_enabled("telegram"):
             try:
-                asyncio.create_task(asyncio.to_thread(_telegram_send, kind, severity, room, msg))
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                pass  # no running event loop (e.g. a sync test calling the callback directly)
+                loop = None
+            if loop is not None:
+                # On the event loop (fusion/ingest alert path): offload the blocking send.
+                loop.create_task(asyncio.to_thread(_telegram_send, kind, severity, room, msg))
+            else:
+                # Called from a WORKER THREAD (a routine action runs in asyncio.to_thread) --
+                # there is no running loop to create_task on. The old `except RuntimeError:
+                # pass` silently DROPPED the send here and the executor still reported "ok".
+                # We are already off the main loop, so send inline (blocking is fine); a
+                # failure logs loudly instead of vanishing.
+                try:
+                    _telegram_send(kind, severity, room, msg)
+                except Exception:
+                    logging.warning("telegram send (off-loop routine path) failed", exc_info=True)
 
     # --- Routines: the user-authored "when THIS -> do THAT" spine (routines.py). The
     # engine taps the SAME arrived/left edge AwayMonitor already emits (via the on_edge
@@ -511,6 +528,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # actions through the existing gated sinks. Empty store => nothing fires =>
     # byte-identical to today. Room/person/device triggers are engine-ready and wired in
     # a following step. ------------------------------------------------------------------
+    _owns_routine_store = routine_store is None   # only close a store this function built
     _routine_store = routine_store or RoutineStore(cfg.db_path)
 
     def _routine_ha_call(domain: str, service: str, entity_id) -> None:
@@ -543,11 +561,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     async def _run_routines(matched: list) -> None:
         for r in matched:
-            # Actions block (HA HTTP); run off the event loop so a slow HA never stalls
-            # the fusion/ingest path the edge callback fires from.
-            status = await asyncio.to_thread(_routine_executor.run, r["actions"])
-            _routine_store.mark_fired(
-                r["id"], datetime.now().isoformat(timespec="seconds"), status)
+            # Guard PER routine: mark_fired is an unguarded sqlite write that can raise on a
+            # db lock (wavr.db is shared, on the Core's SD card). Without this, one routine's
+            # failure would abort the loop and its siblings in the SAME edge would never run.
+            try:
+                # Actions block (HA HTTP); run off the event loop so a slow HA never stalls
+                # the fusion/ingest path the edge callback fires from.
+                status = await asyncio.to_thread(_routine_executor.run, r["actions"])
+                _routine_store.mark_fired(
+                    r["id"], datetime.now().isoformat(timespec="seconds"), status)
+            except Exception:
+                logging.warning("routine run failed: id=%s", r.get("id"), exc_info=True)
 
     _routine_tasks: set = set()   # strong refs to in-flight dispatches
 
@@ -590,13 +614,29 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                  "domain": e["domain"]}
                 for e in ents if e.get("domain") in _ROUTINE_HA_DOMAINS]
 
+    # Boot warm-up: `latest` fills ONE room at a time off the ingest, so at boot a
+    # presence tracker is primed from a PARTIAL house snapshot -- a person already home in
+    # a room that hasn't reported yet would fire a spurious "arrived" when it does, and the
+    # house monitor could latch "away" purely from the rooms seen so far. Suppress PRESENCE
+    # edge dispatch until the trackers have had time to see a house-complete state; they
+    # still UPDATE their internal state during warm-up, so the first real post-warm-up edge
+    # is correct. Time triggers (schedule/away_by_time) are NOT boot-baseline-sensitive, so
+    # the tick is never gated. A test forces this via app.state.routines_mark_warm().
+    _routines_warm = {"ok": False}
+
     def _routines_house_edge(home: bool) -> None:
+        if not _routines_warm["ok"]:
+            return
         _dispatch_routines(_routines.on_house_edge(home))
 
     def _routines_person_edge(person: str, home: bool) -> None:
+        if not _routines_warm["ok"]:
+            return
         _dispatch_routines(_routines.on_person_edge(person, home))
 
     def _routines_room_edge(room: str, occupied: bool) -> None:
+        if not _routines_warm["ok"]:
+            return
         _dispatch_routines(_routines.on_room_edge(room, occupied))
 
     # Per-person arrived/left edges ("when I arrive") + a dedicated house-level arrived/
@@ -1528,6 +1568,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # Telegram wiring above.
         digest_task = asyncio.create_task(_digest_loop())
         routines_task = asyncio.create_task(_routines_loop())
+        # A plain timer (not a task/coroutine) flips the presence-edge warm-up flag, so
+        # there is nothing to leak/await if the app is torn down before it fires.
+        _routines_warmup_handle = asyncio.get_running_loop().call_later(
+            _ROUTINES_WARMUP_S, lambda: _routines_warm.__setitem__("ok", True))
         # Enter the MCP-over-HTTP session manager LAST: all fallible startup is done, so it
         # can't be orphaned by an earlier failure. Requests aren't served until after the
         # yield, so the transport is live before the first /mcp dispatch.
@@ -1538,6 +1582,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         finally:
             # Suppress CancelledError AND any error a caller-injected publisher
             # might raise, so shutdown always reaches manager.stop() + camera close.
+            with suppress(Exception):
+                _routines_warmup_handle.cancel()   # a TimerHandle, cancel is enough
             for t in (rules_task, away_task, refuse_task, digest_task, routines_task,
                       *list(_routine_tasks)):
                 if t:
@@ -1555,6 +1601,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_cameras:
                 with suppress(Exception):
                     _cameras.close()
+            if _owns_routine_store:
+                with suppress(Exception):
+                    _routine_store.close()
             with suppress(Exception):
                 _calib.close()
             if _owns_identity:
@@ -1644,6 +1693,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * routine_rooms: the per-room edge detector, so a test can drive a room fill/empty
     #    (handle(room, occupied)) and assert a room_occupied/room_empty routine fires.
     app.state.routine_rooms = _routine_rooms
+    #  * routines_mark_warm: skip the boot presence-edge warm-up, so an edge test doesn't
+    #    have to wait _ROUTINES_WARMUP_S for edges to start dispatching.
+    app.state.routines_mark_warm = lambda: _routines_warm.__setitem__("ok", True)
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or

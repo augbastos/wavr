@@ -92,8 +92,18 @@ def _validate(name, trigger_kind, trigger_params, condition, actions):
         raise ValueError(f"trigger {trigger_kind!r} requires param {req!r}")
     if trigger_kind in ("schedule", "house_away_by_time"):
         _parse_hhmm(trigger_params[req])   # raises on a bad HH:MM
-    if condition is not None and not isinstance(condition, dict):
-        raise ValueError("condition must be an object or null")
+    if condition is not None:
+        # Only the shapes the engine actually evaluates are accepted, so a condition the
+        # user authored to GATE a routine can NEVER be silently ignored (fail-open). Today
+        # that is exactly {"house": "home"|"away"}; anything else is rejected at write time.
+        if not isinstance(condition, dict):
+            raise ValueError("condition must be an object or null")
+        extra = set(condition) - {"house"}
+        if extra:
+            raise ValueError(f"unsupported condition key(s): {sorted(extra)} "
+                             "(only {'house': 'home'|'away'} is supported)")
+        if "house" in condition and condition["house"] not in ("home", "away"):
+            raise ValueError("condition 'house' must be 'home' or 'away'")
     if not isinstance(actions, list) or not actions:
         raise ValueError("actions must be a non-empty list")
     for a in actions:
@@ -280,16 +290,26 @@ class RoutinesEngine:
     def tick(self, now: datetime, house_home: bool | None) -> list[dict]:
         """Time + deadline triggers, evaluated on the routines loop. Fires each such
         routine at most once per calendar day (a periodic tick would otherwise
-        re-fire every cycle after the target time)."""
+        re-fire every cycle after the target time). Applies the SAME condition gate
+        the edge paths use, and _once() is checked LAST (short-circuit) so a routine
+        whose condition/time fails is never marked fired."""
         out = []
         for r in self._enabled():
             kind = r["trigger_kind"]
             if kind == "schedule":
-                if self._reached(now, r["trigger_params"]["at"]) and self._once(r, now):
+                if (self._reached(now, r["trigger_params"]["at"])
+                        and self._condition_ok(r) is True
+                        and self._once(r, now)):
                     out.append(r)
             elif kind == "house_away_by_time":
-                if (house_home is False
+                # "nobody home by HH:MM" ASSERTS the house is away -> it must not fire on a
+                # stale/unknowable state: require sensing ON right now (else the latched
+                # home state may be stale after a kill-switch toggle) plus the confirmed
+                # away, plus any explicit condition, plus once/day.
+                if (self._sensing_on()
+                        and house_home is False
                         and self._reached(now, r["trigger_params"]["by"])
+                        and self._condition_ok(r) is True
                         and self._once(r, now)):
                     out.append(r)
         return out
@@ -299,10 +319,23 @@ class RoutinesEngine:
         return now.time() >= _parse_hhmm(hhmm)
 
     def _once(self, routine, now: datetime) -> bool:
+        """At most once per calendar day, ACROSS restarts. The in-memory guard is the
+        fast path; the persisted last_fired (written by mark_fired) is the source of
+        truth after a reboot/kiosk-relaunch/update -- without it a schedule that fired
+        at 23:00 would fire AGAIN on the first tick after a 23:30 restart."""
         rid = routine["id"]
-        if self._fired_day.get(rid) == now.date():
+        today = now.date()
+        if self._fired_day.get(rid) == today:
             return False
-        self._fired_day[rid] = now.date()
+        last = routine.get("last_fired")
+        if last:
+            try:
+                if datetime.fromisoformat(last).date() == today:
+                    self._fired_day[rid] = today   # seed the in-memory guard from the store
+                    return False
+            except ValueError:
+                pass
+        self._fired_day[rid] = today
         return True
 
 
