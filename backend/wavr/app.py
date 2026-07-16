@@ -566,7 +566,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         try:
             meta = _device_meta.all()            # {mac: {first_seen, ...}}
         except Exception:
-            meta = {}
+            # A locked/failed read must NOT masquerade as "nothing appeared": the whole
+            # point of this push is what showed up while you were out, so a read we could
+            # not complete is reported HONESTLY, never as a false all-clear (ADR-0003, F1).
+            _notify_all(lead + "Couldn't check for new devices while you were out.",
+                        kind="routine", severity="note")
+            return
         new_macs = {m for m, d in meta.items() if (d.get("first_seen") or "") >= since}
         n = len(new_macs)
         if n == 0:
