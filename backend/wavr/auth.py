@@ -148,6 +148,15 @@ DEFAULT_SCOPES: dict[str, frozenset[str] | "_AllScopes"] = {
     # itself, further bounded there by its per-tool allow-list (effective_tool_
     # scopes below) -- "a bounded capability set, not the whole API" at BOTH layers.
     "agent": frozenset({"mcp"}),
+    # Guest mode (2026-07-16): the strictly-less-than-user principal. `presence:write`
+    # ONLY -- it can register its OWN presence (be counted as home for the evening) and
+    # NOTHING else: no presence:read, no network:read, no camera:view, no control, no
+    # admin, no mcp. Like 'agent' it is deliberately absent from can_view/
+    # can_change_state, so every require_scope-gated route AND the require_authenticated
+    # fallback deny it by construction; its ONLY reachable surface is the presence:write
+    # register-companion route (once app.py adds guest to the require_authenticated
+    # allowlist for that route specifically -- kept OUT of the blanket can_view).
+    "guest": frozenset({"presence:write"}),
 }
 
 
