@@ -124,12 +124,14 @@ class PairingManager:
         if pending is None or now >= pending.expires_at:
             self._failed.setdefault(key, []).append(now)   # wrong/expired guess -> counts (per IP)
             return None
-        # A guest code carries a session deadline -> stamp it on the Device so its
-        # token expires on its own; every normal code has session_expires_at=None
-        # (add() then stores expires_at=NULL = never expires, unchanged behaviour).
-        expires_at = (pending.session_expires_at.isoformat()
-                      if pending.session_expires_at is not None else None)
-        return self._store.add(name, pending.role, expires_at=expires_at)
+        # A guest code carries a session deadline -> stamp it on the Device so its token
+        # expires on its own. A NORMAL code passes NO expires_at kwarg at all, so this
+        # call is byte-identical to before guest mode for every existing caller and every
+        # test stub whose add() signature predates the kwarg (regression-safe).
+        if pending.session_expires_at is not None:
+            return self._store.add(name, pending.role,
+                                   expires_at=pending.session_expires_at.isoformat())
+        return self._store.add(name, pending.role)
 
     # -- WS tickets --------------------------------------------------------
     def mint_ticket(self, device_id: str) -> str:
