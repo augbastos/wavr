@@ -145,8 +145,8 @@ async def _stream_live(ws, q, did, get_device, recheck_s):
             if now - last_check >= recheck_s:
                 last_check = now
                 dev = get_device(did)
-                if dev is None or dev.revoked:
-                    return
+                if dev is None or dev.revoked or _is_expired(dev.expires_at):
+                    return   # drop the live stream the moment the credential dies/expires
 
 # 2C: cadence of the opt-in daily-digest scheduler task (see _digest_loop below) --
 # one composition+send pass every 24h. Gated on the SEPARATE "digest" connector row
@@ -3941,6 +3941,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # read, no stream, no management, nothing persisted past the deadline. Same
             # admin + require_local (loopback-root-CSRF or a central peer) tier as
             # /api/pair-code -- a plain user/agent/guest can NOT mint one.
+            # Reject a non-finite value BEFORE the clamp: pydantic admits NaN/inf by
+            # default, and min/max don't tame NaN, so timedelta(hours=NaN) would 500.
+            if hours != hours or hours in (float("inf"), float("-inf")):
+                raise HTTPException(status_code=422, detail="hours must be a finite number")
             hours = max(0.25, min(float(hours), 24.0))   # clamp server-side: 15 min .. 24 h
             from wavr.tls import cert_fingerprint, resolved_cert_path, verification_code
             fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
@@ -3995,8 +3999,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 await ws.close(code=1008)
                 return
             dev = _devices.get(did)
-            if dev is None or dev.revoked:
-                await ws.close(code=1008)
+            if dev is None or dev.revoked or _is_expired(dev.expires_at):
+                await ws.close(code=1008)   # dead/expired credential never opens the stream
                 return
             # A WS carries no scope through the http middleware, so gate it here for
             # the SAME reason ws-ticket is gated at include-time: the stream is the
