@@ -334,6 +334,12 @@ class DeviceStore:
         role outside VALID_ROLES (validated before touching the db)."""
         if role not in VALID_ROLES:
             raise ValueError(f"invalid role: {role!r} (expected one of {sorted(VALID_ROLES)})")
+        if role == "guest":
+            # A guest MUST carry an expires_at (stamped only at /api/guest/invite redeem);
+            # set_role never touches expires_at, so promoting a device INTO guest here would
+            # mint a never-expiring guest and break the auto-expiry invariant. Guests are
+            # created only through the invite flow (guest-mode audit, F4).
+            raise ValueError("guests are created via /api/guest/invite, not by role change")
         with self._lock:
             cur = self._conn.execute(
                 "UPDATE devices SET role = ? WHERE device_id = ?", (role, device_id)

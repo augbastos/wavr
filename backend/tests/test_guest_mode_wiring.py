@@ -61,6 +61,9 @@ def test_guest_denied_every_house_read_and_the_admin_pin(ctx):
     assert peer.get("/api/inventory", headers=auth).status_code == 403, "no network:read"
     assert peer.post("/api/core/pin/verify", json={"pin": "1234"},
                      headers=auth).status_code == 403, "guest must not probe the admin PIN"
+    # the two NEW read surfaces this same work shipped must also deny a guest (F12)
+    assert peer.get("/api/transparency", headers=auth).status_code == 403, "no presence:read"
+    assert peer.get("/api/routines", headers=auth).status_code == 403, "no control scope"
 
 
 def test_guest_cannot_mint_an_invite_and_neither_can_a_user(ctx):
@@ -140,3 +143,21 @@ def test_revoked_companion_drops_out_of_presence(ctx):
     # the read-time gate drops it. Before the fix it kept counting as home forever.
     assert "aa:bb:cc:dd:ee:01" not in id_store.as_net_known(), \
         "a revoked companion's MAC no longer corroborates presence (Finding A)"
+
+
+def test_expired_guest_drops_out_of_presence(ctx, tmp_path):
+    # F9: the EXPIRED branch of _consent_of (not just REVOKED). A guest whose deadline has
+    # passed must stop counting as present WITHOUT anyone calling revoke -- the auto-expiry
+    # is the whole point of guest mode. Seed a guest device with a past deadline straight
+    # into the same db create_app uses (WAVR_DB=tmp_path/md.db) and link a presence row to it.
+    from datetime import datetime, timedelta, timezone
+
+    from wavr.devices import DeviceStore
+    _app, id_store = ctx
+    ds = DeviceStore(str(tmp_path / "md.db"))
+    did, _tok = ds.add("old guest", "guest",
+                       expires_at=(datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat())
+    id_store.add_anonymous("cc:dd:ee:ff:00:11", source="network", origin="companion", device_id=did)
+    assert "cc:dd:ee:ff:00:11" not in id_store.as_net_known(), \
+        "_consent_of returns red for an EXPIRED device, so its presence drops like a revoked one"
+    ds.close()

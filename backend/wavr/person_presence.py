@@ -12,6 +12,14 @@ Consent is inherited, not re-checked here: the caller feeds only persons who are
 present AND named under the current consent (known_present_persons already applies the
 identity/consent gate), so an anonymous ("yellow") or withdrawn ("red") device never
 produces a named person edge.
+
+KNOWN best-effort nuance (audit F10, LOW): app.py feeds this per ingest ROOM-FRAME, not
+once per fused cycle, so on a house with >= `grace` rooms the departure `grace` is consumed
+in fewer real cycles than its name implies -- a left edge can fire a little sooner than a
+strict per-cycle debounce would. Arrivals (no grace) are unaffected. A strict per-cycle /
+wall-clock debounce is deferred deliberately: it trades either responsiveness (feeding off
+the 30s tick instead of real-time ingest) or a rewrite of these proven trackers, for a
+small timing gain. See the same note on AwayMonitor (away.py).
 """
 from __future__ import annotations
 
@@ -63,6 +71,29 @@ class PersonPresence:
     def _emit(self, person: str, home: bool) -> None:
         if self._on_edge:
             self._on_edge(person, home)
+
+
+class DevicePresence:
+    """Per-MAC appeared/left edges from successive network-inventory snapshots, so a
+    routine's "when this device shows up" (device_seen) is a real edge. Fed the CURRENT
+    set of inventory MACs each poll; emits (mac, online) for each MAC that transitioned.
+    The FIRST update establishes the baseline (whatever is already on the network at boot)
+    WITHOUT emitting -- a device already present when the Core starts is not a fresh
+    'appeared', same first-determination discipline as the other trackers. MACs are lowered
+    so the diff matches the engine's case-insensitive device_seen compare."""
+
+    def __init__(self):
+        self._seen: set[str] | None = None   # None until the baseline is taken
+
+    def update(self, macs) -> list[tuple[str, bool]]:
+        cur = {m.lower() for m in macs if m}
+        if self._seen is None:
+            self._seen = cur
+            return []
+        edges = [(m, True) for m in (cur - self._seen)]
+        edges += [(m, False) for m in (self._seen - cur)]
+        self._seen = cur
+        return edges
 
 
 class RoomPresence:

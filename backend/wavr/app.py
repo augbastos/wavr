@@ -74,7 +74,7 @@ from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
 from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
-from wavr.person_presence import PersonPresence, RoomPresence
+from wavr.person_presence import DevicePresence, PersonPresence, RoomPresence
 from wavr.stillness import StillnessDetector, room_motionless
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
@@ -710,6 +710,26 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # ingest. It only counts still time when a room is confidently occupied by a motion-
     # capable source (ADR-0003 honesty: never manufactures "hasn't moved" from a blind room).
     _stillness = StillnessDetector()
+    # device_seen ("when this device shows up") edges. Unlike the presence trackers this is
+    # POLLED off the network inventory each routines tick -- NetworkInventoryService exposes
+    # no per-scan hook, and ~tick cadence is fine for "when device X connects". `_inventory`
+    # is bound later in create_app; the poll reads it at runtime (same lazy-closure discipline
+    # as the other routines closures).
+    _device_presence = DevicePresence()
+
+    def _routines_device_poll() -> None:
+        # The tracker updates EVERY tick so its baseline stays current, but edges only
+        # DISPATCH once warm -- a device already on the network at boot lands in the baseline
+        # (no spurious 'appeared'), same first-determination guard the ingest edges use.
+        try:
+            macs = {getattr(d, "mac", None) for d in _inventory.latest_inventory()}
+        except Exception:
+            return   # an inventory read hiccup must never break the tick
+        edges = _device_presence.update(macs)
+        if not _routines_warm["ok"]:
+            return
+        for mac, online in edges:
+            _dispatch_routines(_routines.on_device_edge(mac, online))
 
     async def _routines_tick() -> None:
         # One time/deadline pass (test seam: app.state.routines_tick). Local wall-clock
@@ -717,8 +737,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # the run so the seam is deterministic. Presence edges are NOT evaluated here --
         # they are driven in real time off the ingest path (see _publish); this pass only
         # handles schedule + house_away_by_time (which reads the ingest-fed house state).
+        # device_seen is polled here (see _routines_device_poll).
         matched = _routines.tick(datetime.now(), _routine_house.home)
         await _run_routines(matched)
+        _routines_device_poll()
 
     async def _routines_loop():
         while True:
@@ -1304,9 +1326,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         merged: dict[str, str | None] = dict(cfg.net_known)
         # as_net_known (not as_net_map): the PRESENCE map, which also carries the
         # {mac: None} "counted but never named" entries that yellow needs. The env
-        # allowlist has no consent axis -- it is the operator's own box -- so it
-        # stays as-is and the registry's live decision is layered on top.
+        # allowlist has no consent axis -- it is the operator's own box -- so it is the
+        # base and the registry's live decision is layered on top.
         merged.update(_identity_store.as_net_known())
+        # ...but an EXPLICIT red (full withdrawal) must win even over a static
+        # WAVR_NET_KNOWN entry: as_net_known drops red MACs, so without this a red device
+        # ALSO hardcoded in the env allowlist kept counting AND named -- weaker than yellow,
+        # which de-names. Drop the red set so the strongest consent signal is authoritative (F11).
+        for mac in _identity_store.red_net_addresses():
+            merged.pop(mac, None)
         return merged
 
     manager = SourceManager(_ingest)
@@ -1642,9 +1670,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         digest_task = asyncio.create_task(_digest_loop())
         routines_task = asyncio.create_task(_routines_loop())
         # A plain timer (not a task/coroutine) flips the presence-edge warm-up flag, so
-        # there is nothing to leak/await if the app is torn down before it fires.
+        # there is nothing to leak/await if the app is torn down before it fires. Size it to
+        # cover the SLOWEST presence source's first-detection latency, not just multi-room
+        # fusion fill: the network source needs ~net_interval to first populate a device and
+        # net_grace cycles to stabilise, so a known device NOT in the ARP cache at boot
+        # surfaces well after a bare 8s and would otherwise fire a spurious "arrived" edge
+        # (F5). Floor at _ROUTINES_WARMUP_S, +5s slack. Time triggers are never gated.
+        _routines_warmup_s = max(_ROUTINES_WARMUP_S,
+                                 cfg.net_interval * (cfg.net_grace + 1) + 5.0)
         _routines_warmup_handle = asyncio.get_running_loop().call_later(
-            _ROUTINES_WARMUP_S, lambda: _routines_warm.__setitem__("ok", True))
+            _routines_warmup_s, lambda: _routines_warm.__setitem__("ok", True))
         # Enter the MCP-over-HTTP session manager LAST: all fallible startup is done, so it
         # can't be orphaned by an earlier failure. Requests aren't served until after the
         # yield, so the transport is live before the first /mcp dispatch.
@@ -1772,6 +1807,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * routine_stillness: feed a room's still elapsed directly (_routines_stillness(room,
     #    seconds)) so a test can drive a no_motion routine without simulating hours of ingest.
     app.state.routine_stillness = _routines_stillness
+    #  * device_presence + routine_device_poll: the device_seen tracker and its poll, so a
+    #    test can seed the inventory + drive one poll and assert a device_seen routine fires.
+    app.state.device_presence = _device_presence
+    app.state.routine_device_poll = _routines_device_poll
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or

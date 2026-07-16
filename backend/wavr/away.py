@@ -7,7 +7,14 @@ class AwayMonitor:
     """House-level presence: home if ANY room is occupied, else away (debounced).
     Publishes retained house state + arrived/left edge events for home automation,
     and (opt-in) fires a short ntfy notification on the SAME arrived/left edge.
-    Only house-level home/away is ever emitted — never room detail/frames/vitals."""
+    Only house-level home/away is ever emitted — never room detail/frames/vitals.
+
+    KNOWN best-effort nuance (audit F10, LOW): the routines wiring feeds `handle` per
+    ingest ROOM-FRAME, so on a house with >= `away_grace` rooms the vacant streak reaches
+    the threshold within roughly one all-vacant cycle rather than `away_grace` cycles -- a
+    left/away edge can fire sooner than the count implies. Kept as-is deliberately: a strict
+    per-cycle / wall-clock debounce here is a change to a SHARED, proven monitor (also driving
+    the MQTT/ntfy away edge) for a small timing gain. See PersonPresence for the same note."""
 
     def __init__(self, publish: Callable[[str, str, bool], None] | None = None,
                  prefix: str = "wavr", away_grace: int = 3,

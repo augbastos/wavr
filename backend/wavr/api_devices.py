@@ -103,8 +103,10 @@ def build_devices_router(store, delete_deps=None) -> APIRouter:
         returns or alters token material — only the role column moves."""
         try:
             changed = store.set_role(device_id, role)
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"invalid role: {role!r}")
+        except ValueError as exc:
+            # Surface the store's reason (invalid role, or the guest-not-by-role-change
+            # rule) rather than a fixed message, so the caller learns WHY.
+            raise HTTPException(status_code=422, detail=str(exc) or f"invalid role: {role!r}")
         if not changed:
             raise HTTPException(status_code=404, detail=f"unknown device: {device_id}")
         return {"device_id": device_id, "role": role}

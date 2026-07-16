@@ -7,9 +7,11 @@ moved for 3 hours, notify me".
 
 HONESTY IS THE WHOLE FEATURE (ADR-0003: Wavr is NOT a medical/safety device). We only
 ever count "still" time when the room is CONFIDENTLY occupied by a MOTION-CAPABLE source
-(mmWave/camera give per-target velocity; a network/BLE-only occupancy has NO motion
-signal). If we cannot judge motion, `room_motionless` returns None -- the detector never
-manufactures "hasn't moved", and NEVER produces false reassurance from a blind room. The
+-- i.e. one that reports per-target VELOCITY. Today that means mmWave/radar; a CAMERA
+target carries position/posture but NO velocity (camera.py builds Target without it), so
+a camera-only room is unknowable here, exactly like network/BLE occupancy. If we cannot
+judge motion, `room_motionless` returns None -- the detector never manufactures "hasn't
+moved", and NEVER produces false reassurance from a blind (or camera-only) room. The
 routine that consumes this must present it as best-effort awareness, not a safety promise.
 """
 from __future__ import annotations
