@@ -940,6 +940,8 @@
   .rot-meta.danger{color:var(--danger);}
   .rot-row-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:none;}
   .rot-empty{padding:4px 2px 6px;}
+  #rotQuick{margin:0 0 14px;}
+  .rot-quick-row{display:flex;gap:8px;flex-wrap:wrap;}
   .rot-form{display:flex;flex-direction:column;gap:var(--gap);}
   .rot-trigparam{margin-top:10px;}
   .rot-action-list{display:flex;flex-direction:column;}
@@ -2809,6 +2811,10 @@
               <svg aria-hidden="true"><use href="#ic-plus"/></svg> New routine
             </button>
           </div>
+          <!-- Quick starts: sits above BOTH the empty state and the populated list (one
+               element, positioned once) — JS-populated in renderRoutines(); a tap OPENS the
+               builder pre-filled, it never creates a routine silently. -->
+          <div id="rotQuick"></div>
           <div id="rotEmpty" class="rot-empty" hidden>
             <p class="dev-simple-sub">A routine watches for something happening in your home —
               someone arriving, a room filling, a time of day — and automatically does one or more
@@ -7535,11 +7541,42 @@ const ROT_TRIGGERS = [
   {kind:"schedule", label:"At a time of day", paramKey:"at"},
   {kind:"house_away_by_time", label:"If nobody's home by a time", paramKey:"by"},
   {kind:"device_seen", label:"When a device shows up", paramKey:"mac"},
+  {kind:"no_motion", label:"If a room has no movement for a while", paramKey:"no_motion"},
 ];
 const ROT_ACTION_KINDS = [
   {kind:"ha_service", label:"Turn a light/switch on or off"},
   {kind:"notify", label:"Send me a notification"},
   {kind:"set_watch", label:"Enter/leave discreet mode (Watch)"},
+];
+// One-tap "quick starts" — a preset only pre-fills openBuilder()'s state; it never posts on
+// its own. The user still names the routine and hits Save/Create through the normal flow.
+const ROT_QUICKSTARTS = [
+  {
+    label: "Everyone leaves → discreet mode",
+    name: "Everyone leaves → discreet mode",
+    trigger_kind: "house_left", trigger_params: {},
+    action: {kind: "set_watch", params: {on: true}},
+  },
+  {
+    label: "Nobody home by midnight → notify me",
+    name: "Nobody home by midnight",
+    trigger_kind: "house_away_by_time", trigger_params: {by: "00:00"},
+    action: {kind: "notify", params: {message: "Nobody's home and it's past midnight."}},
+  },
+  {
+    label: "Every night at 11pm → discreet mode",
+    name: "Every night at 11pm → discreet mode",
+    trigger_kind: "schedule", trigger_params: {at: "23:00"},
+    action: {kind: "set_watch", params: {on: true}},
+  },
+  {
+    label: "When I arrive → turn on a light",
+    name: "When I arrive → turn on a light",
+    trigger_kind: "house_arrived", trigger_params: {},
+    // entity_id deliberately left blank — the builder's own "choose a light/switch…" picker
+    // is where the user actually selects it, never guessed here.
+    action: {kind: "ha_service", params: {service: "turn_on"}},
+  },
 ];
 function rotTriggerLabel(kind){ const t = ROT_TRIGGERS.find(x => x.kind === kind); return t ? t.label : kind; }
 function rotActionLabel(kind){ const a = ROT_ACTION_KINDS.find(x => x.kind === kind); return a ? a.label : kind; }
@@ -7624,6 +7661,8 @@ async function renderRoutines(){
       case "schedule": return "At " + (p.at || "—");
       case "house_away_by_time": return "If nobody's home by " + (p.by || "—");
       case "device_seen": return "When a device shows up";
+      case "no_motion": return "If " + (p.room || "a room") + " has no movement for "
+        + (p.minutes != null ? p.minutes : "—") + " min";
       default: return rotTriggerLabel(r.trigger_kind);
     }
   }
@@ -7786,7 +7825,9 @@ async function renderRoutines(){
     return wrap;
   }
 
-  async function openBuilder(existing, triggerEl){
+  // preset (optional): a ROT_QUICKSTARTS entry — pre-fills the form only, same as opening
+  // "New routine" by hand. Never submits on its own; the user still names it and hits Save.
+  async function openBuilder(existing, triggerEl, preset){
     if(!overlay || !content) return;
     builderTrigger = triggerEl || document.activeElement;
     title.textContent = existing ? "Edit routine" : "New routine";
@@ -7797,13 +7838,15 @@ async function renderRoutines(){
 
     const [entities, persons] = await Promise.all([fetchEntities(), fetchPersons()]);
 
-    // Local editable state, seeded from `existing` when editing. Never sent verbatim — the
-    // submit handler strips the UI-only "_manual"/"_personManual" markers below first.
+    // Local editable state, seeded from `existing` when editing, or from a quick-start `preset`
+    // when creating from one. Never sent verbatim — the submit handler strips the UI-only
+    // "_manual"/"_personManual" markers below first.
     const state = {
-      name: existing ? (existing.name || "") : "",
-      trigger_kind: existing ? existing.trigger_kind : "house_arrived",
-      trigger_params: existing ? Object.assign({}, existing.trigger_params) : {},
-      actions: existing ? (existing.actions || []).map(a => ({kind: a.kind, params: Object.assign({}, a.params || {})})) : [],
+      name: existing ? (existing.name || "") : (preset ? preset.name : ""),
+      trigger_kind: existing ? existing.trigger_kind : (preset ? preset.trigger_kind : "house_arrived"),
+      trigger_params: existing ? Object.assign({}, existing.trigger_params) : (preset ? Object.assign({}, preset.trigger_params) : {}),
+      actions: existing ? (existing.actions || []).map(a => ({kind: a.kind, params: Object.assign({}, a.params || {})}))
+        : (preset ? [{kind: preset.action.kind, params: Object.assign({}, preset.action.params)}] : []),
       enabled: existing ? !!existing.enabled : false,
     };
 
@@ -7900,6 +7943,36 @@ async function renderRoutines(){
         inp.oninput = ()=>{ state.trigger_params.mac = inp.value; };
         wrap.appendChild(inp);
         trigParamHost.appendChild(wrap);
+      } else if(key === "no_motion"){
+        // Elder-care guardian trigger — needs BOTH room + minutes (routines.py._validate: a
+        // non-positive-int minutes is a 400, surfaced verbatim in errBox on submit).
+        const roomWrap = fieldRow("Room");
+        const roomInp = document.createElement("input");
+        roomInp.type = "text"; roomInp.maxLength = 64; roomInp.setAttribute("aria-label", "room name");
+        roomInp.placeholder = "e.g. living room"; roomInp.value = state.trigger_params.room || "";
+        roomInp.oninput = ()=>{ state.trigger_params.room = roomInp.value; };
+        roomWrap.appendChild(roomInp);
+        trigParamHost.appendChild(roomWrap);
+
+        const minWrap = fieldRow("Minutes with no movement");
+        const minInp = document.createElement("input");
+        minInp.type = "number"; minInp.min = "1"; minInp.step = "1";
+        minInp.setAttribute("aria-label", "notify after this many minutes with no movement");
+        minInp.placeholder = "e.g. 180";
+        if(state.trigger_params.minutes != null) minInp.value = String(state.trigger_params.minutes);
+        minInp.oninput = ()=>{
+          const n = parseInt(minInp.value, 10);
+          if(Number.isFinite(n)) state.trigger_params.minutes = n; else delete state.trigger_params.minutes;
+        };
+        minWrap.appendChild(minInp);
+        trigParamHost.appendChild(minWrap);
+
+        // Honest, load-bearing note (ADR-0003): never let this trigger read as a medical/safety
+        // alarm, and never claim stillness in a room Wavr structurally cannot sense.
+        trigParamHost.appendChild(elc("p", "panel-note",
+          "Best-effort awareness, not a medical or safety alarm (ADR-0003). Only works in a room "
+          + "a motion sensor (camera or radar) can see — Wavr will never claim someone hasn't "
+          + "moved in a room it can't sense that way."));
       }
     }
     renderTriggerParam();
@@ -8100,6 +8173,25 @@ async function renderRoutines(){
   const rotEmptyCta = document.getElementById("rotEmptyCta");
   if(rotNewBtn) rotNewBtn.onclick = (e)=>{ openBuilder(null, e.currentTarget); };
   if(rotEmptyCta) rotEmptyCta.onclick = (e)=>{ openBuilder(null, e.currentTarget); };
+
+  // ---- Quick starts: one tap OPENS the builder pre-filled — never a silent create. Sits
+  // above both the empty state and the list (single element, positioned once), so it shows
+  // in either case without duplicating markup. ----
+  const rotQuick = document.getElementById("rotQuick");
+  if(rotQuick){
+    rotQuick.textContent = "";
+    rotQuick.appendChild(elc("h4", "det-sub", "Quick starts"));
+    const row = elc("div", "rot-quick-row");
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", "quick-start routines");
+    ROT_QUICKSTARTS.forEach(qs => {
+      const b = document.createElement("button"); b.type = "button";
+      b.className = "ctl small rot-quick-btn"; b.textContent = qs.label;
+      b.onclick = (e)=>{ openBuilder(null, e.currentTarget, qs); };
+      row.appendChild(b);
+    });
+    rotQuick.appendChild(row);
+  }
 
   // Entities BEFORE the first list paint so a "turn X on/off" summary shows the friendly HA
   // name from the start, not the raw entity_id until the builder happens to be opened once.
