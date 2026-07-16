@@ -96,6 +96,18 @@ def test_invite_hours_are_clamped(ctx):
     assert me["expires_at"] is not None, "the guest device carries its own deadline"
 
 
+def test_invite_rejects_non_finite_hours(ctx):
+    # A strict JSON client can't even send inf/NaN, but starlette's parser accepts the
+    # non-standard `Infinity`/`NaN` tokens -- send them raw to prove the guard turns them
+    # into a clean 422 rather than a timedelta(hours=NaN) 500.
+    app, _ = ctx
+    root = TestClient(app)
+    hdr = {**CSRF, "content-type": "application/json"}
+    for body in (b'{"hours": Infinity}', b'{"hours": NaN}'):
+        r = root.post("/api/guest/invite", content=body, headers=hdr)
+        assert r.status_code == 422, f"non-finite hours {body!r} must 422, never 500"
+
+
 # --------------------------------------------------------------------------- #
 # A guest is NEVER named, even if it sets its own consent green (Finding B)
 # --------------------------------------------------------------------------- #
