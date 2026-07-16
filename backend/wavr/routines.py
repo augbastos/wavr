@@ -36,12 +36,15 @@ _LOG = logging.getLogger(__name__)
 VALID_TRIGGERS = frozenset({
     "house_arrived", "house_left", "person_arrived", "person_left",
     "room_occupied", "room_empty", "schedule", "house_away_by_time", "device_seen",
+    "no_motion",
 })
-# The required trigger_params key per kind (absent = no params required).
+# The required trigger_params key per kind (absent = no params required). no_motion needs
+# BOTH room + minutes -- the extra `minutes` check is in _validate.
 _TRIGGER_PARAM_KEY = {
     "room_occupied": "room", "room_empty": "room",
     "person_arrived": "person", "person_left": "person",
     "schedule": "at", "house_away_by_time": "by", "device_seen": "mac",
+    "no_motion": "room",
 }
 # Action kinds. Deliberately NO sensing-on / camera-on kind exists, so a routine can
 # never re-arm the master kill-switch or a camera -- the exclusion is structural, not
@@ -92,6 +95,10 @@ def _validate(name, trigger_kind, trigger_params, condition, actions):
         raise ValueError(f"trigger {trigger_kind!r} requires param {req!r}")
     if trigger_kind in ("schedule", "house_away_by_time"):
         _parse_hhmm(trigger_params[req])   # raises on a bad HH:MM
+    if trigger_kind == "no_motion":
+        m = trigger_params.get("minutes")
+        if not isinstance(m, int) or isinstance(m, bool) or m <= 0:
+            raise ValueError("no_motion requires a positive integer 'minutes'")
     if condition is not None:
         # Only the shapes the engine actually evaluates are accepted, so a condition the
         # user authored to GATE a routine can NEVER be silently ignored (fail-open). Today
@@ -241,6 +248,7 @@ class RoutinesEngine:
         self._sensing_on = sensing_on
         self._house_home = house_home
         self._fired_day: dict[str, date] = {}   # once-per-day guard for time triggers
+        self._stillness_latched: dict[str, str] = {}  # routine_id -> room (fired this still episode)
 
     def _enabled(self):
         return [r for r in self._store.list() if r["enabled"]]
@@ -286,6 +294,30 @@ class RoutinesEngine:
         return self._matches(
             lambda r: r["trigger_kind"] == "device_seen"
             and r["trigger_params"].get("mac", "").lower() == mac.lower())
+
+    def on_stillness(self, room: str, elapsed_s: float) -> list[dict]:
+        """Fed the current continuous-still seconds for a room (0 when moving/unknowable).
+        A no_motion routine fires ONCE per still episode when the elapsed crosses its
+        `minutes` threshold; an elapsed of 0 ends the episode and re-arms it (so a real
+        'they got up and later sat still again' fires afresh, not never)."""
+        if elapsed_s <= 0:
+            for rid in [k for k, rm in self._stillness_latched.items() if rm == room]:
+                self._stillness_latched.pop(rid, None)
+            return []
+        out = []
+        for r in self._enabled():
+            if r["trigger_kind"] != "no_motion":
+                continue
+            p = r["trigger_params"]
+            if p.get("room") != room or r["id"] in self._stillness_latched:
+                continue
+            if elapsed_s < int(p.get("minutes", 0)) * 60:
+                continue
+            if self._condition_ok(r) is not True:
+                continue
+            self._stillness_latched[r["id"]] = room
+            out.append(r)
+        return out
 
     def tick(self, now: datetime, house_home: bool | None) -> list[dict]:
         """Time + deadline triggers, evaluated on the routines loop. Fires each such
