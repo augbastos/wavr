@@ -81,8 +81,14 @@ def can_change_state(role: str | None) -> bool:
 
 
 def can_view(role: str | None) -> bool:
-    """Read-only GETs + /ws/live are open to any authenticated role."""
-    return role in ("root", "central", "user")
+    """The require_authenticated allowlist -- the base "this is a real principal" gate.
+    Most read routes ALSO carry a require_scope backstop, so membership here is NOT by
+    itself house-read access. 'guest' (guest mode) is included so it can reach the
+    presence:write register-companion route (its ONLY purpose); every house-read route's
+    own require_scope('presence:read'/'network:read'/...) still denies a guest, which
+    holds presence:write ONLY -- and /api/core/pin/verify is tightened to presence:read
+    for exactly that reason (see app.py)."""
+    return role in ("root", "central", "user", "guest")
 
 
 # --------------------------------------------------------------------------- #
