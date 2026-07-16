@@ -74,6 +74,7 @@ from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
 from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
+from wavr.person_presence import PersonPresence
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
@@ -566,11 +567,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     def _routines_house_edge(home: bool) -> None:
         _dispatch_routines(_routines.on_house_edge(home))
 
+    def _routines_person_edge(person: str, home: bool) -> None:
+        _dispatch_routines(_routines.on_person_edge(person, home))
+
+    # Per-person arrived/left edges ("when I arrive"), fed the CURRENT named-present set
+    # on each routines tick (below). Consent is inherited: known_present_persons already
+    # applies the identity/consent gate, so an anonymous/withdrawn device is never in the
+    # fed set and can never produce a named person edge.
+    _person_presence = PersonPresence(on_edge=_routines_person_edge)
+
     async def _routines_tick() -> None:
         # One time/deadline pass (test seam: app.state.routines_tick). Local wall-clock
         # (the house tz); matching is pure, only a fired routine touches a sink. AWAITS
         # the run (unlike the sync edge callback, which must fire-and-forget) so the tick
         # is deterministic -- after it returns the actions have run.
+        # Also refresh per-person presence from the current named-present set: an arrival/
+        # departure edge fires synchronously here (dispatched off-loop like any edge), so
+        # "when I arrive" resolves within one tick.
+        _person_presence.update(known_present_persons(latest.values()))
         matched = _routines.tick(datetime.now(),
                                  _away.home if _away is not None else None)
         await _run_routines(matched)
@@ -1596,6 +1610,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * routine_store: the live store, so a test can seed a routine + assert what a real
     #    arrived/left edge or a tick actually fired.
     app.state.routine_store = _routine_store
+    #  * person_presence: the per-person tracker, so a test can drive an arrival/departure
+    #    directly (update({...})) and assert a person_arrived/left routine fires, without
+    #    injecting full fusion state.
+    app.state.person_presence = _person_presence
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or

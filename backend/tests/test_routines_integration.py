@@ -60,6 +60,45 @@ def test_empty_store_tick_is_a_noop():
     assert _watch_on(app) is False
 
 
+def test_person_arrival_fires_a_routine_end_to_end():
+    # "when I arrive -> discreet mode", driven through the REAL per-person tracker wired
+    # into the app. Uses the person_presence seam so no full fusion state is needed; the
+    # edge dispatches off-loop, so we drive it inside a running lifespan and let it settle.
+    store = RoutineStore(":memory:")
+    r = store.add("welcome me", "person_arrived", trigger_params={"person": "Augusto"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            app.state.person_presence.update(set())          # boot baseline: nobody home
+            app.state.person_presence.update({"Augusto"})    # Augusto arrives -> edge fires
+            await asyncio.sleep(0.1)                          # let the dispatched action run
+
+    asyncio.run(_drive())
+    fired = store.get(r["id"])
+    assert fired["last_status"] == "ok" and fired["last_fired"], \
+        "a real per-person arrival ran the routine through the app"
+
+
+def test_someone_elses_arrival_does_not_fire_my_routine():
+    store = RoutineStore(":memory:")
+    r = store.add("welcome me", "person_arrived", trigger_params={"person": "Augusto"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            app.state.person_presence.update(set())
+            app.state.person_presence.update({"Bea"})        # a DIFFERENT person arrives
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    assert store.get(r["id"])["last_fired"] is None, "only MY arrival fires my routine"
+
+
 def test_schedule_fires_once_then_holds_same_day():
     store = RoutineStore(":memory:")
     r = store.add("once", "schedule", trigger_params={"at": "00:00"},
