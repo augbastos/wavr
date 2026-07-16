@@ -950,6 +950,32 @@
   .rot-action-row:first-child{border-top:none;padding-top:0;}
   .rot-action-fields{display:flex;gap:10px;flex-wrap:wrap;flex:1 1 320px;min-width:0;align-items:center;}
 
+  /* ---------------- Who's home (glance tab) — big legible headline + compact room lines,
+     same design tokens as the rest of the dashboard, deliberately calmer/larger than a
+     normal tile since this is a "glance from across the room" screen. ---------------- */
+  .qc-headline{margin:0;font-size:clamp(1.5rem,3vw,2.15rem);font-weight:700;
+               letter-spacing:-.01em;transition:color .25s ease-out;}
+  .qc-headline.home{color:var(--accent);}
+  .qc-headline.away{color:var(--text);}
+  .qc-headline.off{color:var(--warn);}
+  .qc-sub{margin:6px 0 0;font-size:1.02rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .qc-names{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 0;}
+  .qc-names:empty{margin:0;}
+  .qc-anon{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0;}
+  .qc-anon:empty{margin:0;}
+  .qc-anon-chip{font-size:.8rem;color:var(--dim);padding:3px 11px;border-radius:999px;
+                border:1px solid var(--line);font-variant-numeric:tabular-nums;}
+  .qc-empty-note{font-size:.92rem;color:var(--dim);}
+  .qc-rooms{display:flex;flex-direction:column;}
+  .qc-room-row{display:flex;justify-content:space-between;align-items:center;gap:12px;
+              font-size:.94rem;padding:9px 2px;border-top:1px dashed var(--line);}
+  .qc-room-row:first-child{border-top:none;}
+  .qc-room-row.dim{color:var(--dim);}
+  .qc-room-name{color:var(--text);overflow-wrap:anywhere;min-width:0;}
+  .qc-room-state{font-variant-numeric:tabular-nums;font-size:.84rem;font-weight:650;
+                 color:var(--dim);flex-shrink:0;}
+  .qc-room-state.occ{color:var(--accent);}
+
   /* ---------------- Connectors & services — the single egress surface (gear) ----------------
      project_wavr_connectors_vision: the ONLY screen that manages anything reaching outward;
      everything OFF by default. One card per connector; labels/scope are server/registry data
@@ -1947,6 +1973,8 @@
   <!-- Core Panel: charging bolt (the battery body/fill itself is a CSS box, not SVG, so its
        level tracks the native-bridge payload directly; this is only the charging glyph) -->
   <symbol id="ic-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 5 13.5h5.5L10 21l8-10.5h-5.5Z"/></symbol>
+  <!-- Who's home tab: two people, mirrors the .who-chip roster glyph style elsewhere -->
+  <symbol id="ic-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3.5 19.5c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5"/><circle cx="17" cy="9" r="2.3"/><path d="M15.2 14.3c2.4.3 4.3 2.3 4.3 5"/></symbol>
 </svg>
 
 <div class="app" id="app">
@@ -1990,6 +2018,14 @@
               aria-selected="false" tabindex="-1" aria-controls="panel-rotinas" aria-label="Routines"
               data-tip="Routines — when this happens, do that">
         <svg aria-hidden="true"><use href="#ic-bolt"/></svg><span class="nav-label">Routines</span>
+      </button>
+      <!-- Who's home (feature #2): a calm glance answer to "who is home?", built entirely from
+           data the dashboard already holds in memory — see #panel-quemcasa + the hook-chained
+           script block near the end of the file (no new fetch, no new poll). -->
+      <button class="nav-item" id="tab-quemcasa" type="button" data-tab="quemcasa" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-quemcasa" aria-label="Who's home"
+              data-tip="Who's home — a calm glance at who's here right now">
+        <svg aria-hidden="true"><use href="#ic-users"/></svg><span class="nav-label">Who's home</span>
       </button>
     </div>
     <!-- Gear: sidebar footer (PC) / rail footer (tablet); on phone it moves to the topbar,
@@ -2830,6 +2866,34 @@
         </div>
         <p class="panel-note" id="rotNote" hidden>Routines run on your Wavr hub and need admin
           access on this device — not available in this demo or on a view-only companion.</p>
+      </section>
+
+      <!-- ==================== WHO'S HOME (feature #2): calm at-a-glance answer to "who is
+           home?" for a non-technical user. Reuses data the dashboard ALREADY holds in memory —
+           no new fetch, no new poll:
+             - roomOcc/roomConf: the dashboard's own top-level RoomState accumulator (the SAME
+               source renderHero()'s Core-panel wave and every room card already read).
+             - sensing on/off: /api/system's `running` flag / status.features.hub_level — the
+               SAME signal deriveTier() uses to render "Off" on the sensing-level meter.
+             - named + anonymous "home now": the "Who's likely home" tile's own already-fetched
+               GET /api/identity/known-presence corroborators (live/central only — a `person:
+               null` corroborator is an anonymously-registered device that still corroborates
+               presence, per wavr.identity_store's yellow consent level. Exposed here via
+               window.__wavrKnownPresence, one additive hook added inside renderKnownPresence()).
+           See the hook-chained script block near the end of the file for the render logic. -->
+      <section class="tab-panel" id="panel-quemcasa" data-tab="quemcasa" role="tabpanel" aria-labelledby="tab-quemcasa">
+        <div id="qcTile" class="tile qc-tile" aria-labelledby="qc-h">
+          <div class="tile-head"><h2 id="qc-h">Who's home</h2><span class="hint">a calm glance, right now</span></div>
+          <p id="qcHeadline" class="qc-headline" aria-live="polite">Loading…</p>
+          <p id="qcSub" class="qc-sub" aria-live="polite"></p>
+          <div id="qcNames" class="qc-names" aria-live="polite"></div>
+          <div id="qcAnon" class="qc-anon" aria-live="polite"></div>
+          <p class="panel-note" id="qcNote" hidden></p>
+        </div>
+        <div id="qcRoomsTile" class="tile">
+          <div class="tile-head"><h2>Rooms</h2><span class="hint">occupied or empty, right now</span></div>
+          <div id="qcRooms" class="qc-rooms" aria-live="polite"></div>
+        </div>
       </section>
     </main>
   </div>
@@ -6471,8 +6535,12 @@ async function renderKnownPresence(){
     let r;
     try{ r = await fetch(location.origin+"/api/identity/known-presence",{headers:hdr}); }
     catch{ return; }                          // backend momentarily unreachable — keep last view
-    if(!r.ok){ tile.hidden = true; return; }  // 403 (multidevice 'user') / feature off — stay hidden
-    let kp; try{ kp = await r.json(); }catch{ tile.hidden = true; return; }
+    // Who's-home tab hook (feature #2, additive): expose this SAME already-fetched payload so
+    // that tab never re-fetches known-presence itself. null = "genuinely unreachable" (403/
+    // parse failure) so the other tab can say so honestly, distinct from a real empty array.
+    if(!r.ok){ tile.hidden = true; window.__wavrKnownPresence = null; return; }  // 403 (multidevice 'user') / feature off — stay hidden
+    let kp; try{ kp = await r.json(); }catch{ tile.hidden = true; window.__wavrKnownPresence = null; return; }
+    window.__wavrKnownPresence = kp;
     const corroborators = Array.isArray(kp && kp.corroborators) ? kp.corroborators : [];
     if(!corroborators.length){ tile.hidden = true; return; }   // nobody assigned yet — nothing honest to show
     tile.hidden = false;
@@ -7547,6 +7615,11 @@ const ROT_ACTION_KINDS = [
   {kind:"ha_service", label:"Turn a light/switch on or off"},
   {kind:"notify", label:"Send me a notification"},
   {kind:"set_watch", label:"Enter/leave discreet mode (Watch)"},
+  // Body is COMPUTED at fire time (routines.py's notify_new_devices) — the count of devices
+  // first-seen while the house was away; `message` is only an optional prefix, never required
+  // (VALID_ACTIONS'/_ACTION_REQUIRED's own contract — see routines.py). Pairs naturally with
+  // the "When someone arrives home" trigger, no special-casing needed here.
+  {kind:"notify_new_devices", label:"Tell me what new devices showed up while I was out"},
 ];
 // One-tap "quick starts" — a preset only pre-fills openBuilder()'s state; it never posts on
 // its own. The user still names the routine and hits Save/Create through the normal flow.
@@ -7674,6 +7747,8 @@ async function renderRoutines(){
     }
     if(a.kind === "notify") return "notify me: “" + (p.message || "") + "”";
     if(a.kind === "set_watch") return p.on ? "turn on discreet mode" : "turn off discreet mode";
+    if(a.kind === "notify_new_devices") return "tell me about new devices while I was out"
+      + (p.message ? " (prefix: “" + p.message + "”)" : "");
     return rotActionLabel(a && a.kind);
   }
   function routineSummary(r){
@@ -8082,6 +8157,18 @@ async function renderRoutines(){
           sel.onchange = ()=>{ a.params.on = (sel.value === "on"); };
           wLabel.appendChild(sel);
           fields.appendChild(wLabel);
+        } else if(a.kind === "notify_new_devices"){
+          // No required params (routines.py _ACTION_REQUIRED["notify_new_devices"] = ()) — the
+          // notification body is computed at fire time from the count of devices first-seen
+          // while the house was away; this text is only an optional prefix (e.g. "Home:").
+          const msgLabel = fieldRow("Message prefix (optional)");
+          const inp = document.createElement("input");
+          inp.type = "text"; inp.maxLength = 200;
+          inp.setAttribute("aria-label", "optional message prefix for action " + (idx+1));
+          inp.placeholder = "e.g. Home:"; inp.value = a.params.message || "";
+          inp.oninput = ()=>{ a.params.message = inp.value; };
+          msgLabel.appendChild(inp);
+          fields.appendChild(msgLabel);
         }
         row.appendChild(fields);
 
@@ -10786,7 +10873,7 @@ try {
 // (window.__wavrMap) that renderRadar() exposes at the end of its closure.
 (function(){
   "use strict";
-  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas"];
+  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas", "quemcasa"];
   var content = document.getElementById("content");
   var navButtons = Array.prototype.slice.call(document.querySelectorAll(".nav-item[data-tab]"));
   var panels = {};
@@ -14771,6 +14858,173 @@ try {
   }
   new MutationObserver(scheduleStamp).observe(document.body, { childList: true, subtree: true });
   stampSrTips();
+})();
+</script>
+<script>
+// ============================================================================
+// Who's home (feature #2): a calm, at-a-glance answer to "who is home?" for a
+// non-technical user. Purely additive, zero new fetches/polls of its own —
+// every value below comes from data the dashboard ALREADY collects, via the
+// SAME hook-chaining idiom the Stage-2/3 and Core-panel blocks use:
+//   - roomOcc/roomConf: the dashboard's own top-level RoomState accumulator
+//     (updateHouse() populates it inside handle(), BEFORE window.__wavrRS
+//     fires — the same "readable from later script blocks" pattern the Core
+//     panel's renderHero() already relies on for its own room summary).
+//   - sensing on/off: chains onto window.__wavrSystem (sysInfo.running — the
+//     SAME flag deriveTier() uses to render "Off" on the sensing-level meter)
+//     for live mode, and window.__wavrStatus (status.features.hub_level) for
+//     a companion viewer — the SAME field the sensing-level meter reads for a
+//     paired device. Demo/simulated never claims "off" — it's illustrative.
+//   - named + anonymous "home now": window.__wavrKnownPresence, one additive
+//     hook added inside renderKnownPresence() (the "Who's likely home" tile)
+//     that exposes its ALREADY-fetched GET /api/identity/known-presence
+//     payload — live/central only, same gate as that tile. A corroborator
+//     with person===null is an anonymously-registered ("yellow") device that
+//     still counts as present without a name (wavr.identity_store's own
+//     consent contract) — exactly the honest "+N other devices" this screen
+//     asks for, never a guess.
+// Nothing here ever asserts "nobody home" when sensing is off, and nothing
+// here polls on its own — it re-renders whenever one of those three hooks
+// fires, debounced 250ms so a burst of RoomState frames repaints once.
+// ============================================================================
+(function(){
+  "use strict";
+  var tile = document.getElementById("qcTile");
+  if(!tile) return;   // additive: a stale cached page without this markup just no-ops
+  var headline = document.getElementById("qcHeadline");
+  var sub = document.getElementById("qcSub");
+  var namesEl = document.getElementById("qcNames");
+  var anonEl = document.getElementById("qcAnon");
+  var note = document.getElementById("qcNote");
+  var qcRoomsEl = document.getElementById("qcRooms");
+
+  var haveFrame = false, qcSysInfo = null, qcStatusInfo = null;
+
+  function sensingOff(){
+    if(MODE === "live") return !!(qcSysInfo && qcSysInfo.running === false);
+    if(MODE === "companion") return !!(qcStatusInfo && qcStatusInfo.features
+      && qcStatusInfo.features.hub_level === "off");
+    return false;   // demo/simulated: illustrative data, never claims sensing is off
+  }
+
+  function render(){
+    if(!haveFrame){
+      headline.className = "qc-headline"; headline.textContent = "Loading…";
+      sub.textContent = ""; namesEl.textContent = ""; anonEl.textContent = "";
+      qcRoomsEl.textContent = ""; note.hidden = true;
+      return;
+    }
+    if(sensingOff()){
+      // Honesty gate: never imply "empty home" when Wavr simply isn't watching —
+      // say so plainly instead, and show nothing else (any roomOcc value here would
+      // be stale, from before sensing was paused).
+      headline.className = "qc-headline off";
+      headline.textContent = "Sensing is off";
+      sub.textContent = "System paused — nothing is sensing. Turn it back on from the sensing-level meter on Home or Settings.";
+      namesEl.textContent = ""; anonEl.textContent = ""; qcRoomsEl.textContent = ""; note.hidden = true;
+      return;
+    }
+
+    var roomKeys = Object.keys(roomOcc);
+    var home = roomKeys.some(function(r){ return roomOcc[r]; });               // matches updateHouse()'s own definition (casa counts)
+    var realOcc = roomKeys.filter(function(r){ return r !== "casa" && roomOcc[r]; });
+    headline.className = "qc-headline " + (home ? "home" : "away");
+    headline.textContent = home ? "Someone's home" : "Empty home";             // exact reuse of heroLine1's own wording
+    if(realOcc.length){
+      var maxConf = Math.max.apply(null, realOcc.map(function(r){ return roomConf[r] || 0; }));
+      sub.textContent = realOcc.join(", ") + " " + MIDDOT + " " + confWord(maxConf).toLowerCase()
+        + " " + MIDDOT + " " + Math.round(maxConf * 100) + "%";                // exact reuse of heroLine2's own format
+    } else if(home){
+      sub.textContent = "house-level signal only " + MIDDOT + " no specific room confirmed";
+    } else {
+      sub.textContent = "no presence detected " + MIDDOT + " sensors monitoring";   // exact reuse of heroLine2's quiet-state wording
+    }
+
+    // Named + anonymous "home now" — live/central only (same gate/data as "Who's likely home").
+    namesEl.textContent = ""; anonEl.textContent = "";
+    var kp = window.__wavrKnownPresence;
+    if(MODE !== "live"){
+      note.hidden = false;
+      note.textContent = "Who's home by name needs the hub — not available in this demo or on a view-only companion device.";
+    } else if(!kp || !Array.isArray(kp.corroborators)){
+      note.hidden = false;
+      note.textContent = "No devices are registered to a person yet — use “assign person” on a row in the Network tab to see names here.";
+    } else {
+      note.hidden = true;
+      var present = kp.corroborators.filter(function(c){ return c && c.present; });
+      var named = present.filter(function(c){ return c.person; });
+      var anon = present.filter(function(c){ return !c.person; });
+      named.forEach(function(c){
+        var chip = document.createElement("span");
+        chip.className = "who-chip";
+        chip.textContent = c.person;   // PII — textContent only, never innerHTML
+        namesEl.appendChild(chip);
+      });
+      if(anon.length){
+        var achip = document.createElement("span");
+        achip.className = "qc-anon-chip";
+        achip.textContent = "+ " + anon.length + " other device" + (anon.length === 1 ? "" : "s");
+        anonEl.appendChild(achip);
+      }
+      if(!named.length && !anon.length){
+        var none = document.createElement("span");
+        none.className = "qc-empty-note";
+        none.textContent = "No one detected right now.";
+        namesEl.appendChild(none);
+      }
+    }
+
+    // Compact per-room lines — mode-agnostic, the SAME roomOcc/roomConf every room card reads.
+    qcRoomsEl.textContent = "";
+    var allRooms = roomKeys.filter(function(r){ return r !== "casa"; }).sort();
+    if(!allRooms.length){
+      var l0 = document.createElement("div"); l0.className = "qc-room-row dim";
+      // Honest, scope-aware: a network/BLE-only install can have real house-level frames
+      // (haveFrame is already true here) with no per-room sensor yet — never worded as
+      // "no data at all", which the house-level headline above would then contradict.
+      l0.textContent = roomKeys.length
+        ? "Only house-level presence is available — no per-room sensor has reported yet."
+        : "No room data yet.";
+      qcRoomsEl.appendChild(l0);
+    } else {
+      allRooms.forEach(function(r){
+        var row = document.createElement("div"); row.className = "qc-room-row";
+        var n = document.createElement("span"); n.className = "qc-room-name"; n.textContent = r;   // room name is RoomState data — textContent only
+        var s = document.createElement("span");
+        s.className = "qc-room-state " + (roomOcc[r] ? "occ" : "");
+        s.textContent = roomOcc[r] ? "occupied" : "empty";
+        row.appendChild(n); row.appendChild(s);
+        qcRoomsEl.appendChild(row);
+      });
+    }
+  }
+
+  var renderTimer = null;
+  function scheduleRender(){
+    if(renderTimer) return;
+    renderTimer = setTimeout(function(){ renderTimer = null; render(); }, 250);
+  }
+
+  // ---------- hooks fed by the main script (same one-liner chain idiom as every other block) ----------
+  var _rs = window.__wavrRS;
+  window.__wavrRS = function(rs){
+    try{ if(_rs) _rs(rs); }catch(e){}
+    haveFrame = true;
+    scheduleRender();
+  };
+  var _sys = window.__wavrSystem;
+  window.__wavrSystem = function(s){
+    try{ if(_sys) _sys(s); }catch(e){}
+    qcSysInfo = (s && typeof s === "object") ? s : null;
+    scheduleRender();
+  };
+  var _stat = window.__wavrStatus;
+  window.__wavrStatus = function(s){
+    try{ if(_stat) _stat(s); }catch(e){}
+    qcStatusInfo = (s && typeof s === "object") ? s : null;
+    scheduleRender();
+  };
+  render();   // first paint: "Loading…" until the first RoomState frame lands
 })();
 </script>
 <script>
