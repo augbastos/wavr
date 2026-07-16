@@ -129,7 +129,13 @@ def _fake_ptz_soap(host="10.0.0.5", sink=None, with_ptz_service=True,
     return soap
 
 
-_LAN_RTSP = "rtsp://admin:pw@10.0.0.5:554/stream1"
+# Distinctive plaintext-password sentinel WITH a hyphen: base64 (the WS-Security
+# nonce/digest alphabet) never contains "-", so a "<sentinel> not in body" leak
+# assertion can never collide with the random nonce the way a bare 2-char "pw" did
+# (~1.4% per assert -> ~12% chance the whole suite flaked per run). Every leak check
+# below asserts against THIS, never a short substring.
+_PW = "secret-pw-xyz"
+_LAN_RTSP = f"rtsp://admin:{_PW}@10.0.0.5:554/stream1"
 
 
 # --------------------------------------------------------------------------- #
@@ -148,11 +154,11 @@ def test_clamp_unit_bounds_and_nonfinite():
 
 
 def test_build_continuous_move_shape_and_escaping():
-    body = build_continuous_move("Profile_1", 1.0, -1.0, 0.0, "admin", "pw")
+    body = build_continuous_move("Profile_1", 1.0, -1.0, 0.0, "admin", _PW)
     assert 'x="1.0000"' in body and 'y="-1.0000"' in body
     assert "<tt:Zoom" not in body                 # zoom==0 -> omitted
     assert "<tptz:ProfileToken>Profile_1</tptz:ProfileToken>" in body
-    assert "pw" not in body                        # password never in the body
+    assert _PW not in body                        # password never in the body
     assert "admin" in body                         # username IS present (WS-UsernameToken)
     # token XML-escaped
     body2 = build_continuous_move("a&<b", 0.0, 0.0, 0.5, "u", "p")
@@ -160,9 +166,9 @@ def test_build_continuous_move_shape_and_escaping():
 
 
 def test_build_stop_shape():
-    body = build_stop("Profile_1", "admin", "pw")
+    body = build_stop("Profile_1", "admin", _PW)
     assert "<tptz:Stop" in body and "<tptz:PanTilt>true</tptz:PanTilt>" in body
-    assert "pw" not in body
+    assert _PW not in body
 
 
 def test_parse_ptz_service_and_fallback():
@@ -181,10 +187,10 @@ def test_build_get_status_shape_and_no_password():
     # Distinctive plaintext-password sentinel WITH a hyphen: base64 (the nonce/digest alphabet)
     # never contains "-", so this can't collide with the random WS-Security nonce the way the old
     # 2-char "pw" did (~1.7% false-positive flake). We assert the plaintext never leaks into the body.
-    body = build_get_status("Profile_1", "admin", "secret-pw-xyz")
+    body = build_get_status("Profile_1", "admin", _PW)
     assert "<tptz:GetStatus" in body
     assert "<tptz:ProfileToken>Profile_1</tptz:ProfileToken>" in body
-    assert "admin" in body and "secret-pw-xyz" not in body   # WS-UsernameToken digest, no plaintext pw
+    assert "admin" in body and _PW not in body   # WS-UsernameToken digest, no plaintext pw
     # token XML-escaped
     assert "a&amp;b" in build_get_status("a&b", "u", "p")
 
@@ -261,7 +267,7 @@ async def test_continuous_move_clamps_and_succeeds():
     assert ok is True
     move = [b for _u, b, a in sink if "ContinuousMove" in b][0]
     assert 'x="1.0000"' in move and 'y="-1.0000"' in move   # server clamp to [-1,1]
-    assert "pw" not in move
+    assert _PW not in move
     ptz._cancel_autostop("cam")
 
 
@@ -306,7 +312,7 @@ async def test_get_status_no_creds_in_result():
     ptz = CameraPTZ(soap=_fake_ptz_soap())
     st = await ptz.get_status("cam", _LAN_RTSP)
     dump = repr(st)
-    assert "pw" not in dump and "admin" not in dump and "10.0.0.5" not in dump
+    assert _PW not in dump and "admin" not in dump and "10.0.0.5" not in dump
 
 
 async def test_no_creds_in_any_result_repr():
@@ -318,7 +324,7 @@ async def test_no_creds_in_any_result_repr():
         await ptz.capabilities("cam", _LAN_RTSP),
     ]
     dump = repr(out)
-    assert "pw" not in dump and "admin" not in dump and "10.0.0.5" not in dump
+    assert _PW not in dump and "admin" not in dump and "10.0.0.5" not in dump
 
 
 async def test_autostop_fires_stop_without_keepalive():
@@ -438,7 +444,7 @@ def test_move_happy_path_active_no_creds_in_response(tmp_path, monkeypatch):
         _activate(c)
         r = c.post("/api/ptz/cam1/move", json={"pan": 1, "tilt": 0})
         assert r.status_code == 200 and r.json() == {"ok": True}
-        assert "pw" not in r.text and "10.0.0.5" not in r.text
+        assert _PW not in r.text and "10.0.0.5" not in r.text
         assert any("ContinuousMove" in b for _u, b, _a in sink)
         c.post("/api/ptz/cam1/stop")   # cancel the auto-stop guard before teardown
 
@@ -447,12 +453,12 @@ def test_capabilities_and_presets_routes_no_creds(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, ptz_soap=_fake_ptz_soap()) as c:
         rc = c.get("/api/ptz/cam1/capabilities")
         assert rc.status_code == 200 and rc.json() == {"ptz": True}
-        assert "pw" not in rc.text
+        assert _PW not in rc.text
         rp = c.get("/api/ptz/cam1/presets")
         assert rp.status_code == 200
         assert rp.json() == [{"token": "1", "name": "Door"},
                              {"token": "2", "name": "Window"}]
-        assert "pw" not in rp.text
+        assert _PW not in rp.text
 
 
 def test_status_route_reads_bearing_no_creds(tmp_path, monkeypatch):
@@ -460,7 +466,7 @@ def test_status_route_reads_bearing_no_creds(tmp_path, monkeypatch):
         r = c.get("/api/ptz/cam1/status")
         assert r.status_code == 200
         assert r.json() == {"status": {"pan": 0.5, "tilt": -0.25, "zoom": 0.1}}
-        assert "pw" not in r.text and "10.0.0.5" not in r.text
+        assert _PW not in r.text and "10.0.0.5" not in r.text
 
 
 def test_status_route_unknown_camera_404(tmp_path, monkeypatch):
