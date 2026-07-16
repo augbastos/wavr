@@ -2192,7 +2192,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return result
 
     @app.get("/api/speedtest/info")
-    async def speedtest_info():
+    async def speedtest_info(_=Depends(require_scope("control"))):
+        # control, mirroring its own POST /api/speedtest sibling (same egress-
+        # diagnostic domain). No UI consumer below central, so gating here costs
+        # nothing and keeps 'agent' out of the egress posture.
         # A3.3 PRE-egress disclosure source (audit fix). Side-effect-free, ZERO
         # egress, no secrets: it makes NO external call, it only reports the
         # configured provider + its egress disclosure so the frontend consent
@@ -2281,10 +2284,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return "precise" if any_cam_enabled else "presence"
 
     @app.get("/api/status")
-    async def status():
+    async def status(_=Depends(require_scope("presence:read"))):
         # READ-ONLY, NO SECRETS: sources are name+active only (no rtsp/mac), features
-        # are opt-in booleans only (no urls/tokens), house is a bare count. Gated by
-        # the same loopback_or_authed middleware as every other GET route.
+        # are opt-in booleans only (no urls/tokens). Gated on presence:read (the same
+        # scope /api/state carries) because house.people below is a live occupancy
+        # count -- the identical data class /api/state already denies 'agent', which
+        # this route was silently leaking to it. root always bypasses require_scope;
+        # 'user'/'central' carry presence:read by default, so this is additive-only
+        # for every existing consumer (the loopback dashboard + companion viewers
+        # both hold it; no frontend path reads house.people at all). (2026-07-16)
         return {
             "version": __version__,
             "sources": [
@@ -2454,7 +2462,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 "network_sensing": _connectors.sensing_allowed()}
 
     @app.get("/api/system/toggles")
-    async def system_toggles():
+    async def system_toggles(_=Depends(require_scope("control"))):
+        # control: the egress/sensing kill-switch posture, one tier below its
+        # root-only write sibling. 'agent' must not read the household's feature
+        # posture. root+central pass.
         return _sys_toggles_state()
 
     @app.post("/api/system/toggles/{name}")
@@ -2807,10 +2818,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return {"ok": ok}
 
     @app.get("/api/core/pin/status")
-    async def core_pin_status():
+    async def core_pin_status(_=Depends(require_scope("presence:read"))):
         # Read-only, no secret (bool only) -- lets the panel know whether a PIN
-        # lock is configured at all, same gate as every other plain GET (the
-        # loopback_or_authed middleware).
+        # lock is configured at all. presence:read (NOT admin): its sibling
+        # /api/core/pin/verify deliberately widens to any authenticated LAN peer
+        # showing the panel, so this bool must stay reachable by root+central+user;
+        # presence:read is the codebase idiom for "any real device, not agent" and
+        # keeps that floor while closing the leak to 'agent'. (2026-07-16)
         return {"pin_set": _pin_store.is_set()}
 
     @app.get("/api/health")
@@ -2905,7 +2919,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 "recent_auto_fixes": [a.to_dict() for a in _doctor_log.recent(20)]}
 
     @app.get("/api/system")
-    async def system():
+    async def system(_=Depends(require_scope("control"))):
+        # control, mirroring its own POST /api/system/toggle sibling: per-source
+        # enabled/active is system-plane posture an 'agent' (scope {mcp}) must not
+        # enumerate over plain HTTP, outside the MCP audit trail. root+central pass.
         return manager.status()
 
     @app.post("/api/system/toggle")
