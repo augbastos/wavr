@@ -549,6 +549,48 @@ def test_agent_role_denied_every_ordinary_api_route(tmp_path, monkeypatch):
     assert peer.post("/api/system/toggle", json={"on": True},
                      headers=auth).status_code == 403                       # control
     assert peer.get("/api/devices", headers=auth).status_code == 403        # admin
+    # 2026-07-16 audit: five GET routes carried NO Depends and leaked to 'agent'
+    # (findings #2 MEDIUM + #3 LOW). Each now gates on the scope its sibling
+    # write/read path uses. This is the regression that lets the gap resurface.
+    assert peer.get("/api/status", headers=auth).status_code == 403          # presence:read (#2: house.people)
+    assert peer.get("/api/system", headers=auth).status_code == 403          # control (#3)
+    assert peer.get("/api/system/toggles", headers=auth).status_code == 403  # control (#3)
+    assert peer.get("/api/speedtest/info", headers=auth).status_code == 403  # control (#3)
+    assert peer.get("/api/core/pin/status", headers=auth).status_code == 403  # presence:read (#3)
+
+
+def test_scoped_reads_stay_open_to_the_roles_that_own_them(tmp_path, monkeypatch):
+    # Control for the agent-denied test: the five newly-gated GETs must still be
+    # reachable by the roles that legitimately read them, or the fix broke the
+    # dashboard. central holds every scope; a 'user' companion holds presence:read
+    # (so /api/status + /api/core/pin/status) but NOT control (so the three
+    # system/egress-posture routes 403 it -- which is correct: the frontend never
+    # calls those for a non-central companion, it early-returns on !companionCentral).
+    db_path = str(tmp_path / "scoped.db")
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", db_path)
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    seed = DeviceStore(db_path)
+    _cid, ctok = seed.add("panel", "central")
+    _uid, utok = seed.add("phone", "user")
+    seed.close()
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    c = {"Authorization": f"Bearer {ctok}"}
+    u = {"Authorization": f"Bearer {utok}"}
+    # central (has control + presence:read): every one of the five stays open.
+    for path in ("/api/status", "/api/system", "/api/system/toggles",
+                 "/api/speedtest/info", "/api/core/pin/status"):
+        assert peer.get(path, headers=c).status_code == 200, f"central lost {path}"
+    # user (presence:read, no control): the two presence-gated reads stay open...
+    assert peer.get("/api/status", headers=u).status_code == 200
+    assert peer.get("/api/core/pin/status", headers=u).status_code == 200
+    # ...and the three control-plane reads correctly 403 (user never calls them).
+    assert peer.get("/api/system", headers=u).status_code == 403
+    assert peer.get("/api/system/toggles", headers=u).status_code == 403
+    assert peer.get("/api/speedtest/info", headers=u).status_code == 403
 
 
 def test_agent_role_denied_the_live_stream_and_its_ticket(tmp_path, monkeypatch):
