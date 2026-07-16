@@ -246,6 +246,20 @@ def test_executor_has_no_sensing_or_camera_sink():
     assert ex.run([{"kind": "camera_on", "params": {"name": "quarto"}}]) == "failed"
 
 
+def test_notify_new_devices_needs_no_params_and_routes_to_its_sink():
+    # The action's body is computed at fire time, so `message` is optional (a prefix).
+    s = RoutineStore(":memory:")
+    r = s.add("arrive digest", "house_arrived",
+              actions=[{"kind": "notify_new_devices", "params": {}}])  # no required params
+    assert r["actions"][0]["kind"] == "notify_new_devices"
+    got = []
+    ex = ActionExecutor(new_devices_notify=lambda p: got.append(p))
+    assert ex.run([{"kind": "notify_new_devices", "params": {"message": "Hi"}}]) == "ok"
+    assert got == [{"message": "Hi"}], "the raw params reach the sink for it to compute the body"
+    # missing sink -> that action fails, never crashes the loop
+    assert ActionExecutor().run([{"kind": "notify_new_devices", "params": {}}]) == "failed"
+
+
 # --------------------------------------------------------------------------- #
 # The on_edge hooks fire on the REAL monitors (additive, guarded like the event)
 # --------------------------------------------------------------------------- #
