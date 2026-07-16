@@ -545,10 +545,51 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if not res.get("ok"):
             raise RuntimeError(res.get("message") or "Home Assistant refused the action")
 
+    # "When I arrive -> tell me what changed while I was out." Stamped (UTC ISO, same
+    # format as device_meta._now) the moment the house-level away edge fires (see
+    # _routines_house_edge), read by the notify_new_devices action. None until the house
+    # has actually gone empty once -- the action degrades to an honest "welcome home"
+    # rather than inventing a baseline it doesn't have.
+    _away_since = {"ts": None}
+
+    def _routine_new_devices_notify(params: dict) -> None:
+        # COUNT + VENDOR only, never a MAC/IP in a push (the same egress discipline the
+        # rogue-alert copy follows). "New" = first_seen on/after the away stamp; device_meta
+        # first_seen is set once, the first time a MAC is ever observed, so this is exactly
+        # "appeared for the first time while you were out".
+        prefix = str((params or {}).get("message") or "").strip()
+        lead = (prefix + " ") if prefix else ""
+        since = _away_since["ts"]
+        if not since:
+            _notify_all(lead + "Welcome home.", kind="routine", severity="note")
+            return
+        try:
+            meta = _device_meta.all()            # {mac: {first_seen, ...}}
+        except Exception:
+            meta = {}
+        new_macs = {m for m, d in meta.items() if (d.get("first_seen") or "") >= since}
+        n = len(new_macs)
+        if n == 0:
+            _notify_all(lead + "No new devices appeared while you were out.",
+                        kind="routine", severity="note")
+            return
+        vendors = []
+        try:
+            for d in _inventory.latest_inventory():
+                if d.mac in new_macs and d.vendor and d.vendor not in vendors:
+                    vendors.append(d.vendor)
+        except Exception:
+            vendors = []
+        tail = (" (" + ", ".join(vendors[:4]) + ")") if vendors else ""
+        plural = "device" if n == 1 else "devices"
+        _notify_all(f"{lead}{n} new {plural} appeared while you were out{tail}.",
+                    kind="routine", severity="note")
+
     _routine_executor = ActionExecutor(
         ha_call=_routine_ha_call,
         notify=lambda m: _notify_all(m, kind="routine", severity="note"),
-        watch_set=_watch.set)
+        watch_set=_watch.set,
+        new_devices_notify=_routine_new_devices_notify)
     _routines = RoutinesEngine(
         _routine_store,
         # Lazy closures: `manager` + `_routine_house` are assigned later in create_app but
@@ -626,6 +667,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _routines_warm = {"ok": False}
 
     def _routines_house_edge(home: bool) -> None:
+        # Stamp the "empty since" clock on EVERY away edge, even during warm-up (the stamp
+        # is a fact about the house, not a routine dispatch) so notify_new_devices has a
+        # correct baseline the first time the house is re-entered after boot.
+        if not home:
+            _away_since["ts"] = datetime.now(timezone.utc).isoformat()
         if not _routines_warm["ok"]:
             return
         _dispatch_routines(_routines.on_house_edge(home))

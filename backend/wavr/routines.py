@@ -49,12 +49,15 @@ _TRIGGER_PARAM_KEY = {
 # Action kinds. Deliberately NO sensing-on / camera-on kind exists, so a routine can
 # never re-arm the master kill-switch or a camera -- the exclusion is structural, not
 # a runtime check that could be bypassed. `media` is added later behind a security
-# sign-off (the media_player carve-out).
-VALID_ACTIONS = frozenset({"ha_service", "notify", "set_watch"})
+# sign-off (the media_player carve-out). `notify_new_devices` is a notify variant whose
+# body is COMPUTED at fire time (count of devices first-seen while the house was empty);
+# its `message` is only an optional prefix, so it has no required params.
+VALID_ACTIONS = frozenset({"ha_service", "notify", "set_watch", "notify_new_devices"})
 _ACTION_REQUIRED = {
     "ha_service": ("domain", "service"),
     "notify": ("message",),
     "set_watch": ("on",),
+    "notify_new_devices": (),
 }
 
 MAX_NAME = 80
@@ -380,10 +383,12 @@ class ActionExecutor:
     for turning sensing or a camera ON, so a routine cannot re-arm either -- the
     exclusion is structural. Returns 'ok' / 'partial' / 'failed'."""
 
-    def __init__(self, ha_call=None, notify=None, watch_set=None):
+    def __init__(self, ha_call=None, notify=None, watch_set=None,
+                 new_devices_notify=None):
         self._ha = ha_call        # (domain, service, entity_id) -> None (raises on failure)
         self._notify = notify     # (message) -> None
         self._watch = watch_set   # (on: bool) -> None
+        self._new_devices = new_devices_notify  # (params: dict) -> None (computes + notifies)
 
     def run(self, actions: list) -> str:
         ok = fail = 0
@@ -413,5 +418,9 @@ class ActionExecutor:
             if self._watch is None:
                 raise RuntimeError("watch mode not available")
             self._watch(bool(p["on"]))
+        elif kind == "notify_new_devices":
+            if self._new_devices is None:
+                raise RuntimeError("new-devices notifier not configured")
+            self._new_devices(p)
         else:
             raise ValueError(f"unknown action kind: {kind!r}")

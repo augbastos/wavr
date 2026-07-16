@@ -3,11 +3,13 @@
 just the pure pieces. Uses set_watch (no external dependency, observable via /api/watch).
 """
 import asyncio
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from wavr.app import create_app
 from wavr.camera_store import CameraStore
+from wavr.device_meta import DeviceMeta
 from wavr.routines import RoutineStore
 from wavr.sources.simulated import SimulatedSource
 from wavr.storage import Storage
@@ -20,6 +22,26 @@ def _app(store):
         sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
         storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
         routine_store=store)
+
+
+class _FakeInv:
+    """latest_inventory() returns objects with just the .mac/.vendor the
+    notify_new_devices sink reads -- no ARP, no real scan."""
+
+    def __init__(self, devices):
+        self._d = devices
+
+    def latest_inventory(self):
+        return self._d
+
+    def recent_alerts(self, limit=50):
+        return []
+
+    async def start(self):
+        return None
+
+    async def stop(self):
+        return None
 
 
 def _watch_on(app):
@@ -132,6 +154,44 @@ def test_house_condition_fires_without_mqtt_via_the_dedicated_tracker():
     asyncio.run(_drive())
     assert store.get(r["id"])["last_fired"] is not None, \
         "the house condition read the dedicated tracker, so it fired even without MQTT"
+
+
+def test_notify_new_devices_reports_only_devices_seen_while_away():
+    # "when I arrive -> tell me what showed up while I was out", end to end through the
+    # real sink: the away edge stamps the empty-since clock, a device whose first_seen
+    # lands AFTER that stamp is the only one counted, and the push carries count + vendor.
+    store = RoutineStore(":memory:")
+    r = store.add("arrive digest", "house_arrived",
+                  actions=[{"kind": "notify_new_devices", "params": {"message": "Home:"}}])
+    store.set_enabled(r["id"], True)
+    dm = DeviceMeta(":memory:")
+    dm.seen("aa:aa:aa:aa:aa:aa")                     # an OLD device, seen before we leave
+    notified: list[str] = []
+    inv = _FakeInv([SimpleNamespace(mac="bb:bb:bb:bb:bb:bb", vendor="Acme Cameras"),
+                    SimpleNamespace(mac="aa:aa:aa:aa:aa:aa", vendor="Old Corp")])
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
+        routine_store=store, device_meta=dm, net_inventory=inv, notify=notified.append)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()
+            app.state.routine_house.handle({"room": "sala", "occupied": True})   # HOME baseline
+            for _ in range(6):
+                app.state.routine_house.handle({"room": "sala", "occupied": False})  # leave -> away EDGE (stamps)
+            dm.seen("bb:bb:bb:bb:bb:bb")             # a NEW device appears while we're out
+            app.state.routine_house.handle({"room": "sala", "occupied": True})       # arrive -> fire
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    assert store.get(r["id"])["last_status"] == "ok"
+    msg = next((m for m in notified if "new device" in m), None)
+    assert msg is not None, f"expected a new-devices push, got {notified!r}"
+    assert "1 new device" in msg and "Acme Cameras" in msg, msg
+    assert "Home:" in msg, "the user's optional prefix is preserved"
+    assert "Old Corp" not in msg and "aa:aa" not in msg, \
+        "the pre-existing device is not counted, and no MAC leaks into the push"
 
 
 def test_room_fill_fires_a_routine_end_to_end():
