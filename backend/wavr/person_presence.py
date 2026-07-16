@@ -63,3 +63,20 @@ class PersonPresence:
     def _emit(self, person: str, home: bool) -> None:
         if self._on_edge:
             self._on_edge(person, home)
+
+
+class RoomPresence:
+    """Per-room occupied/empty edges, fed each room's fused occupancy on the ingest.
+    The fusion layer already debounces a room's occupancy, so this only tracks the last
+    value and fires on_edge(room, occupied) on a flip. The FIRST determination per room
+    fires nothing (a room already occupied at boot is not a fresh 'filled' edge)."""
+
+    def __init__(self, on_edge: Callable[[str, bool], None] | None = None):
+        self._on_edge = on_edge
+        self._last: dict[str, bool] = {}
+
+    def handle(self, room: str, occupied: bool) -> None:
+        prev = self._last.get(room)
+        if prev is not None and prev != occupied and self._on_edge:
+            self._on_edge(room, occupied)
+        self._last[room] = occupied

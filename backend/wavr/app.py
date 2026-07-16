@@ -74,7 +74,7 @@ from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
 from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
-from wavr.person_presence import PersonPresence
+from wavr.person_presence import PersonPresence, RoomPresence
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
@@ -532,10 +532,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         watch_set=_watch.set)
     _routines = RoutinesEngine(
         _routine_store,
-        # Lazy closures: `manager` + `_away` are assigned later in create_app but only
-        # READ at runtime (an edge or a tick), by which point both are bound.
+        # Lazy closures: `manager` + `_routine_house` are assigned later in create_app but
+        # only READ at runtime (an edge or a tick), by which point both are bound.
         sensing_on=lambda: bool(manager.status().get("running")),
-        house_home=lambda: _away.home if _away is not None else None)
+        # The house CONDITION reads the dedicated always-on tracker (_routine_house),
+        # NOT the optional MQTT/ntfy AwayMonitor (_away) which is None with no sink -- else
+        # a routine with a {house: home/away} condition would silently never fire on a Core
+        # without MQTT (it read None -> UNKNOWN -> skip). Same source the tick uses.
+        house_home=lambda: _routine_house.home)
 
     async def _run_routines(matched: list) -> None:
         for r in matched:
@@ -592,6 +596,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     def _routines_person_edge(person: str, home: bool) -> None:
         _dispatch_routines(_routines.on_person_edge(person, home))
 
+    def _routines_room_edge(room: str, occupied: bool) -> None:
+        _dispatch_routines(_routines.on_room_edge(room, occupied))
+
     # Per-person arrived/left edges ("when I arrive") + a dedicated house-level arrived/
     # left edge detector, BOTH fed in real time off the always-running ingest path (see
     # _publish) rather than the hub. So routines depend on NO subscription/task and need
@@ -601,6 +608,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # identity/consent gate, so an anonymous/withdrawn device never produces a named edge.
     _person_presence = PersonPresence(on_edge=_routines_person_edge)
     _routine_house = AwayMonitor(away_grace=cfg.away_grace, on_edge=_routines_house_edge)
+    _routine_rooms = RoomPresence(on_edge=_routines_room_edge)
 
     async def _routines_tick() -> None:
         # One time/deadline pass (test seam: app.state.routines_tick). Local wall-clock
@@ -875,6 +883,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # per-person tracker off the current named-present set. Any arrived/left edge
         # dispatches a routine off-loop. Cheap + inert when the store has no routines.
         _routine_house.handle(d)
+        _routine_rooms.handle(d["room"], bool(d["occupied"]))
         _person_presence.update(known_present_persons(latest.values()))
         # Watch/Guard: at THIS fan-out egress (WS clients + MQTT via the hub) publish the
         # SUPPRESSED view -- family geometry/identity/vitals stripped, only counts + the
@@ -1632,6 +1641,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * routine_house: the dedicated house edge detector, so a test can drive a house
     #    arrived/left (handle({"room":.., "occupied":..})) and assert a house routine fires.
     app.state.routine_house = _routine_house
+    #  * routine_rooms: the per-room edge detector, so a test can drive a room fill/empty
+    #    (handle(room, occupied)) and assert a room_occupied/room_empty routine fires.
+    app.state.routine_rooms = _routine_rooms
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or

@@ -1,6 +1,6 @@
 """Per-person arrived/left edges: baseline at boot (no spurious arrival), debounced
-departures, and consent inherited from the caller's feed."""
-from wavr.person_presence import PersonPresence
+departures, and consent inherited from the caller's feed. Plus per-room edges."""
+from wavr.person_presence import PersonPresence, RoomPresence
 
 
 def _tracker(grace=2):
@@ -58,3 +58,27 @@ def test_only_persons_the_caller_feeds_ever_edge():
     t.update({"Augusto"})            # baseline
     t.update({"Augusto"})            # an anonymous device present but NOT named -> not fed
     assert edges == [], "no named edge for anyone the caller didn't include"
+
+
+# --------------------------------------------------------------------------- #
+# Per-room edges
+# --------------------------------------------------------------------------- #
+def test_room_edges_fire_on_flip_not_on_first_determination():
+    edges = []
+    r = RoomPresence(on_edge=lambda room, occ: edges.append((room, occ)))
+    r.handle("cozinha", True)        # first determination -> no edge (already occupied at boot)
+    assert edges == []
+    r.handle("cozinha", False)       # emptied
+    r.handle("cozinha", True)        # filled
+    assert edges == [("cozinha", False), ("cozinha", True)]
+
+
+def test_room_edges_are_per_room():
+    edges = []
+    r = RoomPresence(on_edge=lambda room, occ: edges.append((room, occ)))
+    r.handle("sala", False)          # baseline sala
+    r.handle("cozinha", False)       # baseline cozinha
+    r.handle("sala", True)           # only sala flips
+    assert edges == [("sala", True)]
+    r.handle("cozinha", False)       # cozinha unchanged -> no edge
+    assert edges == [("sala", True)]
