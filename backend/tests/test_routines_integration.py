@@ -1,0 +1,74 @@
+"""Routines wired into the live app: a time trigger drives a REAL sink end to end
+(store -> engine -> executor -> the app's actual WatchMode), proving the wiring, not
+just the pure pieces. Uses set_watch (no external dependency, observable via /api/watch).
+"""
+import asyncio
+
+from fastapi.testclient import TestClient
+
+from wavr.app import create_app
+from wavr.camera_store import CameraStore
+from wavr.routines import RoutineStore
+from wavr.sources.simulated import SimulatedSource
+from wavr.storage import Storage
+
+CSRF = {"X-Wavr-Local": "1"}
+
+
+def _app(store):
+    return create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
+        routine_store=store)
+
+
+def _watch_on(app):
+    with TestClient(app, headers=CSRF) as c:
+        return c.get("/api/watch").json()["on"]
+
+
+def test_schedule_routine_drives_the_real_watch_sink():
+    store = RoutineStore(":memory:")
+    # "at 00:00" -> any wall-clock time has reached it, so one tick fires it.
+    r = store.add("night discreet", "schedule", trigger_params={"at": "00:00"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)
+    asyncio.run(app.state.routines_tick())        # one deterministic time/deadline pass
+    fired = store.get(r["id"])
+    assert fired["last_status"] == "ok" and fired["last_fired"], \
+        "the routine ran its set_watch action through the real sink and recorded ok"
+    # Observe the concrete effect once (single lifespan): the app's real WatchMode flipped.
+    assert _watch_on(app) is True, "the routine's set_watch action really flipped the watch"
+
+
+def test_disabled_routine_does_not_fire():
+    store = RoutineStore(":memory:")
+    r = store.add("off", "schedule", trigger_params={"at": "00:00"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    # left DISABLED (routines boot off)
+    app = _app(store)
+    asyncio.run(app.state.routines_tick())
+    assert _watch_on(app) is False, "a disabled routine never fires"
+    assert store.get(r["id"])["last_fired"] is None
+
+
+def test_empty_store_tick_is_a_noop():
+    app = _app(RoutineStore(":memory:"))
+    # No routines at all -> byte-identical to today: a tick does nothing and does not raise.
+    asyncio.run(app.state.routines_tick())
+    assert _watch_on(app) is False
+
+
+def test_schedule_fires_once_then_holds_same_day():
+    store = RoutineStore(":memory:")
+    r = store.add("once", "schedule", trigger_params={"at": "00:00"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)
+    asyncio.run(app.state.routines_tick())          # fires
+    first = store.get(r["id"])["last_fired"]
+    assert first, "fired on the first tick"
+    asyncio.run(app.state.routines_tick())          # same engine, same day -> held
+    assert store.get(r["id"])["last_fired"] == first, \
+        "schedule already fired today -> the second tick does not re-fire (last_fired unchanged)"

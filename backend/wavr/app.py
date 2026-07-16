@@ -73,6 +73,7 @@ from wavr.sources.onvif import ONVIFProbe
 from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
+from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
@@ -150,6 +151,11 @@ async def _stream_live(ws, q, did, get_device, recheck_s):
 # anything is actually sent. A test drives one deterministic tick via the
 # app.state.digest_once seam instead of waiting on this interval.
 _DIGEST_INTERVAL_S = 24 * 3600.0
+# How often the routines loop evaluates time/deadline triggers (schedule,
+# house_away_by_time). 30s is fine-grained enough for an "at 23:00" routine while
+# the matching stays pure (only a fired routine touches a sink). Test seam:
+# app.state.routines_tick fires one pass without waiting on this interval.
+_ROUTINES_INTERVAL_S = 30.0
 
 
 def _load_device_catalog() -> list:
@@ -406,7 +412,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
-               known_store=None, occupancy_log=None, assistant_store=None) -> FastAPI:
+               known_store=None, occupancy_log=None, assistant_store=None,
+               routine_store=None) -> FastAPI:
     cfg = load_config()
     # Peer pairing (Phase 1) is a strict superset of multidevice: a peer authenticates
     # as a `role=central` device, so the whole DeviceStore/PairingManager/middleware
@@ -496,6 +503,86 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             except RuntimeError:
                 pass  # no running event loop (e.g. a sync test calling the callback directly)
 
+    # --- Routines: the user-authored "when THIS -> do THAT" spine (routines.py). The
+    # engine taps the SAME arrived/left edge AwayMonitor already emits (via the on_edge
+    # hook wired into _away below) plus a time/deadline tick, and runs each routine's
+    # actions through the existing gated sinks. Empty store => nothing fires =>
+    # byte-identical to today. Room/person/device triggers are engine-ready and wired in
+    # a following step. ------------------------------------------------------------------
+    _routine_store = routine_store or RoutineStore(cfg.db_path)
+
+    def _routine_ha_call(domain: str, service: str, entity_id) -> None:
+        # A routine's light/switch action goes through the EXACT gate chain the MCP
+        # agent's control tool uses (control flag + entity shape + sensitive-domain
+        # refusal + allowlist). A refusal is a non-raising {"ok": False}; turn it into an
+        # exception so the executor counts it as a failed action. Imported lazily to keep
+        # wavr.mcp out of the default import path.
+        from wavr.mcp import call_ha_service
+        res = call_ha_service(client_from_config(cfg), domain, service, entity_id or "",
+                              control_enabled=cfg.mcp_control,
+                              allowed_services=cfg.ha_allowed_services)
+        if not res.get("ok"):
+            raise RuntimeError(res.get("message") or "Home Assistant refused the action")
+
+    _routine_executor = ActionExecutor(
+        ha_call=_routine_ha_call,
+        notify=lambda m: _notify_all(m, kind="routine", severity="note"),
+        watch_set=_watch.set)
+    _routines = RoutinesEngine(
+        _routine_store,
+        # Lazy closures: `manager` + `_away` are assigned later in create_app but only
+        # READ at runtime (an edge or a tick), by which point both are bound.
+        sensing_on=lambda: bool(manager.status().get("running")),
+        house_home=lambda: _away.home if _away is not None else None)
+
+    def _has_presence_routine() -> bool:
+        # Any ENABLED routine whose trigger needs the live house presence edge
+        # (arrived/left / away-by-time). schedule + device_seen do NOT, so a store of
+        # only those never starts the away task -- preserving the "no hub subscriber
+        # unless opted in" invariant that test_away_wiring / test_notifier_wiring assert.
+        # Constructing the AwayMonitor object costs nothing (no subscription); only its
+        # run() task subscribes, and that is gated on this.
+        need = {"house_arrived", "house_left", "person_arrived", "person_left",
+                "room_occupied", "room_empty", "house_away_by_time"}
+        return any(r["enabled"] and r["trigger_kind"] in need
+                   for r in _routine_store.list())
+
+    async def _run_routines(matched: list) -> None:
+        for r in matched:
+            # Actions block (HA HTTP); run off the event loop so a slow HA never stalls
+            # the fusion/ingest path the edge callback fires from.
+            status = await asyncio.to_thread(_routine_executor.run, r["actions"])
+            _routine_store.mark_fired(
+                r["id"], datetime.now().isoformat(timespec="seconds"), status)
+
+    def _dispatch_routines(matched: list) -> None:
+        if not matched:
+            return
+        try:
+            asyncio.get_running_loop().create_task(_run_routines(matched))
+        except RuntimeError:
+            pass  # no running loop (a sync test driving the monitor edge directly)
+
+    def _routines_house_edge(home: bool) -> None:
+        _dispatch_routines(_routines.on_house_edge(home))
+
+    async def _routines_tick() -> None:
+        # One time/deadline pass (test seam: app.state.routines_tick). Local wall-clock
+        # (the house tz); matching is pure, only a fired routine touches a sink. AWAITS
+        # the run (unlike the sync edge callback, which must fire-and-forget) so the tick
+        # is deterministic -- after it returns the actions have run.
+        matched = _routines.tick(datetime.now(),
+                                 _away.home if _away is not None else None)
+        await _run_routines(matched)
+
+    async def _routines_loop():
+        while True:
+            await asyncio.sleep(_ROUTINES_INTERVAL_S)
+            try:
+                await _routines_tick()
+            except Exception:
+                logging.warning("routines tick failed", exc_info=True)
+
     # Rules/MQTT engine: opt-in via injected `rules_publish` (tests) or WAVR_MQTT_ENABLED
     # (real paho publisher, lazily connected). Off by default -- no publisher, no engine.
     _rules_publish = rules_publish
@@ -511,9 +598,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # screen while nothing else is configured needs a restart before away-edge push
     # starts (honest limitation, not a silent gap -- the away monitor object itself
     # doesn't exist yet to fan out through).
+    # `_routine_store is not None` (always true) keeps AwayMonitor running so routines
+    # get the arrived/left edge even when no MQTT/ntfy/Telegram sink is configured -- the
+    # monitor is cheap and its own publish/notify stay no-ops when those are off.
     _away = (AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace,
-                         notify=lambda msg: _notify_all(msg, kind="away_edge", severity="note"))
-             if (_rules_publish or _notify or _connectors.is_enabled("telegram")) else None)
+                         notify=lambda msg: _notify_all(msg, kind="away_edge", severity="note"),
+                         on_edge=_routines_house_edge)
+             if (_rules_publish or _notify or _connectors.is_enabled("telegram")
+                 or _routine_store is not None) else None)
 
     # Narrator: opt-in via injected `narrator` (tests) or the two-factor gate below.
     # PROVIDER-AGNOSTIC (WAVR_NARRATE_PROVIDER=gemini|ollama|openai|anthropic); the
@@ -1377,7 +1469,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 prefix=cfg.mqtt_prefix,
             )
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
-        away_task = asyncio.create_task(_away.run(_hub)) if _away else None
+        # Start the away subscription only when a sink OR an enabled presence routine
+        # actually needs the arrived/left edge -- so an idle Core with no routines keeps
+        # the "no hub subscriber unless opted in" invariant (a runtime routine-enable
+        # re-checks this via _ensure_away, added with the routines routes).
+        away_task = (asyncio.create_task(_away.run(_hub))
+                     if (_away is not None
+                         and (_rules_publish or _notify
+                              or _connectors.is_enabled("telegram")
+                              or _has_presence_routine()))
+                     else None)
         # Periodic re-fuse loop (WAVR_REFUSE_S, default 5s; 0 disables). Ages rooms
         # that have stopped receiving events so a disconnected source fades to
         # unoccupied instead of freezing its last reading.
@@ -1389,6 +1490,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # takes effect on the NEXT tick with no restart, unlike AwayMonitor's
         # Telegram wiring above.
         digest_task = asyncio.create_task(_digest_loop())
+        routines_task = asyncio.create_task(_routines_loop())
         # Enter the MCP-over-HTTP session manager LAST: all fallible startup is done, so it
         # can't be orphaned by an earlier failure. Requests aren't served until after the
         # yield, so the transport is live before the first /mcp dispatch.
@@ -1399,7 +1501,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         finally:
             # Suppress CancelledError AND any error a caller-injected publisher
             # might raise, so shutdown always reaches manager.stop() + camera close.
-            for t in (rules_task, away_task, refuse_task, digest_task):
+            for t in (rules_task, away_task, refuse_task, digest_task, routines_task):
                 if t:
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -1488,6 +1590,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * digest_once: the daily-digest composition+send body (2C), so a test can drive
     #    one deterministic tick without waiting _DIGEST_INTERVAL_S -- mirrors refuse_once.
     app.state.digest_once = _digest_once
+    #  * routines_tick: one time/deadline routines pass, so a test can drive a schedule
+    #    or house_away_by_time trigger deterministically without waiting on the loop.
+    app.state.routines_tick = _routines_tick
+    #  * routine_store: the live store, so a test can seed a routine + assert what a real
+    #    arrived/left edge or a tick actually fired.
+    app.state.routine_store = _routine_store
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
