@@ -36,7 +36,11 @@ def _utcnow() -> datetime:
 @dataclass
 class _PendingCode:
     role: str
-    expires_at: datetime
+    expires_at: datetime                       # the ~2-min REDEMPTION window
+    # Guest mode: the SEPARATE, host-chosen deadline stamped onto the Device at
+    # redeem (the guest token's own lifetime, hours not minutes). None for every
+    # normal pairing -- only a guest code carries it.
+    session_expires_at: datetime | None = None
 
 
 @dataclass
@@ -82,6 +86,22 @@ class PairingManager:
         self._codes[code] = _PendingCode(role, self._now() + timedelta(seconds=self._code_ttl))
         return code
 
+    def mint_guest_code(self, hours: float) -> str:
+        """Mint a one-time GUEST pairing code. The code itself still lives only the
+        normal ~2-min redemption window; `session_expires_at` is the SEPARATE,
+        host-chosen deadline (`hours` from now) stamped onto the Device at redeem, so
+        the guest credential dies on its own with no in-memory timer. `hours` must be
+        positive (the /api/guest/invite endpoint clamps it to a sane max)."""
+        if hours <= 0:
+            raise ValueError("guest invite hours must be positive")
+        self._purge_expired()
+        code = self._fresh_code()
+        now = self._now()
+        self._codes[code] = _PendingCode(
+            "guest", now + timedelta(seconds=self._code_ttl),
+            session_expires_at=now + timedelta(hours=hours))
+        return code
+
     def redeem(self, code: str, name: str, source_ip: str | None = None) -> tuple[str, str] | None:
         """Redeem a code for a new device: returns (device_id, token) once, or None
         if the code is unknown, already used, or expired. One-time: the code is
@@ -104,7 +124,12 @@ class PairingManager:
         if pending is None or now >= pending.expires_at:
             self._failed.setdefault(key, []).append(now)   # wrong/expired guess -> counts (per IP)
             return None
-        return self._store.add(name, pending.role)
+        # A guest code carries a session deadline -> stamp it on the Device so its
+        # token expires on its own; every normal code has session_expires_at=None
+        # (add() then stores expires_at=NULL = never expires, unchanged behaviour).
+        expires_at = (pending.session_expires_at.isoformat()
+                      if pending.session_expires_at is not None else None)
+        return self._store.add(name, pending.role, expires_at=expires_at)
 
     # -- WS tickets --------------------------------------------------------
     def mint_ticket(self, device_id: str) -> str:
