@@ -551,6 +551,58 @@ def test_agent_role_denied_every_ordinary_api_route(tmp_path, monkeypatch):
     assert peer.get("/api/devices", headers=auth).status_code == 403        # admin
 
 
+def test_agent_role_denied_the_live_stream_and_its_ticket(tmp_path, monkeypatch):
+    # The live x/y position + vitals stream (/ws/live, ADR-0002's most sensitive
+    # live-only class) and the ticket that opens it must deny 'agent' for the SAME
+    # reason every ordinary route does: an agent's only surface is /mcp, where the
+    # per-tool allow-list and audit trail live. The ws-ticket router was wired with
+    # no dependencies (app.py) while every sibling route gates on a scope, so an
+    # agent got 403 on /api/state yet 200 on /api/ws-ticket and a CONNECTED
+    # /ws/live -- streaming the exact data /api/state denied it, outside the MCP
+    # audit trail entirely. Both now require presence:read (which 'agent' lacks and
+    # 'user'/'central' have), so this is one gate, not a special case. (2026-07-16)
+    db_path = str(tmp_path / "agent_ws.db")
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", db_path)
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    seed_store = DeviceStore(db_path)
+    _id, token = seed_store.add("mcp-agent", "agent")
+    seed_store.close()
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    auth = {"Authorization": f"Bearer {token}"}
+    assert peer.get("/api/state", headers=auth).status_code == 403          # the control
+    # The ticket that unlocks the stream must deny the agent, not just the stream.
+    assert peer.post("/api/ws-ticket", headers=auth).status_code == 403
+    # And the socket itself must refuse an agent bearer even if a ticket were had.
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect):
+        with peer.websocket_connect("/ws/live", headers=auth):
+            pass
+
+
+def test_user_role_still_gets_the_live_stream(tmp_path, monkeypatch):
+    # The control for the test above: a 'user' companion HAS presence:read, so the
+    # new gate must not break its access to its own house's live view.
+    db_path = str(tmp_path / "user_ws.db")
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_DB", db_path)
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+    seed_store = DeviceStore(db_path)
+    _id, token = seed_store.add("phone", "user")
+    seed_store.close()
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    peer = TestClient(app, client=("192.168.1.50", 12345))
+    auth = {"Authorization": f"Bearer {token}"}
+    r = peer.post("/api/ws-ticket", headers=auth)
+    assert r.status_code == 200 and r.json().get("ticket")
+
+
 def test_agent_role_promoted_via_existing_devices_role_route(tmp_path, monkeypatch):
     # The admin-gated POST /api/devices/{id}/role route (unchanged by this
     # feature) already accepts 'agent' now that it's in VALID_ROLES -- an
