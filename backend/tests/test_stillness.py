@@ -3,7 +3,8 @@ continuous-still timer, and the engine's once-per-episode no_motion firing."""
 from datetime import datetime, timedelta, timezone
 
 from wavr.routines import RoutineStore, RoutinesEngine
-from wavr.stillness import STILL_MOVE_GRACE_S, StillnessDetector, room_motionless
+from wavr.stillness import (STILL_MAX_FRAME_GAP_S, STILL_MOVE_GRACE_S,
+                            StillnessDetector, room_motionless)
 
 
 # --------------------------------------------------------------------------- #
@@ -34,12 +35,23 @@ class _Clock:
         self.t += timedelta(seconds=seconds)
 
 
+def _still_run(d, clock, seconds, step=60, room="sala"):
+    """Feed still frames `step` seconds apart (well within the observation window,
+    like the real per-frame cadence) to represent `seconds` of continuous stillness,
+    returning the final elapsed."""
+    elapsed = 0.0
+    for _ in range(int(seconds // step)):
+        clock.add(step)
+        elapsed = d.update(room, True)
+    return elapsed
+
+
 def test_stillness_accumulates_and_resets_on_real_movement():
     c = _Clock()
     d = StillnessDetector(now_fn=c.iso)
     assert d.update("sala", True) == 0.0, "first still frame = baseline, 0 elapsed"
-    c.add(600); assert d.update("sala", True) == 600.0, "10 min still"
-    c.add(600); assert d.update("sala", True) == 1200.0, "20 min still"
+    assert _still_run(d, c, 600) == 600.0, "10 min of in-window still frames"
+    assert _still_run(d, c, 600) == 1200.0, "20 min still"
     # sustained movement (> grace) ends the episode
     c.add(1); assert d.update("sala", False) == 1200.0, "a brief move is within grace -> frozen"
     c.add(STILL_MOVE_GRACE_S + 1); assert d.update("sala", False) == 0.0, "sustained move -> reset"
@@ -50,9 +62,31 @@ def test_stillness_tolerates_a_brief_unknowable_gap():
     c = _Clock()
     d = StillnessDetector(now_fn=c.iso)
     d.update("sala", True)
-    c.add(3600); assert d.update("sala", True) == 3600.0     # 1h still
+    assert _still_run(d, c, 3600) == 3600.0                  # 1h of in-window still frames
     c.add(2); assert d.update("sala", None) == 3600.0        # brief unknowable -> frozen, not reset
     c.add(1); assert d.update("sala", True) >= 3600.0        # still counting after the blip
+
+
+def test_stillness_does_not_stitch_across_a_long_silence():
+    # F2 (ADR-0003): a still frame arriving after a gap LONGER than a frame window is a
+    # room we did NOT observe continuously -- it must start fresh, never claim the whole
+    # unobserved gap as "continuously still" (the WAVR_REFUSE_S=0 / node-went-silent case).
+    c = _Clock()
+    d = StillnessDetector(now_fn=c.iso)
+    d.update("sala", True)
+    c.add(STILL_MAX_FRAME_GAP_S + 1)
+    assert d.update("sala", True) == 0.0, "an unobserved gap is not stitched into stillness"
+
+
+def test_malformed_ts_ends_the_episode_truthfully():
+    # F4: a malformed ts returns 0.0 AND ends the episode, so the sentinel is honest and a
+    # later good frame can't re-fire a phantom episode left dangling by the bad frame.
+    c = _Clock()
+    d = StillnessDetector(now_fn=c.iso)
+    d.update("sala", True)
+    c.add(60); assert d.update("sala", True) == 60.0
+    assert d.update("sala", True, ts="not-a-timestamp") == 0.0, "malformed ts -> episode ended"
+    c.add(5); assert d.update("sala", True) == 0.0, "no stale re-fire; the clock restarted"
 
 
 def test_sustained_unknowable_ends_the_episode_no_false_stillness():
@@ -91,6 +125,19 @@ def test_no_motion_re_arms_after_movement():
 def test_no_motion_is_per_room():
     eng, rid = _eng_with_no_motion(minutes=1)
     assert eng.on_stillness("cozinha", 10000) == [], "a different room never fires the sala routine"
+
+
+def test_no_motion_cache_refreshes_when_a_routine_is_enabled_later():
+    # F3: on_stillness uses a version-gated cache to skip a per-frame store read. Prove the
+    # cache stays LIVE -- a routine added/enabled after the engine was built still fires.
+    s = RoutineStore(":memory:")
+    eng = RoutinesEngine(s, sensing_on=lambda: True)
+    assert eng.on_stillness("sala", 10000) == [], "no no_motion routine yet -> nothing fires"
+    r = s.add("guardian", "no_motion", trigger_params={"room": "sala", "minutes": 1},
+              actions=[{"kind": "notify", "params": {"message": "m"}}])
+    s.set_enabled(r["id"], True)
+    assert [x["id"] for x in eng.on_stillness("sala", 120)] == [r["id"]], \
+        "the store version bumped, the cache refreshed, the new routine takes effect"
 
 
 def test_no_motion_requires_room_and_positive_minutes():
