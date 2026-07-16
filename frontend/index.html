@@ -928,6 +928,26 @@
     border:1px solid var(--line);font-size:.66rem;font-weight:600;letter-spacing:.4px;
     text-transform:uppercase;vertical-align:baseline;}
 
+  /* ---------------- Routines (Rotinas tab): layperson "when THIS -> do THAT" builder ---------------- */
+  .rot-list{display:flex;flex-direction:column;gap:10px;margin-top:10px;}
+  .rot-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;
+           border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--elevated);}
+  .rot-row-left{min-width:0;overflow-wrap:anywhere;flex:1 1 240px;}
+  .rot-name{font-size:.9rem;font-weight:600;}
+  .rot-summary{margin:3px 0 0;font-size:.82rem;color:var(--dim);line-height:1.45;}
+  .rot-meta{margin:5px 0 0;font-size:.72rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .rot-meta.warn{color:var(--warn);}
+  .rot-meta.danger{color:var(--danger);}
+  .rot-row-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:none;}
+  .rot-empty{padding:4px 2px 6px;}
+  .rot-form{display:flex;flex-direction:column;gap:var(--gap);}
+  .rot-trigparam{margin-top:10px;}
+  .rot-action-list{display:flex;flex-direction:column;}
+  .rot-action-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+                  border-top:1px dashed var(--line);padding:12px 0;}
+  .rot-action-row:first-child{border-top:none;padding-top:0;}
+  .rot-action-fields{display:flex;gap:10px;flex-wrap:wrap;flex:1 1 320px;min-width:0;align-items:center;}
+
   /* ---------------- Connectors & services — the single egress surface (gear) ----------------
      project_wavr_connectors_vision: the ONLY screen that manages anything reaching outward;
      everything OFF by default. One card per connector; labels/scope are server/registry data
@@ -1962,6 +1982,13 @@
               data-tip="System — sensors, egress dashboard, diagnostics">
         <svg aria-hidden="true"><use href="#ic-shield"/></svg><span class="nav-label">System</span>
       </button>
+      <!-- Routines (routines.py "when THIS -> do THAT" spine): live/central only, same tier
+           as System (require_scope("control")) — see panel-rotinas + renderRoutines(). -->
+      <button class="nav-item" id="tab-rotinas" type="button" data-tab="rotinas" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-rotinas" aria-label="Routines"
+              data-tip="Routines — when this happens, do that">
+        <svg aria-hidden="true"><use href="#ic-bolt"/></svg><span class="nav-label">Routines</span>
+      </button>
     </div>
     <!-- Gear: sidebar footer (PC) / rail footer (tablet); on phone it moves to the topbar,
          never into the tab-bar (MASTER-SPEC §5 decision). -->
@@ -2764,6 +2791,40 @@
         </div>
         <p class="panel-note" id="sisNote" hidden>Detailed system status is available on the hub's panel (local access).</p>
       </section>
+
+      <!-- ==================== ROUTINES (layperson "when THIS -> do THAT" builder) ====================
+           GET/POST/PUT/DELETE /api/routines* — router-level require_scope("control"): the SAME
+           tier as System's /api/system (renderControls), so this tab is reachable by root (live)
+           AND a companion paired with the 'central' role (DEFAULT_SCOPES includes "control"); a
+           plain 'user' companion lacks the scope and is 403'd server-side. renderRoutines() mirrors
+           renderControls()'s exact MODE gate. The builder never lets the user type JSON — every
+           field is a picked option, a plain-text box, or a time input; see routines.py for the
+           validated shape a 400 can name. -->
+      <section class="tab-panel" id="panel-rotinas" data-tab="rotinas" role="tabpanel" aria-labelledby="tab-rotinas">
+        <div id="routinesTile" class="tile" hidden aria-labelledby="rotinas-h">
+          <div class="tile-head">
+            <h2 id="rotinas-h">Routines</h2>
+            <span class="hint">when this happens, do that</span>
+            <button id="rotNewBtn" type="button" class="ctl small primary">
+              <svg aria-hidden="true"><use href="#ic-plus"/></svg> New routine
+            </button>
+          </div>
+          <div id="rotEmpty" class="rot-empty" hidden>
+            <p class="dev-simple-sub">A routine watches for something happening in your home —
+              someone arriving, a room filling, a time of day — and automatically does one or more
+              things, like turning on a light or sending you a notification. For example:
+              <i>“When I arrive home, turn on the living-room light”</i> or
+              <i>“When everyone leaves, turn everything off.”</i></p>
+            <button id="rotEmptyCta" type="button" class="ctl primary dev-simple-cta">
+              <svg aria-hidden="true"><use href="#ic-plus"/></svg> Create your first routine
+            </button>
+          </div>
+          <div id="rotList" class="rot-list" aria-live="polite" hidden></div>
+          <span id="rotFb" class="action-fb" aria-live="polite"></span>
+        </div>
+        <p class="panel-note" id="rotNote" hidden>Routines run on your Wavr hub and need admin
+          access on this device — not available in this demo or on a view-only companion.</p>
+      </section>
     </main>
   </div>
 </div>
@@ -3269,6 +3330,18 @@
   <div class="overlay-content" id="setupContent"></div>
 </div>
 
+<!-- Routine builder (New/Edit) — its own takeover, sibling to #setupOverlay above; reuses
+     the SAME .overlay/.overlay-bar/.overlay-content shell so it reads as one component family,
+     but never shares state with the device-catalog wizard (separate ids, separate JS). The
+     routines LIST lives in the Rotinas tab (#panel-rotinas) — this is just "build one routine". -->
+<div id="routineOverlay" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="routine-h">
+  <div class="overlay-bar">
+    <button id="routineBack" class="ctl small" type="button">‹ Back</button>
+    <h2 id="routine-h">New routine</h2>
+  </div>
+  <div class="overlay-content" id="routineContent"></div>
+</div>
+
 <!-- ============ CORE PANEL (Phase 1 of "Wavr OS"): ?core / window.WAVR_CORE ambient
      home-status face. Native [hidden] and completely inert in the three existing modes
      (live/companion/simulated); only the gated script block near the end of <body>
@@ -3552,6 +3625,9 @@ function companionIsCentral(){
         // stays a no-op here; this only surfaces the tile in-session for a mobile admin whose
         // backend-confirmed role just resolved.
         if(typeof renderMobileBonded === "function") renderMobileBonded();
+        // Rotinas tab (same live/central-only tier as System): re-run now that the role has
+        // resolved, mirroring the renderControls() re-run just above.
+        if(typeof renderRoutines === "function") renderRoutines();
       })
       .catch(()=>{ companionRoleCache = null; });   // transient failure -- allow a retry on next paint
   }
@@ -7444,6 +7520,594 @@ async function renderAssistant(){
 }
 renderAssistant();
 
+// ---- Routines (Rotinas tab): layperson "when THIS -> do THAT" builder ----
+// Plain-language trigger/action menus, mirroring routines.py's VALID_TRIGGERS/VALID_ACTIONS
+// and their required trigger_params/action-params keys exactly (a 400 there is surfaced
+// honestly here, never silently retried or guessed around). The picker never emits JSON —
+// every field is a <select> option, a text box, or a time input.
+const ROT_TRIGGERS = [
+  {kind:"house_arrived", label:"When someone arrives home", paramKey:null},
+  {kind:"house_left", label:"When everyone leaves", paramKey:null},
+  {kind:"person_arrived", label:"When a specific person arrives", paramKey:"person"},
+  {kind:"person_left", label:"When a specific person leaves", paramKey:"person"},
+  {kind:"room_occupied", label:"When a room fills", paramKey:"room"},
+  {kind:"room_empty", label:"When a room empties", paramKey:"room"},
+  {kind:"schedule", label:"At a time of day", paramKey:"at"},
+  {kind:"house_away_by_time", label:"If nobody's home by a time", paramKey:"by"},
+  {kind:"device_seen", label:"When a device shows up", paramKey:"mac"},
+];
+const ROT_ACTION_KINDS = [
+  {kind:"ha_service", label:"Turn a light/switch on or off"},
+  {kind:"notify", label:"Send me a notification"},
+  {kind:"set_watch", label:"Enter/leave discreet mode (Watch)"},
+];
+function rotTriggerLabel(kind){ const t = ROT_TRIGGERS.find(x => x.kind === kind); return t ? t.label : kind; }
+function rotActionLabel(kind){ const a = ROT_ACTION_KINDS.find(x => x.kind === kind); return a ? a.label : kind; }
+
+async function renderRoutines(){
+  // Same MODE tier as renderControls()/System: reachable live (loopback root) OR a companion
+  // paired 'central' (its DEFAULT_SCOPES include "control", the router-level gate on every
+  // /api/routines* route) — never a plain 'user' companion or the public demo.
+  const companionCentral = MODE === "companion" && companionIsCentral();
+  const tile = document.getElementById("routinesTile");
+  const note = document.getElementById("rotNote");
+  if(MODE !== "live" && !companionCentral){
+    if(tile) tile.hidden = true;
+    if(note) note.hidden = false;
+    return;
+  }
+  if(note) note.hidden = true;
+  if(tile) tile.hidden = false;
+
+  // Mobile: route through the native pinned fetch (base = stored central) so the companion
+  // Bearer token never hits the app's own https://localhost — same __nf pattern as
+  // renderControls/renderStatus. Absent the hook, __nf is exactly the original same-origin fetch.
+  const __nf = (path, opt)=> window.WAVR_MOBILE
+    ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+    : fetch(location.origin + path, opt);
+  const companionAuth = companionCentral ? {"Authorization":"Bearer "+companionToken()} : null;
+  // Fix D pattern (matches renderControls/renderConnectors): a companion sends its Bearer
+  // instead of the loopback-only X-Wavr-Local header on every write; GETs need only the Bearer.
+  const writeHdr = ()=> companionCentral
+    ? Object.assign({"Content-Type":"application/json"}, companionAuth)
+    : {"Content-Type":"application/json","X-Wavr-Local":"1"};
+  const deleteHdr = ()=> companionCentral ? companionAuth : {"X-Wavr-Local":"1"};
+  const getOpt = companionAuth ? {headers: companionAuth} : undefined;
+
+  const list = document.getElementById("rotList");
+  const empty = document.getElementById("rotEmpty");
+  const fb = document.getElementById("rotFb");
+  let ROUTINES = [];
+  let ENTITIES = null;    // lazy-cached GET /api/routines/ha-entities result ([] once fetched)
+  let PERSONS = null;     // lazy-cached known-person names (live only, mirrors renderKnownPresence)
+
+  async function fetchEntities(){
+    if(ENTITIES) return ENTITIES;
+    try{
+      const r = await __nf("/api/routines/ha-entities", getOpt);
+      const j = await r.json();
+      ENTITIES = Array.isArray(j.entities) ? j.entities : [];
+    }catch{ ENTITIES = []; }
+    return ENTITIES;
+  }
+  async function fetchPersons(){
+    if(PERSONS) return PERSONS;
+    PERSONS = [];
+    if(MODE !== "live") return PERSONS;   // known-presence is live-only (renderKnownPresence's own gate)
+    try{
+      const r = await fetch(location.origin+"/api/identity/known-presence", {headers:{"X-Wavr-Local":"1"}});
+      if(r.ok){
+        const j = await r.json();
+        const names = (Array.isArray(j.corroborators) ? j.corroborators : [])
+          .map(c => c.person).filter(p => typeof p === "string" && p.trim());
+        PERSONS = Array.from(new Set(names)).sort();
+      }
+    }catch{}
+    return PERSONS;
+  }
+  function entityLabel(id){
+    if(!id) return "a device";
+    const e = ENTITIES && ENTITIES.find(x => x.entity_id === id);
+    return e ? e.name : id;   // fall back to the raw id — still honest, just unresolved
+  }
+
+  // ---- Plain-language summaries for the list (never a JSON dump) ----
+  function triggerSummary(r){
+    const p = r.trigger_params || {};
+    switch(r.trigger_kind){
+      case "house_arrived": return "When someone arrives home";
+      case "house_left": return "When everyone leaves";
+      case "person_arrived": return "When " + (p.person || "someone") + " arrives";
+      case "person_left": return "When " + (p.person || "someone") + " leaves";
+      case "room_occupied": return "When the " + (p.room || "room") + " fills";
+      case "room_empty": return "When the " + (p.room || "room") + " empties";
+      case "schedule": return "At " + (p.at || "—");
+      case "house_away_by_time": return "If nobody's home by " + (p.by || "—");
+      case "device_seen": return "When a device shows up";
+      default: return rotTriggerLabel(r.trigger_kind);
+    }
+  }
+  function actionSummary(a){
+    const p = (a && a.params) || {};
+    if(a.kind === "ha_service"){
+      const onoff = p.service === "turn_off" ? "off" : "on";
+      return "turn " + entityLabel(p.entity_id) + " " + onoff;
+    }
+    if(a.kind === "notify") return "notify me: “" + (p.message || "") + "”";
+    if(a.kind === "set_watch") return p.on ? "turn on discreet mode" : "turn off discreet mode";
+    return rotActionLabel(a && a.kind);
+  }
+  function routineSummary(r){
+    const acts = Array.isArray(r.actions) ? r.actions : [];
+    return triggerSummary(r) + " → " + (acts.length ? acts.map(actionSummary).join(", ") : "(no actions)");
+  }
+
+  function renderList(){
+    list.textContent = "";
+    if(!ROUTINES.length){
+      empty.hidden = false; list.hidden = true;
+      return;
+    }
+    empty.hidden = true; list.hidden = false;
+    ROUTINES.forEach(r => {
+      const row = document.createElement("div"); row.className = "rot-row";
+      const left = document.createElement("div"); left.className = "rot-row-left";
+      const name = document.createElement("div"); name.className = "rot-name";
+      name.textContent = r.name || "(unnamed routine)";        // textContent — user data
+      left.appendChild(name);
+      const summary = document.createElement("p"); summary.className = "rot-summary";
+      summary.textContent = routineSummary(r);                 // textContent — server/user data
+      left.appendChild(summary);
+      const firedRel = fmtRelative(r.last_fired);
+      if(firedRel){
+        const meta = document.createElement("p");
+        meta.className = "rot-meta" + (r.last_status === "partial" ? " warn"
+          : r.last_status === "failed" ? " danger" : "");
+        meta.textContent = "last ran " + firedRel + (r.last_status ? " · " + r.last_status : "");
+        left.appendChild(meta);
+      }
+      row.appendChild(left);
+
+      const ctl = document.createElement("div"); ctl.className = "rot-row-ctl";
+      const sw = document.createElement("button"); sw.type = "button";
+      sw.className = "ctl switch small " + (r.enabled ? "on" : "off");
+      sw.setAttribute("role", "switch");
+      sw.setAttribute("aria-checked", r.enabled ? "true" : "false");
+      sw.setAttribute("aria-label", (r.name || "routine") + ": " + (r.enabled ? "on" : "off"));
+      sw.onclick = async ()=>{
+        sw.disabled = true;
+        let resp;
+        try{
+          resp = await __nf("/api/routines/"+encodeURIComponent(r.id)+"/enable",
+            {method:"POST", headers:writeHdr(), body:JSON.stringify({on: !r.enabled})});
+        }catch{}
+        if(resp && resp.ok){
+          actionFeedback(fb, true, null, !r.enabled ? "✓ turned on" : "✓ turned off");
+          refresh();
+        } else {
+          sw.disabled = false;
+          actionFeedback(fb, false, "couldn't change — check the connection");
+        }
+      };
+      ctl.appendChild(sw);
+
+      const testBtn = document.createElement("button"); testBtn.type = "button";
+      testBtn.className = "ctl small"; testBtn.textContent = "Test";
+      testBtn.setAttribute("data-tip", "Runs this routine's actions right now, for real — e.g. a light really turns on");
+      const testFb = document.createElement("span"); testFb.className = "action-fb"; testFb.setAttribute("aria-live", "polite");
+      testBtn.onclick = async ()=>{
+        testBtn.disabled = true; testFb.className = "action-fb"; testFb.textContent = "running…";
+        let resp;
+        try{
+          resp = await __nf("/api/routines/"+encodeURIComponent(r.id)+"/test",
+            {method:"POST", headers:writeHdr()});
+        }catch{}
+        testBtn.disabled = false;
+        if(resp && resp.ok){
+          let j; try{ j = await resp.json(); }catch{ j = {}; }
+          const st = j.status || "ok";
+          if(st === "ok") actionFeedback(testFb, true, null, "✓ ran ok");
+          else if(st === "partial") actionFeedback(testFb, false, "ran, but some actions failed");
+          else actionFeedback(testFb, false, "failed — check Home Assistant / the notifier");
+        } else {
+          actionFeedback(testFb, false, "couldn't run — check the connection");
+        }
+      };
+      ctl.appendChild(testBtn); ctl.appendChild(testFb);
+
+      const editBtn = document.createElement("button"); editBtn.type = "button";
+      editBtn.className = "ctl small"; editBtn.textContent = "Edit";
+      editBtn.onclick = (e)=>{ openBuilder(r, e.currentTarget); };
+      ctl.appendChild(editBtn);
+
+      // Two-step reveal-then-confirm — never a native confirm(), mirrors Nodes/Peers "Remove".
+      const rmBtn = document.createElement("button"); rmBtn.type = "button"; rmBtn.className = "rm";
+      rmBtn.textContent = "Remove";
+      rmBtn.setAttribute("aria-label", "remove " + (r.name || "routine"));
+      rmBtn.onclick = ()=>{
+        ctl.textContent = "";
+        const warn = document.createElement("span"); warn.className = "pair-dev-meta"; warn.textContent = "Remove? ";
+        const yes = document.createElement("button"); yes.type = "button"; yes.className = "rm"; yes.textContent = "Confirm";
+        const no = document.createElement("button"); no.type = "button"; no.className = "ctl small off"; no.textContent = "Cancel";
+        no.onclick = ()=>{ renderList(); };
+        yes.onclick = async ()=>{
+          yes.disabled = true; no.disabled = true;
+          let resp;
+          try{
+            resp = await __nf("/api/routines/"+encodeURIComponent(r.id), {method:"DELETE", headers:deleteHdr()});
+          }catch{}
+          if(resp && resp.ok){ actionFeedback(fb, true, null, "✓ removed"); refresh(); }
+          else { actionFeedback(fb, false, "couldn't remove"); renderList(); }
+        };
+        ctl.appendChild(warn); ctl.appendChild(yes); ctl.appendChild(no);
+      };
+      ctl.appendChild(rmBtn);
+      row.appendChild(ctl);
+      list.appendChild(row);
+    });
+  }
+
+  async function refresh(){
+    let resp;
+    try{ resp = await __nf("/api/routines", getOpt); }catch{ return; }   // backend momentarily unreachable — keep last view
+    if(!resp || !resp.ok) return;
+    let j; try{ j = await resp.json(); }catch{ j = {routines: []}; }
+    ROUTINES = Array.isArray(j.routines) ? j.routines : [];
+    renderList();
+  }
+
+  // ---- Builder overlay (New / Edit) — guided form only, never a JSON editor ----
+  const overlay = document.getElementById("routineOverlay");
+  const content = document.getElementById("routineContent");
+  const title = document.getElementById("routine-h");
+  const backBtn = document.getElementById("routineBack");
+  let builderTrigger = null;
+
+  function closeBuilder(){
+    if(!overlay || overlay.hidden) return;
+    overlay.hidden = true;
+    if(window.__wavrSetAppInert) window.__wavrSetAppInert(false);
+    if(builderTrigger && builderTrigger.focus) builderTrigger.focus();
+    builderTrigger = null;
+  }
+  if(backBtn) backBtn.onclick = closeBuilder;
+  if(overlay && window.__wavrTrapFocus) window.__wavrTrapFocus(overlay);
+  document.addEventListener("keydown", (e)=>{ if(e.key === "Escape" && overlay && !overlay.hidden) closeBuilder(); });
+
+  function elc(tag, cls, text){
+    const e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(text != null) e.textContent = text;
+    return e;
+  }
+  function fieldRow(labelText){
+    const wrap = elc("label", "pair-role");
+    wrap.appendChild(document.createTextNode(labelText));
+    return wrap;
+  }
+
+  async function openBuilder(existing, triggerEl){
+    if(!overlay || !content) return;
+    builderTrigger = triggerEl || document.activeElement;
+    title.textContent = existing ? "Edit routine" : "New routine";
+    content.textContent = "";
+    content.appendChild(elc("p", "narrate-out muted", "Loading…"));
+    overlay.hidden = false;
+    if(window.__wavrSetAppInert) window.__wavrSetAppInert(true);
+
+    const [entities, persons] = await Promise.all([fetchEntities(), fetchPersons()]);
+
+    // Local editable state, seeded from `existing` when editing. Never sent verbatim — the
+    // submit handler strips the UI-only "_manual"/"_personManual" markers below first.
+    const state = {
+      name: existing ? (existing.name || "") : "",
+      trigger_kind: existing ? existing.trigger_kind : "house_arrived",
+      trigger_params: existing ? Object.assign({}, existing.trigger_params) : {},
+      actions: existing ? (existing.actions || []).map(a => ({kind: a.kind, params: Object.assign({}, a.params || {})})) : [],
+      enabled: existing ? !!existing.enabled : false,
+    };
+
+    content.textContent = "";
+    const form = document.createElement("form"); form.className = "rot-form";
+
+    // -- Name --
+    const nameTile = elc("div", "tile");
+    const nameHead = elc("div", "tile-head"); nameHead.appendChild(elc("h2", null, "Name"));
+    nameTile.appendChild(nameHead);
+    const nameLabel = fieldRow("Routine name");
+    const nameInput = document.createElement("input");
+    nameInput.type = "text"; nameInput.maxLength = 80; nameInput.required = true;
+    nameInput.value = state.name; nameInput.placeholder = "e.g. Everyone leaves";
+    nameInput.setAttribute("aria-label", "routine name");
+    nameInput.oninput = ()=>{ state.name = nameInput.value; };
+    nameLabel.appendChild(nameInput);
+    nameTile.appendChild(nameLabel);
+    form.appendChild(nameTile);
+
+    // -- Trigger --
+    const trigTile = elc("div", "tile");
+    const trigHead = elc("div", "tile-head"); trigHead.appendChild(elc("h2", null, "When…"));
+    trigTile.appendChild(trigHead);
+    const trigLabel = fieldRow("Trigger");
+    const trigSelect = document.createElement("select");
+    trigSelect.setAttribute("aria-label", "trigger");
+    ROT_TRIGGERS.forEach(t => trigSelect.appendChild(new Option(t.label, t.kind, t.kind === state.trigger_kind, t.kind === state.trigger_kind)));
+    trigLabel.appendChild(trigSelect);
+    trigTile.appendChild(trigLabel);
+    const trigParamHost = elc("div", "rot-trigparam");
+    trigTile.appendChild(trigParamHost);
+    form.appendChild(trigTile);
+
+    function renderTriggerParam(){
+      trigParamHost.textContent = "";
+      const meta = ROT_TRIGGERS.find(t => t.kind === state.trigger_kind);
+      const key = meta && meta.paramKey;
+      if(!key){
+        trigParamHost.appendChild(elc("p", "panel-note", "No extra details needed for this trigger."));
+        return;
+      }
+      if(key === "person"){
+        const wrap = fieldRow("Person");
+        const useManual = !persons.length || state.trigger_params._personManual === true
+          || (state.trigger_params.person && persons.indexOf(state.trigger_params.person) === -1);
+        if(!useManual){
+          const sel = document.createElement("select");
+          sel.setAttribute("aria-label", "person");
+          sel.appendChild(new Option("choose a person…", "", !state.trigger_params.person, !state.trigger_params.person));
+          persons.forEach(p => sel.appendChild(new Option(p, p, p === state.trigger_params.person, p === state.trigger_params.person)));
+          sel.appendChild(new Option("Someone else (type a name)…", "__other__"));
+          sel.onchange = ()=>{
+            if(sel.value === "__other__"){ state.trigger_params._personManual = true; renderTriggerParam(); return; }
+            state.trigger_params.person = sel.value;
+          };
+          wrap.appendChild(sel);
+        } else {
+          const inp = document.createElement("input");
+          inp.type = "text"; inp.maxLength = 64; inp.setAttribute("aria-label", "person name");
+          inp.placeholder = "e.g. augusto"; inp.value = state.trigger_params.person || "";
+          inp.oninput = ()=>{ state.trigger_params.person = inp.value; };
+          wrap.appendChild(inp);
+          if(persons.length){
+            const back = document.createElement("button"); back.type = "button";
+            back.className = "linklike"; back.textContent = "choose from the list instead";
+            back.onclick = ()=>{ state.trigger_params._personManual = false; renderTriggerParam(); };
+            wrap.appendChild(back);
+          }
+        }
+        trigParamHost.appendChild(wrap);
+      } else if(key === "room"){
+        const wrap = fieldRow("Room");
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.maxLength = 64; inp.setAttribute("aria-label", "room name");
+        inp.placeholder = "e.g. living room"; inp.value = state.trigger_params.room || "";
+        inp.oninput = ()=>{ state.trigger_params.room = inp.value; };
+        wrap.appendChild(inp);
+        trigParamHost.appendChild(wrap);
+      } else if(key === "at" || key === "by"){
+        const wrap = fieldRow(key === "at" ? "Time" : "By this time");
+        const inp = document.createElement("input");
+        inp.type = "time"; inp.setAttribute("aria-label", key === "at" ? "time of day" : "deadline time");
+        inp.value = state.trigger_params[key] || "";
+        inp.oninput = ()=>{ state.trigger_params[key] = inp.value; };
+        wrap.appendChild(inp);
+        trigParamHost.appendChild(wrap);
+      } else if(key === "mac"){
+        const wrap = fieldRow("Device address (MAC)");
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.maxLength = 32; inp.setAttribute("aria-label", "device MAC address");
+        inp.placeholder = "aa:bb:cc:dd:ee:ff"; inp.value = state.trigger_params.mac || "";
+        inp.autocomplete = "off"; inp.spellcheck = false;
+        inp.oninput = ()=>{ state.trigger_params.mac = inp.value; };
+        wrap.appendChild(inp);
+        trigParamHost.appendChild(wrap);
+      }
+    }
+    renderTriggerParam();
+    trigSelect.onchange = ()=>{
+      state.trigger_kind = trigSelect.value;
+      state.trigger_params = {};   // switching trigger kind drops the old, now-irrelevant param
+      renderTriggerParam();
+    };
+
+    // -- Actions (a list; "Add all my lights (off)" fans out to N ha_service actions at once) --
+    const actTile = elc("div", "tile");
+    const actHead = elc("div", "tile-head");
+    actHead.appendChild(elc("h2", null, "Then do this"));
+    const addActBtn = document.createElement("button"); addActBtn.type = "button";
+    addActBtn.className = "ctl small"; addActBtn.textContent = "+ Add action";
+    actHead.appendChild(addActBtn);
+    actTile.appendChild(actHead);
+    const actList = elc("div", "rot-action-list");
+    actTile.appendChild(actList);
+    const addAllOffBtn = document.createElement("button"); addAllOffBtn.type = "button";
+    addAllOffBtn.className = "ctl small"; addAllOffBtn.style.marginTop = "10px"; addAllOffBtn.hidden = true;
+    addAllOffBtn.textContent = "Add all my lights (off)";
+    addAllOffBtn.setAttribute("data-tip", "Adds one “turn off” action for every light/switch Wavr can control — the fast way to build “turn everything off”");
+    actTile.appendChild(addAllOffBtn);
+    const actEmptyNote = elc("p", "panel-note", "Add at least one action.");
+    actTile.appendChild(actEmptyNote);
+    form.appendChild(actTile);
+
+    function renderActions(){
+      actList.textContent = "";
+      addAllOffBtn.hidden = !entities.length;
+      actEmptyNote.hidden = !!state.actions.length;
+      state.actions.forEach((a, idx) => {
+        const row = elc("div", "rot-action-row");
+        const fields = elc("div", "rot-action-fields");
+
+        const kindLabel = fieldRow("Action");
+        const kindSel = document.createElement("select");
+        kindSel.setAttribute("aria-label", "action " + (idx+1) + " type");
+        ROT_ACTION_KINDS.forEach(ak => kindSel.appendChild(new Option(ak.label, ak.kind, ak.kind === a.kind, ak.kind === a.kind)));
+        kindSel.onchange = ()=>{ a.kind = kindSel.value; a.params = {}; renderActions(); };
+        kindLabel.appendChild(kindSel);
+        fields.appendChild(kindLabel);
+
+        if(a.kind === "ha_service"){
+          const entLabel = fieldRow("Light/switch");
+          const useManual = !entities.length || a.params._manual === true
+            || (a.params.entity_id && !entities.some(e => e.entity_id === a.params.entity_id));
+          if(!useManual){
+            const sel = document.createElement("select");
+            sel.setAttribute("aria-label", "entity for action " + (idx+1));
+            sel.appendChild(new Option("choose a light/switch…", "", !a.params.entity_id, !a.params.entity_id));
+            entities.forEach(e => sel.appendChild(new Option(e.name + " (" + e.domain + ")", e.entity_id,
+              e.entity_id === a.params.entity_id, e.entity_id === a.params.entity_id)));
+            sel.appendChild(new Option("Type the entity ID myself…", "__other__"));
+            sel.onchange = ()=>{
+              if(sel.value === "__other__"){ a.params._manual = true; renderActions(); return; }
+              const chosen = entities.find(e => e.entity_id === sel.value);
+              a.params.entity_id = sel.value;
+              a.params.domain = chosen ? chosen.domain : (a.params.domain || "light");
+              renderActions();
+            };
+            entLabel.appendChild(sel);
+          } else {
+            const inp = document.createElement("input");
+            inp.type = "text"; inp.setAttribute("aria-label", "entity id for action " + (idx+1));
+            inp.placeholder = "e.g. light.sala"; inp.value = a.params.entity_id || "";
+            inp.autocomplete = "off"; inp.spellcheck = false;
+            inp.oninput = ()=>{
+              a.params.entity_id = inp.value;
+              a.params.domain = inp.value.split(".")[0] || "light";
+            };
+            entLabel.appendChild(inp);
+            if(entities.length){
+              const back = document.createElement("button"); back.type = "button";
+              back.className = "linklike"; back.textContent = "choose from the list instead";
+              back.onclick = ()=>{ a.params._manual = false; renderActions(); };
+              entLabel.appendChild(back);
+            }
+          }
+          fields.appendChild(entLabel);
+
+          const onoffLabel = fieldRow("Turn");
+          const onoffSel = document.createElement("select");
+          onoffSel.setAttribute("aria-label", "on or off for action " + (idx+1));
+          if(!a.params.service) a.params.service = "turn_on";
+          onoffSel.appendChild(new Option("On", "turn_on", a.params.service !== "turn_off", a.params.service !== "turn_off"));
+          onoffSel.appendChild(new Option("Off", "turn_off", a.params.service === "turn_off", a.params.service === "turn_off"));
+          onoffSel.onchange = ()=>{ a.params.service = onoffSel.value; };
+          onoffLabel.appendChild(onoffSel);
+          fields.appendChild(onoffLabel);
+        } else if(a.kind === "notify"){
+          const msgLabel = fieldRow("Message");
+          const inp = document.createElement("input");
+          inp.type = "text"; inp.maxLength = 200; inp.setAttribute("aria-label", "notification message for action " + (idx+1));
+          inp.placeholder = "e.g. Everyone left the house"; inp.value = a.params.message || "";
+          inp.oninput = ()=>{ a.params.message = inp.value; };
+          msgLabel.appendChild(inp);
+          fields.appendChild(msgLabel);
+        } else if(a.kind === "set_watch"){
+          const wLabel = fieldRow("Discreet mode");
+          const sel = document.createElement("select");
+          sel.setAttribute("aria-label", "discreet mode for action " + (idx+1));
+          if(a.params.on === undefined) a.params.on = true;
+          sel.appendChild(new Option("Turn on", "on", a.params.on === true, a.params.on === true));
+          sel.appendChild(new Option("Turn off", "off", a.params.on !== true, a.params.on !== true));
+          sel.onchange = ()=>{ a.params.on = (sel.value === "on"); };
+          wLabel.appendChild(sel);
+          fields.appendChild(wLabel);
+        }
+        row.appendChild(fields);
+
+        const rm = document.createElement("button"); rm.type = "button";
+        rm.className = "rm"; rm.textContent = "Remove";
+        rm.setAttribute("aria-label", "remove action " + (idx+1));
+        rm.onclick = ()=>{ state.actions.splice(idx, 1); renderActions(); };
+        row.appendChild(rm);
+
+        actList.appendChild(row);
+      });
+    }
+    addActBtn.onclick = ()=>{ state.actions.push({kind:"ha_service", params:{service:"turn_on"}}); renderActions(); };
+    addAllOffBtn.onclick = ()=>{
+      entities.forEach(e => state.actions.push({kind:"ha_service", params:{domain:e.domain, service:"turn_off", entity_id:e.entity_id}}));
+      renderActions();
+    };
+    renderActions();
+
+    // -- Enable now (new routines only — an existing one already has its own on/off switch
+    // in the list) + Save/Cancel --
+    const saveTile = elc("div", "tile");
+    if(!existing){
+      const enableLabel = elc("label", "pair-role");
+      const enableChk = document.createElement("input");
+      enableChk.type = "checkbox"; enableChk.checked = state.enabled;
+      enableChk.setAttribute("aria-label", "enable this routine now");
+      enableChk.onchange = ()=>{ state.enabled = enableChk.checked; };
+      enableLabel.appendChild(enableChk);
+      enableLabel.appendChild(document.createTextNode(" Turn this routine on now"));
+      saveTile.appendChild(enableLabel);
+    }
+    const errBox = elc("p", "action-fb err", "");
+    errBox.hidden = true;
+    saveTile.appendChild(errBox);
+    const btnRow = elc("div", "controls-row");
+    const saveBtn = document.createElement("button"); saveBtn.type = "submit";
+    saveBtn.className = "ctl primary"; saveBtn.textContent = existing ? "Save changes" : "Create routine";
+    const cancelBtn = document.createElement("button"); cancelBtn.type = "button";
+    cancelBtn.className = "ctl off"; cancelBtn.textContent = "Cancel";
+    cancelBtn.onclick = closeBuilder;
+    btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+    saveTile.appendChild(btnRow);
+    form.appendChild(saveTile);
+
+    form.onsubmit = async (e)=>{
+      e.preventDefault();
+      errBox.hidden = true;
+      // Strip UI-only markers (which widget to show) before this ever reaches the network —
+      // they are never real routine fields.
+      const cleanTriggerParams = Object.assign({}, state.trigger_params);
+      delete cleanTriggerParams._personManual;
+      const cleanActions = state.actions.map(a => {
+        const p = Object.assign({}, a.params);
+        delete p._manual;
+        return {kind: a.kind, params: p};
+      });
+      const body = {
+        name: state.name.trim(), trigger_kind: state.trigger_kind,
+        trigger_params: cleanTriggerParams, actions: cleanActions,
+      };
+      if(!existing) body.enabled = state.enabled;
+      saveBtn.disabled = true;
+      let resp;
+      try{
+        resp = existing
+          ? await __nf("/api/routines/"+encodeURIComponent(existing.id), {method:"PUT", headers:writeHdr(), body:JSON.stringify(body)})
+          : await __nf("/api/routines", {method:"POST", headers:writeHdr(), body:JSON.stringify(body)});
+      }catch{}
+      saveBtn.disabled = false;
+      if(resp && resp.ok){
+        closeBuilder();
+        actionFeedback(fb, true, null, existing ? "✓ routine updated" : "✓ routine created");
+        refresh();
+      } else {
+        // Honest validation echo — routines.py's ValueError text names exactly which field
+        // was wrong (e.g. "trigger 'schedule' requires param 'at'"), never a generic failure.
+        let msg = "couldn't save — check the fields above";
+        try{ const j = await resp.json(); if(j && j.detail) msg = String(j.detail); }catch{}
+        errBox.hidden = false; errBox.textContent = msg;
+      }
+    };
+
+    content.appendChild(form);
+    nameInput.focus();
+  }
+
+  const rotNewBtn = document.getElementById("rotNewBtn");
+  const rotEmptyCta = document.getElementById("rotEmptyCta");
+  if(rotNewBtn) rotNewBtn.onclick = (e)=>{ openBuilder(null, e.currentTarget); };
+  if(rotEmptyCta) rotEmptyCta.onclick = (e)=>{ openBuilder(null, e.currentTarget); };
+
+  // Entities BEFORE the first list paint so a "turn X on/off" summary shows the friendly HA
+  // name from the start, not the raw entity_id until the builder happens to be opened once.
+  await fetchEntities();
+  await refresh();
+}
+renderRoutines();
+
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
 const POSTURE_LABEL = {walking:"walking", standing:"standing", sitting:"sitting", lying:"lying"};
@@ -10030,7 +10694,7 @@ try {
 // (window.__wavrMap) that renderRadar() exposes at the end of its closure.
 (function(){
   "use strict";
-  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema"];
+  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas"];
   var content = document.getElementById("content");
   var navButtons = Array.prototype.slice.call(document.querySelectorAll(".nav-item[data-tab]"));
   var panels = {};
