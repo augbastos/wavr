@@ -194,6 +194,105 @@ def test_notify_new_devices_reports_only_devices_seen_while_away():
         "the pre-existing device is not counted, and no MAC leaks into the push"
 
 
+def test_no_motion_fires_through_the_real_ingest_pipeline():
+    # F8: no_motion has been unit- and seam-tested, but never through the REAL ingest ->
+    # fusion -> _publish -> room_motionless -> StillnessDetector chain. Drive app.state.ingest
+    # with still (low-velocity) mmwave targets whose ts advance past the routine's threshold,
+    # and assert the guardian fires. Fusion ages by EVENT ts (no wall-clock now_fn), so the
+    # "3 minutes" of stillness is fixed ISO strings, not real elapsed time.
+    from wavr.events import SensingEvent, Target
+    from wavr.fusion import FusionEngine
+    from wavr.hub import Hub
+
+    store = RoutineStore(":memory:")
+    r = store.add("still 1 min", "no_motion", trigger_params={"room": "quarto", "minutes": 1},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = create_app(
+        sources=[], storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
+        camera_store=CameraStore(":memory:"), net_inventory=_FakeInv([]), routine_store=store)
+
+    def _still(ts):
+        tgt = (Target(id=1, x=1.0, y=1.0, velocity=0.02, confidence=0.9),)   # velocity < 0.15 = still
+        return SensingEvent(room="quarto", modality="mmwave", presence=True, motion=0.0,
+                            breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts,
+                            targets=tgt, count=1)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()
+            base = "2026-07-10T00:00:"
+            for s in ("00", "20", "40"):                      # settle occupancy, accrue stillness
+                await app.state.ingest(_still(f"{base}{s}+00:00"))
+            await app.state.ingest(_still("2026-07-10T00:01:05+00:00"))   # 65s still -> crosses 60s
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    fired = store.get(r["id"])
+    assert fired["last_status"] == "ok" and fired["last_fired"], \
+        "a real still-target ingest crossing the threshold fired the no_motion guardian"
+
+
+def test_routine_ha_service_is_refused_for_a_sensitive_domain(monkeypatch):
+    # F7: a routine's ha_service action goes through the SAME gate chain the MCP control
+    # tool uses -- prove the real call_ha_service (not just the fake sink) refuses a
+    # SENSITIVE domain, so a routine can never be authored to unlock a door / open a
+    # camera. WAVR_MCP_CONTROL=1 so the refusal is specifically the sensitive-domain gate,
+    # not the control-off gate.
+    monkeypatch.setenv("WAVR_MCP_CONTROL", "1")
+    monkeypatch.setenv("WAVR_DB", ":memory:")
+    calls = []
+
+    class _FakeHA:
+        def call_service(self, domain, service, data=None):
+            calls.append((domain, service))
+            return {}
+
+    monkeypatch.setattr("wavr.app.client_from_config", lambda cfg: _FakeHA())
+    store = RoutineStore(":memory:")
+    r = store.add("unlock the door", "schedule", trigger_params={"at": "00:00"},
+                  actions=[{"kind": "ha_service",
+                            "params": {"domain": "lock", "service": "unlock", "entity_id": "lock.front"}}])
+    store.set_enabled(r["id"], True)
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"), routine_store=store)
+    with TestClient(app, headers=CSRF) as c:
+        resp = c.post(f"/api/routines/{r['id']}/test")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "failed", "a routine can't actuate a sensitive domain (lock)"
+    assert calls == [], "the sensitive-domain gate refused BEFORE ever delegating to Home Assistant"
+
+
+def test_device_seen_fires_when_the_watched_mac_appears():
+    # F1 regression: device_seen was UI-exposed + validated + unit-tested but never wired,
+    # so a "when my kid's phone (MAC) shows up" routine silently never fired. Prove the poll
+    # now dispatches it end to end (baseline first -> no spurious fire; then the MAC appears).
+    store = RoutineStore(":memory:")
+    r = store.add("porch on", "device_seen", trigger_params={"mac": "AA:BB:CC:DD:EE:FF"},
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    inv = _FakeInv([SimpleNamespace(mac="11:22:33:44:55:66", vendor="router")])  # not the watched mac
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
+        routine_store=store, net_inventory=inv)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()
+            app.state.routine_device_poll()                 # baseline snapshot -> no edge
+            assert store.get(r["id"])["last_fired"] is None, "a device already present is not 'appeared'"
+            inv._d.append(SimpleNamespace(mac="aa:bb:cc:dd:ee:ff", vendor="Kid Phone"))  # watched MAC joins
+            app.state.routine_device_poll()                 # appear edge -> fires
+            await asyncio.sleep(0.05)
+
+    asyncio.run(_drive())
+    fired = store.get(r["id"])
+    assert fired["last_status"] == "ok" and fired["last_fired"], \
+        "device_seen fired the moment the watched MAC (case-insensitive) appeared on the network"
+
+
 def test_notify_new_devices_read_failure_is_honest_not_a_false_all_clear():
     # F1 (ADR-0003): if the device_meta read raises (locked SD-card db, the bug-bank #8
     # hazard) the push must say "couldn't check", never a false "no new devices" -- the
