@@ -5303,15 +5303,25 @@ function renderNetwork(){
             aform.appendChild(ainput); aform.appendChild(asave); aform.appendChild(acancel);
             left.appendChild(aform);
           } else if(owned){
+            // An ANONYMOUS row (consent "yellow": counted as home, deliberately
+            // never named) has no person to show. Every branch here predates that
+            // level and assumed a non-empty name, so it rendered a nameless "★ "
+            // and an "un-assign " with a blank subject. Name the state instead —
+            // "no name" is a CHOICE the owner made, and the UI has to say so.
+            const anon = owned.anonymous || !owned.person;
+            const who = anon ? "(anonymous)" : owned.person;
             const ownedTag = document.createElement("span"); ownedTag.className = "dev-rename-btn dev-known-btn";
-            ownedTag.textContent = "★ " + owned.person;               // textContent — PII
-            ownedTag.setAttribute("aria-label", "registered to " + owned.person + " — presence corroborator");
+            ownedTag.textContent = "★ " + who;                        // textContent — PII
+            ownedTag.setAttribute("aria-label", anon
+              ? "registered anonymously — presence corroborator, no name"
+              : "registered to " + owned.person + " — presence corroborator");
             left.appendChild(ownedTag);
             const unassign = document.createElement("button");
             unassign.type = "button"; unassign.className = "dev-rename-btn";
             unassign.textContent = "un-assign";
-            unassign.setAttribute("aria-label",
-              "un-assign " + owned.person + " from this device — privacy opt-out");
+            unassign.setAttribute("aria-label", anon
+              ? "un-register this anonymous device — privacy opt-out"
+              : "un-assign " + owned.person + " from this device — privacy opt-out");
             unassign.onclick = async ()=>{
               unassign.disabled = true;
               let r;
