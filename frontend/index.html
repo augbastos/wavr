@@ -7596,6 +7596,12 @@ async function renderRadar(){
   svg.appendChild(houseLayer); svg.appendChild(zoneLayer); svg.appendChild(roomsLayer); svg.appendChild(drawLayer);
 
   const roomIdx = {};
+  // roomIdx only ever holds the ACTIVE floor's rooms (+ their 2D SVG DOM nodes), so a
+  // RoomState for an off-floor room used to early-return from radarUpdate and never
+  // reach liveTargets / the 3D ghost-marker — "someone's upstairs" silently vanished
+  // in a multi-floor house. roomRectIdx is the geometry (name -> {x,y,w,h}) for EVERY
+  // floor, so live target data is kept complete; only the 2D SVG draw stays floor-gated.
+  const roomRectIdx = {};
   // ---- Map liveness tri-state (fake-presence-on-disconnect fix) ----
   // roomLiveness[room] mirrors /api/cameras' per-camera enum, aggregated per room
   // ('offline' if ANY covering camera is latched down by the F3 health hook). Rebuilt by
@@ -7697,6 +7703,10 @@ async function renderRadar(){
     const rects = rectsFor(f);
     roomsLayer.textContent = "";
     for(const k in roomIdx) delete roomIdx[k];
+    // All-floor geometry, refreshed here (floor switch / house edit / boot — never
+    // per-frame, cost is O(total rooms)). Feeds radarUpdate's off-floor liveTargets.
+    for(const k in roomRectIdx) delete roomRectIdx[k];
+    (HOUSE.floors || []).forEach(fl => rectsFor(fl).forEach(r => { roomRectIdx[r.name] = r; }));
     const W = rects.length ? Math.max(...rects.map(r=>r.x+r.w)) : 7.7;
     const H = rects.length ? Math.max(...rects.map(r=>r.y+r.h)) : 5.7;
     // Bottom margin is larger than the other sides as a second safety net (on top of the
@@ -8591,9 +8601,17 @@ async function renderRadar(){
     return {x, y};
   }
   function zoneOccupied(z){
-    for(const room in liveTargets)
-      for(const p of liveTargets[room])
+    // liveTargets now holds EVERY floor's rooms (so off-floor presence reaches 3D),
+    // but zones are drawn on the ACTIVE floor only, so hit-test ONLY active-floor
+    // rooms — else an upstairs target at the same x/y would falsely light a
+    // ground-floor zone. Identical behaviour for a single-floor house.
+    const f = floorFor(currentFloor);
+    for(const room of (f && f.rooms) || []){
+      const pts = liveTargets[room.name];
+      if(!pts) continue;
+      for(const p of pts)
         if(p.x>=z.x && p.x<=z.x+z.w && p.y>=z.y && p.y<=z.y+z.h) return true;
+    }
     return false;
   }
   let zoneRects = [], zoneStatus = [];    // built on zone change; per-frame we only toggle .occ
@@ -9426,25 +9444,35 @@ async function renderRadar(){
   })();
 
   radarUpdate = (rs)=>{
-    const e = roomIdx[rs.room]; if(!e) return;
-    paintRoom2D(rs.room);   // liveness tri-state (occupied/offline/empty/blind), not just .occ
-    // Reuse dots keyed by target id so movement TRANSITIONS instead of teleporting
-    // (a person walking reads as motion, not a slideshow of positions).
-    const seen = new Set();
-    (rs.targets||[]).forEach(t=>{
-      const key = String(t.id ?? "?");
-      seen.add(key);
-      const g = e.dots.get(key);
-      if(g){ placeDot(g, e.r, t); }
-      else { const n = dot(e.r, t); e.dots.set(key, n); e.layer.appendChild(n); }
-    });
-    [...e.dots.keys()].forEach(k=>{
-      if(!seen.has(k)){ e.dots.get(k).remove(); e.dots.delete(k); }
-    });
-    // Feed absolute target positions to the zone hit-test, then re-highlight zones.
+    // Geometry from the ALL-floor index, so an off-floor room (not in roomIdx)
+    // still lands in liveTargets and reaches the 3D ghost-marker. A room absent
+    // from the whole house doc has no geometry -> nothing to place.
+    const rect = roomRectIdx[rs.room];
+    if(!rect) return;
+    // Feed absolute target positions for EVERY floor's rooms; the 3D people/floor-stack
+    // renderer decides how to draw an off-floor one (ghost marker).
     liveTargets[rs.room] = (rs.targets||[]).map(t => {
-      const p = absTargetPoint(e.r, t); p.est = isEstimated(t); return p;   // est -> hazy 3D marker
+      const p = absTargetPoint(rect, t); p.est = isEstimated(t); return p;   // est -> hazy 3D marker
     });
+    // The 2D SVG only ever draws the ACTIVE floor, so its dot bookkeeping stays gated
+    // on roomIdx (which only holds active-floor rooms + their DOM nodes).
+    const e = roomIdx[rs.room];
+    if(e){
+      paintRoom2D(rs.room);   // liveness tri-state (occupied/offline/empty/blind), not just .occ
+      // Reuse dots keyed by target id so movement TRANSITIONS instead of teleporting
+      // (a person walking reads as motion, not a slideshow of positions).
+      const seen = new Set();
+      (rs.targets||[]).forEach(t=>{
+        const key = String(t.id ?? "?");
+        seen.add(key);
+        const g = e.dots.get(key);
+        if(g){ placeDot(g, e.r, t); }
+        else { const n = dot(e.r, t); e.dots.set(key, n); e.layer.appendChild(n); }
+      });
+      [...e.dots.keys()].forEach(k=>{
+        if(!seen.has(k)){ e.dots.get(k).remove(); e.dots.delete(k); }
+      });
+    }
     updateZoneOcc();   // per-frame: only re-highlight (no DOM rebuild); structure rebuilt on zone change
     updatePeople3D();  // keep the 3D people markers in sync with the same live target data
     tintRoom3D(rs.room);   // §6: floor tint tracks this frame's confidence (roomOcc/roomConf
