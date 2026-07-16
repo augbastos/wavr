@@ -85,7 +85,7 @@ from wavr.api_assistant import build_assistant_router
 from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.api_routines import build_routines_router
-from wavr.devices import DeviceStore, VALID_CONSENT
+from wavr.devices import DeviceStore, VALID_CONSENT, _is_expired
 from wavr.pairing import PairingManager
 from wavr.pair_requests import PairApprovalManager
 from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope, effective_scopes
@@ -1276,6 +1276,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             exactly the leftovers that must stay dark.
           * no Device row -- hard-deleted, or a row from another DB.
 
+          * revoked OR expired -- a credential that no longer verifies must contribute
+            NO presence. _devices.get() returns the row IGNORING revoked/expires_at (it
+            is the admin/consent view), so without this check a revoked companion (or an
+            expired guest) kept counting as home forever via as_net_known -- the token
+            was dead but the MAC stayed "present" (Finding A, guest-mode review). Fails
+            closed here too: a dead credential is red.
+
         `consent or "green"` mirrors devices.Device.to_dict: NULL means "never
         explicitly set", which resolves to green everywhere."""
         if device_id == ROOT_DEVICE_ID:
@@ -1283,7 +1290,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if _devices is None:
             return "red"
         device = _devices.get(device_id)
-        if device is None:
+        if device is None or device.revoked or _is_expired(device.expires_at):
             return "red"
         return device.consent or "green"
 
@@ -3014,7 +3021,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         mac = await _resolve_companion_mac(host) if host else None
         if not mac:
             return {"mac_registered": False, "reason": "no-arp-resolution"}
-        if consent == "yellow":
+        # A GUEST is NEVER named, regardless of the consent color it set on itself: a
+        # guest holds presence:write and could POST /api/consent green, then register
+        # with a label -- the "guest is unnamed" invariant must hold at the WRITE, not
+        # just the read layer (Finding B, guest-mode review). Force the anonymous branch.
+        role = getattr(request.state, "role", None)
+        if consent == "yellow" or role == "guest":
             # Presence WITHOUT the name: an ANONYMOUS row. This used to skip the
             # write entirely, on the reasoning that the write is what attaches a
             # name -- but the write is ALSO what makes the MAC known, and only a
@@ -3105,16 +3117,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def devices_me(request: Request, _=Depends(require_authenticated)):
         # Read-back of the caller's OWN role/name -- lets a paired companion
         # show "Admin device" / "Member device" without the 403-inference hack
-        # the shim's detectRole() previously had to do. can_view's role set
-        # (root/central/user) is exactly what require_authenticated already
-        # gates, so no extra scope needed beyond authentication itself.
+        # the shim's detectRole() previously had to do. Reachable by can_view's set
+        # (root/central/user AND guest) -- it returns ONLY the caller's own row, no
+        # house data, so a guest seeing its own {role, expires_at} is safe and lets
+        # the guest UI show "Guest -- expires HH:MM". No scope needed beyond auth.
         role = getattr(request.state, "role", None)
         if role == "root":
-            return {"device_id": None, "role": "root", "name": None}
+            return {"device_id": None, "role": "root", "name": None, "expires_at": None}
         device = _self_device(request)
         if device is None:
             raise HTTPException(status_code=403, detail="invalid or revoked token")
-        return {"device_id": device.device_id, "role": device.role, "name": device.name}
+        return {"device_id": device.device_id, "role": device.role, "name": device.name,
+                "expires_at": device.expires_at}
 
     @app.get("/api/companion/health")
     async def companion_health(request: Request, _=Depends(require_authenticated),
@@ -3202,10 +3216,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/core/pin/verify")
     async def verify_core_pin(pin: str = Body(..., embed=True),
-                              _=Depends(require_authenticated)):
+                              _=Depends(require_authenticated),
+                              __=Depends(require_scope("presence:read"))):
         # Reachable by the panel: loopback (CSRF-gated, like every other loopback
-        # state check) or any authenticated LAN peer showing the panel -- see
-        # require_authenticated. Rate-limited (wavr.pin_ratelimit): checked BEFORE
+        # state check) or a presence:read LAN peer (root/central/user) showing the
+        # panel. presence:read is the codebase idiom for "any real device, not agent"
+        # (see the sibling /api/core/pin/status) -- it also excludes a 'guest', which
+        # holds presence:write only and must not be able to probe the admin PIN
+        # (guest-mode review, Finding C). Rate-limited (wavr.pin_ratelimit): checked BEFORE
         # touching the store, so a caller under lockout never reaches the
         # (deliberately slow) pbkdf2 compare. Locked-out or malformed input both
         # degrade to an honest {"ok": false} rather than a distinguishable error
@@ -3908,6 +3926,30 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             lan_url = f"https://{_local_ip}:{cfg.port}"
             return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6,
                     "lan_url": lan_url}
+
+        @app.post("/api/guest/invite")
+        async def guest_invite(hours: float = Body(4.0, embed=True),
+                               _=Depends(require_local),
+                               __=Depends(require_scope("admin"))):
+            # Guest mode: the host mints a TIME-BOXED guest invite. The guest scans the
+            # SAME QR + does the SAME out-of-band cert-fingerprint / verify6 MitM compare
+            # as /api/pair-code, and redeems at the SAME POST /api/pair -- but the code
+            # carries role 'guest' + a session deadline, so the guest device gets a
+            # presence:write-ONLY token that auto-expires in `hours` (devices.expires_at,
+            # enforced at verify() AND at the read-time consent gate) and appears only as
+            # ANONYMOUS presence (register-companion force-anonymous for guests). No house
+            # read, no stream, no management, nothing persisted past the deadline. Same
+            # admin + require_local (loopback-root-CSRF or a central peer) tier as
+            # /api/pair-code -- a plain user/agent/guest can NOT mint one.
+            hours = max(0.25, min(float(hours), 24.0))   # clamp server-side: 15 min .. 24 h
+            from wavr.tls import cert_fingerprint, resolved_cert_path, verification_code
+            fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+            code = _pairing.mint_guest_code(hours)
+            verify6 = verification_code(fingerprint, code) if fingerprint else None
+            lan_url = f"https://{_local_ip}:{cfg.port}"
+            expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+            return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6,
+                    "lan_url": lan_url, "expires_at": expires_at, "role": "guest"}
 
         # "Approve on the Core" (design 2026-07-11). Two routers, two DIFFERENT auth
         # boundaries -- the exact split api_peers.py/api_nodes.py already use:

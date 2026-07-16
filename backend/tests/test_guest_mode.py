@@ -86,10 +86,12 @@ def test_guest_default_scope_is_presence_write_only():
         assert denied not in auth.DEFAULT_SCOPES["guest"], denied
 
 
-def test_guest_absent_from_can_view_and_can_change_state():
-    # Like 'agent', a guest fails closed on both role tiers, so every
-    # require_authenticated/require_local fallback denies it by construction.
-    assert auth.can_view("guest") is False
+def test_guest_can_view_but_never_change_state():
+    # Guest IS in can_view so it can pass require_authenticated for the presence:write
+    # register-companion route (its only purpose); every house-read route's own
+    # require_scope still denies it. It is NEVER in can_change_state, so the central-only
+    # state-changing tier (require_local fallback) denies it by construction.
+    assert auth.can_view("guest") is True
     assert auth.can_change_state("guest") is False
 
 
