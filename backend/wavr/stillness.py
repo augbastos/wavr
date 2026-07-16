@@ -25,6 +25,13 @@ STILL_VELOCITY_MS = 0.15
 # "they got up"); a briefer blip is tolerated so one noisy frame doesn't reset an hours-long
 # clock. Longer than fall's flicker grace on purpose -- stillness is measured over hours.
 STILL_MOVE_GRACE_S = 20.0
+# The longest gap between two STILL frames we still treat as "we watched the room the whole
+# time". A still frame arriving later than this after the previous one means the room went
+# UNOBSERVED across the gap (a node fell silent, re-fuse is disabled, etc.) -- we must NOT
+# stitch that gap into "continuously still" and manufacture an unobserved period (ADR-0003).
+# Set above fusion's decay window (stale_s ~90s) so the normal per-frame cadence (<=5s
+# re-fuse floor, or a sparse-but-live sensor) never trips it; only genuine silence does.
+STILL_MAX_FRAME_GAP_S = 120.0
 
 
 def room_motionless(occupied: bool, targets) -> bool | None:
@@ -65,8 +72,23 @@ class StillnessDetector:
         try:
             now = _as_utc(ts)
         except (TypeError, ValueError):
-            return 0.0   # a malformed ts must never crash the fusion tick for this room
+            # A malformed ts can't be placed on the timeline. END the episode (pop the
+            # state) so the 0.0 we return is TRUTHFUL -- not a stale "episode over"
+            # sentinel that leaves `since` live and lets the next good frame re-fire a
+            # phantom hours-long episode (F4). Never crashes the fusion tick either way.
+            self._since.pop(room, None)
+            self._last_still.pop(room, None)
+            return 0.0
         if still is True:
+            last = self._last_still.get(room)
+            # A still frame arriving MORE than a full observation window after the last
+            # one means we did NOT watch the room continuously across that gap -- start a
+            # FRESH episode rather than stitch unobserved time into "continuously still"
+            # (F2, ADR-0003 honesty). Under normal cadence the gap is seconds, never trips.
+            if last is not None and (now - last).total_seconds() > STILL_MAX_FRAME_GAP_S:
+                self._since[room] = now
+                self._last_still[room] = now
+                return 0.0
             self._last_still[room] = now
             since = self._since.get(room)
             if since is None:

@@ -151,8 +151,16 @@ class RoutineStore:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
+        # Bumped on every write that changes WHICH routines exist / are enabled / how
+        # they trigger (add/update/set_enabled/delete -- NOT mark_fired, which only
+        # touches last_fired/last_status). Lets a hot per-frame reader (the engine's
+        # no_motion cache, F3) skip a locked SELECT unless something actually changed.
+        self._version = 0
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+
+    def version(self) -> int:
+        return self._version
 
     @staticmethod
     def _row(r: sqlite3.Row) -> dict:
@@ -179,6 +187,7 @@ class RoutineStore:
                  json.dumps(actions)),
             )
             self._conn.commit()
+            self._version += 1
         return self.get(rid)
 
     def update(self, rid, name, trigger_kind, trigger_params, actions,
@@ -194,6 +203,7 @@ class RoutineStore:
                  json.dumps(actions), rid),
             )
             self._conn.commit()
+            self._version += 1
             if cur.rowcount == 0:
                 return None
         return self.get(rid)
@@ -203,6 +213,7 @@ class RoutineStore:
             cur = self._conn.execute(
                 "UPDATE routines SET enabled=? WHERE id=?", (1 if on else 0, rid))
             self._conn.commit()
+            self._version += 1
             return cur.rowcount > 0
 
     def mark_fired(self, rid, when: str, status: str) -> None:
@@ -226,6 +237,7 @@ class RoutineStore:
         with self._lock:
             cur = self._conn.execute("DELETE FROM routines WHERE id=?", (rid,))
             self._conn.commit()
+            self._version += 1
             return cur.rowcount > 0
 
     def close(self) -> None:
@@ -252,9 +264,24 @@ class RoutinesEngine:
         self._house_home = house_home
         self._fired_day: dict[str, date] = {}   # once-per-day guard for time triggers
         self._stillness_latched: dict[str, str] = {}  # routine_id -> room (fired this still episode)
+        self._nm_cache: list[dict] | None = None    # enabled no_motion routines (F3 cache)
+        self._nm_cache_ver: int | None = None       # the store version _nm_cache reflects
 
     def _enabled(self):
         return [r for r in self._store.list() if r["enabled"]]
+
+    def _no_motion_enabled(self) -> list[dict]:
+        """Enabled no_motion routines, cached and refreshed ONLY when the store version
+        changes. on_stillness is driven per fused frame during a still episode; without
+        this it would run a locked SELECT on the shared (SD-card) db every frame even in
+        a house with zero no_motion routines (F3). A store write bumps the version and
+        invalidates the cache, so enable/disable/edit is still instant."""
+        v = self._store.version()
+        if self._nm_cache_ver != v:
+            self._nm_cache = [r for r in self._store.list()
+                              if r["enabled"] and r["trigger_kind"] == "no_motion"]
+            self._nm_cache_ver = v
+        return self._nm_cache
 
     def _condition_ok(self, routine) -> bool | None:
         """True = fire, False = condition not met (skip), None = UNKNOWN (skip, and
@@ -308,9 +335,7 @@ class RoutinesEngine:
                 self._stillness_latched.pop(rid, None)
             return []
         out = []
-        for r in self._enabled():
-            if r["trigger_kind"] != "no_motion":
-                continue
+        for r in self._no_motion_enabled():   # cached; no per-frame store read (F3)
             p = r["trigger_params"]
             if p.get("room") != room or r["id"] in self._stillness_latched:
                 continue
