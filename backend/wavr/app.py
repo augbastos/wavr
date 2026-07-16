@@ -75,6 +75,7 @@ from wavr.sources.ble import BLESource
 from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
 from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
 from wavr.person_presence import PersonPresence, RoomPresence
+from wavr.stillness import StillnessDetector, room_motionless
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
@@ -639,6 +640,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             return
         _dispatch_routines(_routines.on_room_edge(room, occupied))
 
+    def _routines_stillness(room: str, elapsed_s: float) -> None:
+        if not _routines_warm["ok"]:
+            return
+        _dispatch_routines(_routines.on_stillness(room, elapsed_s))
+
     # Per-person arrived/left edges ("when I arrive") + a dedicated house-level arrived/
     # left edge detector, BOTH fed in real time off the always-running ingest path (see
     # _publish) rather than the hub. So routines depend on NO subscription/task and need
@@ -649,6 +655,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _person_presence = PersonPresence(on_edge=_routines_person_edge)
     _routine_house = AwayMonitor(away_grace=cfg.away_grace, on_edge=_routines_house_edge)
     _routine_rooms = RoomPresence(on_edge=_routines_room_edge)
+    # Per-room continuous-stillness timer (the elder-care no_motion trigger), fed off the
+    # ingest. It only counts still time when a room is confidently occupied by a motion-
+    # capable source (ADR-0003 honesty: never manufactures "hasn't moved" from a blind room).
+    _stillness = StillnessDetector()
 
     async def _routines_tick() -> None:
         # One time/deadline pass (test seam: app.state.routines_tick). Local wall-clock
@@ -925,6 +935,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _routine_house.handle(d)
         _routine_rooms.handle(d["room"], bool(d["occupied"]))
         _person_presence.update(known_present_persons(latest.values()))
+        # Continuous-stillness clock for the no_motion (elder-care) trigger. room_motionless
+        # returns None (unknowable) unless the room is confidently occupied by a motion-
+        # capable source, so a blind room never accrues "still" time.
+        _routines_stillness(d["room"], _stillness.update(
+            d["room"], room_motionless(bool(d["occupied"]), d.get("targets") or []), d["ts"]))
         # Watch/Guard: at THIS fan-out egress (WS clients + MQTT via the hub) publish the
         # SUPPRESSED view -- family geometry/identity/vitals stripped, only counts + the
         # intrusion room leave. Intrusion needs the consent identity layer to know who is
@@ -1696,6 +1711,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * routines_mark_warm: skip the boot presence-edge warm-up, so an edge test doesn't
     #    have to wait _ROUTINES_WARMUP_S for edges to start dispatching.
     app.state.routines_mark_warm = lambda: _routines_warm.__setitem__("ok", True)
+    #  * routine_stillness: feed a room's still elapsed directly (_routines_stillness(room,
+    #    seconds)) so a test can drive a no_motion routine without simulating hours of ingest.
+    app.state.routine_stillness = _routines_stillness
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
