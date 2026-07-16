@@ -83,6 +83,7 @@ from wavr.assistant_store import AssistantEngineStore
 from wavr.api_assistant import build_assistant_router
 from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
+from wavr.api_routines import build_routines_router
 from wavr.devices import DeviceStore, VALID_CONSENT
 from wavr.pairing import PairingManager
 from wavr.pair_requests import PairApprovalManager
@@ -544,13 +545,46 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _routine_store.mark_fired(
                 r["id"], datetime.now().isoformat(timespec="seconds"), status)
 
+    _routine_tasks: set = set()   # strong refs to in-flight dispatches
+
     def _dispatch_routines(matched: list) -> None:
         if not matched:
             return
         try:
-            asyncio.get_running_loop().create_task(_run_routines(matched))
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            pass  # no running loop (a sync test driving the monitor edge directly)
+            return  # no running loop (a sync test driving the monitor edge directly)
+        # Hold a STRONG reference until the task completes: asyncio keeps only a weak ref,
+        # so a bare create_task can be garbage-collected mid-flight and the routine action
+        # silently never runs (bug-bank #9). The done-callback drops the ref; shutdown
+        # cancels any still in flight.
+        t = loop.create_task(_run_routines(matched))
+        _routine_tasks.add(t)
+        t.add_done_callback(_routine_tasks.discard)
+
+    async def _run_routine_test(actions: list) -> str:
+        # The routines /test button: run the actions once, off the event loop (blocking
+        # HA), through the SAME gated executor a fired routine uses. Returns the status.
+        return await asyncio.to_thread(_routine_executor.run, actions)
+
+    # Domains a routine may actuate via Home Assistant for the picker: actuatable AND
+    # non-sensitive (media_player / lock / camera etc. stay out -- they are refused by
+    # call_ha_service anyway, so offering them would only mislead). scene/script are
+    # excluded too (INDIRECTION_DOMAINS): "everything off" is a multi-entity action list,
+    # not a scene.
+    _ROUTINE_HA_DOMAINS = frozenset({"light", "switch", "fan", "input_boolean"})
+
+    def _ha_entities() -> list:
+        client = client_from_config(cfg)
+        if client is None:
+            return []
+        try:
+            ents = client.get_entities()
+        except Exception:
+            return []   # an HA outage must never break the routines screen
+        return [{"entity_id": e["entity_id"], "name": e.get("friendly_name") or e["entity_id"],
+                 "domain": e["domain"]}
+                for e in ents if e.get("domain") in _ROUTINE_HA_DOMAINS]
 
     def _routines_house_edge(home: bool) -> None:
         _dispatch_routines(_routines.on_house_edge(home))
@@ -1495,7 +1529,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         finally:
             # Suppress CancelledError AND any error a caller-injected publisher
             # might raise, so shutdown always reaches manager.stop() + camera close.
-            for t in (rules_task, away_task, refuse_task, digest_task, routines_task):
+            for t in (rules_task, away_task, refuse_task, digest_task, routines_task,
+                      *list(_routine_tasks)):
                 if t:
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -1896,6 +1931,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             device_meta=_device_meta,
             known_store=_known_store, net_service=_inventory),
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
+    # Routines: household config, so router-level control (root+central; never an 'agent'
+    # or a plain 'user') + per-write require_local CSRF. The /test button actuates a real
+    # device, so it counts as a write. Mounted unconditionally -- a single loopback Core
+    # (no multidevice) manages routines too.
+    app.include_router(
+        build_routines_router(
+            _routine_store, run_test=_run_routine_test, ha_entities_fn=_ha_entities,
+            write_deps=[Depends(require_local)]),
+        dependencies=[Depends(require_scope("control"))])
 
     def _connector_catalog() -> list[dict]:
         # The built-in connectors surfaced from EXISTING gated features. available/env
