@@ -198,12 +198,25 @@ class NetworkSource:
 
     def _current(self) -> tuple[set[str], dict[str, str]]:
         """(presence MAC set, {mac: person} labels) for THIS cycle: the frozen
-        construction values unioned with the live provider result when injected."""
+        construction values unioned with the live provider result when injected.
+
+        A provider entry whose value is falsy (None) is KNOWN-BUT-UNNAMED -- the
+        consent tri-color's "yellow": it counts toward presence and must never
+        carry a label. So it joins the MAC set but is REMOVED from the labels,
+        overriding any name the construction-time env allowlist happens to hold for
+        that MAC: a live consent decision always wins over a frozen value, never
+        the other way round."""
         if self._known_provider is None:
             return self._known, self._known_labels
         prov = {m.replace("-", ":").lower(): p
                 for m, p in self._known_provider().items()}
-        return self._known | set(prov), {**self._known_labels, **prov}
+        labels = dict(self._known_labels)
+        for mac, person in prov.items():
+            if person:
+                labels[mac] = person
+            else:
+                labels.pop(mac, None)
+        return self._known | set(prov), labels
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:

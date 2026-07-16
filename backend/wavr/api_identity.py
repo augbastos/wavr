@@ -113,7 +113,15 @@ def build_identity_router(store, bonded_reader=None, ensure_source=None,
         meta_rows = device_meta.all() if device_meta is not None else {}
         return compose_known_presence(
             casa_state=casa_state,
-            net_registry=store.as_net_map(),
+            # as_net_known (not as_net_map): the PRESENCE map, so a "yellow" device
+            # corroborates here as person=None -- "counted as home, without a name",
+            # which is exactly what that level promises. The NAMED map made yellow
+            # invisible on this surface: fusion counted it while the very list that
+            # explains WHY the house reads occupied omitted it, so a household whose
+            # only device is yellow saw "likely home" with zero corroborators.
+            # (index.html already renders `person || "(unnamed)"` here -- the UI was
+            # built for an anonymous corroborator the backend never sent.)
+            net_registry=store.as_net_known(),
             detailed_addrs=store.detailed_net_addresses(),
             meta_rows=meta_rows,
             now=datetime.now(timezone.utc),
