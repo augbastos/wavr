@@ -84,7 +84,7 @@ from wavr.api_identity import build_identity_router
 from wavr.devices import DeviceStore, VALID_CONSENT
 from wavr.pairing import PairingManager
 from wavr.pair_requests import PairApprovalManager
-from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope
+from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope, effective_scopes
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.api_pair_requests import build_pair_request_router, build_pending_pairings_router
 from wavr.peers import PeerStore
@@ -1528,7 +1528,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     if cfg.multidevice:
         app.include_router(build_pair_router(_devices, _pairing))
-        app.include_router(build_ws_ticket_router(_devices, _pairing))
+        # ws-ticket unlocks /ws/live, which streams per-person x/y + vitals -- the
+        # most sensitive live-only class (ADR-0002). It MUST carry the same scope
+        # its stream does: without this the router had NO dependency (unlike the
+        # devices router below), so an 'agent' device -- whose only intended surface
+        # is /mcp -- could mint a ticket and open the stream, exactly the data the
+        # scope-gated /api/state already denies it. presence:read is the one gate;
+        # 'agent' lacks it, 'user'/'central'/root have it. (2026-07-16)
+        app.include_router(
+            build_ws_ticket_router(_devices, _pairing),
+            dependencies=[Depends(require_scope("presence:read"))])
         app.include_router(
             build_devices_router(_devices, delete_deps=[Depends(require_csrf_root)]),
             dependencies=[Depends(require_central), Depends(require_scope("admin"))])
@@ -3545,6 +3554,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 return
             dev = _devices.get(did)
             if dev is None or dev.revoked:
+                await ws.close(code=1008)
+                return
+            # A WS carries no scope through the http middleware, so gate it here for
+            # the SAME reason ws-ticket is gated at include-time: the stream is the
+            # per-person geometry + vitals class, and an 'agent' (scopes = {mcp})
+            # must never reach it even if it somehow obtained a ticket. Belt AND
+            # braces -- the ticket mint is already scope-gated, but the socket must
+            # not depend on that being the only door. (2026-07-16)
+            if not has_scope(effective_scopes(dev.role, dev.scopes), "presence:read"):
                 await ws.close(code=1008)
                 return
         else:
