@@ -536,18 +536,6 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         sensing_on=lambda: bool(manager.status().get("running")),
         house_home=lambda: _away.home if _away is not None else None)
 
-    def _has_presence_routine() -> bool:
-        # Any ENABLED routine whose trigger needs the live house presence edge
-        # (arrived/left / away-by-time). schedule + device_seen do NOT, so a store of
-        # only those never starts the away task -- preserving the "no hub subscriber
-        # unless opted in" invariant that test_away_wiring / test_notifier_wiring assert.
-        # Constructing the AwayMonitor object costs nothing (no subscription); only its
-        # run() task subscribes, and that is gated on this.
-        need = {"house_arrived", "house_left", "person_arrived", "person_left",
-                "room_occupied", "room_empty", "house_away_by_time"}
-        return any(r["enabled"] and r["trigger_kind"] in need
-                   for r in _routine_store.list())
-
     async def _run_routines(matched: list) -> None:
         for r in matched:
             # Actions block (HA HTTP); run off the event loop so a slow HA never stalls
@@ -570,23 +558,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     def _routines_person_edge(person: str, home: bool) -> None:
         _dispatch_routines(_routines.on_person_edge(person, home))
 
-    # Per-person arrived/left edges ("when I arrive"), fed the CURRENT named-present set
-    # on each routines tick (below). Consent is inherited: known_present_persons already
-    # applies the identity/consent gate, so an anonymous/withdrawn device is never in the
-    # fed set and can never produce a named person edge.
+    # Per-person arrived/left edges ("when I arrive") + a dedicated house-level arrived/
+    # left edge detector, BOTH fed in real time off the always-running ingest path (see
+    # _publish) rather than the hub. So routines depend on NO subscription/task and need
+    # no lazy bring-up: an arrival fires the moment the fused state shows it, and a house
+    # with zero routines still adds nothing (the trackers are cheap objects that just
+    # observe `latest`). Consent is inherited: known_present_persons already applies the
+    # identity/consent gate, so an anonymous/withdrawn device never produces a named edge.
     _person_presence = PersonPresence(on_edge=_routines_person_edge)
+    _routine_house = AwayMonitor(away_grace=cfg.away_grace, on_edge=_routines_house_edge)
 
     async def _routines_tick() -> None:
         # One time/deadline pass (test seam: app.state.routines_tick). Local wall-clock
         # (the house tz); matching is pure, only a fired routine touches a sink. AWAITS
-        # the run (unlike the sync edge callback, which must fire-and-forget) so the tick
-        # is deterministic -- after it returns the actions have run.
-        # Also refresh per-person presence from the current named-present set: an arrival/
-        # departure edge fires synchronously here (dispatched off-loop like any edge), so
-        # "when I arrive" resolves within one tick.
-        _person_presence.update(known_present_persons(latest.values()))
-        matched = _routines.tick(datetime.now(),
-                                 _away.home if _away is not None else None)
+        # the run so the seam is deterministic. Presence edges are NOT evaluated here --
+        # they are driven in real time off the ingest path (see _publish); this pass only
+        # handles schedule + house_away_by_time (which reads the ingest-fed house state).
+        matched = _routines.tick(datetime.now(), _routine_house.home)
         await _run_routines(matched)
 
     async def _routines_loop():
@@ -612,14 +600,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # screen while nothing else is configured needs a restart before away-edge push
     # starts (honest limitation, not a silent gap -- the away monitor object itself
     # doesn't exist yet to fan out through).
-    # `_routine_store is not None` (always true) keeps AwayMonitor running so routines
-    # get the arrived/left edge even when no MQTT/ntfy/Telegram sink is configured -- the
-    # monitor is cheap and its own publish/notify stay no-ops when those are off.
     _away = (AwayMonitor(_rules_publish, prefix=cfg.mqtt_prefix, away_grace=cfg.away_grace,
-                         notify=lambda msg: _notify_all(msg, kind="away_edge", severity="note"),
-                         on_edge=_routines_house_edge)
-             if (_rules_publish or _notify or _connectors.is_enabled("telegram")
-                 or _routine_store is not None) else None)
+                         notify=lambda msg: _notify_all(msg, kind="away_edge", severity="note"))
+             if (_rules_publish or _notify or _connectors.is_enabled("telegram")) else None)
 
     # Narrator: opt-in via injected `narrator` (tests) or the two-factor gate below.
     # PROVIDER-AGNOSTIC (WAVR_NARRATE_PROVIDER=gemini|ollama|openai|anthropic); the
@@ -853,6 +836,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                     d["occupied"], d["confidence"],
                                     d.get("person_count"), d["ts"])
         latest[d["room"]] = d          # FULL internal truth (never suppressed in `latest`)
+        # Drive the routines presence trackers off this always-running ingest (real time,
+        # no hub subscription): the dedicated house edge detector per room, and the
+        # per-person tracker off the current named-present set. Any arrived/left edge
+        # dispatches a routine off-loop. Cheap + inert when the store has no routines.
+        _routine_house.handle(d)
+        _person_presence.update(known_present_persons(latest.values()))
         # Watch/Guard: at THIS fan-out egress (WS clients + MQTT via the hub) publish the
         # SUPPRESSED view -- family geometry/identity/vitals stripped, only counts + the
         # intrusion room leave. Intrusion needs the consent identity layer to know who is
@@ -1483,16 +1472,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 prefix=cfg.mqtt_prefix,
             )
         rules_task = asyncio.create_task(_rules.run(_hub)) if _rules else None
-        # Start the away subscription only when a sink OR an enabled presence routine
-        # actually needs the arrived/left edge -- so an idle Core with no routines keeps
-        # the "no hub subscriber unless opted in" invariant (a runtime routine-enable
-        # re-checks this via _ensure_away, added with the routines routes).
-        away_task = (asyncio.create_task(_away.run(_hub))
-                     if (_away is not None
-                         and (_rules_publish or _notify
-                              or _connectors.is_enabled("telegram")
-                              or _has_presence_routine()))
-                     else None)
+        away_task = asyncio.create_task(_away.run(_hub)) if _away else None
         # Periodic re-fuse loop (WAVR_REFUSE_S, default 5s; 0 disables). Ages rooms
         # that have stopped receiving events so a disconnected source fades to
         # unoccupied instead of freezing its last reading.
@@ -1614,6 +1594,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #    directly (update({...})) and assert a person_arrived/left routine fires, without
     #    injecting full fusion state.
     app.state.person_presence = _person_presence
+    #  * routine_house: the dedicated house edge detector, so a test can drive a house
+    #    arrived/left (handle({"room":.., "occupied":..})) and assert a house routine fires.
+    app.state.routine_house = _routine_house
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
