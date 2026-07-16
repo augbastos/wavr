@@ -194,6 +194,43 @@ def test_notify_new_devices_reports_only_devices_seen_while_away():
         "the pre-existing device is not counted, and no MAC leaks into the push"
 
 
+def test_notify_new_devices_read_failure_is_honest_not_a_false_all_clear():
+    # F1 (ADR-0003): if the device_meta read raises (locked SD-card db, the bug-bank #8
+    # hazard) the push must say "couldn't check", never a false "no new devices" -- the
+    # whole point of the action is what showed up while you were out.
+    import sqlite3
+
+    class _BoomMeta(DeviceMeta):
+        def all(self):
+            raise sqlite3.OperationalError("database is locked")
+
+    store = RoutineStore(":memory:")
+    r = store.add("arrive digest", "house_arrived",
+                  actions=[{"kind": "notify_new_devices", "params": {}}])
+    store.set_enabled(r["id"], True)
+    notified: list[str] = []
+    app = create_app(
+        sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+        storage=Storage(":memory:"), camera_store=CameraStore(":memory:"),
+        routine_store=store, device_meta=_BoomMeta(":memory:"),
+        net_inventory=_FakeInv([]), notify=notified.append)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            app.state.routines_mark_warm()
+            app.state.routine_house.handle({"room": "sala", "occupied": True})   # home
+            for _ in range(6):
+                app.state.routine_house.handle({"room": "sala", "occupied": False})  # away -> stamp
+            app.state.routine_house.handle({"room": "sala", "occupied": True})       # arrive -> fire
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    assert any("couldn't check" in m.lower() for m in notified), \
+        f"a failed read must be reported honestly, got {notified!r}"
+    assert not any("no new device" in m.lower() for m in notified), \
+        "a read failure must never masquerade as an all-clear"
+
+
 def test_room_fill_fires_a_routine_end_to_end():
     # "when the kitchen fills -> discreet mode", through the per-room edge detector fed
     # off the ingest. First determination is the baseline (no edge); the flip fires.
