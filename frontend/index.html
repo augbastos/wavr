@@ -401,8 +401,10 @@
 
   /* ---------------- Shared controls (JS overwrites className on several of these) ---------------- */
   .ctl{background:var(--elevated);color:var(--text);border:1px solid var(--line);border-radius:999px;
-       padding:7px 14px;font-size:.8rem;cursor:pointer;
+       padding:7px 14px;font-size:.8rem;cursor:pointer;display:inline-flex;align-items:center;
+       justify-content:center;gap:6px;vertical-align:middle;line-height:1.1;
        transition:border-color .15s ease-out,color .15s ease-out,transform .1s ease-out,background-color .15s ease-out;}
+  .ctl svg{width:14px;height:14px;flex:none;}
   .ctl:hover{border-color:var(--dim);}
   .ctl:active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);transform:scale(.97);}
   .ctl.on{border-color:var(--accent);color:var(--accent);}
