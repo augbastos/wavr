@@ -1446,9 +1446,16 @@
              border-right:0;border-top:1px solid var(--line-strong);
              padding:4px 8px calc(4px + env(safe-area-inset-bottom));}
     .nav-brand,.nav-foot{display:none;}
-    .nav-tabs{flex-direction:row;flex:1;padding:0;gap:0;}
-    .nav-item{flex:1 1 0;flex-direction:column;gap:3px;justify-content:center;
-              padding:7px 2px;min-height:48px;border-radius:8px;text-align:center;}
+    /* 9 tabs no longer fit as equal flex:1 columns on a phone (labels crowd/truncate) —
+       let the bar scroll horizontally instead; each item keeps a natural min-width so
+       labels stay legible. Scrollbar hidden to keep the calm chrome (matches the
+       .rooms horizontal-scroll idiom above, which does the same). */
+    .nav-tabs{flex-direction:row;flex:1;padding:0;gap:0;overflow-x:auto;overflow-y:hidden;
+              scroll-snap-type:x proximity;-ms-overflow-style:none;scrollbar-width:none;}
+    .nav-tabs::-webkit-scrollbar{display:none;}
+    .nav-item{flex:0 0 auto;min-width:64px;flex-direction:column;gap:3px;justify-content:center;
+              padding:7px 6px;min-height:48px;border-radius:8px;text-align:center;
+              scroll-snap-align:center;}
     .nav-label{display:block;font-size:.6rem;letter-spacing:.02em;}
     .nav-item.active::before{left:14px;right:14px;top:0;bottom:auto;width:auto;height:2px;}
     .topbar-brand{display:flex;}
@@ -6143,24 +6150,43 @@ async function renderPairing(){
       left.appendChild(name); left.appendChild(meta);
       row.appendChild(left);
       const ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
-      // Role control: promote/demote a paired device between Admin (stored 'central')
-      // and User (stored 'user') without revoke+re-pair. UI labels differ from the
-      // stored VALUES on purpose (backend auth keys off 'central'/'root').
-      const roleSel = document.createElement("select"); roleSel.className = "pair-dev-role";
-      roleSel.setAttribute("aria-label", "device role");
-      const optUser = document.createElement("option"); optUser.value = "user"; optUser.textContent = "User";
-      const optAdmin = document.createElement("option"); optAdmin.value = "central"; optAdmin.textContent = "Admin";
-      roleSel.appendChild(optUser); roleSel.appendChild(optAdmin);
-      roleSel.value = (d.role === "central") ? "central" : "user";  // reflect current stored role
-      roleSel.onchange = async ()=>{
-        const newRole = roleSel.value;                              // 'user' | 'central'
-        let r;
-        try{ r = await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id)+"/role",
-          {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
-           body:JSON.stringify({role:newRole})}); }catch{}
-        if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after role change
-        else { actionFeedback(pairFb, false, "couldn't change the role"); refresh(); }  // revert select to server truth
-      };
+      if(d.role === "guest"){
+        // Guest devices are NOT promotable from this list — a guest row shows a plain
+        // badge + its auto-expiry deadline instead of the User/Admin select. Promoting a
+        // guest to User/Admin here would silently defeat the whole point of a time-boxed,
+        // presence:write-only pass (see devices.py VALID_ROLES + auth.DEFAULT_SCOPES["guest"]).
+        const guestBadge = document.createElement("span"); guestBadge.className = "pill off";
+        guestBadge.textContent = "Guest";
+        ctl.appendChild(guestBadge);
+        if(typeof d.expires_at === "string" && d.expires_at){
+          const dt = new Date(d.expires_at);
+          if(!isNaN(dt.getTime())){
+            const exp = document.createElement("span"); exp.className = "pair-dev-meta";
+            exp.textContent = "expires " + dt.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+            ctl.appendChild(exp);
+          }
+        }
+      } else {
+        // Role control: promote/demote a paired device between Admin (stored 'central')
+        // and User (stored 'user') without revoke+re-pair. UI labels differ from the
+        // stored VALUES on purpose (backend auth keys off 'central'/'root').
+        const roleSel = document.createElement("select"); roleSel.className = "pair-dev-role";
+        roleSel.setAttribute("aria-label", "device role");
+        const optUser = document.createElement("option"); optUser.value = "user"; optUser.textContent = "User";
+        const optAdmin = document.createElement("option"); optAdmin.value = "central"; optAdmin.textContent = "Admin";
+        roleSel.appendChild(optUser); roleSel.appendChild(optAdmin);
+        roleSel.value = (d.role === "central") ? "central" : "user";  // reflect current stored role
+        roleSel.onchange = async ()=>{
+          const newRole = roleSel.value;                              // 'user' | 'central'
+          let r;
+          try{ r = await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id)+"/role",
+            {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+             body:JSON.stringify({role:newRole})}); }catch{}
+          if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after role change
+          else { actionFeedback(pairFb, false, "couldn't change the role"); refresh(); }  // revert select to server truth
+        };
+        ctl.appendChild(roleSel);
+      }
       const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
       rm.textContent = "Revoke";
       rm.onclick = async ()=>{
@@ -6170,7 +6196,7 @@ async function renderPairing(){
         if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after revoking
         else { actionFeedback(pairFb, false, "couldn't revoke the device"); }
       };
-      ctl.appendChild(roleSel); ctl.appendChild(rm);
+      ctl.appendChild(rm);
       row.appendChild(ctl); devList.appendChild(row);
     });
   }
@@ -8450,9 +8476,10 @@ async function renderRoutines(){
         // Honest, load-bearing note (ADR-0003): never let this trigger read as a medical/safety
         // alarm, and never claim stillness in a room Wavr structurally cannot sense.
         trigParamHost.appendChild(elc("p", "panel-note",
-          "Best-effort awareness, not a medical or safety alarm (ADR-0003). Only works in a room "
-          + "a motion sensor (camera or radar) can see — Wavr will never claim someone hasn't "
-          + "moved in a room it can't sense that way."));
+          "Best-effort awareness, not a medical or safety alarm (ADR-0003). Works only in a room "
+          + "with a radar / mmWave motion sensor — it reads per-target velocity, so it can tell "
+          + "when someone has stopped moving. A camera alone can't measure stillness, so Wavr "
+          + "won't claim someone hasn't moved in a room it can't sense that way."));
       }
     }
     renderTriggerParam();
@@ -11309,6 +11336,10 @@ try {
       btn.classList.toggle("active", on);
       btn.setAttribute("aria-selected", on ? "true" : "false");
       btn.tabIndex = on ? 0 : -1;
+      // Phone bar now scrolls horizontally (9 tabs, .nav-tabs overflow-x:auto) — keep the
+      // active one in view whether switchTab was reached by tap, keyboard, or a deep-link
+      // elsewhere in the file (e.g. window.switchTab("sistema")).
+      if(on && btn.scrollIntoView) btn.scrollIntoView({block:"nearest", inline:"nearest"});
     });
     TABS.forEach(function(t){
       if(panels[t]) panels[t].classList.toggle("active", t === name);
