@@ -82,6 +82,32 @@ def test_person_arrival_fires_a_routine_end_to_end():
         "a real per-person arrival ran the routine through the app"
 
 
+def test_house_arrival_fires_a_routine_end_to_end():
+    # "when someone arrives -> discreet mode", through the dedicated house edge detector
+    # fed off the ingest. Driven via the routine_house seam so no fusion state is needed;
+    # the first handle is the boot baseline (no edge), the flip fires.
+    store = RoutineStore(":memory:")
+    r = store.add("welcome home", "house_arrived",
+                  actions=[{"kind": "set_watch", "params": {"on": True}}])
+    store.set_enabled(r["id"], True)
+    app = _app(store)
+
+    async def _drive():
+        async with app.router.lifespan_context(app):
+            # Establish "away" as the determined baseline: away_grace (default 3)
+            # consecutive vacant cycles. The first determination fires no edge (booting
+            # away is not an arrival); the following occupied flip IS the arrival.
+            for _ in range(4):
+                app.state.routine_house.handle({"room": "sala", "occupied": False})
+            app.state.routine_house.handle({"room": "sala", "occupied": True})   # arrives -> edge
+            await asyncio.sleep(0.1)
+
+    asyncio.run(_drive())
+    fired = store.get(r["id"])
+    assert fired["last_status"] == "ok" and fired["last_fired"], \
+        "a real house arrival (away -> home) ran the routine through the app"
+
+
 def test_someone_elses_arrival_does_not_fire_my_routine():
     store = RoutineStore(":memory:")
     r = store.add("welcome me", "person_arrived", trigger_params={"person": "Augusto"},
