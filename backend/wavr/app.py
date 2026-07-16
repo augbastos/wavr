@@ -2747,6 +2747,103 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             },
         }
 
+    @app.get("/api/transparency")
+    async def transparency(_=Depends(require_scope("presence:read"))):
+        # "What Wavr knows about you" trust screen (feature #6). The ENTIRE point of
+        # this route is honesty -- every field is DERIVED from the same live
+        # accessors the rest of the app already reads, never a hardcoded "we're
+        # private" claim. Gated identically to GET /api/state (presence:read; root
+        # always bypasses) -- this discloses counts + config rather than raw
+        # presence, but never a looser bar than /api/state.
+        st = manager.status()
+        enabled_by_name = {s["name"]: s["enabled"] for s in st["sources"]}
+        # One row per PERSISTED camera (_cameras.list(), same store /api/cameras
+        # reads), cross-referenced against the SourceManager's live enabled state --
+        # the same join _hub_level() above already does to answer "any camera on?".
+        # Cameras always boot OFF (camera_store.py's own invariant), so a freshly
+        # added camera is honestly reported off until an operator flips it.
+        cameras = [{"name": c["name"], "on": bool(enabled_by_name.get(c["name"], False))}
+                   for c in _cameras.list()]
+
+        # Counts reuse the SAME accessors their own existing endpoints count from --
+        # never a fresh derivation that could drift from what those screens show.
+        # `anonymous` (IdentityStore._row_to_dict) is the honest "consented to
+        # corroborate presence but declined a name" split -- people_known counts
+        # only the NAMED rows. device_meta.all() is the same store
+        # presence_report.py's device_count reads. room_names(_house) is the same
+        # call GET /api/status.house.rooms makes just above. Each is wrapped
+        # defensively: wavr.db is shared/SD-card-backed and a transient lock must
+        # never 500 a trust screen -- an honest 0 beats a crash or a fabricated
+        # number.
+        try:
+            people_known = sum(1 for d in _identity_store.list() if not d["anonymous"])
+        except Exception:
+            people_known = 0
+        try:
+            devices_seen = len(_device_meta.all())
+        except Exception:
+            devices_seen = 0
+        try:
+            rooms = len(room_names(_house))
+        except Exception:
+            rooms = 0
+
+        # Egress: one row per channel that can actually carry data OFF the box.
+        # `on` mirrors the SAME chokepoint each feature's own route enforces --
+        # never a softer/rosier read than what a real call would hit.
+        #
+        # Home Assistant control: matches _connector_catalog's hactl_env exactly --
+        # cfg.mcp_control (opt-in) AND an HAClient actually resolves (ha_url +
+        # ha_token both set; client_from_config returns None otherwise).
+        ha_control_on = bool(cfg.mcp_control) and client_from_config(cfg) is not None
+        # Telegram: the SAME connector gate _notify_all/away/digest all read.
+        telegram_on = _connectors.is_enabled("telegram")
+        # ntfy: `_notify` IS the ntfy sink (opt-in via WAVR_NTFY_URL, built once at
+        # wiring time above) -- its mere presence is the honest "will an alert
+        # actually reach ntfy" signal, not a second re-derivation of cfg.ntfy_url.
+        ntfy_on = _notify is not None
+        # Cloud AI narrator: mirrors POST /api/narrate's own three-gate chokepoint
+        # (connector override != "off", the provider client actually built, and --
+        # for a CLOUD provider only -- the System-tab egress kill switch) so this
+        # never reports "on" more optimistically than a real narrate call would
+        # behave. Ollama is the ONE local provider (narrator.py: "ZERO external
+        # egress") -- a fully-enabled local narrator must still report False here,
+        # since nothing leaves the home. This is the honesty nuance the screen
+        # exists to get right: "narrator enabled" is NOT the same question as
+        # "narrator reaches the cloud".
+        # KNOWN IMPRECISION (documented, not silently swallowed): the 'openai'
+        # provider can ALSO be pointed at a loopback server via
+        # WAVR_OPENAI_BASE_URL (narrator.py's own docstring: "Cloud egress when
+        # base_url is the OpenAI default; LOCAL when pointed at a loopback
+        # server") -- this route has no clean way to tell those apart from a bare
+        # bool, so it treats 'openai' as cloud unconditionally, same as
+        # _connector_catalog's narr_scope above. That is the SAFE direction to be
+        # wrong in for a trust screen (a rare false "on" for a self-hosted OpenAI-
+        # compatible box beats ever silently reporting cloud egress as off).
+        narr_provider = getattr(cfg, "narrate_provider", "gemini")
+        narr_is_cloud = narr_provider != "ollama"
+        narr_live = (_narrator is not None
+                     and _connectors.override("narrator") != "off"
+                     and (not narr_is_cloud or _connectors.egress_allowed()))
+        cloud_narrator_on = narr_is_cloud and narr_live
+
+        return {
+            "sensing_on": bool(st.get("running")),
+            "cameras": cameras,
+            "counts": {"people_known": people_known, "devices_seen": devices_seen,
+                       "rooms": rooms},
+            "egress": [
+                {"channel": "Home Assistant control", "on": ha_control_on,
+                 "detail": "Wavr can switch your Home Assistant devices"},
+                {"channel": "Telegram notifications", "on": telegram_on,
+                 "detail": "Alerts sent to Telegram"},
+                {"channel": "ntfy notifications", "on": ntfy_on,
+                 "detail": "Alerts pushed via ntfy"},
+                {"channel": "Cloud AI narrator", "on": cloud_narrator_on,
+                 "detail": "Room summaries sent to a cloud AI"},
+            ],
+        }
+
     # System toggles (feature "system-toggles"): the two System-tab master
     # switches (Egress / Network sensing) the receipt-only #egressList/
     # #sensingList cards used to only DESCRIBE ("needs a hub restart -- no
