@@ -126,3 +126,57 @@ def test_doctor_autofix_off_only_suggests_for_a_stalled_source(monkeypatch):
         post = c.get("/api/system").json()
         flaky_post = next(s for s in post["sources"] if s["name"] == "flaky")
         assert flaky_post["active"] is False   # never touched
+
+
+# ---- discovery_reach (CL-02, PR1): endpoint wires the structured verdict ------
+
+class _FakeInv:
+    """Inventory with N ARP-visible devices, enough to cross DISCOVERY_MIN_ARP so the
+    probe seam is actually consulted (a real inventory is empty in tests -> small-net)."""
+    def __init__(self, n):
+        self._n = n
+    def latest_inventory(self):
+        return [object() for _ in range(self._n)]
+    def last_scan_ts(self):
+        return None
+    def recent_alerts(self, limit=50):
+        return []
+    async def scan_once(self):
+        return []
+    async def start(self):
+        return None
+    async def stop(self):
+        return None
+
+
+def test_doctor_discovery_reach_names_multicast_dead_end_to_end(monkeypatch):
+    # 15 devices reachable via ARP but the injected multicast probe says 0 answered ->
+    # the endpoint returns the STRUCTURED verdict (never a flat string), no real socket.
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+
+    async def _probe():
+        return 0
+
+    app = _app(net_inventory=_FakeInv(15), net_mcast_probe=_probe)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+    dr = next(x for x in body["checks"] if x["id"] == "discovery_reach")
+    assert dr["ok"] is False
+    assert dr["verdict"]["cause"] == "MULTICAST_DEAD_UNKNOWN"
+    assert dr["verdict"]["arp_count"] == 15 and dr["verdict"]["mcast_responders"] == 0
+    assert dr["verdict"]["copy_key"] == "discovery_multicast_dead"
+    # report-only: the pathology is NEVER auto-fixed (no router touch)
+    assert not any(a.get("target") == "discovery_reach" for a in body["auto_fixed"])
+
+
+def test_doctor_discovery_reach_healthy_when_probe_answers(monkeypatch):
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+
+    async def _probe():
+        return 6
+
+    app = _app(net_inventory=_FakeInv(15), net_mcast_probe=_probe)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+    dr = next(x for x in body["checks"] if x["id"] == "discovery_reach")
+    assert dr["ok"] is True and dr["verdict"]["cause"] is None

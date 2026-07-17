@@ -52,18 +52,61 @@ SEVERITY_CRITICAL = "critical"
 
 _MAX_LOG = 50
 
+# discovery_reach (net-doctor, sim cluster CL-02): the verdict is STRUCTURED data, never a
+# flat string -- so the later PRs extend it (cause discrimination, remediation deep-link,
+# shareable report) without rework. PR1 only ever emits MULTICAST_DEAD_UNKNOWN /
+# INCONCLUSIVE_SMALL_NET / (healthy -> cause=None); PR2 refines MULTICAST_DEAD_UNKNOWN into
+# AP_ISOLATION_OR_MDNS_FILTERING vs SECOND_NETWORK_VLAN via a unicast probe + DHCP/subnet cross-check.
+CAUSE_AP_ISOLATION = "AP_ISOLATION_OR_MDNS_FILTERING"
+CAUSE_SECOND_NETWORK = "SECOND_NETWORK_VLAN"
+CAUSE_MULTICAST_DEAD = "MULTICAST_DEAD_UNKNOWN"
+CAUSE_INCONCLUSIVE_SMALL = "INCONCLUSIVE_SMALL_NET"
+
+CONF_LOW = "low"
+CONF_MEDIUM = "medium"
+CONF_HIGH = "high"
+
+# ARP-visible floor below which we REFUSE to judge (a studio with 3 devices is not a
+# pathology -- never false-positive it); and the multicast-responder ceiling that reads as
+# "silent". The verdict is always a hypothesis ("provavelmente"), never CONFIRMED (ADR-0003).
+DISCOVERY_MIN_ARP = 5
+DISCOVERY_MCAST_SILENT = 1
+
+
+@dataclass(frozen=True)
+class DoctorVerdict:
+    """Structured discovery_reach verdict (never a flat string, by design -- the later PRs
+    extend it). `cause` is None when discovery reach is healthy OR unknowable; `copy_key`
+    lets the frontend map to plain-language, hypothesis-framed copy without the backend
+    baking a locale string; arp_count/mcast_responders are the two numbers the copy shows."""
+    cause: str | None
+    confidence: str
+    arp_count: int
+    mcast_responders: int
+    copy_key: str
+
+    def to_dict(self) -> dict:
+        return {"cause": self.cause, "confidence": self.confidence,
+                "arp_count": self.arp_count, "mcast_responders": self.mcast_responders,
+                "copy_key": self.copy_key}
+
 
 @dataclass(frozen=True)
 class DoctorCheck:
     """One diagnosed item. `ok=None` is an honest "not applicable" (e.g. the
-    underlying monitor is off) -- never fabricated as good or bad."""
+    underlying monitor is off) -- never fabricated as good or bad. `verdict` carries
+    STRUCTURED discovery_reach data (None for every other check)."""
     id: str
     ok: bool | None
     severity: str | None
     detail: str
+    verdict: "DoctorVerdict | None" = None
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "ok": self.ok, "severity": self.severity, "detail": self.detail}
+        d = {"id": self.id, "ok": self.ok, "severity": self.severity, "detail": self.detail}
+        if self.verdict is not None:
+            d["verdict"] = self.verdict.to_dict()
+        return d
 
 
 @dataclass(frozen=True)
@@ -142,6 +185,7 @@ def diagnose(*, health: dict,
              room_sources: dict[str, list[dict]],
              last_inventory_scan_ts: str | None, net_scan_interval: float,
              mdns_expected: bool, mdns_alive: bool,
+             arp_count: int = 0, mcast_responders: int | None = None,
              ) -> tuple[list[DoctorCheck], list[FixCandidate]]:
     """Pure diagnosis pass -- no I/O, never raises (every check is wrapped so
     one bad input can't take down the others, mirroring `health_check._run_all`'s
@@ -309,6 +353,38 @@ def diagnose(*, health: dict,
             detail=("total signal loss across all rooms" if total_loss
                     else (f"stale: {stale_pairs}" if stale_pairs else "all signals fresh")))
     _check("signal_freshness", _signal_freshness)
+
+    # 10. discovery_reach -- REPORT-ONLY (never touch the router). Correlates the ARP-visible
+    # device count against how many answered a multicast (mDNS/SSDP) probe: many devices
+    # reachable but the mesh silent = the classic "router isolates devices / IoT-VLAN eats
+    # multicast" pathology that leaves discovery cold while the rest of the doctor reads green.
+    # PR1 names the GENERIC case (MULTICAST_DEAD_UNKNOWN); PR2 discriminates the cause. Always
+    # a hypothesis ("provavelmente"), never CONFIRMED, never a FixCandidate (no router touch).
+    def _discovery_reach() -> DoctorCheck:
+        mcr = mcast_responders if mcast_responders is not None else -1
+        if arp_count < DISCOVERY_MIN_ARP:
+            # too few devices to distinguish "isolated" from "genuinely small home" -- and the
+            # caller skips the probe entirely here (mcast_responders=None), so never claim dead
+            return DoctorCheck(id="discovery_reach", ok=None, severity=None,
+                               detail=f"only {arp_count} devices reachable -- too few to judge",
+                               verdict=DoctorVerdict(CAUSE_INCONCLUSIVE_SMALL, CONF_LOW,
+                                                     arp_count, mcr, "discovery_small_net"))
+        if mcast_responders is None:
+            # probe couldn't run (no socket / env) -> honest "can't tell", never a false verdict
+            return DoctorCheck(id="discovery_reach", ok=None, severity=None,
+                               detail="multicast probe unavailable",
+                               verdict=DoctorVerdict(None, CONF_LOW, arp_count, -1,
+                                                     "discovery_probe_unavailable"))
+        if mcast_responders <= DISCOVERY_MCAST_SILENT:
+            return DoctorCheck(id="discovery_reach", ok=False, severity=SEVERITY_DEGRADED,
+                               detail=f"{arp_count} devices reachable, {mcast_responders} answered discovery",
+                               verdict=DoctorVerdict(CAUSE_MULTICAST_DEAD, CONF_MEDIUM,
+                                                     arp_count, mcast_responders, "discovery_multicast_dead"))
+        return DoctorCheck(id="discovery_reach", ok=True, severity=SEVERITY_OK,
+                           detail=f"{arp_count} reachable, {mcast_responders} answered discovery",
+                           verdict=DoctorVerdict(None, CONF_HIGH, arp_count, mcast_responders,
+                                                 "discovery_ok"))
+    _check("discovery_reach", _discovery_reach)
 
     return checks, list(fixable_by_target.values())
 

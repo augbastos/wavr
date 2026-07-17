@@ -1338,6 +1338,12 @@
   /* A2.3: health check's per-check breakdown reuses .diag-list/.diag-row (below) verbatim.
      Severity line = icon + words (never color alone); reuses the ok/warn/danger palette. */
   .health-result{margin-top:6px;}
+  /* discovery_reach (CL-02) verdict callout — plain-language, hypothesis-framed */
+  .doctor-verdict{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;
+                  background:var(--elevated);}
+  .doctor-verdict.warn{border-color:var(--warn);}
+  .dv-title{margin:0 0 5px;font-weight:600;color:var(--warn);}
+  .dv-body{margin:0;font-size:.85rem;color:var(--text);line-height:1.5;max-width:70ch;}
   .health-sev{display:flex;gap:8px;align-items:center;}
   .health-sev svg{width:16px;height:16px;flex:none;}
   .diag-list{display:flex;flex-direction:column;}
@@ -14807,6 +14813,39 @@ try {
   function doctorLbl(id){
     return String(id == null ? "" : id).replace(/_/g, " ").replace(/:/g, ": ");
   }
+  // discovery_reach (CL-02): map the STRUCTURED verdict's copy_key to plain-language,
+  // hypothesis-framed copy ("provavelmente" — ADR-0003) with the two numbers. Only the
+  // PROBLEM case (multicast_dead) gets a prominent callout; healthy / small-net / probe-
+  // unavailable just ride as a normal check row. PR2 splits multicast_dead into isolation
+  // vs second-network (each with its own key here); PR3 wires the "Como arrumar" link.
+  var DISCOVERY_COPY = {
+    // PR1 states the OBSERVATION only (cause is UNKNOWN here — MULTICAST_DEAD_UNKNOWN);
+    // PR2 discriminates router-filtering vs a hub that can't receive LAN multicast. So do
+    // NOT blame the router yet — that would be a premature verdict (ADR-0003).
+    discovery_multicast_dead: function(v){
+      return {
+        cls: "warn",
+        title: "Wavr não está descobrindo seus aparelhos",
+        body: "Wavr vê " + v.arp_count + " aparelhos na sua rede, mas só " + Math.max(0, v.mcast_responders)
+          + " respondeu à descoberta por nome. A detecção por rede continua funcionando — mas a descoberta"
+          + " (nomes/mDNS) não está chegando. Provavelmente é o roteador filtrando esse tráfego"
+          + " (isolamento de clientes ou uma rede IoT separada) OU uma limitação do aparelho onde o Wavr"
+          + " roda. O Wavr vai identificar a causa exata em breve."
+      };
+    }
+  };
+  function discoveryVerdictCallout(checks){
+    var dr = null;
+    for(var i=0;i<checks.length;i++){ if(checks[i] && checks[i].id === "discovery_reach"){ dr = checks[i]; break; } }
+    if(!dr || !dr.verdict) return null;
+    var mk = DISCOVERY_COPY[dr.verdict.copy_key];
+    if(!mk) return null;
+    var info = mk(dr.verdict);
+    var el = elc("div", "doctor-verdict " + info.cls);
+    el.appendChild(elc("p", "dv-title", info.title));
+    el.appendChild(elc("p", "dv-body", info.body));
+    return el;
+  }
   function renderDoctorResult(d){
     var box = $("doctorResult");
     if(!box) return;
@@ -14817,6 +14856,8 @@ try {
     var suggestions = Array.isArray(d.suggestions) ? d.suggestions : [];
     box.appendChild(elc("p", "panel-note pres-n",
       checks.length + " check(s) · " + fixed.length + " auto-fixed · " + suggestions.length + " suggestion(s)"));
+    var dvCallout = discoveryVerdictCallout(checks);
+    if(dvCallout) box.appendChild(dvCallout);
     var list = elc("div", "diag-list");
     checks.forEach(function(c){
       var cls = (c && c.ok === true) ? "ok"
