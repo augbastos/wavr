@@ -1351,8 +1351,12 @@
           color:var(--text);line-height:1.5;max-width:70ch;}
   .dv-fix ol{margin:6px 0 8px;padding-left:20px;} .dv-fix li{margin:3px 0;}
   .dv-fix label{display:block;margin:8px 0 4px;font-size:.78rem;color:var(--muted);}
-  .dv-fix select{font-size:.82rem;padding:4px 8px;border-radius:7px;border:1px solid var(--line);
-                 background:var(--bg);color:var(--text);}
+  .dv-router-search{font-size:.82rem;padding:5px 10px;border-radius:7px;border:1px solid var(--line);
+                    background:var(--bg);color:var(--text);width:min(100%,320px);}
+  .dv-router-hits{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;}
+  .dv-router-hit{font-size:.76rem;padding:4px 10px;border-radius:999px;cursor:pointer;
+                 border:1px solid var(--line);background:transparent;color:var(--text);}
+  .dv-router-hit:hover{border-color:var(--warn);color:var(--warn);}
   .dv-brand-tip{margin:8px 0 0;font-size:.82rem;} .dv-doc{margin:8px 0 0;font-size:.76rem;color:var(--muted);}
   .dv-report{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);}
   .dv-report-btn{font-size:.82rem;padding:6px 12px;border-radius:8px;cursor:pointer;
@@ -12990,7 +12994,7 @@ try {
               var callout = discoveryVerdictCallout(dd.checks);
               if(callout){
                 vbody.appendChild(elc("p", "panel-note",
-                  "O diagnóstico de rede pode explicar por que o aparelho não apareceu:"));
+                  "The network diagnosis may explain why the device didn't show up:"));
                 vbody.appendChild(callout);
               }
             }
@@ -14853,84 +14857,103 @@ try {
     // multicast viability was PROVEN (discovery_ap_isolation / discovery_second_network). When
     // it could NOT be proven the copy points at the hub's own environment, never the router.
     // Each case: what Wavr sees + what still works + what the user can do (ADR-0003 honest).
+    // Product language is ENGLISH (v0.2.0 decision) — all user-facing copy here stays EN.
     discovery_host_unavailable: function(v){
       return {
         cls: "warn",
-        title: "Este hub não está recebendo a descoberta",
-        body: "Wavr vê " + v.arp_count + " aparelhos na sua rede, mas o aparelho onde o Wavr roda"
-          + " não está recebendo o tráfego de descoberta (multicast) da rede — por isso não dá pra"
-          + " culpar o seu roteador. Isso é comum quando o Wavr roda dentro de um ambiente restrito"
-          + " (container). A detecção por rede continua funcionando normalmente. O que você pode"
-          + " fazer: rodar o Core num computador/laptop na mesma rede, ou conferir se o roteador não"
-          + " está com isolamento de clientes ligado."
+        title: "This hub isn't receiving discovery traffic",
+        body: "Wavr can see " + v.arp_count + " devices on your network, but the device Wavr runs on"
+          + " isn't receiving the network's discovery (multicast) traffic — so this is not your"
+          + " router's fault. This is common when Wavr runs inside a restricted environment"
+          + " (a container). Network detection keeps working normally. What you can do: run the Core"
+          + " on a computer/laptop on the same network, or check that the router doesn't have client"
+          + " isolation turned on."
       };
     },
     discovery_ap_isolation: function(v){
       return {
         cls: "warn",
-        title: "Sua rede está bloqueando a descoberta",
-        body: "Wavr vê " + v.arp_count + " aparelhos e confirmou que recebe multicast da rede — mas os"
-          + " aparelhos não respondem à descoberta por nome. Provavelmente o roteador está filtrando"
-          + " esse tráfego (isolamento de clientes / \"AP isolation\", ou um filtro de mDNS). A detecção"
-          + " por rede continua funcionando. O que fazer: procurar \"isolamento de clientes\" / \"AP"
-          + " isolation\" nas configurações do roteador e desligar."
+        title: "Your network is blocking discovery",
+        body: "Wavr can see " + v.arp_count + " devices and confirmed it receives multicast from the"
+          + " network — yet the devices don't answer name discovery. Most likely the router is"
+          + " filtering that traffic (client isolation / \"AP isolation\", or an mDNS filter)."
+          + " Network detection keeps working. What to do: look for \"client isolation\" / \"AP"
+          + " isolation\" in your router settings and turn it off. Some ISP routers don't expose"
+          + " these switches at all — not finding them is normal, see the guide."
       };
     },
     discovery_second_network: function(v){
       return {
         cls: "warn",
-        title: "Seus aparelhos estão em redes separadas",
-        body: "Wavr vê " + v.arp_count + " aparelhos, mas eles parecem estar em mais de uma rede"
-          + " (subnets diferentes ou mais de um servidor DHCP). Uma rede separada de IoT/convidados"
-          + " não deixa a descoberta cruzar de um lado pro outro. A detecção por rede segue"
-          + " funcionando. O que fazer: colocar o Wavr na mesma rede/VLAN dos aparelhos que você quer"
-          + " descobrir."
+        title: "Your devices are on separate networks",
+        body: "Wavr can see " + v.arp_count + " devices, but they appear to be on more than one"
+          + " network (different subnets or more than one DHCP server). A separate IoT/guest network"
+          + " stops discovery from crossing between them. Network detection keeps working. What to"
+          + " do: put Wavr on the same network/VLAN as the devices you want discovered."
       };
     },
     // Neutral fallback: viability could not be established -> DO NOT blame the router (hard rule).
     discovery_multicast_dead: function(v){
       return {
         cls: "warn",
-        title: "Wavr não está descobrindo seus aparelhos",
-        body: "Wavr vê " + v.arp_count + " aparelhos na sua rede, mas só " + Math.max(0, v.mcast_responders)
-          + " respondeu à descoberta por nome. A detecção por rede continua funcionando — mas a descoberta"
-          + " (nomes/mDNS) não está chegando, e ainda não deu pra confirmar a causa (pode ser um filtro"
-          + " na rede ou uma limitação do aparelho onde o Wavr roda). O Wavr não vai apontar o dedo sem"
-          + " ter certeza."
+        title: "Wavr can't discover your devices",
+        body: "Wavr can see " + v.arp_count + " devices on your network, but only " + Math.max(0, v.mcast_responders)
+          + " answered name discovery. Network detection keeps working — but discovery (names/mDNS)"
+          + " isn't getting through, and the cause couldn't be confirmed yet (it may be a filter on"
+          + " the network or a limitation of the device Wavr runs on). Wavr won't point fingers"
+          + " without being sure."
       };
     }
   };
   // PR3: local, no-egress "how to fix" — keyed by the DETECTED cause's copy_key. Steps say WHAT
-  // to change; the brand picker says WHERE (per-router), with the full guide's filename in the
-  // public repo (docs/network-fixes/). Nothing here calls out to the internet.
+  // to change; the router search says WHERE (per-router), with the full guide's filename in the
+  // public repo (docs/network-fixes/). Nothing here calls out to the internet. English-only copy.
   var FIX_GUIDE = {
     discovery_ap_isolation: { steps: [
-      "No admin do seu roteador, procure \"isolamento de clientes\" / \"AP isolation\" e desligue para a rede onde o Wavr e os aparelhos estão.",
-      "Confira que o Wavr e os aparelhos NÃO estão na rede de convidados (guest) — ela isola de propósito.",
-      "Aplique e rode o diagnóstico de novo." ] },
+      "In your router admin, look for \"client isolation\" / \"AP isolation\" and turn it OFF for the network Wavr and your devices are on.",
+      "Make sure Wavr and your devices are NOT on the guest network — it isolates on purpose.",
+      "Some ISP routers expose none of these switches — not finding them is normal; see your router's guide below.",
+      "Apply and run the diagnosis again." ] },
     discovery_second_network: { steps: [
-      "Seus aparelhos parecem estar em mais de uma rede (subnets diferentes ou 2 servidores DHCP).",
-      "Coloque o Wavr na MESMA rede/VLAN dos aparelhos que você quer descobrir (ex.: tirar da rede de convidados/IoT separada).",
-      "Se você usa mesh ou um segundo roteador, é dali que costuma vir a segunda rede." ] },
+      "Your devices appear to be on more than one network (different subnets or 2 DHCP servers).",
+      "Put Wavr on the SAME network/VLAN as the devices you want discovered (e.g. off the guest/IoT network).",
+      "If you use mesh or a second router, that's usually where the second network comes from." ] },
     discovery_host_unavailable: { steps: [
-      "O aparelho onde o Wavr roda não está recebendo o tráfego de descoberta da rede — não é culpa do roteador.",
-      "Se o Core roda dentro de um ambiente restrito (container), rode-o num computador/laptop na mesma rede.",
-      "Como alternativa, confira se o roteador não está com isolamento de clientes ligado." ] },
+      "The device Wavr runs on isn't receiving the network's discovery traffic — this is not your router's fault.",
+      "If the Core runs inside a restricted environment (container), run it on a computer/laptop on the same network.",
+      "Alternatively, check that the router doesn't have client isolation turned on." ] },
     discovery_multicast_dead: { steps: [
-      "A causa não pôde ser confirmada — trabalhe a checagem rápida de rede.",
-      "Verifique isolamento de clientes desligado, Wavr e aparelhos na mesma rede, e multicast/mDNS liberado.",
-      "Guia completo dos requisitos no repo: docs/network-fixes/wavr-network-requirements.md" ] }
+      "The cause couldn't be confirmed — work through the quick network self-check.",
+      "Check: client isolation off, Wavr and devices on the same network, multicast/mDNS allowed.",
+      "Full requirements guide in the repo: docs/network-fixes/wavr-network-requirements.md" ] }
   };
-  var BRAND_TIPS = {
-    other:    { name: "Outro / não sei", tip: "Procure pelas palavras: \"isolamento de clientes\" / \"AP isolation\", rede \"guest\", e \"mDNS\"/\"multicast\" nas configurações de Wi-Fi.", doc: "wavr-network-requirements.md" },
-    virgin:   { name: "Virgin Media Hub", tip: "Advanced settings → Wireless → Guest network. Isolamento na rede principal é raro; o vilão costuma ser a rede de convidados.", doc: "virgin-media-hub.md" },
-    eir:      { name: "eir", tip: "Wi-Fi → Advanced → \"Isolate clients\" / \"AP isolation\" → desligar. Tirar Wavr e aparelhos da rede de convidados.", doc: "eir.md" },
-    sky:      { name: "Sky", tip: "\"Broadband Shield\" é filtro de conteúdo, NÃO isolamento. Hub travado sem toggle → usar seu próprio roteador atrás dele.", doc: "sky.md" },
-    tplink:   { name: "TP-Link", tip: "Archer: Advanced → Wireless → desmarcar \"AP Isolation\" (por banda). Deco: More → IoT Network (essa rede isola).", doc: "tp-link.md" },
-    vodafone: { name: "Vodafone", tip: "Wi-Fi → Advanced → \"Isolate clients\" / \"AP isolation\". (Guia ainda em rascunho no repo.)", doc: "vodafone.md" },
-    unifi:    { name: "UniFi", tip: "SSID → Advanced → \"Client Device Isolation\" off. VLAN de IoT é a causa comum → habilitar reflector mDNS ou juntar as redes.", doc: "unifi.md" }
+  // Searchable router database — match by brand, ISP, model OR country so the list is never
+  // an Ireland-only dropdown. `kw` is a lowercase haystack of names/ISPs/models/countries.
+  var ROUTER_DB = [
+    { name: "Virgin Media Hub", kw: "virgin media hub 3 4 5 ireland uk liberty global",
+      tip: "Advanced settings → Wireless → Guest network. Main-network isolation is rare on these; the usual culprit is the guest SSID.",
+      doc: "virgin-media-hub.md" },
+    { name: "eir (F3000 / F2000)", kw: "eir ireland f3000 f2000",
+      tip: "Wi-Fi → Advanced → \"Isolate clients\" / \"AP isolation\" → off. Keep Wavr and devices off the guest network.",
+      doc: "eir.md" },
+    { name: "Sky Hub / Max Hub", kw: "sky hub max broadband uk ireland italy",
+      tip: "\"Broadband Shield\" is content filtering, NOT isolation. Locked-down hub with no toggles → use your own router behind it.",
+      doc: "sky.md" },
+    { name: "Vodafone (Ultra Hub / Station)", kw: "vodafone ultra hub station thg3000 ireland uk germany italy spain portugal netherlands",
+      tip: "Stock Vodafone hubs expose few or none of these toggles — not finding them is normal, not a mistake. Check the guest network; if discovery still fails, the practical route is your own router/AP behind it.",
+      doc: "vodafone.md" },
+    { name: "TP-Link (Archer / Deco)", kw: "tp-link tplink archer deco mesh",
+      tip: "Archer: Advanced → Wireless → untick \"AP Isolation\" (per band). Deco app: More → IoT Network (that network isolates).",
+      doc: "tp-link.md" },
+    { name: "UniFi (Ubiquiti)", kw: "unifi ubiquiti dream machine udm cloud gateway",
+      tip: "SSID → Advanced → \"Client Device Isolation\" off. An IoT VLAN is the usual cause → enable the mDNS reflector or merge the networks.",
+      doc: "unifi.md" }
+  ];
+  var ROUTER_GENERIC = {
+    name: "Any other router",
+    tip: "In the Wi-Fi settings, hunt for the words: \"client isolation\" / \"AP isolation\", \"guest\" network, and \"mDNS\" / \"multicast\". Many ISP routers expose none of these — that's normal; the requirements guide covers what to check instead.",
+    doc: "wavr-network-requirements.md"
   };
-  var BRAND_ORDER = ["other","virgin","eir","sky","tplink","vodafone","unifi"];
   function discoveryFixPanel(copyKey){
     var g = FIX_GUIDE[copyKey];
     if(!g) return null;
@@ -14938,16 +14961,38 @@ try {
     var ol = document.createElement("ol");
     g.steps.forEach(function(s){ ol.appendChild(elc("li", "", s)); });
     wrap.appendChild(ol);
-    wrap.appendChild(elc("label", "", "Qual seu roteador?"));
-    var sel = document.createElement("select");
-    BRAND_ORDER.forEach(function(k){
-      var o = document.createElement("option"); o.value = k; o.textContent = BRAND_TIPS[k].name; sel.appendChild(o);
-    });
-    wrap.appendChild(sel);
-    var tip = elc("p", "dv-brand-tip"); var doc = elc("p", "dv-doc"); wrap.appendChild(tip); wrap.appendChild(doc);
-    function render(){ var b = BRAND_TIPS[sel.value] || BRAND_TIPS.other; tip.textContent = b.tip;
-      doc.textContent = "Guia completo (no repositório): docs/network-fixes/" + b.doc; }
-    sel.addEventListener("change", render); render();
+    wrap.appendChild(elc("label", "", "Find your router — search by brand, ISP or country"));
+    var inp = document.createElement("input");
+    inp.type = "search"; inp.className = "dv-router-search";
+    inp.placeholder = "e.g. Vodafone, TP-Link, Ireland…";
+    inp.setAttribute("aria-label", "search router brand, ISP or country");
+    wrap.appendChild(inp);
+    var hits = elc("div", "dv-router-hits");
+    wrap.appendChild(hits);
+    var tip = elc("p", "dv-brand-tip"); var doc = elc("p", "dv-doc");
+    wrap.appendChild(tip); wrap.appendChild(doc);
+    function show(b){ tip.textContent = b.tip;
+      doc.textContent = "Full guide (in the repository): docs/network-fixes/" + b.doc; }
+    function render(){
+      var q = (inp.value || "").trim().toLowerCase();
+      hits.textContent = "";
+      var matches = !q ? ROUTER_DB
+        : ROUTER_DB.filter(function(b){
+            return (b.name.toLowerCase() + " " + b.kw).indexOf(q) !== -1; });
+      matches.forEach(function(b){
+        var btn = elc("button", "dv-router-hit", b.name);
+        btn.type = "button";
+        btn.addEventListener("click", function(){ show(b); });
+        hits.appendChild(btn);
+      });
+      var other = elc("button", "dv-router-hit", ROUTER_GENERIC.name);
+      other.type = "button";
+      other.addEventListener("click", function(){ show(ROUTER_GENERIC); });
+      hits.appendChild(other);
+      if(q && !matches.length) show(ROUTER_GENERIC);
+    }
+    inp.addEventListener("input", render);
+    render(); show(ROUTER_GENERIC);
     return wrap;
   }
   function discoveryVerdictCallout(checks){
@@ -14962,13 +15007,13 @@ try {
     el.appendChild(elc("p", "dv-body", info.body));
     // [Como arrumar] — only for causes that have an actionable guide (never for ok/small/probe).
     if(FIX_GUIDE[dr.verdict.copy_key]){
-      var btn = elc("button", "dv-fix-btn", "Como arrumar");
+      var btn = elc("button", "dv-fix-btn", "How to fix");
       btn.type = "button";
       var panel = null;
       btn.addEventListener("click", function(){
-        if(panel){ panel.remove(); panel = null; btn.textContent = "Como arrumar"; return; }
+        if(panel){ panel.remove(); panel = null; btn.textContent = "How to fix"; return; }
         panel = discoveryFixPanel(dr.verdict.copy_key);
-        if(panel){ el.appendChild(panel); btn.textContent = "Ocultar"; }
+        if(panel){ el.appendChild(panel); btn.textContent = "Hide"; }
       });
       el.appendChild(btn);
     }
@@ -15035,11 +15080,11 @@ try {
     // user pastes it somewhere themselves.
     if(typeof d.report === "string" && d.report){
       var rep = elc("div", "dv-report");
-      var rbtn = elc("button", "dv-report-btn", "Copiar relatório do diagnóstico");
+      var rbtn = elc("button", "dv-report-btn", "Copy diagnostic report");
       rbtn.type = "button";
       rbtn.addEventListener("click", function(){
-        var done = function(){ rbtn.textContent = "Copiado ✓"; setTimeout(function(){
-          rbtn.textContent = "Copiar relatório do diagnóstico"; }, 2000); };
+        var done = function(){ rbtn.textContent = "Copied ✓"; setTimeout(function(){
+          rbtn.textContent = "Copy diagnostic report"; }, 2000); };
         if(navigator.clipboard && navigator.clipboard.writeText){
           navigator.clipboard.writeText(d.report).then(done, function(){ done(); });
         } else {
@@ -15051,8 +15096,8 @@ try {
       });
       rep.appendChild(rbtn);
       rep.appendChild(elc("p", "dv-report-note",
-        "Cole numa issue do GitHub pra pedir ajuda — os MACs já vêm redigidos (aa:bb:cc:**:**:**) "
-        + "e o Wavr nunca manda isso pra lugar nenhum sozinho."));
+        "Paste this into a GitHub issue to ask for help — MACs are already redacted "
+        + "(aa:bb:cc:**:**:**) and Wavr never sends this anywhere on its own."));
       box.appendChild(rep);
     }
     box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()

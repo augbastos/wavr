@@ -35,8 +35,10 @@ def _discovery_copy_keys(html):
 
 
 def _brand_docs(html):
-    block = re.search(r"var BRAND_TIPS\s*=\s*\{(.*?)\n  \};", html, re.S).group(1)
-    return re.findall(r'doc:\s*"([^"]+)"', block)
+    # the searchable router DB (array of brands) + the generic fallback entry
+    block = re.search(r"var ROUTER_DB\s*=\s*\[(.*?)\n  \];", html, re.S).group(1)
+    generic = re.search(r"var ROUTER_GENERIC\s*=\s*\{(.*?)\n  \};", html, re.S).group(1)
+    return re.findall(r'doc:\s*"([^"]+)"', block + generic)
 
 
 def test_every_actionable_cause_has_a_fix_guide():
