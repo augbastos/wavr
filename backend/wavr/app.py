@@ -66,7 +66,8 @@ from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
 from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
 from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
-from wavr.net_doctor import diagnose, apply_fixes, DoctorLog, DISCOVERY_MIN_ARP
+from wavr.net_doctor import (diagnose, apply_fixes, DoctorLog,
+                             DISCOVERY_MIN_ARP, DISCOVERY_MCAST_SILENT)
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
@@ -409,6 +410,71 @@ def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
                                 on_privacy=on_privacy)
 
 
+def _probe_mcast_viability(own_ip: str, duration: float = 4.0):
+    """net_doctor PR2 support -- the HARD-RULE gate: prove this hub receives ANY inbound LAN
+    multicast BEFORE the doctor is ever allowed to blame the router. Joins the two common
+    discovery groups (mDNS 224.0.0.251, SSDP 239.255.255.250), disables multicast loopback
+    so our OWN provoke packets never count, sends one mDNS query + one SSDP M-SEARCH to
+    provoke traffic, then listens for any packet from ANOTHER host.
+
+      True  -> the host received inbound LAN multicast (viability PROVEN)  -> a silent
+               discovery is then the NETWORK segmenting/filtering it (router accusation allowed).
+      False -> received nothing foreign -> the host does NOT receive inbound LAN multicast
+               (e.g. a proot/container Core) -> HOST_MULTICAST_UNAVAILABLE, NEVER a router blame.
+      None  -> couldn't even set up a socket -> unknowable -> stay neutral.
+
+    Loopback delivery (IP_MULTICAST_LOOP) is explicitly excluded: kernel-local echo does NOT
+    prove the interface receives LAN multicast, which is the entire ambiguity PR2 resolves.
+    """
+    import socket
+    import struct
+    import select
+    import time as _time
+    MDNS = ("224.0.0.251", 5353)
+    SSDP = ("239.255.255.250", 1900)
+    MDNS_QUERY = (b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+                  b"\x09_services\x07_dns-sd\x04_udp\x05local\x00\x00\x0c\x00\x01")
+    SSDP_MSEARCH = (b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+                    b"MAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n")
+    socks = []
+    try:
+        for grp, port in (MDNS, SSDP):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                with suppress(AttributeError, OSError):
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                s.bind(("", port))
+                mreq = struct.pack("4sl", socket.inet_aton(grp), socket.INADDR_ANY)
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+                s.setblocking(False)
+                socks.append((s, grp, port))
+            except OSError:
+                continue
+        if not socks:
+            return None
+        for s, grp, port in socks:
+            with suppress(OSError):
+                s.sendto(MDNS_QUERY if port == 5353 else SSDP_MSEARCH, (grp, port))
+        deadline = _time.monotonic() + duration
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
+            rlist, _, _ = select.select([s for s, _, _ in socks], [], [], remaining)
+            for s in rlist:
+                with suppress(OSError):
+                    _data, addr = s.recvfrom(2048)
+                    if addr[0] != own_ip and not addr[0].startswith("127."):
+                        return True   # inbound LAN multicast from another host -> host viable
+        return False
+    finally:
+        for s, _, _ in socks:
+            with suppress(OSError):
+                s.close()
+
+
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
                internet_monitor=None, health_check=None, dhcp_monitor=None,
@@ -416,6 +482,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                ha_import_store=None,
                wol_send=None, ping_probe=None, traceroute_runner=None,
                dns_query_fn=None, speedtest_fn=None, net_mcast_probe=None,
+               net_mcast_viability=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
@@ -3378,6 +3445,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 logging.warning("doctor: mcast probe leg failed: %r", r)
         return len(responders) if ran else None
 
+    async def _doctor_mcast_viability():
+        # discovery_reach PR2: the HARD-RULE gate. Only run when the mesh already looks silent
+        # (the caller decides). Returns True (host receives inbound LAN multicast -> a router
+        # blame is then permitted), False (receives none -> HOST_MULTICAST_UNAVAILABLE, never a
+        # router blame) or None (couldn't probe -> stay neutral). Injectable so tests never open
+        # a real socket. Runs the blocking socket work off the event loop.
+        if net_mcast_viability is not None:
+            try:
+                return await net_mcast_viability()
+            except Exception:
+                logging.warning("doctor: injected mcast viability probe failed", exc_info=True)
+                return None
+        try:
+            return await asyncio.to_thread(_probe_mcast_viability, _local_ip)
+        except Exception:
+            logging.warning("doctor: mcast viability probe failed", exc_info=True)
+            return None
+
     @app.get("/api/health/doctor")
     async def health_doctor(auto_fix: bool = False,
                             _=Depends(require_local), __=Depends(require_scope("control"))):
@@ -3395,9 +3480,27 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # via ARP vs devices that answered a multicast probe. Read-only; no router touch. Only
         # PROBE when there are enough devices to judge (>=DISCOVERY_MIN_ARP): a small/empty
         # network is inconclusive anyway, so we skip the ~4s socket work and pass None.
-        arp_count = len(_inventory.latest_inventory())
+        inv = _inventory.latest_inventory()
+        arp_count = len(inv)
         mcast_responders = (await _doctor_mcast_probe()
                             if arp_count >= DISCOVERY_MIN_ARP else None)
+        # PR2 cause discrimination -- pay for these extra signals ONLY when the mesh already
+        # looks silent (arp>=MIN and mcast<=SILENT), i.e. the exact case the verdict must
+        # explain. Host-viability is the HARD-RULE gate: no router blame without it proven.
+        host_multicast_viable = None
+        arp_subnet_count = 1
+        dhcp_server_count = 0
+        if (mcast_responders is not None
+                and mcast_responders <= DISCOVERY_MCAST_SILENT
+                and arp_count >= DISCOVERY_MIN_ARP):
+            host_multicast_viable = await _doctor_mcast_viability()
+            subnets = {".".join(d.ip.split(".")[:3])
+                       for d in inv if getattr(d, "ip", None)}
+            arp_subnet_count = max(1, len(subnets))
+            # an EXTRA DHCP server (recent rogue/multiple-server alert) => >=2 servers seen,
+            # the classic second-network / VLAN signal; else 1 seen (monitor on) or 0 (off).
+            dhcp_server_count = (2 if (_dhcp_monitor and _dhcp_monitor.recent_alerts(1))
+                                 else (1 if _dhcp_monitor else 0))
         checks, fixable = diagnose(
             health=result,
             gateway_status=_gateway_monitor.status() if _gateway_monitor else None,
@@ -3412,6 +3515,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             last_inventory_scan_ts=_inventory.last_scan_ts(), net_scan_interval=cfg.net_scan_interval,
             mdns_expected=cfg.peers_enabled, mdns_alive=_mdns_state.get("handle") is not None,
             arp_count=arp_count, mcast_responders=mcast_responders,
+            host_multicast_viable=host_multicast_viable,
+            arp_subnet_count=arp_subnet_count, dhcp_server_count=dhcp_server_count,
         )
         fixed, suggestions = await apply_fixes(
             fixable, enabled=(auto_fix and cfg.net_doctor_autofix),

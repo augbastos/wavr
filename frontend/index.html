@@ -14819,18 +14819,54 @@ try {
   // unavailable just ride as a normal check row. PR2 splits multicast_dead into isolation
   // vs second-network (each with its own key here); PR3 wires the "Como arrumar" link.
   var DISCOVERY_COPY = {
-    // PR1 states the OBSERVATION only (cause is UNKNOWN here — MULTICAST_DEAD_UNKNOWN);
-    // PR2 discriminates router-filtering vs a hub that can't receive LAN multicast. So do
-    // NOT blame the router yet — that would be a premature verdict (ADR-0003).
+    // PR2 discriminates the cause. HARD RULE: the router is only ever named when the hub's
+    // multicast viability was PROVEN (discovery_ap_isolation / discovery_second_network). When
+    // it could NOT be proven the copy points at the hub's own environment, never the router.
+    // Each case: what Wavr sees + what still works + what the user can do (ADR-0003 honest).
+    discovery_host_unavailable: function(v){
+      return {
+        cls: "warn",
+        title: "Este hub não está recebendo a descoberta",
+        body: "Wavr vê " + v.arp_count + " aparelhos na sua rede, mas o aparelho onde o Wavr roda"
+          + " não está recebendo o tráfego de descoberta (multicast) da rede — por isso não dá pra"
+          + " culpar o seu roteador. Isso é comum quando o Wavr roda dentro de um ambiente restrito"
+          + " (container). A detecção por rede continua funcionando normalmente. O que você pode"
+          + " fazer: rodar o Core num computador/laptop na mesma rede, ou conferir se o roteador não"
+          + " está com isolamento de clientes ligado."
+      };
+    },
+    discovery_ap_isolation: function(v){
+      return {
+        cls: "warn",
+        title: "Sua rede está bloqueando a descoberta",
+        body: "Wavr vê " + v.arp_count + " aparelhos e confirmou que recebe multicast da rede — mas os"
+          + " aparelhos não respondem à descoberta por nome. Provavelmente o roteador está filtrando"
+          + " esse tráfego (isolamento de clientes / \"AP isolation\", ou um filtro de mDNS). A detecção"
+          + " por rede continua funcionando. O que fazer: procurar \"isolamento de clientes\" / \"AP"
+          + " isolation\" nas configurações do roteador e desligar."
+      };
+    },
+    discovery_second_network: function(v){
+      return {
+        cls: "warn",
+        title: "Seus aparelhos estão em redes separadas",
+        body: "Wavr vê " + v.arp_count + " aparelhos, mas eles parecem estar em mais de uma rede"
+          + " (subnets diferentes ou mais de um servidor DHCP). Uma rede separada de IoT/convidados"
+          + " não deixa a descoberta cruzar de um lado pro outro. A detecção por rede segue"
+          + " funcionando. O que fazer: colocar o Wavr na mesma rede/VLAN dos aparelhos que você quer"
+          + " descobrir."
+      };
+    },
+    // Neutral fallback: viability could not be established -> DO NOT blame the router (hard rule).
     discovery_multicast_dead: function(v){
       return {
         cls: "warn",
         title: "Wavr não está descobrindo seus aparelhos",
         body: "Wavr vê " + v.arp_count + " aparelhos na sua rede, mas só " + Math.max(0, v.mcast_responders)
           + " respondeu à descoberta por nome. A detecção por rede continua funcionando — mas a descoberta"
-          + " (nomes/mDNS) não está chegando. Provavelmente é o roteador filtrando esse tráfego"
-          + " (isolamento de clientes ou uma rede IoT separada) OU uma limitação do aparelho onde o Wavr"
-          + " roda. O Wavr vai identificar a causa exata em breve."
+          + " (nomes/mDNS) não está chegando, e ainda não deu pra confirmar a causa (pode ser um filtro"
+          + " na rede ou uma limitação do aparelho onde o Wavr roda). O Wavr não vai apontar o dedo sem"
+          + " ter certeza."
       };
     }
   };
