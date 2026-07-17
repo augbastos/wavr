@@ -1344,6 +1344,16 @@
   .doctor-verdict.warn{border-color:var(--warn);}
   .dv-title{margin:0 0 5px;font-weight:600;color:var(--warn);}
   .dv-body{margin:0;font-size:.85rem;color:var(--text);line-height:1.5;max-width:70ch;}
+  .dv-fix-btn{margin-top:9px;font-size:.8rem;padding:5px 11px;border-radius:8px;cursor:pointer;
+              border:1px solid var(--warn);background:transparent;color:var(--warn);font-weight:600;}
+  .dv-fix-btn:hover{background:var(--warn);color:var(--bg);}
+  .dv-fix{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:.83rem;
+          color:var(--text);line-height:1.5;max-width:70ch;}
+  .dv-fix ol{margin:6px 0 8px;padding-left:20px;} .dv-fix li{margin:3px 0;}
+  .dv-fix label{display:block;margin:8px 0 4px;font-size:.78rem;color:var(--muted);}
+  .dv-fix select{font-size:.82rem;padding:4px 8px;border-radius:7px;border:1px solid var(--line);
+                 background:var(--bg);color:var(--text);}
+  .dv-brand-tip{margin:8px 0 0;font-size:.82rem;} .dv-doc{margin:8px 0 0;font-size:.76rem;color:var(--muted);}
   .health-sev{display:flex;gap:8px;align-items:center;}
   .health-sev svg{width:16px;height:16px;flex:none;}
   .diag-list{display:flex;flex-direction:column;}
@@ -14870,6 +14880,56 @@ try {
       };
     }
   };
+  // PR3: local, no-egress "how to fix" — keyed by the DETECTED cause's copy_key. Steps say WHAT
+  // to change; the brand picker says WHERE (per-router), with the full guide's filename in the
+  // public repo (docs/network-fixes/). Nothing here calls out to the internet.
+  var FIX_GUIDE = {
+    discovery_ap_isolation: { steps: [
+      "No admin do seu roteador, procure \"isolamento de clientes\" / \"AP isolation\" e desligue para a rede onde o Wavr e os aparelhos estão.",
+      "Confira que o Wavr e os aparelhos NÃO estão na rede de convidados (guest) — ela isola de propósito.",
+      "Aplique e rode o diagnóstico de novo." ] },
+    discovery_second_network: { steps: [
+      "Seus aparelhos parecem estar em mais de uma rede (subnets diferentes ou 2 servidores DHCP).",
+      "Coloque o Wavr na MESMA rede/VLAN dos aparelhos que você quer descobrir (ex.: tirar da rede de convidados/IoT separada).",
+      "Se você usa mesh ou um segundo roteador, é dali que costuma vir a segunda rede." ] },
+    discovery_host_unavailable: { steps: [
+      "O aparelho onde o Wavr roda não está recebendo o tráfego de descoberta da rede — não é culpa do roteador.",
+      "Se o Core roda dentro de um ambiente restrito (container), rode-o num computador/laptop na mesma rede.",
+      "Como alternativa, confira se o roteador não está com isolamento de clientes ligado." ] },
+    discovery_multicast_dead: { steps: [
+      "A causa não pôde ser confirmada — trabalhe a checagem rápida de rede.",
+      "Verifique isolamento de clientes desligado, Wavr e aparelhos na mesma rede, e multicast/mDNS liberado.",
+      "Guia completo dos requisitos no repo: docs/network-fixes/wavr-network-requirements.md" ] }
+  };
+  var BRAND_TIPS = {
+    other:    { name: "Outro / não sei", tip: "Procure pelas palavras: \"isolamento de clientes\" / \"AP isolation\", rede \"guest\", e \"mDNS\"/\"multicast\" nas configurações de Wi-Fi.", doc: "wavr-network-requirements.md" },
+    virgin:   { name: "Virgin Media Hub", tip: "Advanced settings → Wireless → Guest network. Isolamento na rede principal é raro; o vilão costuma ser a rede de convidados.", doc: "virgin-media-hub.md" },
+    eir:      { name: "eir", tip: "Wi-Fi → Advanced → \"Isolate clients\" / \"AP isolation\" → desligar. Tirar Wavr e aparelhos da rede de convidados.", doc: "eir.md" },
+    sky:      { name: "Sky", tip: "\"Broadband Shield\" é filtro de conteúdo, NÃO isolamento. Hub travado sem toggle → usar seu próprio roteador atrás dele.", doc: "sky.md" },
+    tplink:   { name: "TP-Link", tip: "Archer: Advanced → Wireless → desmarcar \"AP Isolation\" (por banda). Deco: More → IoT Network (essa rede isola).", doc: "tp-link.md" },
+    vodafone: { name: "Vodafone", tip: "Wi-Fi → Advanced → \"Isolate clients\" / \"AP isolation\". (Guia ainda em rascunho no repo.)", doc: "vodafone.md" },
+    unifi:    { name: "UniFi", tip: "SSID → Advanced → \"Client Device Isolation\" off. VLAN de IoT é a causa comum → habilitar reflector mDNS ou juntar as redes.", doc: "unifi.md" }
+  };
+  var BRAND_ORDER = ["other","virgin","eir","sky","tplink","vodafone","unifi"];
+  function discoveryFixPanel(copyKey){
+    var g = FIX_GUIDE[copyKey];
+    if(!g) return null;
+    var wrap = elc("div", "dv-fix");
+    var ol = document.createElement("ol");
+    g.steps.forEach(function(s){ ol.appendChild(elc("li", "", s)); });
+    wrap.appendChild(ol);
+    wrap.appendChild(elc("label", "", "Qual seu roteador?"));
+    var sel = document.createElement("select");
+    BRAND_ORDER.forEach(function(k){
+      var o = document.createElement("option"); o.value = k; o.textContent = BRAND_TIPS[k].name; sel.appendChild(o);
+    });
+    wrap.appendChild(sel);
+    var tip = elc("p", "dv-brand-tip"); var doc = elc("p", "dv-doc"); wrap.appendChild(tip); wrap.appendChild(doc);
+    function render(){ var b = BRAND_TIPS[sel.value] || BRAND_TIPS.other; tip.textContent = b.tip;
+      doc.textContent = "Guia completo (no repositório): docs/network-fixes/" + b.doc; }
+    sel.addEventListener("change", render); render();
+    return wrap;
+  }
   function discoveryVerdictCallout(checks){
     var dr = null;
     for(var i=0;i<checks.length;i++){ if(checks[i] && checks[i].id === "discovery_reach"){ dr = checks[i]; break; } }
@@ -14880,6 +14940,18 @@ try {
     var el = elc("div", "doctor-verdict " + info.cls);
     el.appendChild(elc("p", "dv-title", info.title));
     el.appendChild(elc("p", "dv-body", info.body));
+    // [Como arrumar] — only for causes that have an actionable guide (never for ok/small/probe).
+    if(FIX_GUIDE[dr.verdict.copy_key]){
+      var btn = elc("button", "dv-fix-btn", "Como arrumar");
+      btn.type = "button";
+      var panel = null;
+      btn.addEventListener("click", function(){
+        if(panel){ panel.remove(); panel = null; btn.textContent = "Como arrumar"; return; }
+        panel = discoveryFixPanel(dr.verdict.copy_key);
+        if(panel){ el.appendChild(panel); btn.textContent = "Ocultar"; }
+      });
+      el.appendChild(btn);
+    }
     return el;
   }
   function renderDoctorResult(d){
