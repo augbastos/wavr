@@ -1359,10 +1359,19 @@
   .dv-router-hit:hover{border-color:var(--warn);color:var(--warn);}
   .dv-brand-tip{margin:8px 0 0;font-size:.82rem;} .dv-doc{margin:8px 0 0;font-size:.76rem;color:var(--muted);}
   .dv-report{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);}
+  .dv-report-row{display:flex;flex-wrap:wrap;gap:8px;}
   .dv-report-btn{font-size:.82rem;padding:6px 12px;border-radius:8px;cursor:pointer;
-                 border:1px solid var(--line);background:var(--bg);color:var(--text);font-weight:600;}
+                 border:1px solid var(--line);background:var(--bg);color:var(--text);font-weight:600;
+                 display:inline-flex;align-items:center;gap:7px;}
+  .dv-report-btn svg{width:13px;height:13px;flex:none;}
   .dv-report-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .dv-report-btn.dv-send:hover{border-color:var(--warn);color:var(--warn);}
   .dv-report-note{margin:6px 0 0;font-size:.76rem;color:var(--muted);max-width:70ch;}
+  .dv-auto{margin-top:10px;display:flex;align-items:flex-start;gap:8px;}
+  .dv-auto input{margin-top:3px;accent-color:var(--warn);}
+  .dv-auto-label{font-size:.8rem;font-weight:600;display:inline-flex;align-items:center;gap:6px;
+                 cursor:pointer;color:var(--text);}
+  .dv-auto-label svg{width:13px;height:13px;flex:none;color:var(--warn);}
   .health-sev{display:flex;gap:8px;align-items:center;}
   .health-sev svg{width:16px;height:16px;flex:none;}
   .diag-list{display:flex;flex-direction:column;}
@@ -1991,6 +2000,13 @@
   <symbol id="ic-cube" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20 7.4v9.2L12 21 4 16.6V7.4Z"/><path d="M12 12v9M4 7.4 12 12l8-4.6"/></symbol>
   <symbol id="ic-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 21.5 20h-19Z"/><path d="M12 9.7v4.3"/><circle cx="12" cy="17" r=".7" fill="currentColor" stroke="none"/></symbol>
   <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6"/></symbol>
+  <!-- UNIVERSAL EGRESS PICTOGRAM (convention, 2026-07-17): the OS-standard cloud-with-up-arrow
+       ("upload to the internet") glyph everyone already knows from phones and computers.
+       ANY control, card or toggle that connects/sends OUTSIDE the local network must carry
+       #ic-egress — one icon, everywhere, so "this leaves your home" is recognizable at a
+       glance across the whole app (connectors cards, diagnostics send/auto-send, future
+       cloud features). Never reuse it for LAN-only traffic. -->
+  <symbol id="ic-egress" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 4 16.3"/><path d="M12 12v9"/><path d="m8 16 4-4 4 4"/></symbol>
   <!-- Stage 2: device-catalog category + UI icons -->
   <symbol id="ic-bt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 7.5 17 16.5 12 21V3l5 4.5L6.5 16.5"/></symbol>
   <symbol id="ic-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 7V4M14 7V4M10 20v-3M14 20v-3M7 10H4M7 14H4M20 10h-3M20 14h-3"/></symbol>
@@ -7554,7 +7570,8 @@ async function renderConnectors(){
     const badge = document.createElement("span");
     badge.className = "conn-egress-badge " + (egress ? "leaves" : "stays");
     const bsvg = document.createElementNS(NS, "svg"); bsvg.setAttribute("aria-hidden", "true");
-    const buse = document.createElementNS(NS, "use"); buse.setAttribute("href", egress ? "#ic-net" : "#ic-lock");
+    // #ic-egress = the UNIVERSAL "this leaves your home" pictogram (see the sprite comment).
+    const buse = document.createElementNS(NS, "use"); buse.setAttribute("href", egress ? "#ic-egress" : "#ic-lock");
     bsvg.appendChild(buse); badge.appendChild(bsvg);
     badge.appendChild(document.createTextNode(egress ? "Leaves your home" : "Stays on your network"));
     card.appendChild(badge);
@@ -15019,6 +15036,19 @@ try {
     }
     return el;
   }
+  // Local SVG-sprite helper for the diagnostics UI. This script block is scope-isolated from
+  // the one that defines the shared icon() helper (each block is its own closure — calling
+  // icon() from here is a ReferenceError that the doctor's .catch silently swallowed, which is
+  // exactly how the Copy/Send report buttons vanished on the kiosk). Self-contained on purpose.
+  function dvIcon(sym){
+    var NS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("aria-hidden", "true");
+    var use = document.createElementNS(NS, "use");
+    use.setAttribute("href", "#" + sym);
+    svg.appendChild(use);
+    return svg;
+  }
   // PR4: fetch just the diagnosis (no auto_fix — a setup surface must never trigger fixes) so the
   // end-of-setup step can surface the discovery verdict when a device doesn't show up. Same auth
   // dance as the doctor button; returns the parsed JSON or null (never throws at the call site).
@@ -15080,6 +15110,7 @@ try {
     // user pastes it somewhere themselves.
     if(typeof d.report === "string" && d.report){
       var rep = elc("div", "dv-report");
+      var row = elc("div", "dv-report-row");
       var rbtn = elc("button", "dv-report-btn", "Copy diagnostic report");
       rbtn.type = "button";
       rbtn.addEventListener("click", function(){
@@ -15094,10 +15125,87 @@ try {
           document.body.removeChild(ta); done();
         }
       });
-      rep.appendChild(rbtn);
+      row.appendChild(rbtn);
+      // Authed fetch for the diagnostics actions — same header dance as the doctor call.
+      var diagFetch = function(path, opts){
+        var companionCentral = (M === "companion" && companionIsCentral());
+        opts = opts || {};
+        opts.headers = Object.assign(
+          companionCentral ? { "Authorization": "Bearer " + companionToken() }
+                           : { "X-Wavr-Local": "1" },
+          opts.headers || {});
+        var __nf = window.WAVR_MOBILE
+          ? function(p,o){ return window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + p, o); }
+          : function(p,o){ return fetch(location.origin + p, o); };
+        return __nf(path, opts);
+      };
+      // MANUAL send — the tap IS the consent for this one send. Carries the universal
+      // #ic-egress pictogram ("this leaves your home"). Honest failure texts per cause.
+      var sbtn = elc("button", "dv-report-btn dv-send");
+      sbtn.type = "button";
+      sbtn.appendChild(dvIcon("ic-egress"));
+      sbtn.appendChild(document.createTextNode("Send report"));
+      var sbtnReset = function(txt){ sbtn.textContent = ""; sbtn.appendChild(dvIcon("ic-egress"));
+        sbtn.appendChild(document.createTextNode(txt)); };
+      sbtn.addEventListener("click", function(){
+        sbtn.disabled = true; sbtnReset("Sending…");
+        diagFetch("/api/health/doctor/send", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ report: d.report }) })
+          .then(function(r){ return r.json().then(function(j){ return { s: r.status, j: j }; }); })
+          .then(function(res){
+            if(res.s === 200 && res.j && res.j.ok){ sbtnReset("Sent ✓"); }
+            else if(res.s === 409){ sbtnReset("Unavailable"); }
+            else { sbtnReset("Failed — try again"); }
+          })
+          .catch(function(){ sbtnReset("Failed — offline?"); })
+          .then(function(){ sbtn.disabled = false;
+            setTimeout(function(){ sbtnReset("Send report"); }, 3000); });
+      });
+      row.appendChild(sbtn);
+      rep.appendChild(row);
       rep.appendChild(elc("p", "dv-report-note",
-        "Paste this into a GitHub issue to ask for help — MACs are already redacted "
-        + "(aa:bb:cc:**:**:**) and Wavr never sends this anywhere on its own."));
+        "Copy: paste into a GitHub issue to ask for help. Send: ships this report outside your"
+        + " local network to the Wavr diagnostics endpoint — one send, only when you tap. MACs are"
+        + " already redacted (aa:bb:cc:**:**:**); Wavr never sends anything on its own."));
+      // AUTO-SEND opt-in toggle (standing consent) — wired to the `diagnostics` connector.
+      // The enable route is loopback-root only, so the toggle is hidden on companions
+      // (they'd 403); the Connectors screen remains the canonical surface for it.
+      if(M !== "companion"){
+        diagFetch("/api/connectors", {}).then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(list){
+            var c = null;
+            (Array.isArray(list) ? list : (list && list.connectors) || []).forEach(function(x){
+              if(x && x.id === "diagnostics") c = x; });
+            if(!c) return;
+            var wrap = elc("div", "dv-auto");
+            var cb = document.createElement("input");
+            cb.type = "checkbox"; cb.id = "dvAutoDiag";
+            cb.checked = (c.override === "on");
+            var lab = document.createElement("label");
+            lab.className = "dv-auto-label"; lab.htmlFor = "dvAutoDiag";
+            lab.appendChild(dvIcon("ic-egress"));
+            lab.appendChild(document.createTextNode("Auto-send diagnostics when a problem is found"));
+            var note = elc("p", "dv-report-note",
+              "Opt-in — off by default. When ON, Wavr automatically sends a MAC-redacted"
+              + " diagnostic report OUTSIDE your local network whenever a diagnosis finds a"
+              + " problem. Nothing else is ever sent, and Wavr never turns this on by itself."
+              + (c.available ? "" : " (Needs a diagnostics endpoint configured — WAVR_DIAG_ENDPOINT.)"));
+            cb.addEventListener("change", function(){
+              cb.disabled = true;
+              diagFetch("/api/connectors/diagnostics/enable", { method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ enabled: cb.checked }) })
+                .then(function(r){ if(!r.ok){ cb.checked = !cb.checked; } })
+                .catch(function(){ cb.checked = !cb.checked; })
+                .then(function(){ cb.disabled = false; });
+            });
+            var col = elc("div");
+            col.appendChild(lab); col.appendChild(note);
+            wrap.appendChild(cb); wrap.appendChild(col);
+            rep.appendChild(wrap);
+          }).catch(function(){});
+      }
       box.appendChild(rep);
     }
     box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()
