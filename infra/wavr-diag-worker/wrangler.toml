@@ -1,0 +1,12 @@
+# wavr-diag — receiving endpoint for Wavr's opt-in diagnostics reporting.
+# Cloudflare PAGES project (project-scoped URL, no account subdomain):
+#   https://wavr-diag.pages.dev/report
+# Deploy:  npx wrangler pages deploy       (from this directory)
+# The Core points at it via WAVR_DIAG_ENDPOINT=https://wavr-diag.pages.dev/report
+name = "wavr-diag"
+pages_build_output_dir = "public"
+compatibility_date = "2026-07-01"
+
+[[kv_namespaces]]
+binding = "DIAG"
+id = "61e6e90ab1a04b608e3cd266b9d5d116"

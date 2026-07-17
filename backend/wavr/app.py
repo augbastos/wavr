@@ -68,6 +68,7 @@ from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
 from wavr.net_doctor import (diagnose, apply_fixes, DoctorLog, build_doctor_report,
                              DISCOVERY_MIN_ARP, DISCOVERY_MCAST_SILENT)
+from wavr.connectors.diag import send_report as diag_send_report
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
@@ -482,7 +483,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                ha_import_store=None,
                wol_send=None, ping_probe=None, traceroute_runner=None,
                dns_query_fn=None, speedtest_fn=None, net_mcast_probe=None,
-               net_mcast_viability=None,
+               net_mcast_viability=None, diag_sender=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
@@ -2231,6 +2232,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         mcph_gate = _connectors.effective_active("mcp-http", False)
         mcph_active = mcph_gate and _mcp_http_route is not None
         mcph_needs = "restart" if (mcph_gate and not mcph_active) else None
+        # Diagnostics auto-send: no env flag; the registry IS the standing-consent gate
+        # (default OFF). Available only when an endpoint is configured; the toggle is
+        # the AUTOMATIC path's opt-in — the manual "Send report" tap consents per-action
+        # and is gated at its own route, not here.
+        diag_gate = _connectors.effective_active("diagnostics", False)
+        diag_available = bool(cfg.diag_endpoint)
+        diag_active = diag_gate and diag_available
+        diag_needs = "config" if (diag_gate and not diag_available) else None
 
         return [
             {"id": "narrator", "kind": "builtin", "direction": "outbound",
@@ -2276,6 +2285,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                       "room/ts only) and the HA entity list each require an EXPLICIT per-agent grant. "
                       "Central/root (local dashboard) unrestricted; 'user'-role devices are denied /mcp",
              "env_flag": None},
+            # Diagnostics auto-send (2026-07-17): OPT-IN standing consent for shipping
+            # MAC-redacted doctor reports off the LAN when a diagnosis finds a problem.
+            # DEFAULT OFF — with the toggle off (and no manual tap) nothing ever leaves.
+            {"id": "diagnostics", "kind": "builtin", "direction": "outbound",
+             "label": "Diagnostics reporting", "available": diag_available,
+             "active": diag_active, "suppressed": _connectors.is_suppressed("diagnostics"),
+             "override": _connectors.override("diagnostics"), "env_active": False,
+             "needs": diag_needs, "enforcement": "registry-overlay",
+             "scope": "outbound-cloud: sends MAC-redacted diagnostic reports OUTSIDE your local "
+                      "network to the Wavr diagnostics endpoint, automatically, whenever a network "
+                      "diagnosis finds a problem. Report = check results + verdict only — never "
+                      "device identities, house map, or credentials. Off (default) = nothing is "
+                      "ever sent automatically; the manual 'Send report' button asks each time",
+             "env_flag": "WAVR_DIAG_ENDPOINT"},
         ]
 
     def _connectors_active() -> int:
@@ -3528,11 +3551,55 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         report = build_doctor_report(
             checks, fixed, suggestions,
             generated=datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+        # AUTO-SEND (opt-in, default OFF): while the `diagnostics` connector toggle is on
+        # (standing consent) AND the egress master allows AND an endpoint is configured, a
+        # diagnosis that found a PROBLEM reports home by itself. Fire-and-forget off the
+        # event loop -- an unreachable endpoint can never slow or break the doctor.
+        if (any(c.ok is False for c in checks)
+                and cfg.diag_endpoint
+                and _connectors.egress_allowed()
+                and _connectors.effective_active("diagnostics", False)):
+            async def _auto_send(rep=report):
+                try:
+                    if diag_sender is not None:
+                        res = await diag_sender(rep)
+                    else:
+                        res = await asyncio.to_thread(
+                            diag_send_report, _connectors, cfg.diag_endpoint, rep)
+                    if not (res or {}).get("ok"):
+                        logging.warning("diagnostics auto-send failed: %s", res)
+                except Exception:
+                    logging.warning("diagnostics auto-send raised", exc_info=True)
+            asyncio.get_running_loop().create_task(_auto_send())
         return {"checks": [c.to_dict() for c in checks],
                 "auto_fixed": [a.to_dict() for a in fixed],
                 "suggestions": [s.to_dict() for s in suggestions],
                 "recent_auto_fixes": [a.to_dict() for a in _doctor_log.recent(20)],
                 "report": report}
+
+    # NOTE the path: /api/diag/{tool} (network diagnostics) already exists and would
+    # swallow /api/diag/send as tool="send" — so the report-send lives under the
+    # doctor's own namespace instead.
+    @app.post("/api/health/doctor/send")
+    async def diag_send(payload: dict = Body(...),
+                        _=Depends(require_local), __=Depends(require_scope("control"))):
+        # MANUAL send -- the button tap IS the consent for this one send (per-action
+        # opt-in), so the `diagnostics` connector toggle is NOT required here; that
+        # toggle governs only the AUTOMATIC path. Still behind the system egress master
+        # + endpoint config, and the report is re-redacted inside send_report (defense
+        # in depth) -- a raw MAC can never leave even if a client hands us one.
+        if not cfg.diag_endpoint:
+            raise HTTPException(status_code=409,
+                                detail="no diagnostics endpoint configured (WAVR_DIAG_ENDPOINT)")
+        if not _connectors.egress_allowed():
+            raise HTTPException(status_code=409, detail="egress is blocked on this hub")
+        report = payload.get("report")
+        if not isinstance(report, str) or not report.strip():
+            raise HTTPException(status_code=422, detail="report (string) required")
+        if diag_sender is not None:
+            return await diag_sender(report)
+        return await asyncio.to_thread(
+            diag_send_report, _connectors, cfg.diag_endpoint, report, manual=True)
 
     @app.get("/api/system")
     async def system(_=Depends(require_scope("control"))):
