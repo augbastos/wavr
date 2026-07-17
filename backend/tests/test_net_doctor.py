@@ -6,9 +6,12 @@ disabled/privacy-off source is never even inspected, let alone proposed as a
 fix candidate, and gateway/rogue-DHCP checks never produce a `FixCandidate`
 at all (report-only by construction)."""
 from wavr.net_doctor import (
+    CAUSE_INCONCLUSIVE_SMALL,
+    CAUSE_MULTICAST_DEAD,
     DoctorAction,
     DoctorLog,
     SEVERITY_CRITICAL,
+    SEVERITY_DEGRADED,
     SEVERITY_MINOR,
     SEVERITY_OK,
     apply_fixes,
@@ -386,3 +389,51 @@ def test_doctor_log_trims_to_bound():
     recent = log.recent(10)
     assert len(recent) == 3
     assert [a.target for a in recent] == ["s2", "s3", "s4"]   # newest 3, oldest evicted
+
+
+# ---- 10. discovery_reach (CL-02, PR1) ---------------------------------------
+# The verdict is STRUCTURED (DoctorVerdict), never a flat string, and REPORT-ONLY
+# (never a FixCandidate -- this module never touches the router).
+
+def test_discovery_reach_names_the_pathology_when_multicast_is_silent():
+    checks, fixable = _diag(arp_count=15, mcast_responders=0)
+    c = _by_id(checks, "discovery_reach")
+    assert c.ok is False and c.severity == SEVERITY_DEGRADED
+    assert c.verdict.cause == CAUSE_MULTICAST_DEAD
+    assert c.verdict.arp_count == 15 and c.verdict.mcast_responders == 0
+    assert c.verdict.copy_key == "discovery_multicast_dead"
+    # report-only: NEVER proposes a fix (no router touch), even when unhealthy
+    assert not any(f.id == "discovery_reach" for f in fixable)
+    # the structured verdict survives serialization for the frontend
+    assert c.to_dict()["verdict"]["cause"] == CAUSE_MULTICAST_DEAD
+
+
+def test_discovery_reach_healthy_when_multicast_answers():
+    checks, _ = _diag(arp_count=15, mcast_responders=5)
+    c = _by_id(checks, "discovery_reach")
+    assert c.ok is True and c.verdict.cause is None and c.verdict.copy_key == "discovery_ok"
+
+
+def test_discovery_reach_small_net_never_false_positives():
+    # a studio with 3 devices must NOT be flagged as isolated
+    checks, _ = _diag(arp_count=3, mcast_responders=0)
+    c = _by_id(checks, "discovery_reach")
+    assert c.ok is None and c.verdict.cause == CAUSE_INCONCLUSIVE_SMALL
+    assert c.verdict.copy_key == "discovery_small_net"
+
+
+def test_discovery_reach_probe_unavailable_is_honest():
+    # probe couldn't run -> "can't tell", never a false "multicast dead"
+    checks, _ = _diag(arp_count=15, mcast_responders=None)
+    c = _by_id(checks, "discovery_reach")
+    assert c.ok is None and c.verdict.cause is None
+    assert c.verdict.copy_key == "discovery_probe_unavailable"
+
+
+def test_discovery_reach_boundary_at_the_floor():
+    # exactly at the ARP floor (5) with a lone responder (<=1) still reads dead;
+    # one more responder flips it healthy.
+    dead = _by_id(_diag(arp_count=5, mcast_responders=1)[0], "discovery_reach")
+    assert dead.ok is False and dead.verdict.cause == CAUSE_MULTICAST_DEAD
+    ok = _by_id(_diag(arp_count=5, mcast_responders=2)[0], "discovery_reach")
+    assert ok.ok is True

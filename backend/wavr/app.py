@@ -66,7 +66,7 @@ from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
 from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
 from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
-from wavr.net_doctor import diagnose, apply_fixes, DoctorLog
+from wavr.net_doctor import diagnose, apply_fixes, DoctorLog, DISCOVERY_MIN_ARP
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
@@ -415,7 +415,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                health_resolvers=None, gateway_monitor=None,
                ha_import_store=None,
                wol_send=None, ping_probe=None, traceroute_runner=None,
-               dns_query_fn=None, speedtest_fn=None,
+               dns_query_fn=None, speedtest_fn=None, net_mcast_probe=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
@@ -3346,6 +3346,38 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             logging.warning("doctor: mDNS re-announce failed", exc_info=True)
             _mdns_state["handle"] = None
 
+    async def _doctor_mcast_probe():
+        # discovery_reach (CL-02): count DISTINCT devices that answer a short mDNS+SSDP
+        # multicast listen -- the read-time signal for "is multicast reaching me at all".
+        # Injectable (net_mcast_probe seam) so tests never open a real socket. Legs run
+        # CONCURRENTLY (~4s total, not 8); a leg failing is tolerated, but if BOTH raise
+        # (no socket / env) return None -> the check reports "can't tell", never a false
+        # "multicast dead" verdict. Opens its own short-lived socket, independent of any
+        # running mDNS source. Returns int (responder count) or None (couldn't probe).
+        if net_mcast_probe is not None:
+            try:
+                return await net_mcast_probe()
+            except Exception:
+                logging.warning("doctor: injected mcast probe failed", exc_info=True)
+                return None
+        from wavr.sources.mdns import MDNSCollector
+        from wavr.sources.ssdp import SSDPCollector
+
+        async def _leg(factory):
+            return await factory().collect(duration=4.0)
+
+        results = await asyncio.gather(_leg(MDNSCollector), _leg(SSDPCollector),
+                                       return_exceptions=True)
+        responders: set = set()
+        ran = False
+        for r in results:
+            if isinstance(r, dict):
+                responders.update(r.keys())
+                ran = True
+            else:
+                logging.warning("doctor: mcast probe leg failed: %r", r)
+        return len(responders) if ran else None
+
     @app.get("/api/health/doctor")
     async def health_doctor(auto_fix: bool = False,
                             _=Depends(require_local), __=Depends(require_scope("control"))):
@@ -3359,6 +3391,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         )
         room_sources = {r: ((s.sources if (s := _fusion.state(r)) else []))
                         for r in _fusion.rooms()}
+        # discovery_reach (CL-02): the two numbers the check correlates -- devices reachable
+        # via ARP vs devices that answered a multicast probe. Read-only; no router touch. Only
+        # PROBE when there are enough devices to judge (>=DISCOVERY_MIN_ARP): a small/empty
+        # network is inconclusive anyway, so we skip the ~4s socket work and pass None.
+        arp_count = len(_inventory.latest_inventory())
+        mcast_responders = (await _doctor_mcast_probe()
+                            if arp_count >= DISCOVERY_MIN_ARP else None)
         checks, fixable = diagnose(
             health=result,
             gateway_status=_gateway_monitor.status() if _gateway_monitor else None,
@@ -3372,6 +3411,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             room_sources=room_sources,
             last_inventory_scan_ts=_inventory.last_scan_ts(), net_scan_interval=cfg.net_scan_interval,
             mdns_expected=cfg.peers_enabled, mdns_alive=_mdns_state.get("handle") is not None,
+            arp_count=arp_count, mcast_responders=mcast_responders,
         )
         fixed, suggestions = await apply_fixes(
             fixable, enabled=(auto_fix and cfg.net_doctor_autofix),
