@@ -54,12 +54,15 @@ _MAX_LOG = 50
 
 # discovery_reach (net-doctor, sim cluster CL-02): the verdict is STRUCTURED data, never a
 # flat string -- so the later PRs extend it (cause discrimination, remediation deep-link,
-# shareable report) without rework. PR1 only ever emits MULTICAST_DEAD_UNKNOWN /
-# INCONCLUSIVE_SMALL_NET / (healthy -> cause=None); PR2 refines MULTICAST_DEAD_UNKNOWN into
-# AP_ISOLATION_OR_MDNS_FILTERING vs SECOND_NETWORK_VLAN via a unicast probe + DHCP/subnet cross-check.
+# shareable report) without rework. PR2 discriminates the "silent multicast" cause using a
+# HOST-VIABILITY probe (does this hub receive ANY inbound LAN multicast?) + a DHCP/subnet
+# cross-check. HARD RULE (Augusto): NEVER blame the router without the host's multicast
+# viability PROVEN -- an unprovable host (proot/container) yields HOST_MULTICAST_UNAVAILABLE,
+# never a router accusation.
 CAUSE_AP_ISOLATION = "AP_ISOLATION_OR_MDNS_FILTERING"
 CAUSE_SECOND_NETWORK = "SECOND_NETWORK_VLAN"
-CAUSE_MULTICAST_DEAD = "MULTICAST_DEAD_UNKNOWN"
+CAUSE_HOST_MULTICAST_UNAVAILABLE = "HOST_MULTICAST_UNAVAILABLE"
+CAUSE_MULTICAST_DEAD = "MULTICAST_DEAD_UNKNOWN"   # neutral fallback when viability is unknown
 CAUSE_INCONCLUSIVE_SMALL = "INCONCLUSIVE_SMALL_NET"
 
 CONF_LOW = "low"
@@ -186,6 +189,8 @@ def diagnose(*, health: dict,
              last_inventory_scan_ts: str | None, net_scan_interval: float,
              mdns_expected: bool, mdns_alive: bool,
              arp_count: int = 0, mcast_responders: int | None = None,
+             host_multicast_viable: bool | None = None,
+             arp_subnet_count: int = 1, dhcp_server_count: int = 0,
              ) -> tuple[list[DoctorCheck], list[FixCandidate]]:
     """Pure diagnosis pass -- no I/O, never raises (every check is wrapped so
     one bad input can't take down the others, mirroring `health_check._run_all`'s
@@ -376,8 +381,30 @@ def diagnose(*, health: dict,
                                verdict=DoctorVerdict(None, CONF_LOW, arp_count, -1,
                                                      "discovery_probe_unavailable"))
         if mcast_responders <= DISCOVERY_MCAST_SILENT:
+            base = f"{arp_count} devices reachable, {mcast_responders} answered discovery"
+            # HARD RULE: never blame the router unless the host's multicast reception is PROVEN.
+            if host_multicast_viable is False:
+                # the hub receives NO inbound LAN multicast at all (e.g. a proot/container Core)
+                # -> the fault is the HOST environment, NOT the router.
+                return DoctorCheck(id="discovery_reach", ok=False, severity=SEVERITY_DEGRADED,
+                                   detail=base + " (this hub receives no LAN multicast)",
+                                   verdict=DoctorVerdict(CAUSE_HOST_MULTICAST_UNAVAILABLE, CONF_MEDIUM,
+                                                         arp_count, mcast_responders, "discovery_host_unavailable"))
+            if host_multicast_viable is True:
+                # the hub DOES receive LAN multicast, yet devices don't answer discovery -> the
+                # NETWORK is dropping/segmenting it. Split second-network vs isolation/mDNS-filtering.
+                if arp_subnet_count > 1 or dhcp_server_count > 1:
+                    return DoctorCheck(id="discovery_reach", ok=False, severity=SEVERITY_DEGRADED,
+                                       detail=base + f" ({arp_subnet_count} subnets, {dhcp_server_count} DHCP servers)",
+                                       verdict=DoctorVerdict(CAUSE_SECOND_NETWORK, CONF_MEDIUM,
+                                                             arp_count, mcast_responders, "discovery_second_network"))
+                return DoctorCheck(id="discovery_reach", ok=False, severity=SEVERITY_DEGRADED,
+                                   detail=base + " (hub receives multicast; devices don't answer)",
+                                   verdict=DoctorVerdict(CAUSE_AP_ISOLATION, CONF_MEDIUM,
+                                                         arp_count, mcast_responders, "discovery_ap_isolation"))
+            # viability UNKNOWN (not probed) -> stay neutral, never a router accusation (hard rule)
             return DoctorCheck(id="discovery_reach", ok=False, severity=SEVERITY_DEGRADED,
-                               detail=f"{arp_count} devices reachable, {mcast_responders} answered discovery",
+                               detail=base,
                                verdict=DoctorVerdict(CAUSE_MULTICAST_DEAD, CONF_MEDIUM,
                                                      arp_count, mcast_responders, "discovery_multicast_dead"))
         return DoctorCheck(id="discovery_reach", ok=True, severity=SEVERITY_OK,

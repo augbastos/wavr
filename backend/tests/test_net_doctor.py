@@ -6,8 +6,11 @@ disabled/privacy-off source is never even inspected, let alone proposed as a
 fix candidate, and gateway/rogue-DHCP checks never produce a `FixCandidate`
 at all (report-only by construction)."""
 from wavr.net_doctor import (
+    CAUSE_AP_ISOLATION,
+    CAUSE_HOST_MULTICAST_UNAVAILABLE,
     CAUSE_INCONCLUSIVE_SMALL,
     CAUSE_MULTICAST_DEAD,
+    CAUSE_SECOND_NETWORK,
     DoctorAction,
     DoctorLog,
     SEVERITY_CRITICAL,
@@ -437,3 +440,49 @@ def test_discovery_reach_boundary_at_the_floor():
     assert dead.ok is False and dead.verdict.cause == CAUSE_MULTICAST_DEAD
     ok = _by_id(_diag(arp_count=5, mcast_responders=2)[0], "discovery_reach")
     assert ok.ok is True
+
+
+# ---- 10b. discovery_reach cause discrimination (CL-02, PR2) ------------------
+# The HARD RULE: never blame the router without the host's multicast viability PROVEN.
+
+def test_discovery_reach_host_unavailable_when_viability_false():
+    # hub receives NO inbound LAN multicast (e.g. proot/container) -> blame the HOST, not router
+    checks, fixable = _diag(arp_count=15, mcast_responders=0, host_multicast_viable=False)
+    c = _by_id(checks, "discovery_reach")
+    assert c.ok is False and c.severity == SEVERITY_DEGRADED
+    assert c.verdict.cause == CAUSE_HOST_MULTICAST_UNAVAILABLE
+    assert c.verdict.copy_key == "discovery_host_unavailable"
+    assert not any(f.id == "discovery_reach" for f in fixable)   # still report-only
+
+
+def test_discovery_reach_ap_isolation_when_viable_and_single_net():
+    # viability PROVEN + one subnet/one DHCP -> the network is filtering discovery (router blame OK)
+    checks, _ = _diag(arp_count=15, mcast_responders=0, host_multicast_viable=True)
+    c = _by_id(checks, "discovery_reach")
+    assert c.verdict.cause == CAUSE_AP_ISOLATION
+    assert c.verdict.copy_key == "discovery_ap_isolation"
+
+
+def test_discovery_reach_second_network_by_subnet():
+    # viability PROVEN + devices span >1 subnet -> a second network / VLAN, not plain isolation
+    checks, _ = _diag(arp_count=15, mcast_responders=0,
+                      host_multicast_viable=True, arp_subnet_count=2)
+    c = _by_id(checks, "discovery_reach")
+    assert c.verdict.cause == CAUSE_SECOND_NETWORK
+    assert c.verdict.copy_key == "discovery_second_network"
+
+
+def test_discovery_reach_second_network_by_dhcp_count():
+    # viability PROVEN + >1 DHCP server seen -> second network / VLAN
+    checks, _ = _diag(arp_count=15, mcast_responders=0,
+                      host_multicast_viable=True, dhcp_server_count=2)
+    c = _by_id(checks, "discovery_reach")
+    assert c.verdict.cause == CAUSE_SECOND_NETWORK
+
+
+def test_discovery_reach_stays_neutral_without_viability():
+    # HARD RULE: viability UNKNOWN (None) must NEVER produce a router accusation -> neutral cause
+    checks, _ = _diag(arp_count=15, mcast_responders=0, host_multicast_viable=None)
+    c = _by_id(checks, "discovery_reach")
+    assert c.verdict.cause == CAUSE_MULTICAST_DEAD
+    assert c.verdict.cause not in (CAUSE_AP_ISOLATION, CAUSE_SECOND_NETWORK)
