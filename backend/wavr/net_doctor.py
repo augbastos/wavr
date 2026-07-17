@@ -34,6 +34,7 @@ just by convention):
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -460,3 +461,65 @@ async def apply_fixes(fixable: list[FixCandidate], *, enabled: bool,
         actions.append(action)
 
     return actions, suggestions
+
+
+# ---- PR4: shareable, MAC-redacted report (flutter-doctor pattern) -----------
+# PRIVACY CONTRACT: a report meant to be pasted into a public GitHub issue must NEVER carry a
+# raw MAC (it identifies a household's exact devices). We keep the OUI (first 3 octets -> vendor,
+# useful for debugging) and mask the host half. The WHOLE assembled report is passed through the
+# scrubber as a single choke point, so a MAC leaking into any future check.detail is still caught.
+_MAC_RE = re.compile(
+    r"\b([0-9A-Fa-f]{2})([:-])([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})\2"
+    r"[0-9A-Fa-f]{2}\2[0-9A-Fa-f]{2}\2[0-9A-Fa-f]{2}\b")
+
+
+def redact_macs(text: str) -> str:
+    """Mask the host half of every MAC-shaped token, keeping the OUI. aa:bb:cc:dd:ee:ff ->
+    aa:bb:cc:**:**:** (same separator preserved)."""
+    return _MAC_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}{m.group(2)}{m.group(4)}"
+                  f"{m.group(2)}**{m.group(2)}**{m.group(2)}**", text)
+
+
+def _report_tag(ok: "bool | None") -> str:
+    return "[OK]" if ok is True else ("[WARN]" if ok is False else "[--]")
+
+
+def build_doctor_report(checks, actions, suggestions, *, generated: "str | None" = None) -> str:
+    """Assemble a plain-text, copy-pasteable diagnostic report (flutter-doctor style) with all
+    MACs redacted. `checks` are DoctorCheck, `actions` DoctorAction, `suggestions`
+    DoctorSuggestion. Returns the finished, already-scrubbed report string."""
+    lines = ["Wavr doctor — diagnostic report",
+             "===============================", ""]
+    if generated:
+        lines.append(f"generated: {generated}")
+    lines.append(f"checks: {len(checks)} · auto-fixed: {len(actions)} · "
+                 f"suggestions: {len(suggestions)}")
+    lines.append("")
+
+    verdict = next((c.verdict for c in checks
+                    if getattr(c, "id", None) == "discovery_reach" and getattr(c, "verdict", None)),
+                   None)
+    if verdict is not None:
+        lines += ["Discovery verdict:",
+                  f"  cause      : {verdict.cause or 'none (healthy)'}",
+                  f"  confidence : {verdict.confidence}",
+                  f"  devices    : {verdict.arp_count} reachable, "
+                  f"{max(0, verdict.mcast_responders)} answered discovery",
+                  f"  copy_key   : {verdict.copy_key}", ""]
+
+    lines.append("Checks:")
+    for c in checks:
+        lines.append(f"  {_report_tag(getattr(c, 'ok', None))} {getattr(c, 'id', '?')} — "
+                     f"{getattr(c, 'detail', '') or '—'}")
+    if actions:
+        lines += ["", "Auto-fixed (safe, local-only):"]
+        for a in actions:
+            lines.append(f"  · {a.kind}/{a.target}: {a.detail}")
+    if suggestions:
+        lines += ["", "Suggestions:"]
+        for s in suggestions:
+            lines.append(f"  · {s.message}")
+    lines += ["", "(MACs redacted for privacy: aa:bb:cc:**:**:** — Wavr never phones home; this "
+              "report is generated locally and shared only if you paste it.)"]
+    return redact_macs("\n".join(lines))
