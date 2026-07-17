@@ -19,7 +19,7 @@ at your network, these guides show where to fix it.
 | [eir](eir.md) | complete |
 | [Sky](sky.md) | complete |
 | [TP-Link](tp-link.md) | complete |
-| [Vodafone](vodafone.md) | stub — help wanted |
+| [Vodafone](vodafone.md) | field-verified (Ultra Hub, IE) — stock firmware exposes no isolation/multicast toggles |
 | [UniFi](unifi.md) | stub — help wanted |
 
 ## How the doctor's cause maps to a fix
