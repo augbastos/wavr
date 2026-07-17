@@ -1354,6 +1354,11 @@
   .dv-fix select{font-size:.82rem;padding:4px 8px;border-radius:7px;border:1px solid var(--line);
                  background:var(--bg);color:var(--text);}
   .dv-brand-tip{margin:8px 0 0;font-size:.82rem;} .dv-doc{margin:8px 0 0;font-size:.76rem;color:var(--muted);}
+  .dv-report{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);}
+  .dv-report-btn{font-size:.82rem;padding:6px 12px;border-radius:8px;cursor:pointer;
+                 border:1px solid var(--line);background:var(--bg);color:var(--text);font-weight:600;}
+  .dv-report-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .dv-report-note{margin:6px 0 0;font-size:.76rem;color:var(--muted);max-width:70ch;}
   .health-sev{display:flex;gap:8px;align-items:center;}
   .health-sev svg{width:16px;height:16px;flex:none;}
   .diag-list{display:flex;flex-direction:column;}
@@ -12975,6 +12980,21 @@ try {
           } else {
             vres.textContent = "no source registered on the hub yet — apply the configuration and restart the service.";
           }
+          // PR4: end-of-setup discovery check. If nothing new showed up, a pathological network
+          // (isolation / second net / silent multicast) is a likely reason — surface that verdict
+          // HERE, before the user concludes, instead of leaving them guessing. Best-effort: a
+          // missing/healthy verdict simply adds nothing.
+          if(!fresh.length && typeof discoveryVerdictCallout === "function"){
+            var dd = await fetchDiscoveryVerdict();
+            if(dd && Array.isArray(dd.checks)){
+              var callout = discoveryVerdictCallout(dd.checks);
+              if(callout){
+                vbody.appendChild(elc("p", "panel-note",
+                  "O diagnóstico de rede pode explicar por que o aparelho não apareceu:"));
+                vbody.appendChild(callout);
+              }
+            }
+          }
         }
         vbtn.disabled = false;
       };
@@ -14954,6 +14974,21 @@ try {
     }
     return el;
   }
+  // PR4: fetch just the diagnosis (no auto_fix — a setup surface must never trigger fixes) so the
+  // end-of-setup step can surface the discovery verdict when a device doesn't show up. Same auth
+  // dance as the doctor button; returns the parsed JSON or null (never throws at the call site).
+  function fetchDiscoveryVerdict(){
+    var companionCentral = (M === "companion" && companionIsCentral());
+    var headers = companionCentral
+      ? { "Authorization": "Bearer " + companionToken() }
+      : { "X-Wavr-Local": "1" };
+    var __nf = window.WAVR_MOBILE
+      ? function(p,o){ return window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + p, o); }
+      : function(p,o){ return fetch(location.origin + p, o); };
+    return __nf("/api/health/doctor", { headers: headers, cache: "no-store" })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .catch(function(){ return null; });
+  }
   function renderDoctorResult(d){
     var box = $("doctorResult");
     if(!box) return;
@@ -14994,6 +15029,31 @@ try {
           ((s && s.message) || "") + ((s && s.action_hint) ? " (" + s.action_hint + ")" : ""), "warn"));
       });
       box.appendChild(sl);
+    }
+    // PR4: copy-a-shareable-report (flutter-doctor pattern). The report string is built + MAC-
+    // redacted server-side; the button copies it verbatim. Nothing leaves the device unless the
+    // user pastes it somewhere themselves.
+    if(typeof d.report === "string" && d.report){
+      var rep = elc("div", "dv-report");
+      var rbtn = elc("button", "dv-report-btn", "Copiar relatório do diagnóstico");
+      rbtn.type = "button";
+      rbtn.addEventListener("click", function(){
+        var done = function(){ rbtn.textContent = "Copiado ✓"; setTimeout(function(){
+          rbtn.textContent = "Copiar relatório do diagnóstico"; }, 2000); };
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(d.report).then(done, function(){ done(); });
+        } else {
+          var ta = document.createElement("textarea"); ta.value = d.report;
+          document.body.appendChild(ta); ta.select();
+          try { document.execCommand("copy"); } catch(e) {}
+          document.body.removeChild(ta); done();
+        }
+      });
+      rep.appendChild(rbtn);
+      rep.appendChild(elc("p", "dv-report-note",
+        "Cole numa issue do GitHub pra pedir ajuda — os MACs já vêm redigidos (aa:bb:cc:**:**:**) "
+        + "e o Wavr nunca manda isso pra lugar nenhum sozinho."));
+      box.appendChild(rep);
     }
     box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()
       + " — point-in-time snapshot, never refreshes on its own"));

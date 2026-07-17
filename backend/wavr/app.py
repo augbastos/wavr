@@ -66,7 +66,7 @@ from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
 from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
 from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
-from wavr.net_doctor import (diagnose, apply_fixes, DoctorLog,
+from wavr.net_doctor import (diagnose, apply_fixes, DoctorLog, build_doctor_report,
                              DISCOVERY_MIN_ARP, DISCOVERY_MCAST_SILENT)
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
@@ -3523,10 +3523,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             restart_source=_doctor_restart_source, reprobe_inventory=_doctor_reprobe_inventory,
             reannounce_mdns=_doctor_reannounce_mdns, log=_doctor_log,
         )
+        # PR4: a copy-pasteable, MAC-redacted report (flutter-doctor pattern). Built server-side
+        # so the privacy redaction is authoritative -- the frontend just copies `report` verbatim.
+        report = build_doctor_report(
+            checks, fixed, suggestions,
+            generated=datetime.now(timezone.utc).replace(microsecond=0).isoformat())
         return {"checks": [c.to_dict() for c in checks],
                 "auto_fixed": [a.to_dict() for a in fixed],
                 "suggestions": [s.to_dict() for s in suggestions],
-                "recent_auto_fixes": [a.to_dict() for a in _doctor_log.recent(20)]}
+                "recent_auto_fixes": [a.to_dict() for a in _doctor_log.recent(20)],
+                "report": report}
 
     @app.get("/api/system")
     async def system(_=Depends(require_scope("control"))):

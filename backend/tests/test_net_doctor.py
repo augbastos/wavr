@@ -12,14 +12,22 @@ from wavr.net_doctor import (
     CAUSE_MULTICAST_DEAD,
     CAUSE_SECOND_NETWORK,
     DoctorAction,
+    DoctorCheck,
     DoctorLog,
+    DoctorSuggestion,
+    DoctorVerdict,
     SEVERITY_CRITICAL,
     SEVERITY_DEGRADED,
     SEVERITY_MINOR,
     SEVERITY_OK,
     apply_fixes,
+    build_doctor_report,
     diagnose,
+    redact_macs,
 )
+import re as _re
+
+_RAW_MAC = _re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 
 
 def _diag(**overrides):
@@ -486,3 +494,61 @@ def test_discovery_reach_stays_neutral_without_viability():
     c = _by_id(checks, "discovery_reach")
     assert c.verdict.cause == CAUSE_MULTICAST_DEAD
     assert c.verdict.cause not in (CAUSE_AP_ISOLATION, CAUSE_SECOND_NETWORK)
+
+
+# ---- 11. shareable report + MAC redaction (CL-02, PR4) ----------------------
+# PRIVACY CONTRACT: a report pasted into a public GitHub issue must NEVER carry a raw MAC.
+
+def test_redact_macs_masks_host_keeps_oui():
+    assert redact_macs("aa:bb:cc:dd:ee:ff") == "aa:bb:cc:**:**:**"
+    assert redact_macs("AA-BB-CC-DD-EE-FF") == "AA-BB-CC-**-**-**"       # hyphen sep preserved
+    # multiple in one string, both scrubbed; the OUI half survives for vendor debugging
+    out = redact_macs("gw 11:22:33:44:55:66 vs de:ad:be:ef:00:11")
+    assert _RAW_MAC.search(out) is None
+    assert "11:22:33:**:**:**" in out and "de:ad:be:**:**:**" in out
+
+
+def test_redact_macs_leaves_non_macs_alone():
+    # IPs, plain hex, and UUIDs must not be mangled
+    for s in ("192.168.1.1", "deadbeef", "550e8400-e29b-41d4-a716-446655440000", "port 5353"):
+        assert redact_macs(s) == s
+
+
+def _mac_check():
+    # a gateway_identity-style detail that legitimately carries MACs (the realistic leak path)
+    return DoctorCheck(id="gateway_identity", ok=False, severity=SEVERITY_CRITICAL,
+                       detail="gateway 192.168.1.1 now aa:bb:cc:dd:ee:ff (was 11:22:33:44:55:66)")
+
+
+def _verdict_check(cause, copy_key):
+    return DoctorCheck(id="discovery_reach", ok=False, severity=SEVERITY_DEGRADED,
+                       detail="9 devices reachable, 0 answered discovery",
+                       verdict=DoctorVerdict(cause, "medium", 9, 0, copy_key))
+
+
+def test_report_never_leaks_a_raw_mac():
+    checks = [_mac_check(), _verdict_check(CAUSE_AP_ISOLATION, "discovery_ap_isolation")]
+    actions = [DoctorAction(ts="2026-07-17T00:00:00+00:00", kind="restart_source",
+                            target="network", detail="restarted network aa:bb:cc:dd:ee:ff")]
+    suggestions = [DoctorSuggestion(id="x", message="check 99:88:77:66:55:44", action_hint="k")]
+    report = build_doctor_report(checks, actions, suggestions)
+    assert _RAW_MAC.search(report) is None            # <-- the core acceptance
+    assert "aa:bb:cc:**:**:**" in report              # OUI preserved, host masked
+    assert "AP_ISOLATION_OR_MDNS_FILTERING" in report and "discovery_ap_isolation" in report
+    assert "checks: 2" in report and "auto-fixed: 1" in report and "suggestions: 1" in report
+
+
+def test_report_matrix_every_cause_is_mac_free():
+    matrix = [(CAUSE_AP_ISOLATION, "discovery_ap_isolation"),
+              (CAUSE_SECOND_NETWORK, "discovery_second_network"),
+              (CAUSE_HOST_MULTICAST_UNAVAILABLE, "discovery_host_unavailable"),
+              (CAUSE_MULTICAST_DEAD, "discovery_multicast_dead")]
+    for cause, key in matrix:
+        report = build_doctor_report([_mac_check(), _verdict_check(cause, key)], [], [])
+        assert _RAW_MAC.search(report) is None, f"raw MAC leaked for cause {cause}"
+        assert cause in report
+
+
+def test_report_includes_generated_timestamp_when_passed():
+    report = build_doctor_report([], [], [], generated="2026-07-17T04:00:00+00:00")
+    assert "generated: 2026-07-17T04:00:00+00:00" in report
