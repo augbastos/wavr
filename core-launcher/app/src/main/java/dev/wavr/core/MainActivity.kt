@@ -2,6 +2,7 @@ package dev.wavr.core
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -99,6 +100,11 @@ class MainActivity : FragmentActivity() {
         const val NSD_SERVICE_PORT = 8000
         /** Logcat tag for discovery events (name-only, never sensitive data). */
         const val NSD_TAG = "WavrNsd"
+
+        // --- Panel preferences (screen-awake policy) ----------------------
+        const val PREFS = "wavr_core"
+        const val KEY_SCREEN_POLICY = "screen_policy"   // "always" | "charging" | "timeout"
+        val SCREEN_POLICIES = setOf("always", "charging", "timeout")
     }
 
     /** Cached status payload + timestamp (getSystemStatus is polled). */
@@ -142,14 +148,28 @@ class MainActivity : FragmentActivity() {
     /** True once NsdManager confirms the service is registered on the LAN. */
     @Volatile private var advertising: Boolean = false
 
+    /** Flips FLAG_KEEP_SCREEN_ON as the charger is connected/disconnected. */
+    private val powerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = applyScreenPolicy()
+    }
+
     /** Actual advertised name (NsdManager may append " (n)" to de-dupe). */
     @Volatile private var advertisedName: String = NSD_SERVICE_NAME
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Keep the panel awake indefinitely — it is a wall/stand display.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Screen-awake policy is CONFIGURABLE (see screenPolicy()), not a hardcoded
+        // wall-panel assumption: an unconditional keep-awake is the dominant battery drain
+        // (a permanent SCREEN_BRIGHT hold flattened the G9 in a day off-charger). Default
+        // "charging" keeps it lit on power and lets it sleep on battery; the power receiver
+        // re-applies as the charger comes and goes. The backend keeps running with the
+        // screen off — this only governs the panel's brightness, and a tap wakes it.
+        registerReceiver(powerReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        })
+        applyScreenPolicy()
 
         // Camera streamer + its permission launcher. Registering the launcher in
         // onCreate is required (must exist before the activity is STARTED). The
@@ -391,12 +411,51 @@ class MainActivity : FragmentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(retryRunnable)
+        try { unregisterReceiver(powerReceiver) } catch (_: Throwable) { /* never registered */ }
         // Stop announcing on the LAN + drop the multicast lock.
         stopAdvertising()
         // Release the camera + close the loopback MJPEG server.
         cameraStreamer.shutdown()
         webView.destroy()
         super.onDestroy()
+    }
+
+    /**
+     * True while the device is charging (any source). Read from the sticky
+     * ACTION_BATTERY_CHANGED intent so it works on every API level without a
+     * version guard. The backend keeps running with the screen off regardless —
+     * this only governs whether the PANEL stays lit.
+     */
+    private fun isCharging(): Boolean {
+        val i = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val status = i?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        return status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
+    }
+
+    /**
+     * The panel's screen-awake policy. CONFIGURABLE, not imposed — the right signal is
+     * really docked/undocked + context (night, in a pocket), which the operator, and one
+     * day an agent, decides. Persisted in SharedPreferences; the panel reads/sets it via
+     * the WavrNative bridge. "charging" is a pragmatic default (a dock usually charges), but
+     * a wall panel can pick "always" and a phone-in-pocket "timeout".
+     */
+    private fun screenPolicy(): String =
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_SCREEN_POLICY, "charging") ?: "charging"
+
+    /** Apply the current policy to the window keep-awake flag (UI thread only). */
+    private fun applyScreenPolicy() {
+        val keepOn = when (screenPolicy()) {
+            "always" -> true                 // wall/stand display — always lit
+            "timeout" -> false               // always follow the system screen timeout
+            else -> isCharging()             // "charging" (default): lit on power, sleeps on battery
+        }
+        if (keepOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -553,6 +612,25 @@ class MainActivity : FragmentActivity() {
         fun getSystemStatus(): String =
             if (onTrustedOrigin()) readSystemStatus() else STATUS_FALLBACK
 
+        /**
+         * Screen-awake policy the panel can read/set: "always" | "charging" | "timeout".
+         * Configurable so a wall panel stays lit while an undocked/pocket device sleeps to
+         * save battery; the backend keeps running with the screen off regardless.
+         */
+        @JavascriptInterface
+        fun getScreenPolicy(): String =
+            if (onTrustedOrigin()) screenPolicy() else "charging"
+
+        /** Persist a new screen policy + apply it now. False on a bad value / untrusted origin. */
+        @JavascriptInterface
+        fun setScreenPolicy(policy: String): Boolean {
+            if (!onTrustedOrigin() || policy !in SCREEN_POLICIES) return false
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_SCREEN_POLICY, policy).apply()
+            runOnUiThread { applyScreenPolicy() }   // window flags must be touched on the UI thread
+            return true
+        }
+
         /** True iff a strong biometric OR device credential is available+enrolled. */
         @JavascriptInterface
         fun hasBiometric(): Boolean = onTrustedOrigin() && isBiometricAvailable()
@@ -626,16 +704,20 @@ class MainActivity : FragmentActivity() {
          * Read-only; never throws into JS.
          */
         @JavascriptInterface
-        fun getDiscoveryState(): String = try {
-            if (!onTrustedOrigin())
-                return "{\"advertising\":false,\"serviceName\":\"$NSD_SERVICE_NAME\",\"type\":\"$NSD_TYPE_LABEL\"}"
-            JSONObject().apply {
-                put("advertising", advertising)
-                put("serviceName", advertisedName)
-                put("type", NSD_TYPE_LABEL)
-            }.toString()
-        } catch (t: Throwable) {
-            "{\"advertising\":false,\"serviceName\":\"$NSD_SERVICE_NAME\",\"type\":\"$NSD_TYPE_LABEL\"}"
+        fun getDiscoveryState(): String {
+            // block body (not `= try`): the early return below is illegal in an
+            // expression body ("Returns are prohibited for functions with an expression body").
+            return try {
+                if (!onTrustedOrigin())
+                    return "{\"advertising\":false,\"serviceName\":\"$NSD_SERVICE_NAME\",\"type\":\"$NSD_TYPE_LABEL\"}"
+                JSONObject().apply {
+                    put("advertising", advertising)
+                    put("serviceName", advertisedName)
+                    put("type", NSD_TYPE_LABEL)
+                }.toString()
+            } catch (t: Throwable) {
+                "{\"advertising\":false,\"serviceName\":\"$NSD_SERVICE_NAME\",\"type\":\"$NSD_TYPE_LABEL\"}"
+            }
         }
     }
 
