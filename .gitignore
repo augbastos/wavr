@@ -51,3 +51,7 @@ docs/competitive-analysis/
 # already matches backend/house.json recursively, listed explicitly (wavr.db* style).
 house.json
 backend/house.json
+council-report.md
+docs/stack-netdoctor/
+docs/feedback-sim/
+docs/superpowers/
