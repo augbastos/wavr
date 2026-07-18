@@ -79,7 +79,9 @@ isn't required).
   calm presence wave that **shifts colour by state** (green = calm, amber = unresolved alerts, red =
   a critical/security alert) and comes to life when the assistant voice speaks — with a glance-free,
   control-gated lock (**PIN, biometric, or no lock**). Tap the alert count for a glance-box that
-  explains each alert and jumps you straight to it. A landscape-first **Settings rail** (Layout,
+  explains each alert and jumps you straight to it. Because the Core is mobile-ish (docked or not),
+  its screen-awake behaviour is a **configurable policy** — stays lit while charging, sleeps on
+  battery so an undocked Core lasts, while the backend keeps sensing with the screen off. A landscape-first **Settings rail** (Layout,
   Devices, Connectors, Privacy, Panel lock, About) keeps the panel navigable on a phone screen, and a
   first-run **What's New** card surfaces each update. Plus **mDNS/DNS-SD discovery** so companions find
   the Core with zero config, and an on-device loopback camera. It is early: treat one as a project
@@ -119,6 +121,16 @@ isn't required).
 - **Defensive LAN inventory ("Wavr Net")** — offline OUI vendor + device-type classification,
   rogue-device / gateway-MAC / rogue-DHCP alerts on a five-tier ladder, and opt-in port/speed/WOL
   utilities. Defensive only (ADR-0004) — Wavr never surveils a network the host isn't authorized on.
+- **Network doctor — honest self-diagnosis when discovery fails** — one tap correlates how many
+  devices are reachable (ARP) against how many answer name-discovery (mDNS/SSDP); when the mesh is
+  silent, it names the *likely* cause **without ever blaming your router unproven**. A host-viability
+  probe first proves the hub itself can receive inbound LAN multicast, so client isolation, a second
+  network, and a container that simply can't receive multicast are told apart honestly — always a
+  hypothesis ("probably"), never CONFIRMED (ADR-0003). Ships plain-language, per-router **fix guides**
+  ([`docs/network-fixes/`](docs/network-fixes/)) and a shareable, **MAC-redacted** `wavr doctor`
+  report you can paste into an issue. Sending it off your LAN is **opt-in, default-OFF** (the
+  `diagnostics` connector); a single universal *egress* pictogram marks every control that leaves
+  your home, and nothing is ever sent without your tap.
 
 ![Ready for the agent era — a built-in MCP server turns the whole house into context any AI agent can query, read-only by design](docs/img/card-mcp.png)
 
