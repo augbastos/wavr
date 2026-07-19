@@ -67,46 +67,12 @@ honest about each one's confidence. Every source implements one small `SensorSou
 reads occupied. When an upstream engine's headline feature turns out to be weaker than its README
 (it happens), Wavr consumes what actually works and the weights tell the truth.
 
-## Roadmap
-
-Recently shipped: multi-device (desktop-central + LAN companions, local TLS, pairing/revocation),
-the installable PWA companion, the MCP "brain on Home Assistant" (read + gated control), and the
-**in-app house editor** — draw multi-floor rooms/walls/stairs, saved via `PUT /api/house`.
-
-Also recently shipped: gateway-anchored reverse-DNS hostname resolution (queries the LAN gateway's
-own DNS server directly — never the OS resolver — so a device's hostname reaches the ID classifier
-even on a machine with a VPN tunnel active; opt-in, `WAVR_NET_HOSTNAMES`); a gateway-MAC-identity
-monitor (on by default, zero extra egress — it only reads the ARP-derived binding the inventory
-scan already produced) paired with an opt-in rogue-DHCP-server detector, both riding one five-tier
-alert ladder (`info` → `note` → `watch` → `alert` → `critical`); MQTT Last-Will + a retained
-availability topic (`<prefix>/status`) so Home Assistant correctly flips Wavr's entities to
-*unavailable* on a crash or restart; occupancy hysteresis in the fusion engine (fast-to-occupied,
-debounced-to-vacant dwell so one dropped frame can't flap a room vacant); a life-safety
-**safety-alarm** device category (smoke/water-leak/flood sensors no longer get lumped in with
-generic environmental ones in the device catalog); and an expanded camera/hub OUI vendor table
-(the full Ubiquiti/UniFi Protect block, plus Reolink/Wyze/Eufy) checked against the live IEEE
-registry.
-
-Next:
-
-- **Camera → position** — per-camera homography (image → floor x/y) so cameras place people on your
-  drawn map, not just flag which room they're in.
-- **Walls in the fusion** — use the drawn walls for occlusion (a camera can't see through a wall) to
-  sharpen the confidence weighting; wire point-in-polygon room assignment into fusion.
-- **Floor-plan import** — trace over an uploaded plan image, or auto-build the geometry from a
-  plan / CAD file.
-- **mmWave bring-up** — HLK-LD2450 over USB serial (~€15): real x/y target tracking on the radar.
-  Parser + source are done and tested; needs the device.
-- **Camera posture live** — YOLO-pose (`[camera]` extra) on RTSP cameras: standing/sitting/lying.
-- **Cross-source track association** — fuse targets from multiple sensors in the same room.
-- **Fallen-person detection** — lying + location + duration on top of the above.
-
 ## Contributing
 
 Issues and PRs welcome. Ground rules: privacy invariants are non-negotiable (nothing leaves the
 LAN except the opt-in narrator; frames are never persisted; new sources must be mock-testable
 without hardware), and every PR needs green tests (`pytest backend/tests -q`). Good first
-contributions: roadmap items above, or a new `SensorSource` (BLE presence, zigbee occupancy, …).
+contributions: a new `SensorSource` (BLE presence, zigbee occupancy, …).
 
 ## Docs
 

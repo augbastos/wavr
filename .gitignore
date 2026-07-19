@@ -71,3 +71,20 @@ mobile/android/.idea/
 mobile/android/app/release/
 mobile/android/app/debug/
 mobile/android/local.properties
+
+# --- local-only: build artifacts (never public) ---
+core-launcher/app/build/
+core-launcher/.gradle/
+core-launcher/local.properties
+desktop/src-tauri/target/
+# --- local-only: private notes, logs, scratch (never public) ---
+docs/ROADMAP.md
+docs/stack-netdoctor/
+docs/feedback-sim/
+docs/competitive-analysis/
+_fable/
+council-report.md
+graphify-out/
+logs/
+house.json
+*.log
