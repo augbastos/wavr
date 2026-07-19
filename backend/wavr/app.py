@@ -66,13 +66,18 @@ from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
 from wavr.dhcp_monitor import RogueDhcpMonitor, make_collector as make_dhcp_collector
 from wavr.gateway_monitor import GatewayIdentityMonitor, GatewayBindingStore
 from wavr.health_check import check_health, default_resolver_checkers, default_extra_checkers
-from wavr.net_doctor import diagnose, apply_fixes, DoctorLog
+from wavr.net_doctor import (diagnose, apply_fixes, DoctorLog, build_doctor_report,
+                             DISCOVERY_MIN_ARP, DISCOVERY_MCAST_SILENT)
+from wavr.connectors.diag import send_report as diag_send_report
 from wavr.presence_report import build_report
 from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
 from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
 from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
+from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
+from wavr.person_presence import DevicePresence, PersonPresence, RoomPresence
+from wavr.stillness import StillnessDetector, room_motionless
 from wavr.connector_store import ConnectorStore
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
@@ -81,7 +86,8 @@ from wavr.assistant_store import AssistantEngineStore
 from wavr.api_assistant import build_assistant_router
 from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
-from wavr.devices import DeviceStore, VALID_CONSENT
+from wavr.api_routines import build_routines_router
+from wavr.devices import DeviceStore, VALID_CONSENT, _is_expired
 from wavr.pairing import PairingManager
 from wavr.pair_requests import PairApprovalManager
 from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope, effective_scopes
@@ -141,8 +147,8 @@ async def _stream_live(ws, q, did, get_device, recheck_s):
             if now - last_check >= recheck_s:
                 last_check = now
                 dev = get_device(did)
-                if dev is None or dev.revoked:
-                    return
+                if dev is None or dev.revoked or _is_expired(dev.expires_at):
+                    return   # drop the live stream the moment the credential dies/expires
 
 # 2C: cadence of the opt-in daily-digest scheduler task (see _digest_loop below) --
 # one composition+send pass every 24h. Gated on the SEPARATE "digest" connector row
@@ -150,6 +156,15 @@ async def _stream_live(ws, q, did, get_device, recheck_s):
 # anything is actually sent. A test drives one deterministic tick via the
 # app.state.digest_once seam instead of waiting on this interval.
 _DIGEST_INTERVAL_S = 24 * 3600.0
+# How often the routines loop evaluates time/deadline triggers (schedule,
+# house_away_by_time). 30s is fine-grained enough for an "at 23:00" routine while
+# the matching stays pure (only a fired routine touches a sink). Test seam:
+# app.state.routines_tick fires one pass without waiting on this interval.
+_ROUTINES_INTERVAL_S = 30.0
+# How long after startup to suppress routine PRESENCE edges (see the warm-up note where
+# the edge callbacks are defined): long enough for every room to report at least once so
+# the trackers are primed from a house-complete state, not a partial boot snapshot.
+_ROUTINES_WARMUP_S = 8.0
 
 
 def _load_device_catalog() -> list:
@@ -277,7 +292,18 @@ def _mask_rtsp(url: str) -> str:
         if "@" not in url or "://" not in url:
             return url
         scheme, rest = url.split("://", 1)
-        creds, host = rest.split("@", 1)
+        # rpartition = the LAST "@", which is the userinfo/host boundary per RFC 3986 (and
+        # what ffmpeg does). Splitting on the FIRST "@" leaked the password TAIL verbatim
+        # whenever the password itself contained an "@" (a common thing in camera creds):
+        # rtsp://user:p@ss@cam/stream masked to rtsp://user:***@ss@cam/stream -- "ss" shipped
+        # to every paired user via GET /api/cameras. camera_url.py already parses the same
+        # URL with rpartition; this is now consistent with it.
+        creds, at, host = rest.rpartition("@")
+        if not at:
+            # No "@" in the AUTHORITY (the "@" was in the scheme, e.g. "a@b://c"). rpartition
+            # never raises, so unlike the old split-unpack there is no ValueError to fall into
+            # the except below -- return unchanged explicitly, as the docstring promises.
+            return url
         if ":" in creds:
             user = creds.split(":", 1)[0]
             creds = f"{user}:***"
@@ -385,17 +411,84 @@ def _camera_factory(cam: dict, cfg, on_health=None, calib=None, house=None,
                                 on_privacy=on_privacy)
 
 
+def _probe_mcast_viability(own_ip: str, duration: float = 4.0):
+    """net_doctor PR2 support -- the HARD-RULE gate: prove this hub receives ANY inbound LAN
+    multicast BEFORE the doctor is ever allowed to blame the router. Joins the two common
+    discovery groups (mDNS 224.0.0.251, SSDP 239.255.255.250), disables multicast loopback
+    so our OWN provoke packets never count, sends one mDNS query + one SSDP M-SEARCH to
+    provoke traffic, then listens for any packet from ANOTHER host.
+
+      True  -> the host received inbound LAN multicast (viability PROVEN)  -> a silent
+               discovery is then the NETWORK segmenting/filtering it (router accusation allowed).
+      False -> received nothing foreign -> the host does NOT receive inbound LAN multicast
+               (e.g. a proot/container Core) -> HOST_MULTICAST_UNAVAILABLE, NEVER a router blame.
+      None  -> couldn't even set up a socket -> unknowable -> stay neutral.
+
+    Loopback delivery (IP_MULTICAST_LOOP) is explicitly excluded: kernel-local echo does NOT
+    prove the interface receives LAN multicast, which is the entire ambiguity PR2 resolves.
+    """
+    import socket
+    import struct
+    import select
+    import time as _time
+    MDNS = ("224.0.0.251", 5353)
+    SSDP = ("239.255.255.250", 1900)
+    MDNS_QUERY = (b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+                  b"\x09_services\x07_dns-sd\x04_udp\x05local\x00\x00\x0c\x00\x01")
+    SSDP_MSEARCH = (b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+                    b"MAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n")
+    socks = []
+    try:
+        for grp, port in (MDNS, SSDP):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                with suppress(AttributeError, OSError):
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                s.bind(("", port))
+                mreq = struct.pack("4sl", socket.inet_aton(grp), socket.INADDR_ANY)
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+                s.setblocking(False)
+                socks.append((s, grp, port))
+            except OSError:
+                continue
+        if not socks:
+            return None
+        for s, grp, port in socks:
+            with suppress(OSError):
+                s.sendto(MDNS_QUERY if port == 5353 else SSDP_MSEARCH, (grp, port))
+        deadline = _time.monotonic() + duration
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
+            rlist, _, _ = select.select([s for s, _, _ in socks], [], [], remaining)
+            for s in rlist:
+                with suppress(OSError):
+                    _data, addr = s.recvfrom(2048)
+                    if addr[0] != own_ip and not addr[0].startswith("127."):
+                        return True   # inbound LAN multicast from another host -> host viable
+        return False
+    finally:
+        for s, _, _ in socks:
+            with suppress(OSError):
+                s.close()
+
+
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
                internet_monitor=None, health_check=None, dhcp_monitor=None,
                health_resolvers=None, gateway_monitor=None,
                ha_import_store=None,
                wol_send=None, ping_probe=None, traceroute_runner=None,
-               dns_query_fn=None, speedtest_fn=None,
+               dns_query_fn=None, speedtest_fn=None, net_mcast_probe=None,
+               net_mcast_viability=None, diag_sender=None,
                onvif_discover=None, onvif_soap=None, ptz_soap=None, arp_send=None,
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
-               known_store=None, occupancy_log=None, assistant_store=None) -> FastAPI:
+               known_store=None, occupancy_log=None, assistant_store=None,
+               routine_store=None) -> FastAPI:
     cfg = load_config()
     # Peer pairing (Phase 1) is a strict superset of multidevice: a peer authenticates
     # as a `role=central` device, so the whole DeviceStore/PairingManager/middleware
@@ -481,9 +574,249 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _notify(msg)
         if _connectors.is_enabled("telegram"):
             try:
-                asyncio.create_task(asyncio.to_thread(_telegram_send, kind, severity, room, msg))
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                pass  # no running event loop (e.g. a sync test calling the callback directly)
+                loop = None
+            if loop is not None:
+                # On the event loop (fusion/ingest alert path): offload the blocking send.
+                loop.create_task(asyncio.to_thread(_telegram_send, kind, severity, room, msg))
+            else:
+                # Called from a WORKER THREAD (a routine action runs in asyncio.to_thread) --
+                # there is no running loop to create_task on. The old `except RuntimeError:
+                # pass` silently DROPPED the send here and the executor still reported "ok".
+                # We are already off the main loop, so send inline (blocking is fine); a
+                # failure logs loudly instead of vanishing.
+                try:
+                    _telegram_send(kind, severity, room, msg)
+                except Exception:
+                    logging.warning("telegram send (off-loop routine path) failed", exc_info=True)
+
+    # --- Routines: the user-authored "when THIS -> do THAT" spine (routines.py). The
+    # engine taps the SAME arrived/left edge AwayMonitor already emits (via the on_edge
+    # hook wired into _away below) plus a time/deadline tick, and runs each routine's
+    # actions through the existing gated sinks. Empty store => nothing fires =>
+    # byte-identical to today. Room/person/device triggers are engine-ready and wired in
+    # a following step. ------------------------------------------------------------------
+    _owns_routine_store = routine_store is None   # only close a store this function built
+    _routine_store = routine_store or RoutineStore(cfg.db_path)
+
+    def _routine_ha_call(domain: str, service: str, entity_id) -> None:
+        # A routine's light/switch action goes through the EXACT gate chain the MCP
+        # agent's control tool uses (control flag + entity shape + sensitive-domain
+        # refusal + allowlist). A refusal is a non-raising {"ok": False}; turn it into an
+        # exception so the executor counts it as a failed action. Imported lazily to keep
+        # wavr.mcp out of the default import path.
+        from wavr.mcp import call_ha_service
+        res = call_ha_service(client_from_config(cfg), domain, service, entity_id or "",
+                              control_enabled=cfg.mcp_control,
+                              allowed_services=cfg.ha_allowed_services)
+        if not res.get("ok"):
+            raise RuntimeError(res.get("message") or "Home Assistant refused the action")
+
+    # "When I arrive -> tell me what changed while I was out." Stamped (UTC ISO, same
+    # format as device_meta._now) the moment the house-level away edge fires (see
+    # _routines_house_edge), read by the notify_new_devices action. None until the house
+    # has actually gone empty once -- the action degrades to an honest "welcome home"
+    # rather than inventing a baseline it doesn't have.
+    _away_since = {"ts": None}
+
+    def _routine_new_devices_notify(params: dict) -> None:
+        # COUNT + VENDOR only, never a MAC/IP in a push (the same egress discipline the
+        # rogue-alert copy follows). "New" = first_seen on/after the away stamp; device_meta
+        # first_seen is set once, the first time a MAC is ever observed, so this is exactly
+        # "appeared for the first time while you were out".
+        prefix = str((params or {}).get("message") or "").strip()
+        lead = (prefix + " ") if prefix else ""
+        since = _away_since["ts"]
+        if not since:
+            _notify_all(lead + "Welcome home.", kind="routine", severity="note")
+            return
+        try:
+            meta = _device_meta.all()            # {mac: {first_seen, ...}}
+        except Exception:
+            # A locked/failed read must NOT masquerade as "nothing appeared": the whole
+            # point of this push is what showed up while you were out, so a read we could
+            # not complete is reported HONESTLY, never as a false all-clear (ADR-0003, F1).
+            _notify_all(lead + "Couldn't check for new devices while you were out.",
+                        kind="routine", severity="note")
+            return
+        new_macs = {m for m, d in meta.items() if (d.get("first_seen") or "") >= since}
+        n = len(new_macs)
+        if n == 0:
+            _notify_all(lead + "No new devices appeared while you were out.",
+                        kind="routine", severity="note")
+            return
+        vendors = []
+        try:
+            for d in _inventory.latest_inventory():
+                if d.mac in new_macs and d.vendor and d.vendor not in vendors:
+                    vendors.append(d.vendor)
+        except Exception:
+            vendors = []
+        tail = (" (" + ", ".join(vendors[:4]) + ")") if vendors else ""
+        plural = "device" if n == 1 else "devices"
+        _notify_all(f"{lead}{n} new {plural} appeared while you were out{tail}.",
+                    kind="routine", severity="note")
+
+    _routine_executor = ActionExecutor(
+        ha_call=_routine_ha_call,
+        notify=lambda m: _notify_all(m, kind="routine", severity="note"),
+        watch_set=_watch.set,
+        new_devices_notify=_routine_new_devices_notify)
+    _routines = RoutinesEngine(
+        _routine_store,
+        # Lazy closures: `manager` + `_routine_house` are assigned later in create_app but
+        # only READ at runtime (an edge or a tick), by which point both are bound.
+        sensing_on=lambda: bool(manager.status().get("running")),
+        # The house CONDITION reads the dedicated always-on tracker (_routine_house),
+        # NOT the optional MQTT/ntfy AwayMonitor (_away) which is None with no sink -- else
+        # a routine with a {house: home/away} condition would silently never fire on a Core
+        # without MQTT (it read None -> UNKNOWN -> skip). Same source the tick uses.
+        house_home=lambda: _routine_house.home)
+
+    async def _run_routines(matched: list) -> None:
+        for r in matched:
+            # Guard PER routine: mark_fired is an unguarded sqlite write that can raise on a
+            # db lock (wavr.db is shared, on the Core's SD card). Without this, one routine's
+            # failure would abort the loop and its siblings in the SAME edge would never run.
+            try:
+                # Actions block (HA HTTP); run off the event loop so a slow HA never stalls
+                # the fusion/ingest path the edge callback fires from.
+                status = await asyncio.to_thread(_routine_executor.run, r["actions"])
+                _routine_store.mark_fired(
+                    r["id"], datetime.now().isoformat(timespec="seconds"), status)
+            except Exception:
+                logging.warning("routine run failed: id=%s", r.get("id"), exc_info=True)
+
+    _routine_tasks: set = set()   # strong refs to in-flight dispatches
+
+    def _dispatch_routines(matched: list) -> None:
+        if not matched:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no running loop (a sync test driving the monitor edge directly)
+        # Hold a STRONG reference until the task completes: asyncio keeps only a weak ref,
+        # so a bare create_task can be garbage-collected mid-flight and the routine action
+        # silently never runs (bug-bank #9). The done-callback drops the ref; shutdown
+        # cancels any still in flight.
+        t = loop.create_task(_run_routines(matched))
+        _routine_tasks.add(t)
+        t.add_done_callback(_routine_tasks.discard)
+
+    async def _run_routine_test(actions: list) -> str:
+        # The routines /test button: run the actions once, off the event loop (blocking
+        # HA), through the SAME gated executor a fired routine uses. Returns the status.
+        return await asyncio.to_thread(_routine_executor.run, actions)
+
+    # Domains a routine may actuate via Home Assistant for the picker: actuatable AND
+    # non-sensitive (media_player / lock / camera etc. stay out -- they are refused by
+    # call_ha_service anyway, so offering them would only mislead). scene/script are
+    # excluded too (INDIRECTION_DOMAINS): "everything off" is a multi-entity action list,
+    # not a scene.
+    _ROUTINE_HA_DOMAINS = frozenset({"light", "switch", "fan", "input_boolean"})
+
+    def _ha_entities() -> list:
+        client = client_from_config(cfg)
+        if client is None:
+            return []
+        try:
+            ents = client.get_entities()
+        except Exception:
+            return []   # an HA outage must never break the routines screen
+        return [{"entity_id": e["entity_id"], "name": e.get("friendly_name") or e["entity_id"],
+                 "domain": e["domain"]}
+                for e in ents if e.get("domain") in _ROUTINE_HA_DOMAINS]
+
+    # Boot warm-up: `latest` fills ONE room at a time off the ingest, so at boot a
+    # presence tracker is primed from a PARTIAL house snapshot -- a person already home in
+    # a room that hasn't reported yet would fire a spurious "arrived" when it does, and the
+    # house monitor could latch "away" purely from the rooms seen so far. Suppress PRESENCE
+    # edge dispatch until the trackers have had time to see a house-complete state; they
+    # still UPDATE their internal state during warm-up, so the first real post-warm-up edge
+    # is correct. Time triggers (schedule/away_by_time) are NOT boot-baseline-sensitive, so
+    # the tick is never gated. A test forces this via app.state.routines_mark_warm().
+    _routines_warm = {"ok": False}
+
+    def _routines_house_edge(home: bool) -> None:
+        # Stamp the "empty since" clock on EVERY away edge, even during warm-up (the stamp
+        # is a fact about the house, not a routine dispatch) so notify_new_devices has a
+        # correct baseline the first time the house is re-entered after boot.
+        if not home:
+            _away_since["ts"] = datetime.now(timezone.utc).isoformat()
+        if not _routines_warm["ok"]:
+            return
+        _dispatch_routines(_routines.on_house_edge(home))
+
+    def _routines_person_edge(person: str, home: bool) -> None:
+        if not _routines_warm["ok"]:
+            return
+        _dispatch_routines(_routines.on_person_edge(person, home))
+
+    def _routines_room_edge(room: str, occupied: bool) -> None:
+        if not _routines_warm["ok"]:
+            return
+        _dispatch_routines(_routines.on_room_edge(room, occupied))
+
+    def _routines_stillness(room: str, elapsed_s: float) -> None:
+        if not _routines_warm["ok"]:
+            return
+        _dispatch_routines(_routines.on_stillness(room, elapsed_s))
+
+    # Per-person arrived/left edges ("when I arrive") + a dedicated house-level arrived/
+    # left edge detector, BOTH fed in real time off the always-running ingest path (see
+    # _publish) rather than the hub. So routines depend on NO subscription/task and need
+    # no lazy bring-up: an arrival fires the moment the fused state shows it, and a house
+    # with zero routines still adds nothing (the trackers are cheap objects that just
+    # observe `latest`). Consent is inherited: known_present_persons already applies the
+    # identity/consent gate, so an anonymous/withdrawn device never produces a named edge.
+    _person_presence = PersonPresence(on_edge=_routines_person_edge)
+    _routine_house = AwayMonitor(away_grace=cfg.away_grace, on_edge=_routines_house_edge)
+    _routine_rooms = RoomPresence(on_edge=_routines_room_edge)
+    # Per-room continuous-stillness timer (the elder-care no_motion trigger), fed off the
+    # ingest. It only counts still time when a room is confidently occupied by a motion-
+    # capable source (ADR-0003 honesty: never manufactures "hasn't moved" from a blind room).
+    _stillness = StillnessDetector()
+    # device_seen ("when this device shows up") edges. Unlike the presence trackers this is
+    # POLLED off the network inventory each routines tick -- NetworkInventoryService exposes
+    # no per-scan hook, and ~tick cadence is fine for "when device X connects". `_inventory`
+    # is bound later in create_app; the poll reads it at runtime (same lazy-closure discipline
+    # as the other routines closures).
+    _device_presence = DevicePresence()
+
+    def _routines_device_poll() -> None:
+        # The tracker updates EVERY tick so its baseline stays current, but edges only
+        # DISPATCH once warm -- a device already on the network at boot lands in the baseline
+        # (no spurious 'appeared'), same first-determination guard the ingest edges use.
+        try:
+            macs = {getattr(d, "mac", None) for d in _inventory.latest_inventory()}
+        except Exception:
+            return   # an inventory read hiccup must never break the tick
+        edges = _device_presence.update(macs)
+        if not _routines_warm["ok"]:
+            return
+        for mac, online in edges:
+            _dispatch_routines(_routines.on_device_edge(mac, online))
+
+    async def _routines_tick() -> None:
+        # One time/deadline pass (test seam: app.state.routines_tick). Local wall-clock
+        # (the house tz); matching is pure, only a fired routine touches a sink. AWAITS
+        # the run so the seam is deterministic. Presence edges are NOT evaluated here --
+        # they are driven in real time off the ingest path (see _publish); this pass only
+        # handles schedule + house_away_by_time (which reads the ingest-fed house state).
+        # device_seen is polled here (see _routines_device_poll).
+        matched = _routines.tick(datetime.now(), _routine_house.home)
+        await _run_routines(matched)
+        _routines_device_poll()
+
+    async def _routines_loop():
+        while True:
+            await asyncio.sleep(_ROUTINES_INTERVAL_S)
+            try:
+                await _routines_tick()
+            except Exception:
+                logging.warning("routines tick failed", exc_info=True)
 
     # Rules/MQTT engine: opt-in via injected `rules_publish` (tests) or WAVR_MQTT_ENABLED
     # (real paho publisher, lazily connected). Off by default -- no publisher, no engine.
@@ -736,6 +1069,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                     d["occupied"], d["confidence"],
                                     d.get("person_count"), d["ts"])
         latest[d["room"]] = d          # FULL internal truth (never suppressed in `latest`)
+        # Drive the routines presence trackers off this always-running ingest (real time,
+        # no hub subscription): the dedicated house edge detector per room, and the
+        # per-person tracker off the current named-present set. Any arrived/left edge
+        # dispatches a routine off-loop. Cheap + inert when the store has no routines.
+        _routine_house.handle(d)
+        _routine_rooms.handle(d["room"], bool(d["occupied"]))
+        _person_presence.update(known_present_persons(latest.values()))
+        # Continuous-stillness clock for the no_motion (elder-care) trigger. room_motionless
+        # returns None (unknowable) unless the room is confidently occupied by a motion-
+        # capable source, so a blind room never accrues "still" time.
+        _routines_stillness(d["room"], _stillness.update(
+            d["room"], room_motionless(bool(d["occupied"]), d.get("targets") or []), d["ts"]))
         # Watch/Guard: at THIS fan-out egress (WS clients + MQTT via the hub) publish the
         # SUPPRESSED view -- family geometry/identity/vitals stripped, only counts + the
         # intrusion room leave. Intrusion needs the consent identity layer to know who is
@@ -1021,6 +1366,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             exactly the leftovers that must stay dark.
           * no Device row -- hard-deleted, or a row from another DB.
 
+          * revoked OR expired -- a credential that no longer verifies must contribute
+            NO presence. _devices.get() returns the row IGNORING revoked/expires_at (it
+            is the admin/consent view), so without this check a revoked companion (or an
+            expired guest) kept counting as home forever via as_net_known -- the token
+            was dead but the MAC stayed "present" (Finding A, guest-mode review). Fails
+            closed here too: a dead credential is red.
+
         `consent or "green"` mirrors devices.Device.to_dict: NULL means "never
         explicitly set", which resolves to green everywhere."""
         if device_id == ROOT_DEVICE_ID:
@@ -1028,7 +1380,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if _devices is None:
             return "red"
         device = _devices.get(device_id)
-        if device is None:
+        if device is None or device.revoked or _is_expired(device.expires_at):
             return "red"
         return device.consent or "green"
 
@@ -1042,9 +1394,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         merged: dict[str, str | None] = dict(cfg.net_known)
         # as_net_known (not as_net_map): the PRESENCE map, which also carries the
         # {mac: None} "counted but never named" entries that yellow needs. The env
-        # allowlist has no consent axis -- it is the operator's own box -- so it
-        # stays as-is and the registry's live decision is layered on top.
+        # allowlist has no consent axis -- it is the operator's own box -- so it is the
+        # base and the registry's live decision is layered on top.
         merged.update(_identity_store.as_net_known())
+        # ...but an EXPLICIT red (full withdrawal) must win even over a static
+        # WAVR_NET_KNOWN entry: as_net_known drops red MACs, so without this a red device
+        # ALSO hardcoded in the env allowlist kept counting AND named -- weaker than yellow,
+        # which de-names. Drop the red set so the strongest consent signal is authoritative (F11).
+        for mac in _identity_store.red_net_addresses():
+            merged.pop(mac, None)
         return merged
 
     manager = SourceManager(_ingest)
@@ -1215,9 +1573,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # see connectors/notify/digest.py's HONESTY note: reads NOTHING (not even
         # occupancy_log) when the gate is off, so a disabled digest is byte-identical
         # to before this feature existed.
-        if not _connectors.is_enabled("digest"):
-            return {"ok": False, "status": "disabled", "via": None}
         try:
+            # The gate lives INSIDE the try on purpose. It is a raw sqlite read
+            # (ConnectorStore.get -> SELECT, unguarded), and `wavr.db` is shared by five
+            # stores on SD-card-backed sqlite on a Core that runs for weeks -- "database is
+            # locked" is a real recurring error class there, not a theoretical one. Sitting
+            # one line ABOVE the try, a single blip propagated out of _digest_once, exited
+            # _digest_loop's `while True` (which has no guard of its own), and killed the
+            # scheduler for the whole process lifetime -- with ZERO log output: the task's
+            # exception was never retrieved, the strong reference kept it from being GC'd so
+            # asyncio's own "exception was never retrieved" fallback never fired, and the
+            # shutdown `suppress(CancelledError, Exception)` swallowed the last chance to see
+            # it. The tick runs once per 24h, so nothing ever retried. Same hazard the sibling
+            # _refuse_loop already guards deliberately.
+            # Gate semantics are unchanged: it is still evaluated FIRST and still reads
+            # NOTHING (not even occupancy_log) when the digest is off.
+            if not _connectors.is_enabled("digest"):
+                return {"ok": False, "status": "disabled", "via": None}
             now = datetime.now(timezone.utc)
             start = now - timedelta(seconds=_DIGEST_INTERVAL_S)
             house_status = await _compute_house_status()
@@ -1364,6 +1736,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # takes effect on the NEXT tick with no restart, unlike AwayMonitor's
         # Telegram wiring above.
         digest_task = asyncio.create_task(_digest_loop())
+        routines_task = asyncio.create_task(_routines_loop())
+        # A plain timer (not a task/coroutine) flips the presence-edge warm-up flag, so
+        # there is nothing to leak/await if the app is torn down before it fires. Size it to
+        # cover the SLOWEST presence source's first-detection latency, not just multi-room
+        # fusion fill: the network source needs ~net_interval to first populate a device and
+        # net_grace cycles to stabilise, so a known device NOT in the ARP cache at boot
+        # surfaces well after a bare 8s and would otherwise fire a spurious "arrived" edge
+        # (F5). Floor at _ROUTINES_WARMUP_S, +5s slack. Time triggers are never gated.
+        _routines_warmup_s = max(_ROUTINES_WARMUP_S,
+                                 cfg.net_interval * (cfg.net_grace + 1) + 5.0)
+        _routines_warmup_handle = asyncio.get_running_loop().call_later(
+            _routines_warmup_s, lambda: _routines_warm.__setitem__("ok", True))
         # Enter the MCP-over-HTTP session manager LAST: all fallible startup is done, so it
         # can't be orphaned by an earlier failure. Requests aren't served until after the
         # yield, so the transport is live before the first /mcp dispatch.
@@ -1374,7 +1758,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         finally:
             # Suppress CancelledError AND any error a caller-injected publisher
             # might raise, so shutdown always reaches manager.stop() + camera close.
-            for t in (rules_task, away_task, refuse_task, digest_task):
+            with suppress(Exception):
+                _routines_warmup_handle.cancel()   # a TimerHandle, cancel is enough
+            for t in (rules_task, away_task, refuse_task, digest_task, routines_task,
+                      *list(_routine_tasks)):
                 if t:
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -1390,6 +1777,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _owns_cameras:
                 with suppress(Exception):
                     _cameras.close()
+            if _owns_routine_store:
+                with suppress(Exception):
+                    _routine_store.close()
             with suppress(Exception):
                 _calib.close()
             if _owns_identity:
@@ -1463,6 +1853,32 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * digest_once: the daily-digest composition+send body (2C), so a test can drive
     #    one deterministic tick without waiting _DIGEST_INTERVAL_S -- mirrors refuse_once.
     app.state.digest_once = _digest_once
+    #  * routines_tick: one time/deadline routines pass, so a test can drive a schedule
+    #    or house_away_by_time trigger deterministically without waiting on the loop.
+    app.state.routines_tick = _routines_tick
+    #  * routine_store: the live store, so a test can seed a routine + assert what a real
+    #    arrived/left edge or a tick actually fired.
+    app.state.routine_store = _routine_store
+    #  * person_presence: the per-person tracker, so a test can drive an arrival/departure
+    #    directly (update({...})) and assert a person_arrived/left routine fires, without
+    #    injecting full fusion state.
+    app.state.person_presence = _person_presence
+    #  * routine_house: the dedicated house edge detector, so a test can drive a house
+    #    arrived/left (handle({"room":.., "occupied":..})) and assert a house routine fires.
+    app.state.routine_house = _routine_house
+    #  * routine_rooms: the per-room edge detector, so a test can drive a room fill/empty
+    #    (handle(room, occupied)) and assert a room_occupied/room_empty routine fires.
+    app.state.routine_rooms = _routine_rooms
+    #  * routines_mark_warm: skip the boot presence-edge warm-up, so an edge test doesn't
+    #    have to wait _ROUTINES_WARMUP_S for edges to start dispatching.
+    app.state.routines_mark_warm = lambda: _routines_warm.__setitem__("ok", True)
+    #  * routine_stillness: feed a room's still elapsed directly (_routines_stillness(room,
+    #    seconds)) so a test can drive a no_motion routine without simulating hours of ingest.
+    app.state.routine_stillness = _routines_stillness
+    #  * device_presence + routine_device_poll: the device_seen tracker and its poll, so a
+    #    test can seed the inventory + drive one poll and assert a device_seen routine fires.
+    app.state.device_presence = _device_presence
+    app.state.routine_device_poll = _routines_device_poll
 
     def require_central(request: Request):
         # Device-management routes: only a 'central' (or the loopback root) may list or
@@ -1762,6 +2178,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             device_meta=_device_meta,
             known_store=_known_store, net_service=_inventory),
         dependencies=[Depends(require_central), Depends(require_scope("admin"))])
+    # Routines: household config, so router-level control (root+central; never an 'agent'
+    # or a plain 'user') + per-write require_local CSRF. The /test button actuates a real
+    # device, so it counts as a write. Mounted unconditionally -- a single loopback Core
+    # (no multidevice) manages routines too.
+    app.include_router(
+        build_routines_router(
+            _routine_store, run_test=_run_routine_test, ha_entities_fn=_ha_entities,
+            write_deps=[Depends(require_local)]),
+        dependencies=[Depends(require_scope("control"))])
 
     def _connector_catalog() -> list[dict]:
         # The built-in connectors surfaced from EXISTING gated features. available/env
@@ -1807,6 +2232,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         mcph_gate = _connectors.effective_active("mcp-http", False)
         mcph_active = mcph_gate and _mcp_http_route is not None
         mcph_needs = "restart" if (mcph_gate and not mcph_active) else None
+        # Diagnostics auto-send: no env flag; the registry IS the standing-consent gate
+        # (default OFF). Available only when an endpoint is configured; the toggle is
+        # the AUTOMATIC path's opt-in — the manual "Send report" tap consents per-action
+        # and is gated at its own route, not here.
+        diag_gate = _connectors.effective_active("diagnostics", False)
+        diag_available = bool(cfg.diag_endpoint)
+        diag_active = diag_gate and diag_available
+        diag_needs = "config" if (diag_gate and not diag_available) else None
 
         return [
             {"id": "narrator", "kind": "builtin", "direction": "outbound",
@@ -1852,6 +2285,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                       "room/ts only) and the HA entity list each require an EXPLICIT per-agent grant. "
                       "Central/root (local dashboard) unrestricted; 'user'-role devices are denied /mcp",
              "env_flag": None},
+            # Diagnostics auto-send (2026-07-17): OPT-IN standing consent for shipping
+            # MAC-redacted doctor reports off the LAN when a diagnosis finds a problem.
+            # DEFAULT OFF — with the toggle off (and no manual tap) nothing ever leaves.
+            {"id": "diagnostics", "kind": "builtin", "direction": "outbound",
+             "label": "Diagnostics reporting", "available": diag_available,
+             "active": diag_active, "suppressed": _connectors.is_suppressed("diagnostics"),
+             "override": _connectors.override("diagnostics"), "env_active": False,
+             "needs": diag_needs, "enforcement": "registry-overlay",
+             "scope": "outbound-cloud: sends MAC-redacted diagnostic reports OUTSIDE your local "
+                      "network to the Wavr diagnostics endpoint, automatically, whenever a network "
+                      "diagnosis finds a problem. Report = check results + verdict only — never "
+                      "device identities, house map, or credentials. Off (default) = nothing is "
+                      "ever sent automatically; the manual 'Send report' button asks each time",
+             "env_flag": "WAVR_DIAG_ENDPOINT"},
         ]
 
     def _connectors_active() -> int:
@@ -2441,6 +2888,103 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             },
         }
 
+    @app.get("/api/transparency")
+    async def transparency(_=Depends(require_scope("presence:read"))):
+        # "What Wavr knows about you" trust screen (feature #6). The ENTIRE point of
+        # this route is honesty -- every field is DERIVED from the same live
+        # accessors the rest of the app already reads, never a hardcoded "we're
+        # private" claim. Gated identically to GET /api/state (presence:read; root
+        # always bypasses) -- this discloses counts + config rather than raw
+        # presence, but never a looser bar than /api/state.
+        st = manager.status()
+        enabled_by_name = {s["name"]: s["enabled"] for s in st["sources"]}
+        # One row per PERSISTED camera (_cameras.list(), same store /api/cameras
+        # reads), cross-referenced against the SourceManager's live enabled state --
+        # the same join _hub_level() above already does to answer "any camera on?".
+        # Cameras always boot OFF (camera_store.py's own invariant), so a freshly
+        # added camera is honestly reported off until an operator flips it.
+        cameras = [{"name": c["name"], "on": bool(enabled_by_name.get(c["name"], False))}
+                   for c in _cameras.list()]
+
+        # Counts reuse the SAME accessors their own existing endpoints count from --
+        # never a fresh derivation that could drift from what those screens show.
+        # `anonymous` (IdentityStore._row_to_dict) is the honest "consented to
+        # corroborate presence but declined a name" split -- people_known counts
+        # only the NAMED rows. device_meta.all() is the same store
+        # presence_report.py's device_count reads. room_names(_house) is the same
+        # call GET /api/status.house.rooms makes just above. Each is wrapped
+        # defensively: wavr.db is shared/SD-card-backed and a transient lock must
+        # never 500 a trust screen -- an honest 0 beats a crash or a fabricated
+        # number.
+        try:
+            people_known = sum(1 for d in _identity_store.list() if not d["anonymous"])
+        except Exception:
+            people_known = 0
+        try:
+            devices_seen = len(_device_meta.all())
+        except Exception:
+            devices_seen = 0
+        try:
+            rooms = len(room_names(_house))
+        except Exception:
+            rooms = 0
+
+        # Egress: one row per channel that can actually carry data OFF the box.
+        # `on` mirrors the SAME chokepoint each feature's own route enforces --
+        # never a softer/rosier read than what a real call would hit.
+        #
+        # Home Assistant control: matches _connector_catalog's hactl_env exactly --
+        # cfg.mcp_control (opt-in) AND an HAClient actually resolves (ha_url +
+        # ha_token both set; client_from_config returns None otherwise).
+        ha_control_on = bool(cfg.mcp_control) and client_from_config(cfg) is not None
+        # Telegram: the SAME connector gate _notify_all/away/digest all read.
+        telegram_on = _connectors.is_enabled("telegram")
+        # ntfy: `_notify` IS the ntfy sink (opt-in via WAVR_NTFY_URL, built once at
+        # wiring time above) -- its mere presence is the honest "will an alert
+        # actually reach ntfy" signal, not a second re-derivation of cfg.ntfy_url.
+        ntfy_on = _notify is not None
+        # Cloud AI narrator: mirrors POST /api/narrate's own three-gate chokepoint
+        # (connector override != "off", the provider client actually built, and --
+        # for a CLOUD provider only -- the System-tab egress kill switch) so this
+        # never reports "on" more optimistically than a real narrate call would
+        # behave. Ollama is the ONE local provider (narrator.py: "ZERO external
+        # egress") -- a fully-enabled local narrator must still report False here,
+        # since nothing leaves the home. This is the honesty nuance the screen
+        # exists to get right: "narrator enabled" is NOT the same question as
+        # "narrator reaches the cloud".
+        # KNOWN IMPRECISION (documented, not silently swallowed): the 'openai'
+        # provider can ALSO be pointed at a loopback server via
+        # WAVR_OPENAI_BASE_URL (narrator.py's own docstring: "Cloud egress when
+        # base_url is the OpenAI default; LOCAL when pointed at a loopback
+        # server") -- this route has no clean way to tell those apart from a bare
+        # bool, so it treats 'openai' as cloud unconditionally, same as
+        # _connector_catalog's narr_scope above. That is the SAFE direction to be
+        # wrong in for a trust screen (a rare false "on" for a self-hosted OpenAI-
+        # compatible box beats ever silently reporting cloud egress as off).
+        narr_provider = getattr(cfg, "narrate_provider", "gemini")
+        narr_is_cloud = narr_provider != "ollama"
+        narr_live = (_narrator is not None
+                     and _connectors.override("narrator") != "off"
+                     and (not narr_is_cloud or _connectors.egress_allowed()))
+        cloud_narrator_on = narr_is_cloud and narr_live
+
+        return {
+            "sensing_on": bool(st.get("running")),
+            "cameras": cameras,
+            "counts": {"people_known": people_known, "devices_seen": devices_seen,
+                       "rooms": rooms},
+            "egress": [
+                {"channel": "Home Assistant control", "on": ha_control_on,
+                 "detail": "Wavr can switch your Home Assistant devices"},
+                {"channel": "Telegram notifications", "on": telegram_on,
+                 "detail": "Alerts sent to Telegram"},
+                {"channel": "ntfy notifications", "on": ntfy_on,
+                 "detail": "Alerts pushed via ntfy"},
+                {"channel": "Cloud AI narrator", "on": cloud_narrator_on,
+                 "detail": "Room summaries sent to a cloud AI"},
+            ],
+        }
+
     # System toggles (feature "system-toggles"): the two System-tab master
     # switches (Egress / Network sensing) the receipt-only #egressList/
     # #sensingList cards used to only DESCRIBE ("needs a hub restart -- no
@@ -2606,7 +3150,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         mac = await _resolve_companion_mac(host) if host else None
         if not mac:
             return {"mac_registered": False, "reason": "no-arp-resolution"}
-        if consent == "yellow":
+        # A GUEST is NEVER named, regardless of the consent color it set on itself: a
+        # guest holds presence:write and could POST /api/consent green, then register
+        # with a label -- the "guest is unnamed" invariant must hold at the WRITE, not
+        # just the read layer (Finding B, guest-mode review). Force the anonymous branch.
+        role = getattr(request.state, "role", None)
+        if consent == "yellow" or role == "guest":
             # Presence WITHOUT the name: an ANONYMOUS row. This used to skip the
             # write entirely, on the reasoning that the write is what attaches a
             # name -- but the write is ALSO what makes the MAC known, and only a
@@ -2697,16 +3246,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def devices_me(request: Request, _=Depends(require_authenticated)):
         # Read-back of the caller's OWN role/name -- lets a paired companion
         # show "Admin device" / "Member device" without the 403-inference hack
-        # the shim's detectRole() previously had to do. can_view's role set
-        # (root/central/user) is exactly what require_authenticated already
-        # gates, so no extra scope needed beyond authentication itself.
+        # the shim's detectRole() previously had to do. Reachable by can_view's set
+        # (root/central/user AND guest) -- it returns ONLY the caller's own row, no
+        # house data, so a guest seeing its own {role, expires_at} is safe and lets
+        # the guest UI show "Guest -- expires HH:MM". No scope needed beyond auth.
         role = getattr(request.state, "role", None)
         if role == "root":
-            return {"device_id": None, "role": "root", "name": None}
+            return {"device_id": None, "role": "root", "name": None, "expires_at": None}
         device = _self_device(request)
         if device is None:
             raise HTTPException(status_code=403, detail="invalid or revoked token")
-        return {"device_id": device.device_id, "role": device.role, "name": device.name}
+        return {"device_id": device.device_id, "role": device.role, "name": device.name,
+                "expires_at": device.expires_at}
 
     @app.get("/api/companion/health")
     async def companion_health(request: Request, _=Depends(require_authenticated),
@@ -2794,10 +3345,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     @app.post("/api/core/pin/verify")
     async def verify_core_pin(pin: str = Body(..., embed=True),
-                              _=Depends(require_authenticated)):
+                              _=Depends(require_authenticated),
+                              __=Depends(require_scope("presence:read"))):
         # Reachable by the panel: loopback (CSRF-gated, like every other loopback
-        # state check) or any authenticated LAN peer showing the panel -- see
-        # require_authenticated. Rate-limited (wavr.pin_ratelimit): checked BEFORE
+        # state check) or a presence:read LAN peer (root/central/user) showing the
+        # panel. presence:read is the codebase idiom for "any real device, not agent"
+        # (see the sibling /api/core/pin/status) -- it also excludes a 'guest', which
+        # holds presence:write only and must not be able to probe the admin PIN
+        # (guest-mode review, Finding C). Rate-limited (wavr.pin_ratelimit): checked BEFORE
         # touching the store, so a caller under lockout never reaches the
         # (deliberately slow) pbkdf2 compare. Locked-out or malformed input both
         # degrade to an honest {"ok": false} rather than a distinguishable error
@@ -2881,6 +3436,56 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             logging.warning("doctor: mDNS re-announce failed", exc_info=True)
             _mdns_state["handle"] = None
 
+    async def _doctor_mcast_probe():
+        # discovery_reach (CL-02): count DISTINCT devices that answer a short mDNS+SSDP
+        # multicast listen -- the read-time signal for "is multicast reaching me at all".
+        # Injectable (net_mcast_probe seam) so tests never open a real socket. Legs run
+        # CONCURRENTLY (~4s total, not 8); a leg failing is tolerated, but if BOTH raise
+        # (no socket / env) return None -> the check reports "can't tell", never a false
+        # "multicast dead" verdict. Opens its own short-lived socket, independent of any
+        # running mDNS source. Returns int (responder count) or None (couldn't probe).
+        if net_mcast_probe is not None:
+            try:
+                return await net_mcast_probe()
+            except Exception:
+                logging.warning("doctor: injected mcast probe failed", exc_info=True)
+                return None
+        from wavr.sources.mdns import MDNSCollector
+        from wavr.sources.ssdp import SSDPCollector
+
+        async def _leg(factory):
+            return await factory().collect(duration=4.0)
+
+        results = await asyncio.gather(_leg(MDNSCollector), _leg(SSDPCollector),
+                                       return_exceptions=True)
+        responders: set = set()
+        ran = False
+        for r in results:
+            if isinstance(r, dict):
+                responders.update(r.keys())
+                ran = True
+            else:
+                logging.warning("doctor: mcast probe leg failed: %r", r)
+        return len(responders) if ran else None
+
+    async def _doctor_mcast_viability():
+        # discovery_reach PR2: the HARD-RULE gate. Only run when the mesh already looks silent
+        # (the caller decides). Returns True (host receives inbound LAN multicast -> a router
+        # blame is then permitted), False (receives none -> HOST_MULTICAST_UNAVAILABLE, never a
+        # router blame) or None (couldn't probe -> stay neutral). Injectable so tests never open
+        # a real socket. Runs the blocking socket work off the event loop.
+        if net_mcast_viability is not None:
+            try:
+                return await net_mcast_viability()
+            except Exception:
+                logging.warning("doctor: injected mcast viability probe failed", exc_info=True)
+                return None
+        try:
+            return await asyncio.to_thread(_probe_mcast_viability, _local_ip)
+        except Exception:
+            logging.warning("doctor: mcast viability probe failed", exc_info=True)
+            return None
+
     @app.get("/api/health/doctor")
     async def health_doctor(auto_fix: bool = False,
                             _=Depends(require_local), __=Depends(require_scope("control"))):
@@ -2894,6 +3499,31 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         )
         room_sources = {r: ((s.sources if (s := _fusion.state(r)) else []))
                         for r in _fusion.rooms()}
+        # discovery_reach (CL-02): the two numbers the check correlates -- devices reachable
+        # via ARP vs devices that answered a multicast probe. Read-only; no router touch. Only
+        # PROBE when there are enough devices to judge (>=DISCOVERY_MIN_ARP): a small/empty
+        # network is inconclusive anyway, so we skip the ~4s socket work and pass None.
+        inv = _inventory.latest_inventory()
+        arp_count = len(inv)
+        mcast_responders = (await _doctor_mcast_probe()
+                            if arp_count >= DISCOVERY_MIN_ARP else None)
+        # PR2 cause discrimination -- pay for these extra signals ONLY when the mesh already
+        # looks silent (arp>=MIN and mcast<=SILENT), i.e. the exact case the verdict must
+        # explain. Host-viability is the HARD-RULE gate: no router blame without it proven.
+        host_multicast_viable = None
+        arp_subnet_count = 1
+        dhcp_server_count = 0
+        if (mcast_responders is not None
+                and mcast_responders <= DISCOVERY_MCAST_SILENT
+                and arp_count >= DISCOVERY_MIN_ARP):
+            host_multicast_viable = await _doctor_mcast_viability()
+            subnets = {".".join(d.ip.split(".")[:3])
+                       for d in inv if getattr(d, "ip", None)}
+            arp_subnet_count = max(1, len(subnets))
+            # an EXTRA DHCP server (recent rogue/multiple-server alert) => >=2 servers seen,
+            # the classic second-network / VLAN signal; else 1 seen (monitor on) or 0 (off).
+            dhcp_server_count = (2 if (_dhcp_monitor and _dhcp_monitor.recent_alerts(1))
+                                 else (1 if _dhcp_monitor else 0))
         checks, fixable = diagnose(
             health=result,
             gateway_status=_gateway_monitor.status() if _gateway_monitor else None,
@@ -2907,16 +3537,69 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             room_sources=room_sources,
             last_inventory_scan_ts=_inventory.last_scan_ts(), net_scan_interval=cfg.net_scan_interval,
             mdns_expected=cfg.peers_enabled, mdns_alive=_mdns_state.get("handle") is not None,
+            arp_count=arp_count, mcast_responders=mcast_responders,
+            host_multicast_viable=host_multicast_viable,
+            arp_subnet_count=arp_subnet_count, dhcp_server_count=dhcp_server_count,
         )
         fixed, suggestions = await apply_fixes(
             fixable, enabled=(auto_fix and cfg.net_doctor_autofix),
             restart_source=_doctor_restart_source, reprobe_inventory=_doctor_reprobe_inventory,
             reannounce_mdns=_doctor_reannounce_mdns, log=_doctor_log,
         )
+        # PR4: a copy-pasteable, MAC-redacted report (flutter-doctor pattern). Built server-side
+        # so the privacy redaction is authoritative -- the frontend just copies `report` verbatim.
+        report = build_doctor_report(
+            checks, fixed, suggestions,
+            generated=datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+        # AUTO-SEND (opt-in, default OFF): while the `diagnostics` connector toggle is on
+        # (standing consent) AND the egress master allows AND an endpoint is configured, a
+        # diagnosis that found a PROBLEM reports home by itself. Fire-and-forget off the
+        # event loop -- an unreachable endpoint can never slow or break the doctor.
+        if (any(c.ok is False for c in checks)
+                and cfg.diag_endpoint
+                and _connectors.egress_allowed()
+                and _connectors.effective_active("diagnostics", False)):
+            async def _auto_send(rep=report):
+                try:
+                    if diag_sender is not None:
+                        res = await diag_sender(rep)
+                    else:
+                        res = await asyncio.to_thread(
+                            diag_send_report, _connectors, cfg.diag_endpoint, rep)
+                    if not (res or {}).get("ok"):
+                        logging.warning("diagnostics auto-send failed: %s", res)
+                except Exception:
+                    logging.warning("diagnostics auto-send raised", exc_info=True)
+            asyncio.get_running_loop().create_task(_auto_send())
         return {"checks": [c.to_dict() for c in checks],
                 "auto_fixed": [a.to_dict() for a in fixed],
                 "suggestions": [s.to_dict() for s in suggestions],
-                "recent_auto_fixes": [a.to_dict() for a in _doctor_log.recent(20)]}
+                "recent_auto_fixes": [a.to_dict() for a in _doctor_log.recent(20)],
+                "report": report}
+
+    # NOTE the path: /api/diag/{tool} (network diagnostics) already exists and would
+    # swallow /api/diag/send as tool="send" — so the report-send lives under the
+    # doctor's own namespace instead.
+    @app.post("/api/health/doctor/send")
+    async def diag_send(payload: dict = Body(...),
+                        _=Depends(require_local), __=Depends(require_scope("control"))):
+        # MANUAL send -- the button tap IS the consent for this one send (per-action
+        # opt-in), so the `diagnostics` connector toggle is NOT required here; that
+        # toggle governs only the AUTOMATIC path. Still behind the system egress master
+        # + endpoint config, and the report is re-redacted inside send_report (defense
+        # in depth) -- a raw MAC can never leave even if a client hands us one.
+        if not cfg.diag_endpoint:
+            raise HTTPException(status_code=409,
+                                detail="no diagnostics endpoint configured (WAVR_DIAG_ENDPOINT)")
+        if not _connectors.egress_allowed():
+            raise HTTPException(status_code=409, detail="egress is blocked on this hub")
+        report = payload.get("report")
+        if not isinstance(report, str) or not report.strip():
+            raise HTTPException(status_code=422, detail="report (string) required")
+        if diag_sender is not None:
+            return await diag_sender(report)
+        return await asyncio.to_thread(
+            diag_send_report, _connectors, cfg.diag_endpoint, report, manual=True)
 
     @app.get("/api/system")
     async def system(_=Depends(require_scope("control"))):
@@ -3492,7 +4175,42 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # same fail-open-to-None shape cert_fingerprint already uses, so the
             # shim can fall back to the (still-shown) full fingerprint compare.
             verify6 = verification_code(fingerprint, code) if fingerprint else None
-            return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6}
+            # LAN-reachable base for the QR builder (P2 self-contained QR): when this panel is
+            # viewed on the hub itself (kiosk/loopback), location.origin is 127.0.0.1/localhost --
+            # useless to a phone that scans the code cold. _local_ip is the SAME LAN address
+            # self_base_url already uses for the peers-admin router above; TLS is coupled 1:1 to
+            # multidevice (see serve.py), so "https" here is exactly as safe as line ~1675.
+            lan_url = f"https://{_local_ip}:{cfg.port}"
+            return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6,
+                    "lan_url": lan_url}
+
+        @app.post("/api/guest/invite")
+        async def guest_invite(hours: float = Body(4.0, embed=True),
+                               _=Depends(require_local),
+                               __=Depends(require_scope("admin"))):
+            # Guest mode: the host mints a TIME-BOXED guest invite. The guest scans the
+            # SAME QR + does the SAME out-of-band cert-fingerprint / verify6 MitM compare
+            # as /api/pair-code, and redeems at the SAME POST /api/pair -- but the code
+            # carries role 'guest' + a session deadline, so the guest device gets a
+            # presence:write-ONLY token that auto-expires in `hours` (devices.expires_at,
+            # enforced at verify() AND at the read-time consent gate) and appears only as
+            # ANONYMOUS presence (register-companion force-anonymous for guests). No house
+            # read, no stream, no management, nothing persisted past the deadline. Same
+            # admin + require_local (loopback-root-CSRF or a central peer) tier as
+            # /api/pair-code -- a plain user/agent/guest can NOT mint one.
+            # Reject a non-finite value BEFORE the clamp: pydantic admits NaN/inf by
+            # default, and min/max don't tame NaN, so timedelta(hours=NaN) would 500.
+            if hours != hours or hours in (float("inf"), float("-inf")):
+                raise HTTPException(status_code=422, detail="hours must be a finite number")
+            hours = max(0.25, min(float(hours), 24.0))   # clamp server-side: 15 min .. 24 h
+            from wavr.tls import cert_fingerprint, resolved_cert_path, verification_code
+            fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+            code = _pairing.mint_guest_code(hours)
+            verify6 = verification_code(fingerprint, code) if fingerprint else None
+            lan_url = f"https://{_local_ip}:{cfg.port}"
+            expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+            return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6,
+                    "lan_url": lan_url, "expires_at": expires_at, "role": "guest"}
 
         # "Approve on the Core" (design 2026-07-11). Two routers, two DIFFERENT auth
         # boundaries -- the exact split api_peers.py/api_nodes.py already use:
@@ -3538,7 +4256,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 await ws.close(code=1008)
                 return
             dev = _devices.get(did)
-            if dev is None or dev.revoked:
+            if dev is None or dev.revoked or _is_expired(dev.expires_at):
+                await ws.close(code=1008)   # dead/expired credential never opens the stream
+                return
+            # A WS carries no scope through the http middleware, so gate it here for
+            # the SAME reason ws-ticket is gated at include-time: the stream is the
+            # per-person geometry + vitals class, and an 'agent' (scopes = {mcp})
+            # must never reach it even if it somehow obtained a ticket. Belt AND
+            # braces -- the ticket mint is already scope-gated, but the socket must
+            # not depend on that being the only door. (2026-07-16)
+            if not has_scope(effective_scopes(dev.role, dev.scopes), "presence:read"):
                 await ws.close(code=1008)
                 return
             # A WS carries no scope through the http middleware, so gate it here for

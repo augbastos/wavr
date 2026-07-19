@@ -14,7 +14,7 @@ invariants below are load-bearing, not style.
 ## Verified commands
 ```powershell
 cd backend; pip install -e .[dev]; python -m wavr.serve   # loopback 127.0.0.1:8000
-python -m pytest backend/tests -q                          # 1212 tests (all hardware mocked)
+python -m pytest backend/tests -q                          # ~2477 tests (all hardware mocked)
 cd desktop; npm run dev                                    # Tauri dev (needs Rust MSVC + Node 18+)
 powershell scripts/wavr-desktop.ps1                        # zero-Rust launcher (backend + browser)
 # frontend/index.html opens directly — no build step; off-localhost it self-switches to simulator
@@ -48,7 +48,13 @@ powershell scripts/wavr-desktop.ps1                        # zero-Rust launcher 
   spatial-geometry-engineer, wavr-lead, etc. in ~/.claude/agents) — route domain
   work to them.
 
-## State (2026-07-06 — update when it changes)
+## State (2026-07-18 — update when it changes)
 Recent: consent-first device identity, multidevice Tauri shell (HTTPS + pinned
 cert), provider-agnostic narrator (Ollama/OpenAI/Anthropic/Gemini), non-biometric
-who-is-home. WIP: camera calibration/localize. No public live demo wired.
+who-is-home, agentic "when-this→do-that" routines + guest mode + transparency
+endpoint, MCP-over-HTTP read transport (ADR-0008), and the **net_doctor** deep
+network-discovery diagnosis (`net_doctor.py` + `connectors/diag.py`): honest cause
+discrimination (never blames the router without proven host multicast viability),
+per-router fix guides, and an **opt-in, default-OFF** MAC-redacted diagnostics-report
+send (the `diagnostics` connector — the newest egress surface). WIP: camera
+calibration/localize. No hosted online demo (local-only by design).

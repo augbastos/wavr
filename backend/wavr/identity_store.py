@@ -366,6 +366,13 @@ class IdentityStore:
         return {addr: person for addr, person, level in self._rows(source)
                 if level == "green" and person}
 
+    def red_net_addresses(self) -> set[str]:
+        """MACs whose LIVE network consent is red (fully withdrawn). The env-allowlist
+        merge drops these so an EXPLICIT withdrawal wins even over a static WAVR_NET_KNOWN
+        entry -- consistent with yellow (which de-names via as_net_known), instead of
+        letting the strongest consent signal be the one the env silently overrides (F11)."""
+        return {addr for addr, _p, level in self._rows("network") if level == "red"}
+
     def _rows(self, source: str) -> list[tuple[str, str, str]]:
         """(address, person, live consent level) for one modality. Every PRESENCE /
         NAME read path funnels through here, so the consent gate cannot be bypassed

@@ -46,7 +46,8 @@ def test_doctor_response_shape(monkeypatch):
     monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
     with TestClient(_app(), headers={"X-Wavr-Local": "1"}) as c:
         body = c.get("/api/health/doctor").json()
-        assert set(body.keys()) == {"checks", "auto_fixed", "suggestions", "recent_auto_fixes"}
+        assert set(body.keys()) == {"checks", "auto_fixed", "suggestions",
+                                    "recent_auto_fixes", "report"}
         assert isinstance(body["checks"], list) and body["checks"]
         ids = {c_["id"] for c_ in body["checks"]}
         assert {"internet", "dns", "gateway_identity", "rogue_dhcp",
@@ -126,3 +127,126 @@ def test_doctor_autofix_off_only_suggests_for_a_stalled_source(monkeypatch):
         post = c.get("/api/system").json()
         flaky_post = next(s for s in post["sources"] if s["name"] == "flaky")
         assert flaky_post["active"] is False   # never touched
+
+
+# ---- discovery_reach (CL-02, PR1): endpoint wires the structured verdict ------
+
+class _FakeInv:
+    """Inventory with N ARP-visible devices, enough to cross DISCOVERY_MIN_ARP so the
+    probe seam is actually consulted (a real inventory is empty in tests -> small-net)."""
+    def __init__(self, n):
+        self._n = n
+    def latest_inventory(self):
+        return [object() for _ in range(self._n)]
+    def last_scan_ts(self):
+        return None
+    def recent_alerts(self, limit=50):
+        return []
+    async def scan_once(self):
+        return []
+    async def start(self):
+        return None
+    async def stop(self):
+        return None
+
+
+def test_doctor_discovery_reach_names_multicast_dead_end_to_end(monkeypatch):
+    # 15 devices reachable via ARP but the injected multicast probe says 0 answered, and
+    # viability is UNKNOWN (injected None) -> the endpoint returns the STRUCTURED neutral
+    # verdict (never a flat string, never a router blame), and never opens a real socket.
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+
+    async def _probe():
+        return 0
+
+    async def _viability():   # unknown -> hard rule: stay neutral, don't blame the router
+        return None
+
+    app = _app(net_inventory=_FakeInv(15), net_mcast_probe=_probe,
+               net_mcast_viability=_viability)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+    dr = next(x for x in body["checks"] if x["id"] == "discovery_reach")
+    assert dr["ok"] is False
+    assert dr["verdict"]["cause"] == "MULTICAST_DEAD_UNKNOWN"
+    assert dr["verdict"]["arp_count"] == 15 and dr["verdict"]["mcast_responders"] == 0
+    assert dr["verdict"]["copy_key"] == "discovery_multicast_dead"
+    # report-only: the pathology is NEVER auto-fixed (no router touch)
+    assert not any(a.get("target") == "discovery_reach" for a in body["auto_fixed"])
+
+
+def test_doctor_discovery_host_unavailable_end_to_end(monkeypatch):
+    # PR2: viability probe says the hub receives NO inbound LAN multicast (proot/container) ->
+    # the verdict blames the HOST environment, never the router. No real socket (injected).
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+
+    async def _probe():
+        return 0
+
+    async def _viability():
+        return False
+
+    app = _app(net_inventory=_FakeInv(15), net_mcast_probe=_probe,
+               net_mcast_viability=_viability)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+    dr = next(x for x in body["checks"] if x["id"] == "discovery_reach")
+    assert dr["verdict"]["cause"] == "HOST_MULTICAST_UNAVAILABLE"
+    assert dr["verdict"]["copy_key"] == "discovery_host_unavailable"
+
+
+def test_doctor_discovery_ap_isolation_end_to_end(monkeypatch):
+    # PR2: viability PROVEN (host receives LAN multicast) yet devices stay silent ->
+    # the network is filtering discovery; a router accusation is now permitted.
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+
+    async def _probe():
+        return 0
+
+    async def _viability():
+        return True
+
+    app = _app(net_inventory=_FakeInv(15), net_mcast_probe=_probe,
+               net_mcast_viability=_viability)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+    dr = next(x for x in body["checks"] if x["id"] == "discovery_reach")
+    assert dr["verdict"]["cause"] == "AP_ISOLATION_OR_MDNS_FILTERING"
+    assert dr["verdict"]["copy_key"] == "discovery_ap_isolation"
+
+
+def test_doctor_discovery_reach_healthy_when_probe_answers(monkeypatch):
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+
+    async def _probe():
+        return 6
+
+    app = _app(net_inventory=_FakeInv(15), net_mcast_probe=_probe)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+    dr = next(x for x in body["checks"] if x["id"] == "discovery_reach")
+    assert dr["ok"] is True and dr["verdict"]["cause"] is None
+
+
+# ---- PR4: the shareable report field is present and MAC-free -----------------
+import re as _re
+_RAW_MAC = _re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
+
+
+def test_doctor_response_carries_a_mac_free_report(monkeypatch):
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+
+    async def _probe():
+        return 0
+
+    async def _viability():
+        return None
+
+    app = _app(net_inventory=_FakeInv(15), net_mcast_probe=_probe, net_mcast_viability=_viability)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+    report = body.get("report")
+    assert isinstance(report, str) and report
+    assert "Wavr doctor" in report                       # flutter-doctor-style header
+    assert _RAW_MAC.search(report) is None               # privacy contract: never a raw MAC
+    assert "discovery_reach" in report                   # the verdict made it into the report

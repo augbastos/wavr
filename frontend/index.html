@@ -401,8 +401,10 @@
 
   /* ---------------- Shared controls (JS overwrites className on several of these) ---------------- */
   .ctl{background:var(--elevated);color:var(--text);border:1px solid var(--line);border-radius:999px;
-       padding:7px 14px;font-size:.8rem;cursor:pointer;
+       padding:7px 14px;font-size:.8rem;cursor:pointer;display:inline-flex;align-items:center;
+       justify-content:center;gap:6px;vertical-align:middle;line-height:1.1;
        transition:border-color .15s ease-out,color .15s ease-out,transform .1s ease-out,background-color .15s ease-out;}
+  .ctl svg{width:14px;height:14px;flex:none;}
   .ctl:hover{border-color:var(--dim);}
   .ctl:active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);transform:scale(.97);}
   .ctl.on{border-color:var(--accent);color:var(--accent);}
@@ -478,6 +480,14 @@
   .dev-rename-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;}
   .dev-rename-form input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
                          border-radius:8px;padding:6px 10px;font-size:.8rem;min-width:140px;}
+  /* New-devices tab (feature #3): destructive action gets warn/danger, never accent (that's
+     reserved for live/confident-presence + primary actions) — same tag.unknown palette choice
+     as the Network tab's own "unknown" pill. Reveal-then-confirm row reuses .rm/.ctl.small.off
+     verbatim (same idiom as Unpair), so no new confirm-button styling is added here. */
+  .dev-block-btn{color:var(--warn);}
+  .dev-block-btn:hover,.dev-block-btn:focus-visible{color:var(--danger);}
+  .nov-block-warn{color:var(--warn);font-size:.75rem;}
+  .nov-empty{color:var(--accent);}
   .alert-actions{margin-top:4px;}
   .alert-honesty{margin:2px 0 8px;}
   .alert-row{font-size:.8rem;padding:7px 0;border-top:1px dashed var(--line);}
@@ -828,6 +838,8 @@
   .pair-role select{background:var(--elevated);color:var(--text);border:1px solid var(--line);
                     border-radius:8px;padding:8px 11px;font-size:.82rem;}
   .pair-code-box{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:2px 0 14px;}
+  .pair-qr-box{flex-direction:column;align-items:flex-start;gap:8px;}
+  .pair-qr-img{background:#fff;padding:10px;border-radius:10px;image-rendering:pixelated;display:block;}
   .pair-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
              font-size:1.7rem;letter-spacing:.18em;color:var(--accent);
              font-variant-numeric:tabular-nums;user-select:all;}
@@ -925,6 +937,54 @@
   .node-chip{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:6px;
     border:1px solid var(--line);font-size:.66rem;font-weight:600;letter-spacing:.4px;
     text-transform:uppercase;vertical-align:baseline;}
+
+  /* ---------------- Routines (Rotinas tab): layperson "when THIS -> do THAT" builder ---------------- */
+  .rot-list{display:flex;flex-direction:column;gap:10px;margin-top:10px;}
+  .rot-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;
+           border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--elevated);}
+  .rot-row-left{min-width:0;overflow-wrap:anywhere;flex:1 1 240px;}
+  .rot-name{font-size:.9rem;font-weight:600;}
+  .rot-summary{margin:3px 0 0;font-size:.82rem;color:var(--dim);line-height:1.45;}
+  .rot-meta{margin:5px 0 0;font-size:.72rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .rot-meta.warn{color:var(--warn);}
+  .rot-meta.danger{color:var(--danger);}
+  .rot-row-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:none;}
+  .rot-empty{padding:4px 2px 6px;}
+  #rotQuick{margin:0 0 14px;}
+  .rot-quick-row{display:flex;gap:8px;flex-wrap:wrap;}
+  .rot-form{display:flex;flex-direction:column;gap:var(--gap);}
+  .rot-trigparam{margin-top:10px;}
+  .rot-action-list{display:flex;flex-direction:column;}
+  .rot-action-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+                  border-top:1px dashed var(--line);padding:12px 0;}
+  .rot-action-row:first-child{border-top:none;padding-top:0;}
+  .rot-action-fields{display:flex;gap:10px;flex-wrap:wrap;flex:1 1 320px;min-width:0;align-items:center;}
+
+  /* ---------------- Who's home (glance tab) — big legible headline + compact room lines,
+     same design tokens as the rest of the dashboard, deliberately calmer/larger than a
+     normal tile since this is a "glance from across the room" screen. ---------------- */
+  .qc-headline{margin:0;font-size:clamp(1.5rem,3vw,2.15rem);font-weight:700;
+               letter-spacing:-.01em;transition:color .25s ease-out;}
+  .qc-headline.home{color:var(--accent);}
+  .qc-headline.away{color:var(--text);}
+  .qc-headline.off{color:var(--warn);}
+  .qc-sub{margin:6px 0 0;font-size:1.02rem;color:var(--dim);font-variant-numeric:tabular-nums;}
+  .qc-names{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 0;}
+  .qc-names:empty{margin:0;}
+  .qc-anon{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0;}
+  .qc-anon:empty{margin:0;}
+  .qc-anon-chip{font-size:.8rem;color:var(--dim);padding:3px 11px;border-radius:999px;
+                border:1px solid var(--line);font-variant-numeric:tabular-nums;}
+  .qc-empty-note{font-size:.92rem;color:var(--dim);}
+  .qc-rooms{display:flex;flex-direction:column;}
+  .qc-room-row{display:flex;justify-content:space-between;align-items:center;gap:12px;
+              font-size:.94rem;padding:9px 2px;border-top:1px dashed var(--line);}
+  .qc-room-row:first-child{border-top:none;}
+  .qc-room-row.dim{color:var(--dim);}
+  .qc-room-name{color:var(--text);overflow-wrap:anywhere;min-width:0;}
+  .qc-room-state{font-variant-numeric:tabular-nums;font-size:.84rem;font-weight:650;
+                 color:var(--dim);flex-shrink:0;}
+  .qc-room-state.occ{color:var(--accent);}
 
   /* ---------------- Connectors & services — the single egress surface (gear) ----------------
      project_wavr_connectors_vision: the ONLY screen that manages anything reaching outward;
@@ -1278,6 +1338,40 @@
   /* A2.3: health check's per-check breakdown reuses .diag-list/.diag-row (below) verbatim.
      Severity line = icon + words (never color alone); reuses the ok/warn/danger palette. */
   .health-result{margin-top:6px;}
+  /* discovery_reach (CL-02) verdict callout — plain-language, hypothesis-framed */
+  .doctor-verdict{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;
+                  background:var(--elevated);}
+  .doctor-verdict.warn{border-color:var(--warn);}
+  .dv-title{margin:0 0 5px;font-weight:600;color:var(--warn);}
+  .dv-body{margin:0;font-size:.85rem;color:var(--text);line-height:1.5;max-width:70ch;}
+  .dv-fix-btn{margin-top:9px;font-size:.8rem;padding:5px 11px;border-radius:8px;cursor:pointer;
+              border:1px solid var(--warn);background:transparent;color:var(--warn);font-weight:600;}
+  .dv-fix-btn:hover{background:var(--warn);color:var(--bg);}
+  .dv-fix{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:.83rem;
+          color:var(--text);line-height:1.5;max-width:70ch;}
+  .dv-fix ol{margin:6px 0 8px;padding-left:20px;} .dv-fix li{margin:3px 0;}
+  .dv-fix label{display:block;margin:8px 0 4px;font-size:.78rem;color:var(--muted);}
+  .dv-router-search{font-size:.82rem;padding:5px 10px;border-radius:7px;border:1px solid var(--line);
+                    background:var(--bg);color:var(--text);width:min(100%,320px);}
+  .dv-router-hits{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;}
+  .dv-router-hit{font-size:.76rem;padding:4px 10px;border-radius:999px;cursor:pointer;
+                 border:1px solid var(--line);background:transparent;color:var(--text);}
+  .dv-router-hit:hover{border-color:var(--warn);color:var(--warn);}
+  .dv-brand-tip{margin:8px 0 0;font-size:.82rem;} .dv-doc{margin:8px 0 0;font-size:.76rem;color:var(--muted);}
+  .dv-report{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);}
+  .dv-report-row{display:flex;flex-wrap:wrap;gap:8px;}
+  .dv-report-btn{font-size:.82rem;padding:6px 12px;border-radius:8px;cursor:pointer;
+                 border:1px solid var(--line);background:var(--bg);color:var(--text);font-weight:600;
+                 display:inline-flex;align-items:center;gap:7px;}
+  .dv-report-btn svg{width:13px;height:13px;flex:none;}
+  .dv-report-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .dv-report-btn.dv-send:hover{border-color:var(--warn);color:var(--warn);}
+  .dv-report-note{margin:6px 0 0;font-size:.76rem;color:var(--muted);max-width:70ch;}
+  .dv-auto{margin-top:10px;display:flex;align-items:flex-start;gap:8px;}
+  .dv-auto input{margin-top:3px;accent-color:var(--warn);}
+  .dv-auto-label{font-size:.8rem;font-weight:600;display:inline-flex;align-items:center;gap:6px;
+                 cursor:pointer;color:var(--text);}
+  .dv-auto-label svg{width:13px;height:13px;flex:none;color:var(--warn);}
   .health-sev{display:flex;gap:8px;align-items:center;}
   .health-sev svg{width:16px;height:16px;flex:none;}
   .diag-list{display:flex;flex-direction:column;}
@@ -1388,9 +1482,16 @@
              border-right:0;border-top:1px solid var(--line-strong);
              padding:4px 8px calc(4px + env(safe-area-inset-bottom));}
     .nav-brand,.nav-foot{display:none;}
-    .nav-tabs{flex-direction:row;flex:1;padding:0;gap:0;}
-    .nav-item{flex:1 1 0;flex-direction:column;gap:3px;justify-content:center;
-              padding:7px 2px;min-height:48px;border-radius:8px;text-align:center;}
+    /* 9 tabs no longer fit as equal flex:1 columns on a phone (labels crowd/truncate) —
+       let the bar scroll horizontally instead; each item keeps a natural min-width so
+       labels stay legible. Scrollbar hidden to keep the calm chrome (matches the
+       .rooms horizontal-scroll idiom above, which does the same). */
+    .nav-tabs{flex-direction:row;flex:1;padding:0;gap:0;overflow-x:auto;overflow-y:hidden;
+              scroll-snap-type:x proximity;-ms-overflow-style:none;scrollbar-width:none;}
+    .nav-tabs::-webkit-scrollbar{display:none;}
+    .nav-item{flex:0 0 auto;min-width:64px;flex-direction:column;gap:3px;justify-content:center;
+              padding:7px 6px;min-height:48px;border-radius:8px;text-align:center;
+              scroll-snap-align:center;}
     .nav-label{display:block;font-size:.6rem;letter-spacing:.02em;}
     .nav-item.active::before{left:14px;right:14px;top:0;bottom:auto;width:auto;height:2px;}
     .topbar-brand{display:flex;}
@@ -1459,13 +1560,25 @@
     .nav-brand{flex-direction:column;justify-content:center;gap:5px;padding:12px 4px;text-align:center;}
     .nav-brand .brand-name{font-size:.72rem;letter-spacing:.4px;}
     .nav-brand .brand-name small{display:none;}
-    .nav-tabs{padding:8px 5px;gap:5px;}
-    .nav-item{flex-direction:column;gap:3px;justify-content:center;padding:8px 2px;min-height:54px;
+    /* Overflow fix: the rail grew from 5 to 9 tabs (+Routines/Who's-home/New-devices/
+       What-Wavr-knows) this session and no longer fits 720px of kiosk height even after
+       tightening spacing below — Settings (.nav-foot, a sibling BELOW .nav-tabs) would get
+       squeezed against the last item or clipped off-screen with no way to reach the tabs
+       past it. .nav-tabs keeps its base flex:1;min-height:0 (line ~77) so it's a bounded
+       flex item, not one that grows to fit content; overflow-y:auto here makes IT (not the
+       whole .sidenav) the scroll container, so .nav-brand/.nav-foot stay pinned top/bottom
+       and every tab stays reachable regardless of how many more get added. Scrollbar hidden
+       to match the phone bottom-bar's own hidden-scrollbar idiom (:1455) — switchTab()'s
+       existing btn.scrollIntoView({block:"nearest"}) (already unconditional, not phone-gated)
+       brings the active tab into view on this axis too, no JS change needed. */
+    .nav-tabs{padding:6px 5px;gap:3px;overflow-y:auto;-ms-overflow-style:none;scrollbar-width:none;}
+    .nav-tabs::-webkit-scrollbar{display:none;}
+    .nav-item{flex:0 0 auto;flex-direction:column;gap:3px;justify-content:center;padding:6px 2px;min-height:46px;
               text-align:center;border-radius:9px;touch-action:manipulation;}
-    .nav-item svg{width:22px;height:22px;}
-    .nav-label{display:block;font-size:.62rem;letter-spacing:.02em;line-height:1.1;}
+    .nav-item svg{width:20px;height:20px;}
+    .nav-label{display:block;font-size:.6rem;letter-spacing:.02em;line-height:1.1;}
     .nav-item.active::before{left:12px;right:12px;top:0;bottom:auto;width:auto;height:2px;}
-    .nav-foot{padding:8px 5px;}
+    .nav-foot{padding:6px 5px;flex:none;}
 
     /* -------- HOME GRID: deterministic two-column instrument that fills the content height
        with NO page scroll. .inicio-grid becomes display:contents so its rooms-col + mapHome
@@ -1887,6 +2000,13 @@
   <symbol id="ic-cube" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20 7.4v9.2L12 21 4 16.6V7.4Z"/><path d="M12 12v9M4 7.4 12 12l8-4.6"/></symbol>
   <symbol id="ic-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 21.5 20h-19Z"/><path d="M12 9.7v4.3"/><circle cx="12" cy="17" r=".7" fill="currentColor" stroke="none"/></symbol>
   <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6"/></symbol>
+  <!-- UNIVERSAL EGRESS PICTOGRAM (convention, 2026-07-17): the OS-standard cloud-with-up-arrow
+       ("upload to the internet") glyph everyone already knows from phones and computers.
+       ANY control, card or toggle that connects/sends OUTSIDE the local network must carry
+       #ic-egress — one icon, everywhere, so "this leaves your home" is recognizable at a
+       glance across the whole app (connectors cards, diagnostics send/auto-send, future
+       cloud features). Never reuse it for LAN-only traffic. -->
+  <symbol id="ic-egress" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 4 16.3"/><path d="M12 12v9"/><path d="m8 16 4-4 4 4"/></symbol>
   <!-- Stage 2: device-catalog category + UI icons -->
   <symbol id="ic-bt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 7.5 17 16.5 12 21V3l5 4.5L6.5 16.5"/></symbol>
   <symbol id="ic-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 7V4M14 7V4M10 20v-3M14 20v-3M7 10H4M7 14H4M20 10h-3M20 14h-3"/></symbol>
@@ -1923,6 +2043,8 @@
   <!-- Core Panel: charging bolt (the battery body/fill itself is a CSS box, not SVG, so its
        level tracks the native-bridge payload directly; this is only the charging glyph) -->
   <symbol id="ic-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 5 13.5h5.5L10 21l8-10.5h-5.5Z"/></symbol>
+  <!-- Who's home tab: two people, mirrors the .who-chip roster glyph style elsewhere -->
+  <symbol id="ic-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3.5 19.5c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5"/><circle cx="17" cy="9" r="2.3"/><path d="M15.2 14.3c2.4.3 4.3 2.3 4.3 5"/></symbol>
 </svg>
 
 <div class="app" id="app">
@@ -1959,6 +2081,42 @@
               aria-selected="false" tabindex="-1" aria-controls="panel-sistema" aria-label="System"
               data-tip="System — sensors, egress dashboard, diagnostics">
         <svg aria-hidden="true"><use href="#ic-shield"/></svg><span class="nav-label">System</span>
+      </button>
+      <!-- Routines (routines.py "when THIS -> do THAT" spine): live/central only, same tier
+           as System (require_scope("control")) — see panel-rotinas + renderRoutines(). -->
+      <button class="nav-item" id="tab-rotinas" type="button" data-tab="rotinas" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-rotinas" aria-label="Routines"
+              data-tip="Routines — when this happens, do that">
+        <svg aria-hidden="true"><use href="#ic-bolt"/></svg><span class="nav-label">Routines</span>
+      </button>
+      <!-- Who's home (feature #2): a calm glance answer to "who is home?", built entirely from
+           data the dashboard already holds in memory — see #panel-quemcasa + the hook-chained
+           script block near the end of the file (no new fetch, no new poll). -->
+      <button class="nav-item" id="tab-quemcasa" type="button" data-tab="quemcasa" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-quemcasa" aria-label="Who's home"
+              data-tip="Who's home — a calm glance at who's here right now">
+        <svg aria-hidden="true"><use href="#ic-users"/></svg><span class="nav-label">Who's home</span>
+      </button>
+      <!-- New devices (feature #3): a calm, layperson-facing "is there anything on my Wi-Fi I
+           don't recognize?" surface. Zero new fetch — chains onto window.__wavrInventory, the
+           SAME /api/inventory payload the Network tab's own 15s poll (renderNetwork()) already
+           feeds to the Stage-2 "Detected" hook; this is a third chain onto that hook, same
+           idiom. "That's mine" / "Block this device" call the SAME /api/inventory/known and
+           /api/block routes the Network tab's row actions use — see #panel-novos + the
+           hook-chained script block near the end of the file. -->
+      <button class="nav-item" id="tab-novos" type="button" data-tab="novos" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-novos" aria-label="New devices"
+              data-tip="New devices — anything on your Wi-Fi you don't recognize yet">
+        <svg aria-hidden="true"><use href="#ic-qmark"/></svg><span class="nav-label">New devices</span>
+      </button>
+      <!-- What Wavr knows (feature #6): the trust screen -- reads GET /api/transparency
+           (presence:read) and answers "what does Wavr know, and what can leave my home?" in
+           plain language for a non-technical user. See #panel-transparencia + renderTransparency()
+           (defined right after renderHouseStatus(), same MODE gate/auth shape). -->
+      <button class="nav-item" id="tab-transparencia" type="button" data-tab="transparencia" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-transparencia" aria-label="What Wavr knows"
+              data-tip="What Wavr knows — an honest summary of sensing, cameras, and what leaves your home">
+        <svg aria-hidden="true"><use href="#ic-lock"/></svg><span class="nav-label">What Wavr knows</span>
       </button>
     </div>
     <!-- Gear: sidebar footer (PC) / rail footer (tablet); on phone it moves to the topbar,
@@ -2762,6 +2920,131 @@
         </div>
         <p class="panel-note" id="sisNote" hidden>Detailed system status is available on the hub's panel (local access).</p>
       </section>
+
+      <!-- ==================== ROUTINES (layperson "when THIS -> do THAT" builder) ====================
+           GET/POST/PUT/DELETE /api/routines* — router-level require_scope("control"): the SAME
+           tier as System's /api/system (renderControls), so this tab is reachable by root (live)
+           AND a companion paired with the 'central' role (DEFAULT_SCOPES includes "control"); a
+           plain 'user' companion lacks the scope and is 403'd server-side. renderRoutines() mirrors
+           renderControls()'s exact MODE gate. The builder never lets the user type JSON — every
+           field is a picked option, a plain-text box, or a time input; see routines.py for the
+           validated shape a 400 can name. -->
+      <section class="tab-panel" id="panel-rotinas" data-tab="rotinas" role="tabpanel" aria-labelledby="tab-rotinas">
+        <div id="routinesTile" class="tile" hidden aria-labelledby="rotinas-h">
+          <div class="tile-head">
+            <h2 id="rotinas-h">Routines</h2>
+            <span class="hint">when this happens, do that</span>
+            <button id="rotNewBtn" type="button" class="ctl small primary">
+              <svg aria-hidden="true"><use href="#ic-plus"/></svg> New routine
+            </button>
+          </div>
+          <!-- Quick starts: sits above BOTH the empty state and the populated list (one
+               element, positioned once) — JS-populated in renderRoutines(); a tap OPENS the
+               builder pre-filled, it never creates a routine silently. -->
+          <div id="rotQuick"></div>
+          <div id="rotEmpty" class="rot-empty" hidden>
+            <p class="dev-simple-sub">A routine watches for something happening in your home —
+              someone arriving, a room filling, a time of day — and automatically does one or more
+              things, like turning on a light or sending you a notification. For example:
+              <i>“When I arrive home, turn on the living-room light”</i> or
+              <i>“When everyone leaves, turn everything off.”</i></p>
+            <button id="rotEmptyCta" type="button" class="ctl primary dev-simple-cta">
+              <svg aria-hidden="true"><use href="#ic-plus"/></svg> Create your first routine
+            </button>
+          </div>
+          <div id="rotList" class="rot-list" aria-live="polite" hidden></div>
+          <span id="rotFb" class="action-fb" aria-live="polite"></span>
+        </div>
+        <p class="panel-note" id="rotNote" hidden>Routines run on your Wavr hub and need admin
+          access on this device — not available in this demo or on a view-only companion.</p>
+      </section>
+
+      <!-- ==================== WHO'S HOME (feature #2): calm at-a-glance answer to "who is
+           home?" for a non-technical user. Reuses data the dashboard ALREADY holds in memory —
+           no new fetch, no new poll:
+             - roomOcc/roomConf: the dashboard's own top-level RoomState accumulator (the SAME
+               source renderHero()'s Core-panel wave and every room card already read).
+             - sensing on/off: /api/system's `running` flag / status.features.hub_level — the
+               SAME signal deriveTier() uses to render "Off" on the sensing-level meter.
+             - named + anonymous "home now": the "Who's likely home" tile's own already-fetched
+               GET /api/identity/known-presence corroborators (live/central only — a `person:
+               null` corroborator is an anonymously-registered device that still corroborates
+               presence, per wavr.identity_store's yellow consent level. Exposed here via
+               window.__wavrKnownPresence, one additive hook added inside renderKnownPresence()).
+           See the hook-chained script block near the end of the file for the render logic. -->
+      <section class="tab-panel" id="panel-quemcasa" data-tab="quemcasa" role="tabpanel" aria-labelledby="tab-quemcasa">
+        <div id="qcTile" class="tile qc-tile" aria-labelledby="qc-h">
+          <div class="tile-head"><h2 id="qc-h">Who's home</h2><span class="hint">a calm glance, right now</span></div>
+          <p id="qcHeadline" class="qc-headline" aria-live="polite">Loading…</p>
+          <p id="qcSub" class="qc-sub" aria-live="polite"></p>
+          <div id="qcNames" class="qc-names" aria-live="polite"></div>
+          <div id="qcAnon" class="qc-anon" aria-live="polite"></div>
+          <p class="panel-note" id="qcNote" hidden></p>
+        </div>
+        <div id="qcRoomsTile" class="tile">
+          <div class="tile-head"><h2>Rooms</h2><span class="hint">occupied or empty, right now</span></div>
+          <div id="qcRooms" class="qc-rooms" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- ==================== NEW DEVICES (feature #3): a calm, glanceable "is there anything
+           on my Wi-Fi I don't recognize?" surface for a non-technical user. The list is the
+           SAME GET /api/inventory rows the Network tab already shows, filtered to known===false
+           and sorted most-recent-first — no headline MAC/IP, no scary jargon. "That's mine" and
+           "Block this device" (two-step confirm, never a silent no-op) are the SAME
+           /api/inventory/known and /api/block routes the Network tab's own row actions and admin
+           surface use. Live-mode only for the actions (X-Wavr-Local CSRF; /api/block is
+           loopback-root only, app.py's require_root). See the hook-chained script block near the
+           end of the file for the render logic. -->
+      <section class="tab-panel" id="panel-novos" data-tab="novos" role="tabpanel" aria-labelledby="tab-novos">
+        <div id="novTile" class="tile" aria-labelledby="nov-h">
+          <div class="tile-head"><h2 id="nov-h">New devices</h2><span class="hint">anything on your Wi-Fi you haven't recognized yet</span></div>
+          <p id="novLoading" class="empty" aria-live="polite">Loading…</p>
+          <p id="novEmpty" class="empty nov-empty" aria-live="polite" hidden>Everything on your Wi-Fi is recognized ✓</p>
+          <div id="novList" class="dev-list" aria-live="polite"></div>
+          <p class="panel-note" id="novNote" hidden></p>
+        </div>
+      </section>
+
+      <!-- ==================== WHAT WAVR KNOWS (feature #6): the trust screen -- an honest,
+           non-technical summary for someone who has never opened a settings panel. Reads
+           GET /api/transparency (presence:read) -- same MODE gate/auth shape as
+           renderHouseStatus() just above it in the script (live + an authenticated companion,
+           never simulated -- the public demo makes no backend calls, same invariant as the
+           System egress dashboard's own demo note). Every dynamic value below is server data,
+           rendered via createElement/textContent -- NEVER innerHTML. The "Good to know" tile
+           is the ONLY static content on this screen (two factual guarantees that hold
+           regardless of what the endpoint returns) -- see renderTransparency(). -->
+      <section class="tab-panel" id="panel-transparencia" data-tab="transparencia" role="tabpanel" aria-labelledby="tab-transparencia">
+        <div id="transTile" class="tile" aria-labelledby="trans-h">
+          <div class="tile-head"><h2 id="trans-h">What Wavr knows</h2><span class="hint">an honest summary, in plain language</span></div>
+          <p id="transLoading" class="empty" aria-live="polite">Loading…</p>
+          <div id="transBody" hidden>
+            <p id="transSensing" class="qc-headline" aria-live="polite"></p>
+            <p id="transSensingSub" class="qc-sub" aria-live="polite"></p>
+            <h4 class="pair-sub" id="transCamH" hidden>Cameras</h4>
+            <p id="transCamNone" class="empty" hidden>No cameras registered.</p>
+            <div id="transCameras" class="qc-rooms" aria-live="polite"></div>
+            <h4 class="pair-sub">In numbers</h4>
+            <p id="transCounts" class="qc-sub" aria-live="polite"></p>
+          </div>
+        </div>
+        <div id="transEgressTile" class="tile" hidden aria-labelledby="trans-eg-h">
+          <div class="tile-head"><h2 id="trans-eg-h">What leaves your home</h2><span class="hint">the honest list — nothing hidden</span></div>
+          <p id="transEgressSummary" class="egress-summary na">—</p>
+          <div id="transEgressList" class="egress-list" aria-live="polite"></div>
+        </div>
+        <div class="tile" aria-labelledby="trans-good-h">
+          <div class="tile-head"><h2 id="trans-good-h">Good to know</h2></div>
+          <div class="inv-card">
+            <ul class="inv-list">
+              <li><svg aria-hidden="true"><use href="#ic-camera"/></svg><span><b>Camera images are analyzed in memory and never saved.</b> Nothing is written to disk, and no frame ever leaves this device.</span></li>
+              <li><svg aria-hidden="true"><use href="#ic-lock"/></svg><span><b>Routines can turn things off, never back on.</b> A routine can pause sensing or switch off a camera, but re-enabling either one always takes your own action.</span></li>
+            </ul>
+          </div>
+        </div>
+        <p class="panel-note" id="transNote" hidden></p>
+      </section>
     </main>
   </div>
 </div>
@@ -2844,6 +3127,18 @@
       </form>
       <p class="pair-hint" style="margin:-4px 0 10px">A live code rotates automatically while this
         panel is open — just open the companion on the device and enter it.</p>
+      <!-- QR strong anchor (chosen 2026-07-14): encodes {url, FULL cert fingerprint, code}.
+           The phone SCANS it and pins the full 256-bit fingerprint (not offline-grindable), so a
+           pairing-time MitM can't forge a cert that matches a short typed code. This is the
+           PRIMARY path; verify6 + the raw fingerprint below stay as the typeable fallback.
+           Rendered only when the backend serves a cert fingerprint (TLS); on plain-HTTP loopback
+           it stays hidden and the typed-code flow shows, changing nothing else. -->
+      <div id="pairQrBox" class="pair-code-box pair-qr-box" hidden>
+        <img id="pairQrImg" class="pair-qr-img" width="184" height="184"
+             alt="Pairing QR code — scan with the Wavr app">
+        <span class="pair-hint">Scan this with the Wavr app to pair securely — no typing, and it
+          pins the hub's full certificate so no one can intercept.</span>
+      </div>
       <!-- Friendly verify6 hero: backend derives verify6 = SHA-256(cert_fp_hex|pair_code) mod
            1e6, so it's bound to THIS pair-code's short TTL (not offline-grindable) and stays
            byte-identical whenever an older backend omits the field — the box just stays
@@ -2880,6 +3175,63 @@
       </details>
       <h4 class="pair-sub">Authorized devices</h4>
       <div id="pairDevList" class="pair-dev-list" aria-live="polite"></div>
+    </div>
+    <!-- Guest pass (feature #8, guest mode 2026-07-16): the host mints a TIME-BOXED guest
+         invite -- POST /api/guest/invite {hours}, SAME require_local+admin gate as
+         /api/pair-code above, so this control is visible under the IDENTICAL condition as
+         the Pairing tile above it (MODE==="live" only -- never shown to any companion,
+         admin or not; see renderGuestInvite(), defined right after renderPairing()). The
+         guest scans the SAME QR/verify6/fingerprint compare as a normal pairing code
+         (byte-identical MitM defense, reusing pair-code-box/pair-qr-box/pair-verify-box/
+         pair-fp-box verbatim) and redeems at the SAME POST /api/pair -- the response just
+         additionally carries `expires_at`/`role:"guest"`. A guest device gets
+         presence:write ONLY (anonymous presence for the evening -- no house read, no
+         stream, no management) and its token dies on its own at the deadline, no revoke
+         needed; it still shows up in "Authorized devices" above like any paired device. -->
+    <div id="guestInvite" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="guest-h">Guest pass</h2><span class="hint">a temporary pass for a visitor</span></div>
+      <p class="pair-hint" style="margin:-2px 0 12px">Create a guest pass — they'll be counted
+        as home for the evening, can't see or control anything, and it expires on its own.</p>
+      <form id="guestForm" class="pair-form" aria-labelledby="guest-h">
+        <label class="pair-role">Expires in
+          <select name="hours" aria-label="guest pass duration">
+            <option value="2">2 hours</option>
+            <option value="4" selected>4 hours</option>
+            <option value="8">8 hours</option>
+            <option value="12">12 hours</option>
+          </select>
+        </label>
+        <button type="submit" class="ctl">Create guest pass</button>
+        <span id="guestFb" class="action-fb" aria-live="polite"></span>
+      </form>
+      <div id="guestQrBox" class="pair-code-box pair-qr-box" hidden>
+        <img id="guestQrImg" class="pair-qr-img" width="184" height="184"
+             alt="Guest pairing QR code — scan with the Wavr app">
+        <span class="pair-hint">Scan this with the Wavr app to let them in — no typing, and it
+          pins the hub's full certificate so no one can intercept.</span>
+      </div>
+      <div id="guestVerifyBox" class="pair-code-box pair-verify-box" hidden>
+        <span class="pair-fp-label">Hub verification code</span>
+        <code id="guestVerify6" class="pair-compare-code" aria-live="polite"></code>
+        <span class="pair-hint">On their phone, enter this 6-digit code to pair.</span>
+      </div>
+      <div id="guestCodeBox" class="pair-code-box" hidden>
+        <span id="guestCode" class="pair-code" aria-live="polite"></span>
+        <span id="guestCountdown" class="pair-countdown" aria-hidden="true"></span>
+        <button type="button" id="guestCopy" class="ctl small">Copy</button>
+        <span class="pair-hint">enter this code on their device · it refreshes itself, so a code
+          they are typing keeps working · local network only</span>
+      </div>
+      <div id="guestCountdownBar" class="pair-cd-bar" hidden><i></i></div>
+      <p id="guestExpiryNote" class="panel-note" hidden></p>
+      <details id="guestFingerprintBox" class="pair-fp-box why" hidden>
+        <summary>Show advanced fingerprint</summary>
+        <p class="pair-fp-hint">On their phone, when they see the security warning, tap it →
+          <b>View certificate</b> and confirm the SHA-256 fingerprint matches:</p>
+        <code id="guestFingerprint" class="pair-fp" aria-live="polite"></code>
+        <p class="pair-fp-warn">If it does <b>not</b> match, stop. Someone may be intercepting
+          your network; do not tap “Continue”.</p>
+      </details>
     </div>
     <!-- My devices — consent-first identity registry (2026-07-06 ethics decision).
          The registry holds ONLY devices the admin confirms: a Bluetooth device bonded to
@@ -3255,6 +3607,18 @@
   <div class="overlay-content" id="setupContent"></div>
 </div>
 
+<!-- Routine builder (New/Edit) — its own takeover, sibling to #setupOverlay above; reuses
+     the SAME .overlay/.overlay-bar/.overlay-content shell so it reads as one component family,
+     but never shares state with the device-catalog wizard (separate ids, separate JS). The
+     routines LIST lives in the Rotinas tab (#panel-rotinas) — this is just "build one routine". -->
+<div id="routineOverlay" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="routine-h">
+  <div class="overlay-bar">
+    <button id="routineBack" class="ctl small" type="button">‹ Back</button>
+    <h2 id="routine-h">New routine</h2>
+  </div>
+  <div class="overlay-content" id="routineContent"></div>
+</div>
+
 <!-- ============ CORE PANEL (Phase 1 of "Wavr OS"): ?core / window.WAVR_CORE ambient
      home-status face. Native [hidden] and completely inert in the three existing modes
      (live/companion/simulated); only the gated script block near the end of <body>
@@ -3538,6 +3902,9 @@ function companionIsCentral(){
         // stays a no-op here; this only surfaces the tile in-session for a mobile admin whose
         // backend-confirmed role just resolved.
         if(typeof renderMobileBonded === "function") renderMobileBonded();
+        // Rotinas tab (same live/central-only tier as System): re-run now that the role has
+        // resolved, mirroring the renderControls() re-run just above.
+        if(typeof renderRoutines === "function") renderRoutines();
       })
       .catch(()=>{ companionRoleCache = null; });   // transient failure -- allow a retry on next paint
   }
@@ -3551,6 +3918,14 @@ function CompanionProvider(token){
   const base = __m ? __m.base : location.origin;
   const __fetch = (u,o)=> __m ? __m.netFetch(u,o) : fetch(u,o);
   const auth = { "Authorization": "Bearer " + token };
+  // Staleness watchdog state (companion-only): a socket can sit "open" while frames silently
+  // stop (dropped route, sleeping Core) — track the last frame time and stop claiming "live"
+  // after 60s of silence. The provider contract has no stop/teardown, so the interval is
+  // created once per provider (guarded) and duplicate start() calls never stack intervals.
+  let lastFrameTs = 0;      // ms timestamp of the last received frame (0 = none yet)
+  let wsOpen = false;       // true from socket creation until its onclose fires
+  let staleFlagged = false; // watchdog raised the reconnecting indicator; cleared on next frame
+  let staleTimer = null;    // the single per-provider watchdog interval
   return {
     async history(){
       try{
@@ -3564,14 +3939,32 @@ function CompanionProvider(token){
       try{
         const r = await __fetch(base+"/api/ws-ticket",{method:"POST",headers:auth});   // mint a short-lived WS ticket
         if(r.status===401||r.status===403){ companionAuthFailed(); return; }
-        if(!r.ok){ setTimeout(()=>this.start(onEvent), 2000); return; }
+        // Retry paths must surface the degraded state (same setter ws.onclose uses) — a silent
+        // retry leaves stale data presented as live while the ticket mint keeps failing.
+        if(!r.ok){ setReconnecting(true); setTimeout(()=>this.start(onEvent), 2000); return; }
         ticket = (await r.json()).ticket;
-      }catch{ setTimeout(()=>this.start(onEvent), 2000); return; }
+      }catch{ setReconnecting(true); setTimeout(()=>this.start(onEvent), 2000); return; }
       const proto = location.protocol==="https:" ? "wss://" : "ws://";     // ws/wss chosen from page protocol
       const ws = __m ? __m.netWebSocket(__m.base.replace(/^http/,"ws") + "/ws/live?ticket=" + encodeURIComponent(ticket))
                      : new WebSocket(proto + location.host + "/ws/live?ticket=" + encodeURIComponent(ticket));
-      ws.onmessage = (m)=> onEvent(JSON.parse(m.data));
-      ws.onclose = ()=> { if(!companionAuthFailedOnce){ setReconnecting(true); setTimeout(()=> this.start(onEvent), 1500); } };
+      wsOpen = true; lastFrameTs = Date.now();   // fresh socket: give it a full silence window before flagging
+      ws.onmessage = (m)=> {
+        lastFrameTs = Date.now();
+        if(staleFlagged){ staleFlagged = false; setReconnecting(false); }   // frames flow again — drop the watchdog's claim
+        onEvent(JSON.parse(m.data));
+      };
+      ws.onclose = ()=> { wsOpen = false; if(!companionAuthFailedOnce){ setReconnecting(true); setTimeout(()=> this.start(onEvent), 1500); } };
+      // Staleness watchdog: a socket that is "open" but silent for >60s must stop claiming "live".
+      // Flip the same reconnecting indicator on — do NOT close/reopen the socket (onclose owns real
+      // reconnects); the next received frame clears it above.
+      if(staleTimer === null){
+        staleTimer = setInterval(()=>{
+          if(wsOpen && !staleFlagged && (Date.now() - lastFrameTs) > 60000){
+            staleFlagged = true;
+            setReconnecting(true);
+          }
+        }, 15000);
+      }
     },
   };
 }
@@ -5603,6 +5996,134 @@ function renderHouseStatus(){
 }
 renderHouseStatus();
 
+// ---- What Wavr knows (feature #6): the trust screen, GET /api/transparency ----
+// Same MODE gate/auth shape as renderHouseStatus() just above (live + an authenticated
+// companion, Bearer/presence:read -- root/central/user all carry that scope by default; a
+// guest device does NOT, so a guest's phone could never see this screen even if it somehow
+// reached the tab). Never fetched in simulated/demo -- same "this demo makes no backend
+// calls" invariant as the System egress dashboard's own #egressDemoNote. Every value below
+// is server data, rendered via createElement/textContent -- NEVER innerHTML.
+function renderTransparency(){
+  const tile = document.getElementById("transTile");
+  if(!tile) return;   // additive: a stale cached page without this markup just no-ops
+  const loading   = document.getElementById("transLoading");
+  const body      = document.getElementById("transBody");
+  const sensingEl = document.getElementById("transSensing");
+  const sensingSub= document.getElementById("transSensingSub");
+  const camH      = document.getElementById("transCamH");
+  const camNone   = document.getElementById("transCamNone");
+  const camList   = document.getElementById("transCameras");
+  const countsEl  = document.getElementById("transCounts");
+  const egTile    = document.getElementById("transEgressTile");
+  const egSum     = document.getElementById("transEgressSummary");
+  const egList    = document.getElementById("transEgressList");
+  const note      = document.getElementById("transNote");
+
+  function showNote(msg){
+    loading.hidden = true; body.hidden = true; egTile.hidden = true;
+    note.hidden = false; note.textContent = msg;
+  }
+
+  if(MODE!=="live" && MODE!=="companion"){
+    showNote("This demo has no hub connected — “What Wavr knows” needs a real Wavr hub.");
+    return;                                    // never a backend call in simulated/demo
+  }
+  if(MODE==="companion" && !companionToken()) return;  // companion pairing state: no token yet
+  const auth = MODE==="companion" ? {"Authorization":"Bearer "+companionToken()} : {"X-Wavr-Local":"1"};
+
+  // v2 egress icons' own visual language (System → "What can leave this home"): a badge per
+  // row is the primary signal — green/lock "stays home", amber/net "can leave". Built locally
+  // (not a call into the Stage-3b IIFE's own egRow/egBadge, which are private to that closure)
+  // but reuses the SAME .eg-row/.eg-icon/.eg-main/.eg-name/.eg-tag/.eg-state CSS classes, so
+  // this screen and System's dashboard read as one voice about egress.
+  function egRowEl(item){
+    const on = !!(item && item.on);
+    const row = document.createElement("div"); row.className = "eg-row";
+    const badge = document.createElement("span");
+    badge.className = "eg-icon " + (on ? "egress" : "local");
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    const use = document.createElementNS(NS, "use");
+    use.setAttribute("href", on ? "#ic-net" : "#ic-lock");
+    svg.appendChild(use); badge.appendChild(svg);
+    row.appendChild(badge);
+    const main = document.createElement("div"); main.className = "eg-main";
+    const nameLine = document.createElement("div"); nameLine.className = "eg-name";
+    nameLine.appendChild(document.createTextNode(String((item && item.channel) || "")));  // textContent-equivalent — server data
+    const tag = document.createElement("span");
+    tag.className = "eg-tag" + (on ? " on" : "");
+    tag.textContent = on ? "on" : "off";
+    nameLine.appendChild(tag);
+    main.appendChild(nameLine);
+    const state = document.createElement("span"); state.className = "eg-state";
+    state.textContent = String((item && item.detail) || "");    // textContent — server data
+    main.appendChild(state);
+    row.appendChild(main);
+    return row;
+  }
+
+  async function refresh(){
+    let r;
+    try{ r = await fetch(location.origin+"/api/transparency", {headers:auth}); }
+    catch{ return; }                           // backend momentarily unreachable — keep last view
+    if(MODE==="companion" && (r.status===401 || r.status===403)){ companionAuthFailed(); return; }
+    if(!r.ok){ showNote("Couldn't load this screen right now — try again in a moment."); return; }
+    let t; try{ t = await r.json(); }catch{ showNote("Couldn't load this screen right now — try again in a moment."); return; }
+
+    loading.hidden = true; note.hidden = true; body.hidden = false;
+
+    const sensingOn = t.sensing_on !== false;
+    sensingEl.className = "qc-headline " + (sensingOn ? "home" : "off");
+    sensingEl.textContent = sensingOn ? "Sensing is on" : "Sensing is off";
+    sensingSub.textContent = sensingOn
+      ? "Wavr is actively watching for presence."
+      : "Wavr is paused — nothing is sensing right now.";
+
+    const cameras = Array.isArray(t.cameras) ? t.cameras : [];
+    camList.textContent = "";
+    camH.hidden = cameras.length === 0;
+    camNone.hidden = cameras.length > 0;
+    cameras.forEach(function(c){
+      const row = document.createElement("div"); row.className = "qc-room-row";
+      const n = document.createElement("span"); n.className = "qc-room-name";
+      n.textContent = String((c && c.name) || "");   // textContent — server data
+      const on = !!(c && c.on);
+      const s = document.createElement("span");
+      s.className = "qc-room-state" + (on ? " occ" : "");
+      s.textContent = on ? "on" : "off";
+      row.appendChild(n); row.appendChild(s);
+      camList.appendChild(row);
+    });
+
+    const counts  = (t.counts && typeof t.counts === "object") ? t.counts : {};
+    const people  = Number(counts.people_known) || 0;
+    const devices = Number(counts.devices_seen) || 0;
+    const rooms   = Number(counts.rooms) || 0;
+    countsEl.textContent = people + " " + (people === 1 ? "person" : "people") + " known" +
+      " · " + devices + " " + (devices === 1 ? "device" : "devices") + " seen" +
+      " · " + rooms + " " + (rooms === 1 ? "room" : "rooms") + " mapped";
+
+    const egress = Array.isArray(t.egress) ? t.egress : [];
+    egTile.hidden = false;
+    egList.textContent = "";
+    egress.forEach(function(e){ egList.appendChild(egRowEl(e)); });
+    // Honesty gate: name what's actually on rather than a bare count — disclosure, not alarm.
+    const onRows = egress.filter(function(e){ return e && e.on; });
+    if(onRows.length === 0){
+      egSum.className = "egress-summary ok";
+      egSum.textContent = "Nothing leaves your home — everything runs on this device.";
+    } else {
+      egSum.className = "egress-summary warn";
+      egSum.textContent = onRows.map(function(e){ return e.channel; }).join(", ") +
+        (onRows.length === 1 ? " is" : " are") + " on — see below.";
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 20000);
+}
+renderTransparency();
+
 // One-shot read of GET /api/status.features.multidevice, shared by the three
 // multidevice-gated panels below (Pairing/Peers/Nodes). /api/devices, /api/peers and
 // /api/nodes are only mounted when WAVR_MULTIDEVICE=1 (backend/wavr/app.py) -- on a
@@ -5625,6 +6146,23 @@ const _wavrMultideviceOff = (MODE==="live")
 // The backend routes (/api/pair-code, /api/devices) only exist when WAVR_MULTIDEVICE=1;
 // when they 404 (or the backend is unreachable) the whole panel stays hidden, so
 // single-device installs never see it. Never shows in Plano B (demo).
+// Lazy-load the self-hosted QR generator (vendor/qrcode.js, MIT — no CDN) ONCE, only when the
+// pairing panel actually needs to draw a QR. Resolves to the global `qrcode` factory. Kept out
+// of the boot path so a single-device install (no pairing) never fetches it.
+let _qrLibPromise = null;
+function _ensureQRCode(){
+  if(window.qrcode) return Promise.resolve(window.qrcode);
+  if(_qrLibPromise) return _qrLibPromise;
+  _qrLibPromise = new Promise((resolve, reject)=>{
+    const s = document.createElement("script");
+    s.src = "vendor/qrcode.js";           // same origin — nothing leaves home
+    s.onload = ()=> window.qrcode ? resolve(window.qrcode) : reject(new Error("qrcode global missing"));
+    s.onerror = ()=> { _qrLibPromise = null; reject(new Error("failed to load vendor/qrcode.js")); };
+    document.head.appendChild(s);
+  });
+  return _qrLibPromise;
+}
+
 async function renderPairing(){
   if(MODE!=="live") return;                 // live-only; never in Plano B (demo)
   if(await _wavrMultideviceOff) return;     // proven off via /api/status — skip the doomed probe (no console 404)
@@ -5667,24 +6205,43 @@ async function renderPairing(){
       left.appendChild(name); left.appendChild(meta);
       row.appendChild(left);
       const ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
-      // Role control: promote/demote a paired device between Admin (stored 'central')
-      // and User (stored 'user') without revoke+re-pair. UI labels differ from the
-      // stored VALUES on purpose (backend auth keys off 'central'/'root').
-      const roleSel = document.createElement("select"); roleSel.className = "pair-dev-role";
-      roleSel.setAttribute("aria-label", "device role");
-      const optUser = document.createElement("option"); optUser.value = "user"; optUser.textContent = "User";
-      const optAdmin = document.createElement("option"); optAdmin.value = "central"; optAdmin.textContent = "Admin";
-      roleSel.appendChild(optUser); roleSel.appendChild(optAdmin);
-      roleSel.value = (d.role === "central") ? "central" : "user";  // reflect current stored role
-      roleSel.onchange = async ()=>{
-        const newRole = roleSel.value;                              // 'user' | 'central'
-        let r;
-        try{ r = await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id)+"/role",
-          {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
-           body:JSON.stringify({role:newRole})}); }catch{}
-        if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after role change
-        else { actionFeedback(pairFb, false, "couldn't change the role"); refresh(); }  // revert select to server truth
-      };
+      if(d.role === "guest"){
+        // Guest devices are NOT promotable from this list — a guest row shows a plain
+        // badge + its auto-expiry deadline instead of the User/Admin select. Promoting a
+        // guest to User/Admin here would silently defeat the whole point of a time-boxed,
+        // presence:write-only pass (see devices.py VALID_ROLES + auth.DEFAULT_SCOPES["guest"]).
+        const guestBadge = document.createElement("span"); guestBadge.className = "pill off";
+        guestBadge.textContent = "Guest";
+        ctl.appendChild(guestBadge);
+        if(typeof d.expires_at === "string" && d.expires_at){
+          const dt = new Date(d.expires_at);
+          if(!isNaN(dt.getTime())){
+            const exp = document.createElement("span"); exp.className = "pair-dev-meta";
+            exp.textContent = "expires " + dt.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+            ctl.appendChild(exp);
+          }
+        }
+      } else {
+        // Role control: promote/demote a paired device between Admin (stored 'central')
+        // and User (stored 'user') without revoke+re-pair. UI labels differ from the
+        // stored VALUES on purpose (backend auth keys off 'central'/'root').
+        const roleSel = document.createElement("select"); roleSel.className = "pair-dev-role";
+        roleSel.setAttribute("aria-label", "device role");
+        const optUser = document.createElement("option"); optUser.value = "user"; optUser.textContent = "User";
+        const optAdmin = document.createElement("option"); optAdmin.value = "central"; optAdmin.textContent = "Admin";
+        roleSel.appendChild(optUser); roleSel.appendChild(optAdmin);
+        roleSel.value = (d.role === "central") ? "central" : "user";  // reflect current stored role
+        roleSel.onchange = async ()=>{
+          const newRole = roleSel.value;                              // 'user' | 'central'
+          let r;
+          try{ r = await fetch(location.origin+"/api/devices/"+encodeURIComponent(d.device_id)+"/role",
+            {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+             body:JSON.stringify({role:newRole})}); }catch{}
+          if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after role change
+          else { actionFeedback(pairFb, false, "couldn't change the role"); refresh(); }  // revert select to server truth
+        };
+        ctl.appendChild(roleSel);
+      }
       const rm = document.createElement("button"); rm.type = "button"; rm.className = "rm";
       rm.textContent = "Revoke";
       rm.onclick = async ()=>{
@@ -5694,7 +6251,7 @@ async function renderPairing(){
         if(r && r.ok){ actionFeedback(pairFb, true); refresh(); }   // re-sync after revoking
         else { actionFeedback(pairFb, false, "couldn't revoke the device"); }
       };
-      ctl.appendChild(roleSel); ctl.appendChild(rm);
+      ctl.appendChild(rm);
       row.appendChild(ctl); devList.appendChild(row);
     });
   }
@@ -5749,6 +6306,37 @@ async function renderPairing(){
       const fp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
       fpEl.textContent = fp;                 // textContent — server-provided fingerprint
       fpBox.hidden = !fp;
+    }
+    // QR strong anchor (chosen 2026-07-14): encode {url, FULL fingerprint, code} so the phone
+    // can SCAN it and pin the full 256-bit cert (not offline-grindable) instead of typing a
+    // short code. Only when the backend served a real fingerprint (TLS); on plain-HTTP loopback
+    // it stays hidden and the typed 6-digit/8-digit flow is the path, changing nothing else.
+    const qrBox = document.getElementById("pairQrBox");
+    const qrImg = document.getElementById("pairQrImg");
+    if(qrBox && qrImg){
+      const qrFp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
+      if(qrFp && d.code){
+        // P2 self-contained QR: encode a phone-reachable base. Only override location.origin with
+        // the backend's lan_url when the CURRENT origin is NOT already a routable LAN IP: a bare
+        // loopback (127.x) or a hub-local hostname (dev.wavr.core kiosk, localhost, *.local) can't
+        // be scanned cold, so use lan_url; but when the panel is browsed from a real LAN address
+        // (192.168.x etc) that origin is proven-reachable by the viewing device -- keep it, so a
+        // multi-NIC/VPN host doesn't swap it for a different-interface lan_url (adversarial-verify
+        // hardening). lan_url is the same _local_ipv4()-derived address peers-admin uses, never
+        // hardcoded; falls back to location.origin for an older backend that omits lan_url.
+        const _oh = location.hostname;
+        const _originRoutable = /^\d{1,3}(\.\d{1,3}){3}$/.test(_oh) && !/^127\./.test(_oh) && _oh !== "0.0.0.0";
+        const qrUrl = (!_originRoutable && typeof d.lan_url === "string" && d.lan_url) ? d.lan_url : location.origin;
+        const payload = JSON.stringify({v:1, u:qrUrl, fp:qrFp, c:String(d.code)});
+        _ensureQRCode().then((qr)=>{
+          const q = qr(0, "M");              // type 0 = auto-size for the data, error-correction M
+          q.addData(payload); q.make();
+          qrImg.src = q.createDataURL(5, 8); // cellSize 5px, quiet-zone 8 modules → ~184px, white bg
+          qrBox.hidden = false;
+        }).catch(()=>{ qrBox.hidden = true; });   // lib missing → fall back to the typed code
+      } else {
+        qrBox.hidden = true;
+      }
     }
     if(cdBar) cdBar.hidden = false;
     actionFeedback(pairFb, true);
@@ -5812,6 +6400,138 @@ async function renderPairing(){
   refresh(seed);                            // seed the list from the probe response we already read
 }
 renderPairing();
+
+// ---- Guest pass (feature #8, guest mode 2026-07-16) ----
+// Host mints a TIME-BOXED guest invite: POST /api/guest/invite {hours}. SAME require_local +
+// admin gate as /api/pair-code above, so this control is visible under the IDENTICAL condition
+// as the Pairing panel — MODE==="live" only, never shown to any companion (admin or not),
+// mirroring renderPairing()'s own gate exactly. The guest scans the SAME QR/verify6/fingerprint
+// compare as a normal pairing code (byte-identical MitM defense, reusing _ensureQRCode()) and
+// redeems at the SAME POST /api/pair — the response just additionally carries `expires_at`/
+// `role:"guest"`. Unlike the always-on Pairing panel (which auto-mints the moment it scrolls
+// into view), minting here only starts on an explicit "Create guest pass" tap — a guest pass is
+// an occasional, deliberate action, not a standing invite. Once started, the code auto-refreshes
+// before its own ~2-min redemption window expires (same tick()/mintOnce() idiom as renderPairing
+// above) and the "expires at" preview recomputes on every refresh; rotation stops the instant the
+// tile leaves the screen (same visibility guard as renderPairing's own tick()).
+function renderGuestInvite(){
+  if(MODE!=="live") return;                 // live-only; never companion or Plano B (demo) — mirrors renderPairing()'s own gate
+  const tile = document.getElementById("guestInvite");
+  if(!tile) return;                         // additive: a stale cached page without this markup just no-ops
+  (async ()=>{
+    if(await _wavrMultideviceOff) return;   // /api/guest/invite is mounted only under the SAME `if cfg.multidevice` block as /api/pair-code — proven off via /api/status, no doomed probe
+    tile.hidden = false;
+
+    const form       = document.getElementById("guestForm");
+    const fb         = document.getElementById("guestFb");
+    const qrBox       = document.getElementById("guestQrBox");
+    const qrImg       = document.getElementById("guestQrImg");
+    const verifyBox   = document.getElementById("guestVerifyBox");
+    const verifyEl    = document.getElementById("guestVerify6");
+    const codeBox     = document.getElementById("guestCodeBox");
+    const codeEl      = document.getElementById("guestCode");
+    const cdEl        = document.getElementById("guestCountdown");
+    const cdBar       = document.getElementById("guestCountdownBar");
+    const cdFill      = cdBar ? cdBar.querySelector("i") : null;
+    const fpBox       = document.getElementById("guestFingerprintBox");
+    const fpEl        = document.getElementById("guestFingerprint");
+    const copyBtn     = document.getElementById("guestCopy");
+    const expiryNote  = document.getElementById("guestExpiryNote");
+
+    const CODE_TTL_MS = 120000, REFRESH_AT_MS = 20000;   // same TTL as pair-code — mint a fresh code with ~20s left
+    let rotTimer = null, rotExpiresAt = 0, rotBusy = false;
+
+    function stopRotation(){ if(rotTimer){ clearInterval(rotTimer); rotTimer = null; } }
+
+    async function mintOnce(){
+      if(rotBusy) return;                   // never overlap a slow request with a tick
+      rotBusy = true;
+      const hours = Math.max(0.25, Math.min(24, Number(form.hours.value) || 4));  // mirrors the backend's own server-side clamp
+      let r, d;
+      try{
+        r = await fetch(location.origin+"/api/guest/invite",{method:"POST",
+          headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+          body:JSON.stringify({hours:hours})});
+        if(!r.ok) throw 0;                   // e.g. multidevice turned off mid-session
+        d = await r.json();
+      }catch{ actionFeedback(fb, false, "couldn't create the guest pass"); stopRotation(); rotBusy = false; return; }
+
+      codeEl.textContent = String(d.code || "");   // textContent — 8-digit code from server
+      codeBox.hidden = false;
+      rotExpiresAt = Date.now() + CODE_TTL_MS;
+
+      const v6 = (typeof d.verify6 === "string" || typeof d.verify6 === "number")
+                 ? String(d.verify6).replace(/\D/g,"").padStart(6,"0").slice(-6) : "";
+      verifyEl.textContent = v6 ? (v6.slice(0,3) + " " + v6.slice(3)) : "";  // textContent — server value
+      verifyBox.hidden = !v6;
+
+      const fp = (typeof d.cert_fingerprint === "string") ? d.cert_fingerprint : "";
+      fpEl.textContent = fp;                 // textContent — server-provided fingerprint
+      fpBox.hidden = !fp;
+
+      if(fp && d.code){
+        const _oh = location.hostname;
+        const _originRoutable = /^\d{1,3}(\.\d{1,3}){3}$/.test(_oh) && !/^127\./.test(_oh) && _oh !== "0.0.0.0";
+        const qrUrl = (!_originRoutable && typeof d.lan_url === "string" && d.lan_url) ? d.lan_url : location.origin;
+        const payload = JSON.stringify({v:1, u:qrUrl, fp:fp, c:String(d.code)});
+        _ensureQRCode().then((qr)=>{
+          const q = qr(0, "M");
+          q.addData(payload); q.make();
+          qrImg.src = q.createDataURL(5, 8);
+          qrBox.hidden = false;
+        }).catch(()=>{ qrBox.hidden = true; });   // lib missing → fall back to the typed code
+      } else {
+        qrBox.hidden = true;
+      }
+
+      // "Guest access expires at HH:MM" — plain local time, recomputed on every refresh (the
+      // preview always reads "if they pair right now, access runs until…"; the redeemed
+      // device's real deadline is stamped from the SAME `hours` at the moment they actually
+      // scan, within this code's own ~2-min window — see pairing.py's mint_guest_code).
+      if(typeof d.expires_at === "string" && d.expires_at){
+        const dt = new Date(d.expires_at);
+        if(!isNaN(dt.getTime())){
+          expiryNote.hidden = false;
+          expiryNote.textContent = "Guest access expires at " +
+            dt.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"}) + ".";
+        } else expiryNote.hidden = true;
+      } else expiryNote.hidden = true;
+
+      if(cdBar) cdBar.hidden = false;
+      actionFeedback(fb, true, "", "✓ guest pass ready");
+      rotBusy = false;
+    }
+
+    function tick(){
+      // Visibility guard: stop the instant the tile isn't shown (Settings closed, or this
+      // section scrolled out via display:none at the panel form factor) — same idiom as
+      // renderPairing()'s own tick(), so a valid guest code never lingers unattended.
+      if(tile.hidden || !tile.offsetParent){ stopRotation(); return; }
+      const leftMs = rotExpiresAt - Date.now();
+      const leftS  = Math.max(0, Math.ceil(leftMs/1000));
+      if(cdEl)   cdEl.textContent = leftS + "s";
+      if(cdFill) cdFill.style.width = Math.max(0, Math.min(100, (leftMs/CODE_TTL_MS)*100)) + "%";
+      if(leftMs <= REFRESH_AT_MS && !rotBusy) mintOnce();   // refresh before the current code dies
+    }
+
+    function startRotation(){
+      stopRotation();
+      mintOnce().then(()=>{ rotTimer = setInterval(tick, 1000); });
+    }
+
+    form.onsubmit = (e)=>{ e.preventDefault(); startRotation(); };
+    // Changing the duration while a pass is already live re-mints under the new hours
+    // immediately — same UX as renderPairing()'s role-change re-mint.
+    form.hours.onchange = ()=>{ if(rotTimer) startRotation(); };
+
+    copyBtn.onclick = ()=>{
+      const code = codeEl.textContent; if(!code) return;
+      try{ if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{}); }catch{}
+      copyBtn.textContent = "Copied"; setTimeout(()=>{ copyBtn.textContent = "Copy"; }, 1500);
+    };
+  })();
+}
+renderGuestInvite();
 
 // ---- Approve-on-Core pairing banner (live only, multidevice-gated, design 2026-07-11) ----
 // A companion that hasn't got a code yet asks the Core to let it in (POST /api/pair-request,
@@ -6301,8 +7021,12 @@ async function renderKnownPresence(){
     let r;
     try{ r = await fetch(location.origin+"/api/identity/known-presence",{headers:hdr}); }
     catch{ return; }                          // backend momentarily unreachable — keep last view
-    if(!r.ok){ tile.hidden = true; return; }  // 403 (multidevice 'user') / feature off — stay hidden
-    let kp; try{ kp = await r.json(); }catch{ tile.hidden = true; return; }
+    // Who's-home tab hook (feature #2, additive): expose this SAME already-fetched payload so
+    // that tab never re-fetches known-presence itself. null = "genuinely unreachable" (403/
+    // parse failure) so the other tab can say so honestly, distinct from a real empty array.
+    if(!r.ok){ tile.hidden = true; window.__wavrKnownPresence = null; return; }  // 403 (multidevice 'user') / feature off — stay hidden
+    let kp; try{ kp = await r.json(); }catch{ tile.hidden = true; window.__wavrKnownPresence = null; return; }
+    window.__wavrKnownPresence = kp;
     const corroborators = Array.isArray(kp && kp.corroborators) ? kp.corroborators : [];
     if(!corroborators.length){ tile.hidden = true; return; }   // nobody assigned yet — nothing honest to show
     tile.hidden = false;
@@ -6846,7 +7570,8 @@ async function renderConnectors(){
     const badge = document.createElement("span");
     badge.className = "conn-egress-badge " + (egress ? "leaves" : "stays");
     const bsvg = document.createElementNS(NS, "svg"); bsvg.setAttribute("aria-hidden", "true");
-    const buse = document.createElementNS(NS, "use"); buse.setAttribute("href", egress ? "#ic-net" : "#ic-lock");
+    // #ic-egress = the UNIVERSAL "this leaves your home" pictogram (see the sprite comment).
+    const buse = document.createElementNS(NS, "use"); buse.setAttribute("href", egress ? "#ic-egress" : "#ic-lock");
     bsvg.appendChild(buse); badge.appendChild(bsvg);
     badge.appendChild(document.createTextNode(egress ? "Leaves your home" : "Stays on your network"));
     card.appendChild(badge);
@@ -7355,6 +8080,700 @@ async function renderAssistant(){
   };
 }
 renderAssistant();
+
+// ---- Routines (Rotinas tab): layperson "when THIS -> do THAT" builder ----
+// Plain-language trigger/action menus, mirroring routines.py's VALID_TRIGGERS/VALID_ACTIONS
+// and their required trigger_params/action-params keys exactly (a 400 there is surfaced
+// honestly here, never silently retried or guessed around). The picker never emits JSON —
+// every field is a <select> option, a text box, or a time input.
+const ROT_TRIGGERS = [
+  {kind:"house_arrived", label:"When someone arrives home", paramKey:null},
+  {kind:"house_left", label:"When everyone leaves", paramKey:null},
+  {kind:"person_arrived", label:"When a specific person arrives", paramKey:"person"},
+  {kind:"person_left", label:"When a specific person leaves", paramKey:"person"},
+  {kind:"room_occupied", label:"When a room fills", paramKey:"room"},
+  {kind:"room_empty", label:"When a room empties", paramKey:"room"},
+  {kind:"schedule", label:"At a time of day", paramKey:"at"},
+  {kind:"house_away_by_time", label:"If nobody's home by a time", paramKey:"by"},
+  {kind:"device_seen", label:"When a device shows up", paramKey:"mac"},
+  {kind:"no_motion", label:"If a room has no movement for a while", paramKey:"no_motion"},
+];
+const ROT_ACTION_KINDS = [
+  {kind:"ha_service", label:"Turn a light/switch on or off"},
+  {kind:"notify", label:"Send me a notification"},
+  {kind:"set_watch", label:"Enter/leave discreet mode (Watch)"},
+  // Body is COMPUTED at fire time (routines.py's notify_new_devices) — the count of devices
+  // first-seen while the house was away; `message` is only an optional prefix, never required
+  // (VALID_ACTIONS'/_ACTION_REQUIRED's own contract — see routines.py). Pairs naturally with
+  // the "When someone arrives home" trigger, no special-casing needed here.
+  {kind:"notify_new_devices", label:"Tell me what new devices showed up while I was out"},
+];
+// One-tap "quick starts" — a preset only pre-fills openBuilder()'s state; it never posts on
+// its own. The user still names the routine and hits Save/Create through the normal flow.
+const ROT_QUICKSTARTS = [
+  {
+    label: "Everyone leaves → discreet mode",
+    name: "Everyone leaves → discreet mode",
+    trigger_kind: "house_left", trigger_params: {},
+    action: {kind: "set_watch", params: {on: true}},
+  },
+  {
+    label: "Nobody home by midnight → notify me",
+    name: "Nobody home by midnight",
+    trigger_kind: "house_away_by_time", trigger_params: {by: "00:00"},
+    action: {kind: "notify", params: {message: "Nobody's home and it's past midnight."}},
+  },
+  {
+    label: "Every night at 11pm → discreet mode",
+    name: "Every night at 11pm → discreet mode",
+    trigger_kind: "schedule", trigger_params: {at: "23:00"},
+    action: {kind: "set_watch", params: {on: true}},
+  },
+  {
+    label: "When I arrive → turn on a light",
+    name: "When I arrive → turn on a light",
+    trigger_kind: "house_arrived", trigger_params: {},
+    // entity_id deliberately left blank — the builder's own "choose a light/switch…" picker
+    // is where the user actually selects it, never guessed here.
+    action: {kind: "ha_service", params: {service: "turn_on"}},
+  },
+];
+function rotTriggerLabel(kind){ const t = ROT_TRIGGERS.find(x => x.kind === kind); return t ? t.label : kind; }
+function rotActionLabel(kind){ const a = ROT_ACTION_KINDS.find(x => x.kind === kind); return a ? a.label : kind; }
+
+async function renderRoutines(){
+  // Same MODE tier as renderControls()/System: reachable live (loopback root) OR a companion
+  // paired 'central' (its DEFAULT_SCOPES include "control", the router-level gate on every
+  // /api/routines* route) — never a plain 'user' companion or the public demo.
+  const companionCentral = MODE === "companion" && companionIsCentral();
+  const tile = document.getElementById("routinesTile");
+  const note = document.getElementById("rotNote");
+  if(MODE !== "live" && !companionCentral){
+    if(tile) tile.hidden = true;
+    if(note) note.hidden = false;
+    return;
+  }
+  if(note) note.hidden = true;
+  if(tile) tile.hidden = false;
+
+  // Mobile: route through the native pinned fetch (base = stored central) so the companion
+  // Bearer token never hits the app's own https://localhost — same __nf pattern as
+  // renderControls/renderStatus. Absent the hook, __nf is exactly the original same-origin fetch.
+  const __nf = (path, opt)=> window.WAVR_MOBILE
+    ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+    : fetch(location.origin + path, opt);
+  const companionAuth = companionCentral ? {"Authorization":"Bearer "+companionToken()} : null;
+  // Fix D pattern (matches renderControls/renderConnectors): a companion sends its Bearer
+  // instead of the loopback-only X-Wavr-Local header on every write; GETs need only the Bearer.
+  const writeHdr = ()=> companionCentral
+    ? Object.assign({"Content-Type":"application/json"}, companionAuth)
+    : {"Content-Type":"application/json","X-Wavr-Local":"1"};
+  const deleteHdr = ()=> companionCentral ? companionAuth : {"X-Wavr-Local":"1"};
+  const getOpt = companionAuth ? {headers: companionAuth} : undefined;
+
+  const list = document.getElementById("rotList");
+  const empty = document.getElementById("rotEmpty");
+  const fb = document.getElementById("rotFb");
+  let ROUTINES = [];
+  let ENTITIES = null;    // lazy-cached GET /api/routines/ha-entities result ([] once fetched)
+  let PERSONS = null;     // lazy-cached known-person names (live only, mirrors renderKnownPresence)
+
+  async function fetchEntities(){
+    if(ENTITIES) return ENTITIES;
+    try{
+      const r = await __nf("/api/routines/ha-entities", getOpt);
+      const j = await r.json();
+      ENTITIES = Array.isArray(j.entities) ? j.entities : [];
+    }catch{ ENTITIES = []; }
+    return ENTITIES;
+  }
+  async function fetchPersons(){
+    if(PERSONS) return PERSONS;
+    PERSONS = [];
+    if(MODE !== "live") return PERSONS;   // known-presence is live-only (renderKnownPresence's own gate)
+    try{
+      const r = await fetch(location.origin+"/api/identity/known-presence", {headers:{"X-Wavr-Local":"1"}});
+      if(r.ok){
+        const j = await r.json();
+        const names = (Array.isArray(j.corroborators) ? j.corroborators : [])
+          .map(c => c.person).filter(p => typeof p === "string" && p.trim());
+        PERSONS = Array.from(new Set(names)).sort();
+      }
+    }catch{}
+    return PERSONS;
+  }
+  function entityLabel(id){
+    if(!id) return "a device";
+    const e = ENTITIES && ENTITIES.find(x => x.entity_id === id);
+    return e ? e.name : id;   // fall back to the raw id — still honest, just unresolved
+  }
+
+  // ---- Plain-language summaries for the list (never a JSON dump) ----
+  function triggerSummary(r){
+    const p = r.trigger_params || {};
+    switch(r.trigger_kind){
+      case "house_arrived": return "When someone arrives home";
+      case "house_left": return "When everyone leaves";
+      case "person_arrived": return "When " + (p.person || "someone") + " arrives";
+      case "person_left": return "When " + (p.person || "someone") + " leaves";
+      case "room_occupied": return "When the " + (p.room || "room") + " fills";
+      case "room_empty": return "When the " + (p.room || "room") + " empties";
+      case "schedule": return "At " + (p.at || "—");
+      case "house_away_by_time": return "If nobody's home by " + (p.by || "—");
+      case "device_seen": return "When a device shows up";
+      case "no_motion": return "If " + (p.room || "a room") + " has no movement for "
+        + (p.minutes != null ? p.minutes : "—") + " min";
+      default: return rotTriggerLabel(r.trigger_kind);
+    }
+  }
+  function actionSummary(a){
+    const p = (a && a.params) || {};
+    if(a.kind === "ha_service"){
+      const onoff = p.service === "turn_off" ? "off" : "on";
+      return "turn " + entityLabel(p.entity_id) + " " + onoff;
+    }
+    if(a.kind === "notify") return "notify me: “" + (p.message || "") + "”";
+    if(a.kind === "set_watch") return p.on ? "turn on discreet mode" : "turn off discreet mode";
+    if(a.kind === "notify_new_devices") return "tell me about new devices while I was out"
+      + (p.message ? " (prefix: “" + p.message + "”)" : "");
+    return rotActionLabel(a && a.kind);
+  }
+  function routineSummary(r){
+    const acts = Array.isArray(r.actions) ? r.actions : [];
+    return triggerSummary(r) + " → " + (acts.length ? acts.map(actionSummary).join(", ") : "(no actions)");
+  }
+
+  function renderList(){
+    list.textContent = "";
+    if(!ROUTINES.length){
+      empty.hidden = false; list.hidden = true;
+      return;
+    }
+    empty.hidden = true; list.hidden = false;
+    ROUTINES.forEach(r => {
+      const row = document.createElement("div"); row.className = "rot-row";
+      const left = document.createElement("div"); left.className = "rot-row-left";
+      const name = document.createElement("div"); name.className = "rot-name";
+      name.textContent = r.name || "(unnamed routine)";        // textContent — user data
+      left.appendChild(name);
+      const summary = document.createElement("p"); summary.className = "rot-summary";
+      summary.textContent = routineSummary(r);                 // textContent — server/user data
+      left.appendChild(summary);
+      const firedRel = fmtRelative(r.last_fired);
+      if(firedRel){
+        const meta = document.createElement("p");
+        meta.className = "rot-meta" + (r.last_status === "partial" ? " warn"
+          : r.last_status === "failed" ? " danger" : "");
+        meta.textContent = "last ran " + firedRel + (r.last_status ? " · " + r.last_status : "");
+        left.appendChild(meta);
+      }
+      row.appendChild(left);
+
+      const ctl = document.createElement("div"); ctl.className = "rot-row-ctl";
+      const sw = document.createElement("button"); sw.type = "button";
+      sw.className = "ctl switch small " + (r.enabled ? "on" : "off");
+      sw.setAttribute("role", "switch");
+      sw.setAttribute("aria-checked", r.enabled ? "true" : "false");
+      sw.setAttribute("aria-label", (r.name || "routine") + ": " + (r.enabled ? "on" : "off"));
+      sw.onclick = async ()=>{
+        sw.disabled = true;
+        let resp;
+        try{
+          resp = await __nf("/api/routines/"+encodeURIComponent(r.id)+"/enable",
+            {method:"POST", headers:writeHdr(), body:JSON.stringify({on: !r.enabled})});
+        }catch{}
+        if(resp && resp.ok){
+          actionFeedback(fb, true, null, !r.enabled ? "✓ turned on" : "✓ turned off");
+          refresh();
+        } else {
+          sw.disabled = false;
+          actionFeedback(fb, false, "couldn't change — check the connection");
+        }
+      };
+      ctl.appendChild(sw);
+
+      const testBtn = document.createElement("button"); testBtn.type = "button";
+      testBtn.className = "ctl small"; testBtn.textContent = "Test";
+      testBtn.setAttribute("data-tip", "Runs this routine's actions right now, for real — e.g. a light really turns on");
+      const testFb = document.createElement("span"); testFb.className = "action-fb"; testFb.setAttribute("aria-live", "polite");
+      testBtn.onclick = async ()=>{
+        testBtn.disabled = true; testFb.className = "action-fb"; testFb.textContent = "running…";
+        let resp;
+        try{
+          resp = await __nf("/api/routines/"+encodeURIComponent(r.id)+"/test",
+            {method:"POST", headers:writeHdr()});
+        }catch{}
+        testBtn.disabled = false;
+        if(resp && resp.ok){
+          let j; try{ j = await resp.json(); }catch{ j = {}; }
+          const st = j.status || "ok";
+          if(st === "ok") actionFeedback(testFb, true, null, "✓ ran ok");
+          else if(st === "partial") actionFeedback(testFb, false, "ran, but some actions failed");
+          else actionFeedback(testFb, false, "failed — check Home Assistant / the notifier");
+        } else {
+          actionFeedback(testFb, false, "couldn't run — check the connection");
+        }
+      };
+      ctl.appendChild(testBtn); ctl.appendChild(testFb);
+
+      const editBtn = document.createElement("button"); editBtn.type = "button";
+      editBtn.className = "ctl small"; editBtn.textContent = "Edit";
+      editBtn.onclick = (e)=>{ openBuilder(r, e.currentTarget); };
+      ctl.appendChild(editBtn);
+
+      // Two-step reveal-then-confirm — never a native confirm(), mirrors Nodes/Peers "Remove".
+      const rmBtn = document.createElement("button"); rmBtn.type = "button"; rmBtn.className = "rm";
+      rmBtn.textContent = "Remove";
+      rmBtn.setAttribute("aria-label", "remove " + (r.name || "routine"));
+      rmBtn.onclick = ()=>{
+        ctl.textContent = "";
+        const warn = document.createElement("span"); warn.className = "pair-dev-meta"; warn.textContent = "Remove? ";
+        const yes = document.createElement("button"); yes.type = "button"; yes.className = "rm"; yes.textContent = "Confirm";
+        const no = document.createElement("button"); no.type = "button"; no.className = "ctl small off"; no.textContent = "Cancel";
+        no.onclick = ()=>{ renderList(); };
+        yes.onclick = async ()=>{
+          yes.disabled = true; no.disabled = true;
+          let resp;
+          try{
+            resp = await __nf("/api/routines/"+encodeURIComponent(r.id), {method:"DELETE", headers:deleteHdr()});
+          }catch{}
+          if(resp && resp.ok){ actionFeedback(fb, true, null, "✓ removed"); refresh(); }
+          else { actionFeedback(fb, false, "couldn't remove"); renderList(); }
+        };
+        ctl.appendChild(warn); ctl.appendChild(yes); ctl.appendChild(no);
+      };
+      ctl.appendChild(rmBtn);
+      row.appendChild(ctl);
+      list.appendChild(row);
+    });
+  }
+
+  async function refresh(){
+    let resp;
+    try{ resp = await __nf("/api/routines", getOpt); }catch{ return; }   // backend momentarily unreachable — keep last view
+    if(!resp || !resp.ok) return;
+    let j; try{ j = await resp.json(); }catch{ j = {routines: []}; }
+    ROUTINES = Array.isArray(j.routines) ? j.routines : [];
+    renderList();
+  }
+
+  // ---- Builder overlay (New / Edit) — guided form only, never a JSON editor ----
+  const overlay = document.getElementById("routineOverlay");
+  const content = document.getElementById("routineContent");
+  const title = document.getElementById("routine-h");
+  const backBtn = document.getElementById("routineBack");
+  let builderTrigger = null;
+
+  function closeBuilder(){
+    if(!overlay || overlay.hidden) return;
+    overlay.hidden = true;
+    if(window.__wavrSetAppInert) window.__wavrSetAppInert(false);
+    if(builderTrigger && builderTrigger.focus) builderTrigger.focus();
+    builderTrigger = null;
+  }
+  if(backBtn) backBtn.onclick = closeBuilder;
+  if(overlay && window.__wavrTrapFocus) window.__wavrTrapFocus(overlay);
+  document.addEventListener("keydown", (e)=>{ if(e.key === "Escape" && overlay && !overlay.hidden) closeBuilder(); });
+
+  function elc(tag, cls, text){
+    const e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(text != null) e.textContent = text;
+    return e;
+  }
+  function fieldRow(labelText){
+    const wrap = elc("label", "pair-role");
+    wrap.appendChild(document.createTextNode(labelText));
+    return wrap;
+  }
+
+  // preset (optional): a ROT_QUICKSTARTS entry — pre-fills the form only, same as opening
+  // "New routine" by hand. Never submits on its own; the user still names it and hits Save.
+  async function openBuilder(existing, triggerEl, preset){
+    if(!overlay || !content) return;
+    builderTrigger = triggerEl || document.activeElement;
+    title.textContent = existing ? "Edit routine" : "New routine";
+    content.textContent = "";
+    content.appendChild(elc("p", "narrate-out muted", "Loading…"));
+    overlay.hidden = false;
+    if(window.__wavrSetAppInert) window.__wavrSetAppInert(true);
+
+    const [entities, persons] = await Promise.all([fetchEntities(), fetchPersons()]);
+
+    // Local editable state, seeded from `existing` when editing, or from a quick-start `preset`
+    // when creating from one. Never sent verbatim — the submit handler strips the UI-only
+    // "_manual"/"_personManual" markers below first.
+    const state = {
+      name: existing ? (existing.name || "") : (preset ? preset.name : ""),
+      trigger_kind: existing ? existing.trigger_kind : (preset ? preset.trigger_kind : "house_arrived"),
+      trigger_params: existing ? Object.assign({}, existing.trigger_params) : (preset ? Object.assign({}, preset.trigger_params) : {}),
+      actions: existing ? (existing.actions || []).map(a => ({kind: a.kind, params: Object.assign({}, a.params || {})}))
+        : (preset ? [{kind: preset.action.kind, params: Object.assign({}, preset.action.params)}] : []),
+      enabled: existing ? !!existing.enabled : false,
+    };
+
+    content.textContent = "";
+    const form = document.createElement("form"); form.className = "rot-form";
+
+    // -- Name --
+    const nameTile = elc("div", "tile");
+    const nameHead = elc("div", "tile-head"); nameHead.appendChild(elc("h2", null, "Name"));
+    nameTile.appendChild(nameHead);
+    const nameLabel = fieldRow("Routine name");
+    const nameInput = document.createElement("input");
+    nameInput.type = "text"; nameInput.maxLength = 80; nameInput.required = true;
+    nameInput.value = state.name; nameInput.placeholder = "e.g. Everyone leaves";
+    nameInput.setAttribute("aria-label", "routine name");
+    nameInput.oninput = ()=>{ state.name = nameInput.value; };
+    nameLabel.appendChild(nameInput);
+    nameTile.appendChild(nameLabel);
+    form.appendChild(nameTile);
+
+    // -- Trigger --
+    const trigTile = elc("div", "tile");
+    const trigHead = elc("div", "tile-head"); trigHead.appendChild(elc("h2", null, "When…"));
+    trigTile.appendChild(trigHead);
+    const trigLabel = fieldRow("Trigger");
+    const trigSelect = document.createElement("select");
+    trigSelect.setAttribute("aria-label", "trigger");
+    ROT_TRIGGERS.forEach(t => trigSelect.appendChild(new Option(t.label, t.kind, t.kind === state.trigger_kind, t.kind === state.trigger_kind)));
+    trigLabel.appendChild(trigSelect);
+    trigTile.appendChild(trigLabel);
+    const trigParamHost = elc("div", "rot-trigparam");
+    trigTile.appendChild(trigParamHost);
+    form.appendChild(trigTile);
+
+    function renderTriggerParam(){
+      trigParamHost.textContent = "";
+      const meta = ROT_TRIGGERS.find(t => t.kind === state.trigger_kind);
+      const key = meta && meta.paramKey;
+      if(!key){
+        trigParamHost.appendChild(elc("p", "panel-note", "No extra details needed for this trigger."));
+        return;
+      }
+      if(key === "person"){
+        const wrap = fieldRow("Person");
+        const useManual = !persons.length || state.trigger_params._personManual === true
+          || (state.trigger_params.person && persons.indexOf(state.trigger_params.person) === -1);
+        if(!useManual){
+          const sel = document.createElement("select");
+          sel.setAttribute("aria-label", "person");
+          sel.appendChild(new Option("choose a person…", "", !state.trigger_params.person, !state.trigger_params.person));
+          persons.forEach(p => sel.appendChild(new Option(p, p, p === state.trigger_params.person, p === state.trigger_params.person)));
+          sel.appendChild(new Option("Someone else (type a name)…", "__other__"));
+          sel.onchange = ()=>{
+            if(sel.value === "__other__"){ state.trigger_params._personManual = true; renderTriggerParam(); return; }
+            state.trigger_params.person = sel.value;
+          };
+          wrap.appendChild(sel);
+        } else {
+          const inp = document.createElement("input");
+          inp.type = "text"; inp.maxLength = 64; inp.setAttribute("aria-label", "person name");
+          inp.placeholder = "e.g. augusto"; inp.value = state.trigger_params.person || "";
+          inp.oninput = ()=>{ state.trigger_params.person = inp.value; };
+          wrap.appendChild(inp);
+          if(persons.length){
+            const back = document.createElement("button"); back.type = "button";
+            back.className = "linklike"; back.textContent = "choose from the list instead";
+            back.onclick = ()=>{ state.trigger_params._personManual = false; renderTriggerParam(); };
+            wrap.appendChild(back);
+          }
+        }
+        trigParamHost.appendChild(wrap);
+      } else if(key === "room"){
+        const wrap = fieldRow("Room");
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.maxLength = 64; inp.setAttribute("aria-label", "room name");
+        inp.placeholder = "e.g. living room"; inp.value = state.trigger_params.room || "";
+        inp.oninput = ()=>{ state.trigger_params.room = inp.value; };
+        wrap.appendChild(inp);
+        trigParamHost.appendChild(wrap);
+      } else if(key === "at" || key === "by"){
+        const wrap = fieldRow(key === "at" ? "Time" : "By this time");
+        const inp = document.createElement("input");
+        inp.type = "time"; inp.setAttribute("aria-label", key === "at" ? "time of day" : "deadline time");
+        inp.value = state.trigger_params[key] || "";
+        inp.oninput = ()=>{ state.trigger_params[key] = inp.value; };
+        wrap.appendChild(inp);
+        trigParamHost.appendChild(wrap);
+      } else if(key === "mac"){
+        const wrap = fieldRow("Device address (MAC)");
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.maxLength = 32; inp.setAttribute("aria-label", "device MAC address");
+        inp.placeholder = "aa:bb:cc:dd:ee:ff"; inp.value = state.trigger_params.mac || "";
+        inp.autocomplete = "off"; inp.spellcheck = false;
+        inp.oninput = ()=>{ state.trigger_params.mac = inp.value; };
+        wrap.appendChild(inp);
+        trigParamHost.appendChild(wrap);
+      } else if(key === "no_motion"){
+        // Elder-care guardian trigger — needs BOTH room + minutes (routines.py._validate: a
+        // non-positive-int minutes is a 400, surfaced verbatim in errBox on submit).
+        const roomWrap = fieldRow("Room");
+        const roomInp = document.createElement("input");
+        roomInp.type = "text"; roomInp.maxLength = 64; roomInp.setAttribute("aria-label", "room name");
+        roomInp.placeholder = "e.g. living room"; roomInp.value = state.trigger_params.room || "";
+        roomInp.oninput = ()=>{ state.trigger_params.room = roomInp.value; };
+        roomWrap.appendChild(roomInp);
+        trigParamHost.appendChild(roomWrap);
+
+        const minWrap = fieldRow("Minutes with no movement");
+        const minInp = document.createElement("input");
+        minInp.type = "number"; minInp.min = "1"; minInp.step = "1";
+        minInp.setAttribute("aria-label", "notify after this many minutes with no movement");
+        minInp.placeholder = "e.g. 180";
+        if(state.trigger_params.minutes != null) minInp.value = String(state.trigger_params.minutes);
+        minInp.oninput = ()=>{
+          const n = parseInt(minInp.value, 10);
+          if(Number.isFinite(n)) state.trigger_params.minutes = n; else delete state.trigger_params.minutes;
+        };
+        minWrap.appendChild(minInp);
+        trigParamHost.appendChild(minWrap);
+
+        // Honest, load-bearing note (ADR-0003): never let this trigger read as a medical/safety
+        // alarm, and never claim stillness in a room Wavr structurally cannot sense.
+        trigParamHost.appendChild(elc("p", "panel-note",
+          "Best-effort awareness, not a medical or safety alarm (ADR-0003). Works only in a room "
+          + "with a radar / mmWave motion sensor — it reads per-target velocity, so it can tell "
+          + "when someone has stopped moving. A camera alone can't measure stillness, so Wavr "
+          + "won't claim someone hasn't moved in a room it can't sense that way."));
+      }
+    }
+    renderTriggerParam();
+    trigSelect.onchange = ()=>{
+      state.trigger_kind = trigSelect.value;
+      state.trigger_params = {};   // switching trigger kind drops the old, now-irrelevant param
+      renderTriggerParam();
+    };
+
+    // -- Actions (a list; "Add all my lights (off)" fans out to N ha_service actions at once) --
+    const actTile = elc("div", "tile");
+    const actHead = elc("div", "tile-head");
+    actHead.appendChild(elc("h2", null, "Then do this"));
+    const addActBtn = document.createElement("button"); addActBtn.type = "button";
+    addActBtn.className = "ctl small"; addActBtn.textContent = "+ Add action";
+    actHead.appendChild(addActBtn);
+    actTile.appendChild(actHead);
+    const actList = elc("div", "rot-action-list");
+    actTile.appendChild(actList);
+    const addAllOffBtn = document.createElement("button"); addAllOffBtn.type = "button";
+    addAllOffBtn.className = "ctl small"; addAllOffBtn.style.marginTop = "10px"; addAllOffBtn.hidden = true;
+    addAllOffBtn.textContent = "Add all my lights (off)";
+    addAllOffBtn.setAttribute("data-tip", "Adds one “turn off” action for every light/switch Wavr can control — the fast way to build “turn everything off”");
+    actTile.appendChild(addAllOffBtn);
+    const actEmptyNote = elc("p", "panel-note", "Add at least one action.");
+    actTile.appendChild(actEmptyNote);
+    form.appendChild(actTile);
+
+    function renderActions(){
+      actList.textContent = "";
+      addAllOffBtn.hidden = !entities.length;
+      actEmptyNote.hidden = !!state.actions.length;
+      state.actions.forEach((a, idx) => {
+        const row = elc("div", "rot-action-row");
+        const fields = elc("div", "rot-action-fields");
+
+        const kindLabel = fieldRow("Action");
+        const kindSel = document.createElement("select");
+        kindSel.setAttribute("aria-label", "action " + (idx+1) + " type");
+        ROT_ACTION_KINDS.forEach(ak => kindSel.appendChild(new Option(ak.label, ak.kind, ak.kind === a.kind, ak.kind === a.kind)));
+        kindSel.onchange = ()=>{ a.kind = kindSel.value; a.params = {}; renderActions(); };
+        kindLabel.appendChild(kindSel);
+        fields.appendChild(kindLabel);
+
+        if(a.kind === "ha_service"){
+          const entLabel = fieldRow("Light/switch");
+          const useManual = !entities.length || a.params._manual === true
+            || (a.params.entity_id && !entities.some(e => e.entity_id === a.params.entity_id));
+          if(!useManual){
+            const sel = document.createElement("select");
+            sel.setAttribute("aria-label", "entity for action " + (idx+1));
+            sel.appendChild(new Option("choose a light/switch…", "", !a.params.entity_id, !a.params.entity_id));
+            entities.forEach(e => sel.appendChild(new Option(e.name + " (" + e.domain + ")", e.entity_id,
+              e.entity_id === a.params.entity_id, e.entity_id === a.params.entity_id)));
+            sel.appendChild(new Option("Type the entity ID myself…", "__other__"));
+            sel.onchange = ()=>{
+              if(sel.value === "__other__"){ a.params._manual = true; renderActions(); return; }
+              const chosen = entities.find(e => e.entity_id === sel.value);
+              a.params.entity_id = sel.value;
+              a.params.domain = chosen ? chosen.domain : (a.params.domain || "light");
+              renderActions();
+            };
+            entLabel.appendChild(sel);
+          } else {
+            const inp = document.createElement("input");
+            inp.type = "text"; inp.setAttribute("aria-label", "entity id for action " + (idx+1));
+            inp.placeholder = "e.g. light.sala"; inp.value = a.params.entity_id || "";
+            inp.autocomplete = "off"; inp.spellcheck = false;
+            inp.oninput = ()=>{
+              a.params.entity_id = inp.value;
+              a.params.domain = inp.value.split(".")[0] || "light";
+            };
+            entLabel.appendChild(inp);
+            if(entities.length){
+              const back = document.createElement("button"); back.type = "button";
+              back.className = "linklike"; back.textContent = "choose from the list instead";
+              back.onclick = ()=>{ a.params._manual = false; renderActions(); };
+              entLabel.appendChild(back);
+            }
+          }
+          fields.appendChild(entLabel);
+
+          const onoffLabel = fieldRow("Turn");
+          const onoffSel = document.createElement("select");
+          onoffSel.setAttribute("aria-label", "on or off for action " + (idx+1));
+          if(!a.params.service) a.params.service = "turn_on";
+          onoffSel.appendChild(new Option("On", "turn_on", a.params.service !== "turn_off", a.params.service !== "turn_off"));
+          onoffSel.appendChild(new Option("Off", "turn_off", a.params.service === "turn_off", a.params.service === "turn_off"));
+          onoffSel.onchange = ()=>{ a.params.service = onoffSel.value; };
+          onoffLabel.appendChild(onoffSel);
+          fields.appendChild(onoffLabel);
+        } else if(a.kind === "notify"){
+          const msgLabel = fieldRow("Message");
+          const inp = document.createElement("input");
+          inp.type = "text"; inp.maxLength = 200; inp.setAttribute("aria-label", "notification message for action " + (idx+1));
+          inp.placeholder = "e.g. Everyone left the house"; inp.value = a.params.message || "";
+          inp.oninput = ()=>{ a.params.message = inp.value; };
+          msgLabel.appendChild(inp);
+          fields.appendChild(msgLabel);
+        } else if(a.kind === "set_watch"){
+          const wLabel = fieldRow("Discreet mode");
+          const sel = document.createElement("select");
+          sel.setAttribute("aria-label", "discreet mode for action " + (idx+1));
+          if(a.params.on === undefined) a.params.on = true;
+          sel.appendChild(new Option("Turn on", "on", a.params.on === true, a.params.on === true));
+          sel.appendChild(new Option("Turn off", "off", a.params.on !== true, a.params.on !== true));
+          sel.onchange = ()=>{ a.params.on = (sel.value === "on"); };
+          wLabel.appendChild(sel);
+          fields.appendChild(wLabel);
+        } else if(a.kind === "notify_new_devices"){
+          // No required params (routines.py _ACTION_REQUIRED["notify_new_devices"] = ()) — the
+          // notification body is computed at fire time from the count of devices first-seen
+          // while the house was away; this text is only an optional prefix (e.g. "Home:").
+          const msgLabel = fieldRow("Message prefix (optional)");
+          const inp = document.createElement("input");
+          inp.type = "text"; inp.maxLength = 200;
+          inp.setAttribute("aria-label", "optional message prefix for action " + (idx+1));
+          inp.placeholder = "e.g. Home:"; inp.value = a.params.message || "";
+          inp.oninput = ()=>{ a.params.message = inp.value; };
+          msgLabel.appendChild(inp);
+          fields.appendChild(msgLabel);
+        }
+        row.appendChild(fields);
+
+        const rm = document.createElement("button"); rm.type = "button";
+        rm.className = "rm"; rm.textContent = "Remove";
+        rm.setAttribute("aria-label", "remove action " + (idx+1));
+        rm.onclick = ()=>{ state.actions.splice(idx, 1); renderActions(); };
+        row.appendChild(rm);
+
+        actList.appendChild(row);
+      });
+    }
+    addActBtn.onclick = ()=>{ state.actions.push({kind:"ha_service", params:{service:"turn_on"}}); renderActions(); };
+    addAllOffBtn.onclick = ()=>{
+      entities.forEach(e => state.actions.push({kind:"ha_service", params:{domain:e.domain, service:"turn_off", entity_id:e.entity_id}}));
+      renderActions();
+    };
+    renderActions();
+
+    // -- Enable now (new routines only — an existing one already has its own on/off switch
+    // in the list) + Save/Cancel --
+    const saveTile = elc("div", "tile");
+    if(!existing){
+      const enableLabel = elc("label", "pair-role");
+      const enableChk = document.createElement("input");
+      enableChk.type = "checkbox"; enableChk.checked = state.enabled;
+      enableChk.setAttribute("aria-label", "enable this routine now");
+      enableChk.onchange = ()=>{ state.enabled = enableChk.checked; };
+      enableLabel.appendChild(enableChk);
+      enableLabel.appendChild(document.createTextNode(" Turn this routine on now"));
+      saveTile.appendChild(enableLabel);
+    }
+    const errBox = elc("p", "action-fb err", "");
+    errBox.hidden = true;
+    saveTile.appendChild(errBox);
+    const btnRow = elc("div", "controls-row");
+    const saveBtn = document.createElement("button"); saveBtn.type = "submit";
+    saveBtn.className = "ctl primary"; saveBtn.textContent = existing ? "Save changes" : "Create routine";
+    const cancelBtn = document.createElement("button"); cancelBtn.type = "button";
+    cancelBtn.className = "ctl off"; cancelBtn.textContent = "Cancel";
+    cancelBtn.onclick = closeBuilder;
+    btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+    saveTile.appendChild(btnRow);
+    form.appendChild(saveTile);
+
+    form.onsubmit = async (e)=>{
+      e.preventDefault();
+      errBox.hidden = true;
+      // Strip UI-only markers (which widget to show) before this ever reaches the network —
+      // they are never real routine fields.
+      const cleanTriggerParams = Object.assign({}, state.trigger_params);
+      delete cleanTriggerParams._personManual;
+      const cleanActions = state.actions.map(a => {
+        const p = Object.assign({}, a.params);
+        delete p._manual;
+        return {kind: a.kind, params: p};
+      });
+      const body = {
+        name: state.name.trim(), trigger_kind: state.trigger_kind,
+        trigger_params: cleanTriggerParams, actions: cleanActions,
+      };
+      if(!existing) body.enabled = state.enabled;
+      saveBtn.disabled = true;
+      let resp;
+      try{
+        resp = existing
+          ? await __nf("/api/routines/"+encodeURIComponent(existing.id), {method:"PUT", headers:writeHdr(), body:JSON.stringify(body)})
+          : await __nf("/api/routines", {method:"POST", headers:writeHdr(), body:JSON.stringify(body)});
+      }catch{}
+      saveBtn.disabled = false;
+      if(resp && resp.ok){
+        closeBuilder();
+        actionFeedback(fb, true, null, existing ? "✓ routine updated" : "✓ routine created");
+        refresh();
+      } else {
+        // Honest validation echo — routines.py's ValueError text names exactly which field
+        // was wrong (e.g. "trigger 'schedule' requires param 'at'"), never a generic failure.
+        let msg = "couldn't save — check the fields above";
+        try{ const j = await resp.json(); if(j && j.detail) msg = String(j.detail); }catch{}
+        errBox.hidden = false; errBox.textContent = msg;
+      }
+    };
+
+    content.appendChild(form);
+    nameInput.focus();
+  }
+
+  const rotNewBtn = document.getElementById("rotNewBtn");
+  const rotEmptyCta = document.getElementById("rotEmptyCta");
+  if(rotNewBtn) rotNewBtn.onclick = (e)=>{ openBuilder(null, e.currentTarget); };
+  if(rotEmptyCta) rotEmptyCta.onclick = (e)=>{ openBuilder(null, e.currentTarget); };
+
+  // ---- Quick starts: one tap OPENS the builder pre-filled — never a silent create. Sits
+  // above both the empty state and the list (single element, positioned once), so it shows
+  // in either case without duplicating markup. ----
+  const rotQuick = document.getElementById("rotQuick");
+  if(rotQuick){
+    rotQuick.textContent = "";
+    rotQuick.appendChild(elc("h4", "det-sub", "Quick starts"));
+    const row = elc("div", "rot-quick-row");
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", "quick-start routines");
+    ROT_QUICKSTARTS.forEach(qs => {
+      const b = document.createElement("button"); b.type = "button";
+      b.className = "ctl small rot-quick-btn"; b.textContent = qs.label;
+      b.onclick = (e)=>{ openBuilder(null, e.currentTarget, qs); };
+      row.appendChild(b);
+    });
+    rotQuick.appendChild(row);
+  }
+
+  // Entities BEFORE the first list paint so a "turn X on/off" summary shows the friendly HA
+  // name from the start, not the raw entity_id until the builder happens to be opened once.
+  await fetchEntities();
+  await refresh();
+}
+renderRoutines();
 
 // ---- Radar (top-down house map + live/demo targets; works in both modes) ----
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -9942,7 +11361,7 @@ try {
 // (window.__wavrMap) that renderRadar() exposes at the end of its closure.
 (function(){
   "use strict";
-  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema"];
+  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas", "quemcasa", "novos", "transparencia"];
   var content = document.getElementById("content");
   var navButtons = Array.prototype.slice.call(document.querySelectorAll(".nav-item[data-tab]"));
   var panels = {};
@@ -9973,6 +11392,10 @@ try {
       btn.classList.toggle("active", on);
       btn.setAttribute("aria-selected", on ? "true" : "false");
       btn.tabIndex = on ? 0 : -1;
+      // Phone bar now scrolls horizontally (9 tabs, .nav-tabs overflow-x:auto) — keep the
+      // active one in view whether switchTab was reached by tap, keyboard, or a deep-link
+      // elsewhere in the file (e.g. window.switchTab("sistema")).
+      if(on && btn.scrollIntoView) btn.scrollIntoView({block:"nearest", inline:"nearest"});
     });
     TABS.forEach(function(t){
       if(panels[t]) panels[t].classList.toggle("active", t === name);
@@ -11577,6 +13000,21 @@ try {
               "restart the service, then verify again.";
           } else {
             vres.textContent = "no source registered on the hub yet — apply the configuration and restart the service.";
+          }
+          // PR4: end-of-setup discovery check. If nothing new showed up, a pathological network
+          // (isolation / second net / silent multicast) is a likely reason — surface that verdict
+          // HERE, before the user concludes, instead of leaving them guessing. Best-effort: a
+          // missing/healthy verdict simply adds nothing.
+          if(!fresh.length && typeof discoveryVerdictCallout === "function"){
+            var dd = await fetchDiscoveryVerdict();
+            if(dd && Array.isArray(dd.checks)){
+              var callout = discoveryVerdictCallout(dd.checks);
+              if(callout){
+                vbody.appendChild(elc("p", "panel-note",
+                  "The network diagnosis may explain why the device didn't show up:"));
+                vbody.appendChild(callout);
+              }
+            }
           }
         }
         vbtn.disabled = false;
@@ -13426,6 +14864,206 @@ try {
   function doctorLbl(id){
     return String(id == null ? "" : id).replace(/_/g, " ").replace(/:/g, ": ");
   }
+  // discovery_reach (CL-02): map the STRUCTURED verdict's copy_key to plain-language,
+  // hypothesis-framed copy ("provavelmente" — ADR-0003) with the two numbers. Only the
+  // PROBLEM case (multicast_dead) gets a prominent callout; healthy / small-net / probe-
+  // unavailable just ride as a normal check row. PR2 splits multicast_dead into isolation
+  // vs second-network (each with its own key here); PR3 wires the "Como arrumar" link.
+  var DISCOVERY_COPY = {
+    // PR2 discriminates the cause. HARD RULE: the router is only ever named when the hub's
+    // multicast viability was PROVEN (discovery_ap_isolation / discovery_second_network). When
+    // it could NOT be proven the copy points at the hub's own environment, never the router.
+    // Each case: what Wavr sees + what still works + what the user can do (ADR-0003 honest).
+    // Product language is ENGLISH (v0.2.0 decision) — all user-facing copy here stays EN.
+    discovery_host_unavailable: function(v){
+      return {
+        cls: "warn",
+        title: "This hub isn't receiving discovery traffic",
+        body: "Wavr can see " + v.arp_count + " devices on your network, but the device Wavr runs on"
+          + " isn't receiving the network's discovery (multicast) traffic — so this is not your"
+          + " router's fault. This is common when Wavr runs inside a restricted environment"
+          + " (a container). Network detection keeps working normally. What you can do: run the Core"
+          + " on a computer/laptop on the same network, or check that the router doesn't have client"
+          + " isolation turned on."
+      };
+    },
+    discovery_ap_isolation: function(v){
+      return {
+        cls: "warn",
+        title: "Your network is blocking discovery",
+        body: "Wavr can see " + v.arp_count + " devices and confirmed it receives multicast from the"
+          + " network — yet the devices don't answer name discovery. Most likely the router is"
+          + " filtering that traffic (client isolation / \"AP isolation\", or an mDNS filter)."
+          + " Network detection keeps working. What to do: look for \"client isolation\" / \"AP"
+          + " isolation\" in your router settings and turn it off. Some ISP routers don't expose"
+          + " these switches at all — not finding them is normal, see the guide."
+      };
+    },
+    discovery_second_network: function(v){
+      return {
+        cls: "warn",
+        title: "Your devices are on separate networks",
+        body: "Wavr can see " + v.arp_count + " devices, but they appear to be on more than one"
+          + " network (different subnets or more than one DHCP server). A separate IoT/guest network"
+          + " stops discovery from crossing between them. Network detection keeps working. What to"
+          + " do: put Wavr on the same network/VLAN as the devices you want discovered."
+      };
+    },
+    // Neutral fallback: viability could not be established -> DO NOT blame the router (hard rule).
+    discovery_multicast_dead: function(v){
+      return {
+        cls: "warn",
+        title: "Wavr can't discover your devices",
+        body: "Wavr can see " + v.arp_count + " devices on your network, but only " + Math.max(0, v.mcast_responders)
+          + " answered name discovery. Network detection keeps working — but discovery (names/mDNS)"
+          + " isn't getting through, and the cause couldn't be confirmed yet (it may be a filter on"
+          + " the network or a limitation of the device Wavr runs on). Wavr won't point fingers"
+          + " without being sure."
+      };
+    }
+  };
+  // PR3: local, no-egress "how to fix" — keyed by the DETECTED cause's copy_key. Steps say WHAT
+  // to change; the router search says WHERE (per-router), with the full guide's filename in the
+  // public repo (docs/network-fixes/). Nothing here calls out to the internet. English-only copy.
+  var FIX_GUIDE = {
+    discovery_ap_isolation: { steps: [
+      "In your router admin, look for \"client isolation\" / \"AP isolation\" and turn it OFF for the network Wavr and your devices are on.",
+      "Make sure Wavr and your devices are NOT on the guest network — it isolates on purpose.",
+      "Some ISP routers expose none of these switches — not finding them is normal; see your router's guide below.",
+      "Apply and run the diagnosis again." ] },
+    discovery_second_network: { steps: [
+      "Your devices appear to be on more than one network (different subnets or 2 DHCP servers).",
+      "Put Wavr on the SAME network/VLAN as the devices you want discovered (e.g. off the guest/IoT network).",
+      "If you use mesh or a second router, that's usually where the second network comes from." ] },
+    discovery_host_unavailable: { steps: [
+      "The device Wavr runs on isn't receiving the network's discovery traffic — this is not your router's fault.",
+      "If the Core runs inside a restricted environment (container), run it on a computer/laptop on the same network.",
+      "Alternatively, check that the router doesn't have client isolation turned on." ] },
+    discovery_multicast_dead: { steps: [
+      "The cause couldn't be confirmed — work through the quick network self-check.",
+      "Check: client isolation off, Wavr and devices on the same network, multicast/mDNS allowed.",
+      "Full requirements guide in the repo: docs/network-fixes/wavr-network-requirements.md" ] }
+  };
+  // Searchable router database — match by brand, ISP, model OR country so the list is never
+  // an Ireland-only dropdown. `kw` is a lowercase haystack of names/ISPs/models/countries.
+  var ROUTER_DB = [
+    { name: "Virgin Media Hub", kw: "virgin media hub 3 4 5 ireland uk liberty global",
+      tip: "Advanced settings → Wireless → Guest network. Main-network isolation is rare on these; the usual culprit is the guest SSID.",
+      doc: "virgin-media-hub.md" },
+    { name: "eir (F3000 / F2000)", kw: "eir ireland f3000 f2000",
+      tip: "Wi-Fi → Advanced → \"Isolate clients\" / \"AP isolation\" → off. Keep Wavr and devices off the guest network.",
+      doc: "eir.md" },
+    { name: "Sky Hub / Max Hub", kw: "sky hub max broadband uk ireland italy",
+      tip: "\"Broadband Shield\" is content filtering, NOT isolation. Locked-down hub with no toggles → use your own router behind it.",
+      doc: "sky.md" },
+    { name: "Vodafone (Ultra Hub / Station)", kw: "vodafone ultra hub station thg3000 ireland uk germany italy spain portugal netherlands",
+      tip: "Stock Vodafone hubs expose few or none of these toggles — not finding them is normal, not a mistake. Check the guest network; if discovery still fails, the practical route is your own router/AP behind it.",
+      doc: "vodafone.md" },
+    { name: "TP-Link (Archer / Deco)", kw: "tp-link tplink archer deco mesh",
+      tip: "Archer: Advanced → Wireless → untick \"AP Isolation\" (per band). Deco app: More → IoT Network (that network isolates).",
+      doc: "tp-link.md" },
+    { name: "UniFi (Ubiquiti)", kw: "unifi ubiquiti dream machine udm cloud gateway",
+      tip: "SSID → Advanced → \"Client Device Isolation\" off. An IoT VLAN is the usual cause → enable the mDNS reflector or merge the networks.",
+      doc: "unifi.md" }
+  ];
+  var ROUTER_GENERIC = {
+    name: "Any other router",
+    tip: "In the Wi-Fi settings, hunt for the words: \"client isolation\" / \"AP isolation\", \"guest\" network, and \"mDNS\" / \"multicast\". Many ISP routers expose none of these — that's normal; the requirements guide covers what to check instead.",
+    doc: "wavr-network-requirements.md"
+  };
+  function discoveryFixPanel(copyKey){
+    var g = FIX_GUIDE[copyKey];
+    if(!g) return null;
+    var wrap = elc("div", "dv-fix");
+    var ol = document.createElement("ol");
+    g.steps.forEach(function(s){ ol.appendChild(elc("li", "", s)); });
+    wrap.appendChild(ol);
+    wrap.appendChild(elc("label", "", "Find your router — search by brand, ISP or country"));
+    var inp = document.createElement("input");
+    inp.type = "search"; inp.className = "dv-router-search";
+    inp.placeholder = "e.g. Vodafone, TP-Link, Ireland…";
+    inp.setAttribute("aria-label", "search router brand, ISP or country");
+    wrap.appendChild(inp);
+    var hits = elc("div", "dv-router-hits");
+    wrap.appendChild(hits);
+    var tip = elc("p", "dv-brand-tip"); var doc = elc("p", "dv-doc");
+    wrap.appendChild(tip); wrap.appendChild(doc);
+    function show(b){ tip.textContent = b.tip;
+      doc.textContent = "Full guide (in the repository): docs/network-fixes/" + b.doc; }
+    function render(){
+      var q = (inp.value || "").trim().toLowerCase();
+      hits.textContent = "";
+      var matches = !q ? ROUTER_DB
+        : ROUTER_DB.filter(function(b){
+            return (b.name.toLowerCase() + " " + b.kw).indexOf(q) !== -1; });
+      matches.forEach(function(b){
+        var btn = elc("button", "dv-router-hit", b.name);
+        btn.type = "button";
+        btn.addEventListener("click", function(){ show(b); });
+        hits.appendChild(btn);
+      });
+      var other = elc("button", "dv-router-hit", ROUTER_GENERIC.name);
+      other.type = "button";
+      other.addEventListener("click", function(){ show(ROUTER_GENERIC); });
+      hits.appendChild(other);
+      if(q && !matches.length) show(ROUTER_GENERIC);
+    }
+    inp.addEventListener("input", render);
+    render(); show(ROUTER_GENERIC);
+    return wrap;
+  }
+  function discoveryVerdictCallout(checks){
+    var dr = null;
+    for(var i=0;i<checks.length;i++){ if(checks[i] && checks[i].id === "discovery_reach"){ dr = checks[i]; break; } }
+    if(!dr || !dr.verdict) return null;
+    var mk = DISCOVERY_COPY[dr.verdict.copy_key];
+    if(!mk) return null;
+    var info = mk(dr.verdict);
+    var el = elc("div", "doctor-verdict " + info.cls);
+    el.appendChild(elc("p", "dv-title", info.title));
+    el.appendChild(elc("p", "dv-body", info.body));
+    // [Como arrumar] — only for causes that have an actionable guide (never for ok/small/probe).
+    if(FIX_GUIDE[dr.verdict.copy_key]){
+      var btn = elc("button", "dv-fix-btn", "How to fix");
+      btn.type = "button";
+      var panel = null;
+      btn.addEventListener("click", function(){
+        if(panel){ panel.remove(); panel = null; btn.textContent = "How to fix"; return; }
+        panel = discoveryFixPanel(dr.verdict.copy_key);
+        if(panel){ el.appendChild(panel); btn.textContent = "Hide"; }
+      });
+      el.appendChild(btn);
+    }
+    return el;
+  }
+  // Local SVG-sprite helper for the diagnostics UI. This script block is scope-isolated from
+  // the one that defines the shared icon() helper (each block is its own closure — calling
+  // icon() from here is a ReferenceError that the doctor's .catch silently swallowed, which is
+  // exactly how the Copy/Send report buttons vanished on the kiosk). Self-contained on purpose.
+  function dvIcon(sym){
+    var NS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("aria-hidden", "true");
+    var use = document.createElementNS(NS, "use");
+    use.setAttribute("href", "#" + sym);
+    svg.appendChild(use);
+    return svg;
+  }
+  // PR4: fetch just the diagnosis (no auto_fix — a setup surface must never trigger fixes) so the
+  // end-of-setup step can surface the discovery verdict when a device doesn't show up. Same auth
+  // dance as the doctor button; returns the parsed JSON or null (never throws at the call site).
+  function fetchDiscoveryVerdict(){
+    var companionCentral = (M === "companion" && companionIsCentral());
+    var headers = companionCentral
+      ? { "Authorization": "Bearer " + companionToken() }
+      : { "X-Wavr-Local": "1" };
+    var __nf = window.WAVR_MOBILE
+      ? function(p,o){ return window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + p, o); }
+      : function(p,o){ return fetch(location.origin + p, o); };
+    return __nf("/api/health/doctor", { headers: headers, cache: "no-store" })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .catch(function(){ return null; });
+  }
   function renderDoctorResult(d){
     var box = $("doctorResult");
     if(!box) return;
@@ -13436,6 +15074,8 @@ try {
     var suggestions = Array.isArray(d.suggestions) ? d.suggestions : [];
     box.appendChild(elc("p", "panel-note pres-n",
       checks.length + " check(s) · " + fixed.length + " auto-fixed · " + suggestions.length + " suggestion(s)"));
+    var dvCallout = discoveryVerdictCallout(checks);
+    if(dvCallout) box.appendChild(dvCallout);
     var list = elc("div", "diag-list");
     checks.forEach(function(c){
       var cls = (c && c.ok === true) ? "ok"
@@ -13464,6 +15104,109 @@ try {
           ((s && s.message) || "") + ((s && s.action_hint) ? " (" + s.action_hint + ")" : ""), "warn"));
       });
       box.appendChild(sl);
+    }
+    // PR4: copy-a-shareable-report (flutter-doctor pattern). The report string is built + MAC-
+    // redacted server-side; the button copies it verbatim. Nothing leaves the device unless the
+    // user pastes it somewhere themselves.
+    if(typeof d.report === "string" && d.report){
+      var rep = elc("div", "dv-report");
+      var row = elc("div", "dv-report-row");
+      var rbtn = elc("button", "dv-report-btn", "Copy diagnostic report");
+      rbtn.type = "button";
+      rbtn.addEventListener("click", function(){
+        var done = function(){ rbtn.textContent = "Copied ✓"; setTimeout(function(){
+          rbtn.textContent = "Copy diagnostic report"; }, 2000); };
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(d.report).then(done, function(){ done(); });
+        } else {
+          var ta = document.createElement("textarea"); ta.value = d.report;
+          document.body.appendChild(ta); ta.select();
+          try { document.execCommand("copy"); } catch(e) {}
+          document.body.removeChild(ta); done();
+        }
+      });
+      row.appendChild(rbtn);
+      // Authed fetch for the diagnostics actions — same header dance as the doctor call.
+      var diagFetch = function(path, opts){
+        var companionCentral = (M === "companion" && companionIsCentral());
+        opts = opts || {};
+        opts.headers = Object.assign(
+          companionCentral ? { "Authorization": "Bearer " + companionToken() }
+                           : { "X-Wavr-Local": "1" },
+          opts.headers || {});
+        var __nf = window.WAVR_MOBILE
+          ? function(p,o){ return window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + p, o); }
+          : function(p,o){ return fetch(location.origin + p, o); };
+        return __nf(path, opts);
+      };
+      // MANUAL send — the tap IS the consent for this one send. Carries the universal
+      // #ic-egress pictogram ("this leaves your home"). Honest failure texts per cause.
+      var sbtn = elc("button", "dv-report-btn dv-send");
+      sbtn.type = "button";
+      sbtn.appendChild(dvIcon("ic-egress"));
+      sbtn.appendChild(document.createTextNode("Send report"));
+      var sbtnReset = function(txt){ sbtn.textContent = ""; sbtn.appendChild(dvIcon("ic-egress"));
+        sbtn.appendChild(document.createTextNode(txt)); };
+      sbtn.addEventListener("click", function(){
+        sbtn.disabled = true; sbtnReset("Sending…");
+        diagFetch("/api/health/doctor/send", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ report: d.report }) })
+          .then(function(r){ return r.json().then(function(j){ return { s: r.status, j: j }; }); })
+          .then(function(res){
+            if(res.s === 200 && res.j && res.j.ok){ sbtnReset("Sent ✓"); }
+            else if(res.s === 409){ sbtnReset("Unavailable"); }
+            else { sbtnReset("Failed — try again"); }
+          })
+          .catch(function(){ sbtnReset("Failed — offline?"); })
+          .then(function(){ sbtn.disabled = false;
+            setTimeout(function(){ sbtnReset("Send report"); }, 3000); });
+      });
+      row.appendChild(sbtn);
+      rep.appendChild(row);
+      rep.appendChild(elc("p", "dv-report-note",
+        "Copy: paste into a GitHub issue to ask for help. Send: ships this report outside your"
+        + " local network to the Wavr diagnostics endpoint — one send, only when you tap. MACs are"
+        + " already redacted (aa:bb:cc:**:**:**); Wavr never sends anything on its own."));
+      // AUTO-SEND opt-in toggle (standing consent) — wired to the `diagnostics` connector.
+      // The enable route is loopback-root only, so the toggle is hidden on companions
+      // (they'd 403); the Connectors screen remains the canonical surface for it.
+      if(M !== "companion"){
+        diagFetch("/api/connectors", {}).then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(list){
+            var c = null;
+            (Array.isArray(list) ? list : (list && list.connectors) || []).forEach(function(x){
+              if(x && x.id === "diagnostics") c = x; });
+            if(!c) return;
+            var wrap = elc("div", "dv-auto");
+            var cb = document.createElement("input");
+            cb.type = "checkbox"; cb.id = "dvAutoDiag";
+            cb.checked = (c.override === "on");
+            var lab = document.createElement("label");
+            lab.className = "dv-auto-label"; lab.htmlFor = "dvAutoDiag";
+            lab.appendChild(dvIcon("ic-egress"));
+            lab.appendChild(document.createTextNode("Auto-send diagnostics when a problem is found"));
+            var note = elc("p", "dv-report-note",
+              "Opt-in — off by default. When ON, Wavr automatically sends a MAC-redacted"
+              + " diagnostic report OUTSIDE your local network whenever a diagnosis finds a"
+              + " problem. Nothing else is ever sent, and Wavr never turns this on by itself."
+              + (c.available ? "" : " (Needs a diagnostics endpoint configured — WAVR_DIAG_ENDPOINT.)"));
+            cb.addEventListener("change", function(){
+              cb.disabled = true;
+              diagFetch("/api/connectors/diagnostics/enable", { method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ enabled: cb.checked }) })
+                .then(function(r){ if(!r.ok){ cb.checked = !cb.checked; } })
+                .catch(function(){ cb.checked = !cb.checked; })
+                .then(function(){ cb.disabled = false; });
+            });
+            var col = elc("div");
+            col.appendChild(lab); col.appendChild(note);
+            wrap.appendChild(cb); wrap.appendChild(col);
+            rep.appendChild(wrap);
+          }).catch(function(){});
+      }
+      box.appendChild(rep);
     }
     box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()
       + " — point-in-time snapshot, never refreshes on its own"));
@@ -13927,6 +15670,416 @@ try {
   }
   new MutationObserver(scheduleStamp).observe(document.body, { childList: true, subtree: true });
   stampSrTips();
+})();
+</script>
+<script>
+// ============================================================================
+// Who's home (feature #2): a calm, at-a-glance answer to "who is home?" for a
+// non-technical user. Purely additive, zero new fetches/polls of its own —
+// every value below comes from data the dashboard ALREADY collects, via the
+// SAME hook-chaining idiom the Stage-2/3 and Core-panel blocks use:
+//   - roomOcc/roomConf: the dashboard's own top-level RoomState accumulator
+//     (updateHouse() populates it inside handle(), BEFORE window.__wavrRS
+//     fires — the same "readable from later script blocks" pattern the Core
+//     panel's renderHero() already relies on for its own room summary).
+//   - sensing on/off: chains onto window.__wavrSystem (sysInfo.running — the
+//     SAME flag deriveTier() uses to render "Off" on the sensing-level meter)
+//     for live mode, and window.__wavrStatus (status.features.hub_level) for
+//     a companion viewer — the SAME field the sensing-level meter reads for a
+//     paired device. Demo/simulated never claims "off" — it's illustrative.
+//   - named + anonymous "home now": window.__wavrKnownPresence, one additive
+//     hook added inside renderKnownPresence() (the "Who's likely home" tile)
+//     that exposes its ALREADY-fetched GET /api/identity/known-presence
+//     payload — live/central only, same gate as that tile. A corroborator
+//     with person===null is an anonymously-registered ("yellow") device that
+//     still counts as present without a name (wavr.identity_store's own
+//     consent contract) — exactly the honest "+N other devices" this screen
+//     asks for, never a guess.
+// Nothing here ever asserts "nobody home" when sensing is off, and nothing
+// here polls on its own — it re-renders whenever one of those three hooks
+// fires, debounced 250ms so a burst of RoomState frames repaints once.
+// ============================================================================
+(function(){
+  "use strict";
+  var tile = document.getElementById("qcTile");
+  if(!tile) return;   // additive: a stale cached page without this markup just no-ops
+  var headline = document.getElementById("qcHeadline");
+  var sub = document.getElementById("qcSub");
+  var namesEl = document.getElementById("qcNames");
+  var anonEl = document.getElementById("qcAnon");
+  var note = document.getElementById("qcNote");
+  var qcRoomsEl = document.getElementById("qcRooms");
+
+  var haveFrame = false, qcSysInfo = null, qcStatusInfo = null;
+
+  function sensingOff(){
+    if(MODE === "live") return !!(qcSysInfo && qcSysInfo.running === false);
+    if(MODE === "companion") return !!(qcStatusInfo && qcStatusInfo.features
+      && qcStatusInfo.features.hub_level === "off");
+    return false;   // demo/simulated: illustrative data, never claims sensing is off
+  }
+
+  function render(){
+    if(!haveFrame){
+      headline.className = "qc-headline"; headline.textContent = "Loading…";
+      sub.textContent = ""; namesEl.textContent = ""; anonEl.textContent = "";
+      qcRoomsEl.textContent = ""; note.hidden = true;
+      return;
+    }
+    if(sensingOff()){
+      // Honesty gate: never imply "empty home" when Wavr simply isn't watching —
+      // say so plainly instead, and show nothing else (any roomOcc value here would
+      // be stale, from before sensing was paused).
+      headline.className = "qc-headline off";
+      headline.textContent = "Sensing is off";
+      sub.textContent = "System paused — nothing is sensing. Turn it back on from the sensing-level meter on Home or Settings.";
+      namesEl.textContent = ""; anonEl.textContent = ""; qcRoomsEl.textContent = ""; note.hidden = true;
+      return;
+    }
+
+    var roomKeys = Object.keys(roomOcc);
+    var home = roomKeys.some(function(r){ return roomOcc[r]; });               // matches updateHouse()'s own definition (casa counts)
+    var realOcc = roomKeys.filter(function(r){ return r !== "casa" && roomOcc[r]; });
+    headline.className = "qc-headline " + (home ? "home" : "away");
+    headline.textContent = home ? "Someone's home" : "Empty home";             // exact reuse of heroLine1's own wording
+    if(realOcc.length){
+      var maxConf = Math.max.apply(null, realOcc.map(function(r){ return roomConf[r] || 0; }));
+      sub.textContent = realOcc.join(", ") + " " + MIDDOT + " " + confWord(maxConf).toLowerCase()
+        + " " + MIDDOT + " " + Math.round(maxConf * 100) + "%";                // exact reuse of heroLine2's own format
+    } else if(home){
+      sub.textContent = "house-level signal only " + MIDDOT + " no specific room confirmed";
+    } else {
+      sub.textContent = "no presence detected " + MIDDOT + " sensors monitoring";   // exact reuse of heroLine2's quiet-state wording
+    }
+
+    // Named + anonymous "home now" — live/central only (same gate/data as "Who's likely home").
+    namesEl.textContent = ""; anonEl.textContent = "";
+    var kp = window.__wavrKnownPresence;
+    if(MODE !== "live"){
+      note.hidden = false;
+      note.textContent = "Who's home by name needs the hub — not available in this demo or on a view-only companion device.";
+    } else if(!kp || !Array.isArray(kp.corroborators)){
+      note.hidden = false;
+      note.textContent = "No devices are registered to a person yet — use “assign person” on a row in the Network tab to see names here.";
+    } else {
+      note.hidden = true;
+      var present = kp.corroborators.filter(function(c){ return c && c.present; });
+      var named = present.filter(function(c){ return c.person; });
+      var anon = present.filter(function(c){ return !c.person; });
+      named.forEach(function(c){
+        var chip = document.createElement("span");
+        chip.className = "who-chip";
+        chip.textContent = c.person;   // PII — textContent only, never innerHTML
+        namesEl.appendChild(chip);
+      });
+      if(anon.length){
+        var achip = document.createElement("span");
+        achip.className = "qc-anon-chip";
+        achip.textContent = "+ " + anon.length + " other device" + (anon.length === 1 ? "" : "s");
+        anonEl.appendChild(achip);
+      }
+      if(!named.length && !anon.length){
+        var none = document.createElement("span");
+        none.className = "qc-empty-note";
+        none.textContent = "No one detected right now.";
+        namesEl.appendChild(none);
+      }
+    }
+
+    // Compact per-room lines — mode-agnostic, the SAME roomOcc/roomConf every room card reads.
+    qcRoomsEl.textContent = "";
+    var allRooms = roomKeys.filter(function(r){ return r !== "casa"; }).sort();
+    if(!allRooms.length){
+      var l0 = document.createElement("div"); l0.className = "qc-room-row dim";
+      // Honest, scope-aware: a network/BLE-only install can have real house-level frames
+      // (haveFrame is already true here) with no per-room sensor yet — never worded as
+      // "no data at all", which the house-level headline above would then contradict.
+      l0.textContent = roomKeys.length
+        ? "Only house-level presence is available — no per-room sensor has reported yet."
+        : "No room data yet.";
+      qcRoomsEl.appendChild(l0);
+    } else {
+      allRooms.forEach(function(r){
+        var row = document.createElement("div"); row.className = "qc-room-row";
+        var n = document.createElement("span"); n.className = "qc-room-name"; n.textContent = r;   // room name is RoomState data — textContent only
+        var s = document.createElement("span");
+        s.className = "qc-room-state " + (roomOcc[r] ? "occ" : "");
+        s.textContent = roomOcc[r] ? "occupied" : "empty";
+        row.appendChild(n); row.appendChild(s);
+        qcRoomsEl.appendChild(row);
+      });
+    }
+  }
+
+  var renderTimer = null;
+  function scheduleRender(){
+    if(renderTimer) return;
+    renderTimer = setTimeout(function(){ renderTimer = null; render(); }, 250);
+  }
+
+  // ---------- hooks fed by the main script (same one-liner chain idiom as every other block) ----------
+  var _rs = window.__wavrRS;
+  window.__wavrRS = function(rs){
+    try{ if(_rs) _rs(rs); }catch(e){}
+    haveFrame = true;
+    scheduleRender();
+  };
+  var _sys = window.__wavrSystem;
+  window.__wavrSystem = function(s){
+    try{ if(_sys) _sys(s); }catch(e){}
+    qcSysInfo = (s && typeof s === "object") ? s : null;
+    scheduleRender();
+  };
+  var _stat = window.__wavrStatus;
+  window.__wavrStatus = function(s){
+    try{ if(_stat) _stat(s); }catch(e){}
+    qcStatusInfo = (s && typeof s === "object") ? s : null;
+    scheduleRender();
+  };
+  render();   // first paint: "Loading…" until the first RoomState frame lands
+})();
+</script>
+<script>
+// ============================================================================
+// New devices (feature #3): a calm, layperson-facing answer to "is there
+// anything on my Wi-Fi I don't recognize?" for a non-technical user. Zero new
+// fetch/poll of its own — chains onto window.__wavrInventory, the SAME
+// /api/inventory payload renderNetwork()'s own 15s poll already feeds to the
+// Stage-2 "Detected" hardware-catalog hook and the Stage-3 dev-list
+// search/profile-reattach hook (this is a THIRD chain onto that identical
+// one-liner idiom — see window.__wavrInventory near "Stage-2 hook" above).
+// Filters to known===false, sorted most-recent-first (last_seen, falling back
+// to first_seen). Per-row actions call the SAME backend routes the Network
+// tab's own row controls already use:
+//   - "That's mine"       -> POST /api/inventory/known {mac, known:true},
+//                             byte-identical body to renderNetwork()'s own
+//                             "this is mine"/knownBtn control.
+//   - "Block this device" -> POST /api/block {mac, action:"block",
+//                             confirm:true}. Disruptive AND loopback-root
+//                             only (app.py's require_root rejects even a
+//                             paired multidevice 'central' peer), so the
+//                             control only ever renders in MODE==="live", and
+//                             is gated behind a reveal-then-confirm row —
+//                             never a native confirm() (matches the Unpair
+//                             pattern elsewhere in this file). A 503
+//                             (WAVR_NET_BLOCKING off, or no elevated
+//                             raw-socket/npcap transport on this host) is
+//                             surfaced honestly, in plain language — never a
+//                             silent no-op.
+// Honesty gate: the reassuring "everything is recognized" copy only ever
+// paints once a real, non-empty /api/inventory payload has actually landed —
+// a totally empty inventory (the opt-in scan not running) gets its own
+// distinct "not detected yet" copy, and demo mode gets an explicit "this
+// demo doesn't access any network" note instead of either claim.
+// ============================================================================
+(function(){
+  "use strict";
+  var tile = document.getElementById("novTile");
+  if(!tile) return;   // additive: a stale cached page without this markup just no-ops
+  var loadingEl = document.getElementById("novLoading");
+  var emptyEl = document.getElementById("novEmpty");
+  var listEl = document.getElementById("novList");
+  var note = document.getElementById("novNote");
+
+  var allDevices = [];
+
+  function novLabel(d){
+    // Same "most human identity first" precedence renderNetwork()'s own
+    // resolvedIdentity uses (name -> display_name -> hostname), extended
+    // with make/model/vendor per this tab's spec, "Unknown device" last —
+    // never a raw MAC/IP as the headline.
+    if(d.name) return String(d.name);
+    if(d.display_name) return String(d.display_name);
+    if(d.hostname) return String(d.hostname);
+    if(d.make && d.model) return String(d.make) + " " + String(d.model);
+    if(d.make) return String(d.make);
+    if(d.vendor) return String(d.vendor);
+    return "Unknown device";
+  }
+  function novTs(d){
+    var t = Date.parse(d.last_seen || d.first_seen || "");
+    return isNaN(t) ? 0 : t;
+  }
+
+  function buildRow(d){
+    var row = document.createElement("div"); row.className = "dev-row";
+    // Audit M1 invariant carried over from renderNetwork(): every row here IS
+    // known===false by construction, so the type icon/label ALWAYS renders
+    // capped/"guessed" (rogue=true) — never the solid confirmed-fact treatment.
+    row.appendChild(dtypeIconEl(d.device_type, d.type_confidence, false, true));
+    var left = document.createElement("div"); left.className = "dev-left";
+
+    var label = novLabel(d);
+    var hasRealIdentity = !!(d.name || d.display_name || d.hostname);
+    var nameLine = document.createElement("div"); nameLine.className = "dev-name-line";
+    var main = document.createElement("span");
+    if(hasRealIdentity){
+      main.className = "dev-main named"; main.textContent = label;   // textContent only — device data is untrusted
+      var sub = document.createElement("span"); sub.className = "dev-sub";
+      sub.textContent = " · " + (d.vendor || "unknown vendor") + " · ";
+      sub.appendChild(dtypeLabelEl(d.device_type, d.type_confidence, true));
+      nameLine.appendChild(main); nameLine.appendChild(sub);
+    } else {
+      main.className = "dev-main";
+      main.textContent = (label === "Unknown device") ? "" : (label + " · ");
+      main.appendChild(dtypeLabelEl(d.device_type, d.type_confidence, true));
+      nameLine.appendChild(main);
+    }
+    left.appendChild(nameLine);
+
+    var metaLine = document.createElement("div"); metaLine.className = "dev-meta-line";
+    var firstRel = fmtRelative(d.first_seen);
+    var meta = document.createElement("span"); meta.className = "dev-meta";
+    meta.textContent = (firstRel ? "first seen " + firstRel : "first seen unknown") + " " + MIDDOT + " ";
+    metaLine.appendChild(meta);
+    // MAC rides small/secondary at most — masked, never the headline (matches maskMac()'s
+    // existing privacy convention: vendor OUI visible, device-specific half hidden).
+    var macEl = document.createElement("span"); macEl.className = "mac";
+    macEl.textContent = maskMac(d.mac);
+    metaLine.appendChild(macEl);
+    left.appendChild(metaLine);
+
+    if(MODE === "live" && d.mac){
+      var mineBtn = document.createElement("button");
+      mineBtn.type = "button"; mineBtn.className = "dev-rename-btn dev-known-btn";
+      mineBtn.textContent = "That's mine";
+      mineBtn.setAttribute("aria-label", "mark " + label + " as known");
+      var mineFb = document.createElement("span"); mineFb.className = "action-fb";
+      var mineWrap = document.createElement("span"); mineWrap.className = "dev-rename-form";
+      mineWrap.appendChild(mineBtn); mineWrap.appendChild(mineFb);
+      left.appendChild(mineWrap);
+
+      var blockCtl = document.createElement("span"); blockCtl.className = "dev-rename-form";
+      var blockBtn = document.createElement("button");
+      blockBtn.type = "button"; blockBtn.className = "dev-rename-btn dev-block-btn";
+      blockBtn.textContent = "Block this device";
+      blockBtn.setAttribute("aria-label", "block " + label + " from the Wi-Fi");
+      var blockFb = document.createElement("span"); blockFb.className = "action-fb";
+      var confirmWrap = null;
+      blockCtl.appendChild(blockBtn); blockCtl.appendChild(blockFb);
+      left.appendChild(blockCtl);
+
+      mineBtn.onclick = function(){
+        mineBtn.disabled = true; blockBtn.disabled = true;
+        (async function(){
+          var r;
+          try{
+            r = await fetch(location.origin + "/api/inventory/known", {method:"POST",
+              headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+              body: JSON.stringify({mac: d.mac, known: true})});
+          }catch(e){}
+          if(r && r.ok){
+            // Optimistic: the row drops off immediately (this IS the success feedback,
+            // per spec) — then a manual refresh (no new poll, the SAME __wavrNetRefresh
+            // hook renderNetwork() already exposes) keeps the Network tab/bulk-trust
+            // count in sync right away instead of waiting up to 15s.
+            allDevices = allDevices.filter(function(x){ return x.mac !== d.mac; });
+            row.remove();
+            if(!listEl.children.length) emptyEl.hidden = false;
+            if(window.__wavrNetRefresh) window.__wavrNetRefresh();
+          } else {
+            var msg = "update failed";
+            try{ if(r){ var j = await r.json(); if(j && (j.detail || j.error)) msg = String(j.detail || j.error); } }catch(e){}
+            actionFeedback(mineFb, false, msg);
+            mineBtn.disabled = false; blockBtn.disabled = false;
+          }
+        })();
+      };
+
+      // Two-step reveal-then-confirm: the first click swaps the button for a
+      // Confirm/Cancel pair; only Confirm sends the disruptive POST. Never a
+      // native confirm() (matches the Unpair pattern elsewhere in this file).
+      // The row is edited IN PLACE (never a full list rebuild) so a
+      // success/error message next to THIS device survives — a full
+      // renderList() would otherwise destroy the very feedback node it just set.
+      blockBtn.onclick = function(){
+        if(confirmWrap) return;
+        blockBtn.hidden = true;
+        confirmWrap = document.createElement("span"); confirmWrap.className = "dev-rename-form";
+        var warn = document.createElement("span"); warn.className = "nov-block-warn";
+        warn.textContent = "Block " + label + "? It loses Wi-Fi access on this network immediately.";
+        var yes = document.createElement("button"); yes.type = "button"; yes.className = "rm"; yes.textContent = "Confirm block";
+        var no = document.createElement("button"); no.type = "button"; no.className = "ctl small off"; no.textContent = "Cancel";
+        no.onclick = function(){ confirmWrap.remove(); confirmWrap = null; blockBtn.hidden = false; };
+        yes.onclick = function(){
+          yes.disabled = true; no.disabled = true;
+          (async function(){
+            var r;
+            try{
+              r = await fetch(location.origin + "/api/block", {method:"POST",
+                headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+                body: JSON.stringify({mac: d.mac, action: "block", confirm: true})});
+            }catch(e){}
+            confirmWrap.remove(); confirmWrap = null; blockBtn.hidden = false;
+            if(r && r.ok){
+              actionFeedback(blockFb, true, null, "✓ blocked — no Wi-Fi access now");
+            } else if(r && r.status === 503){
+              // Honest 503: never pretend the block worked. Plain-language — the toggle
+              // lives on the hub (WAVR_NET_BLOCKING), never a control on this screen.
+              actionFeedback(blockFb, false,
+                "Blocking isn't turned on for this hub — it's enabled by whoever manages the hub, not from this screen.");
+            } else {
+              var msg = "couldn't block this device — try again";
+              try{ if(r){ var j = await r.json(); if(j && j.detail) msg = String(j.detail); } }catch(e){}
+              actionFeedback(blockFb, false, msg);
+            }
+          })();
+        };
+        confirmWrap.appendChild(warn); confirmWrap.appendChild(yes); confirmWrap.appendChild(no);
+        blockCtl.appendChild(confirmWrap);
+      };
+    } else if(d.mac){
+      // Companion (view-only, paired token): no X-Wavr-Local CSRF header, and /api/block is
+      // loopback-root only regardless — same live-only gate renderNetwork()'s own
+      // rename/known-toggle/assign-person row controls already use.
+      note.hidden = false;
+      note.textContent = "Marking a device as yours or blocking it needs the hub — not available in this demo or on a view-only companion device.";
+    }
+
+    row.appendChild(left);
+    return row;
+  }
+
+  function renderList(){
+    listEl.textContent = "";
+    loadingEl.hidden = true;
+    note.hidden = true;   // re-computed per row below (companion-only) so a stale note never lingers after a refresh
+    if(!allDevices.length){
+      // Distinct from "everything recognized": the opt-in inventory scan may simply not be
+      // running yet (see renderNetwork()'s own #netHint, same honest wording).
+      emptyEl.hidden = true;
+      var l0 = document.createElement("p"); l0.className = "empty";
+      l0.textContent = "No devices detected on the network yet.";
+      listEl.appendChild(l0);
+      return;
+    }
+    var unknown = allDevices.filter(function(d){ return d.known === false; })
+      .sort(function(a, b){ return novTs(b) - novTs(a); });
+    if(!unknown.length){
+      emptyEl.hidden = false;
+      return;
+    }
+    emptyEl.hidden = true;
+    var frag = document.createDocumentFragment();
+    unknown.forEach(function(d){ frag.appendChild(buildRow(d)); });
+    listEl.appendChild(frag);
+  }
+
+  if(MODE === "simulated"){
+    // Illustrative-only mode never reaches window.__wavrInventory (renderNetwork() itself
+    // returns before firing it) — say so honestly instead of hanging on "Loading…" forever.
+    loadingEl.hidden = true;
+    note.hidden = false;
+    note.textContent = "New devices are found by your home's Wavr hub; this demo doesn't access any network.";
+  }
+
+  var _inv = window.__wavrInventory;
+  window.__wavrInventory = function(devs){
+    try{ if(_inv) _inv(devs); }catch(e){}
+    if(MODE !== "live" && MODE !== "companion") return;   // demo never reaches this hook anyway
+    allDevices = Array.isArray(devs) ? devs : [];
+    renderList();
+  };
 })();
 </script>
 <script>

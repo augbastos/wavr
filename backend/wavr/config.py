@@ -144,6 +144,12 @@ class Config:
     # (mcp read/control) WITHOUT the registry-import path. Import is never
     # automatic/timed regardless -- this only gates the manual endpoint.
     ha_import: bool
+    # Diagnostics endpoint (net_doctor shareable report). Empty => the diagnostics
+    # connector is unavailable and NOTHING can be sent. Even when set, every send is
+    # gated: manual = an explicit loopback-admin button tap; automatic = the
+    # `diagnostics` connector toggle (registry, default OFF) — plus the egress master
+    # in both cases. Privacy-first, opt-in, never forced (Augusto, 2026-07-17).
+    diag_endpoint: str
     # Home Assistant CONTROL/WRITE side (ADR-0005) — the "brain on HA" WRITE half.
     # OPT-IN, default OFF: the control tool is inert unless `mcp_control` is on, so the
     # read-only default is preserved (nothing actuates). `ha_allowed_services` bounds
@@ -427,6 +433,8 @@ def load_config() -> Config:
         # configured + require_local passes). Set WAVR_HA_IMPORT=0 to disable.
         ha_import=os.getenv("WAVR_HA_IMPORT", "1").strip().lower()
             in ("1", "true", "yes", "on"),
+        # Diagnostics endpoint: empty (default) => diagnostics sending unavailable.
+        diag_endpoint=os.getenv("WAVR_DIAG_ENDPOINT", "").strip(),
         # HA control-side (ADR-0005): default OFF -> control tool inert, read-only as
         # today. Allowlist unset -> the SAFE default set; set-but-empty -> deny all
         # (fail closed). Stored lowercased so the tool's gate compares case-insensitively.

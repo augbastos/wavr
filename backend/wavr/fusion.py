@@ -27,6 +27,31 @@ DEFAULT_WEIGHTS = {"camera": 1.0, "mmwave": 0.9, "wifi_csi": 0.85, "ble": 0.7,
 # counting-capable set is defined; keep in sync with the sources that set count.
 COUNTING_MODALITIES = frozenset({"camera", "mmwave"})
 
+# Modalities whose presence=False is TRUSTWORTHY evidence of absence, i.e. a real "I looked
+# and nobody is there" rather than "I lost them". This is a PHYSICS distinction, not a
+# freshness one, and it is what lets the FUSION-B latch tell a dropout from a live negative:
+#   * camera SEES the room -- a person who stops moving is still visible, so a fresh camera
+#     reporting empty genuinely means empty.
+#   * mmwave infers presence from motion/micro-motion -- a very still person VANISHES from
+#     it. A fresh mmwave presence=False is EXACTLY the dropout FUSION-B exists to bridge, so
+#     it must never be read as "empty" (that would re-introduce the count flicker).
+# Presence-only sources are absent by construction: they never vouch for a count, so their
+# negative has no latch to release.
+# HONEST COST of this gate (do not let this rot into an unstated limitation): an
+# mmwave-ONLY room -- the cheap, camera-free config -- keeps the bounded phantom. If the
+# radar's last count was N and a presence-only source then holds the room occupied, that N
+# (and its exact targets, which the precision ladder promotes back to position/100%) stands
+# for the stale_s window before it expires. There is NO fusion-layer fix: distinguishing "a
+# still person the radar lost" from "an empty room" is not information the merge has. The
+# only honest lever is source-side (e.g. LD2450 micro-motion/breathing keeping a still
+# person present). Camera rooms are cured; mmwave-only rooms are bounded, not cured.
+# NOTE a new counting modality added to COUNTING_MODALITIES defaults to absence-DISTRUST,
+# i.e. it fails toward the phantom, not toward honesty. Decide its absence semantics
+# deliberately; test_trusted_absence_is_a_subset_of_counting enforces the set relation.
+TRUSTED_ABSENCE_MODALITIES = frozenset({"camera"})
+assert TRUSTED_ABSENCE_MODALITIES <= COUNTING_MODALITIES, \
+    "TRUSTED_ABSENCE_MODALITIES must be a subset of COUNTING_MODALITIES"
+
 # PRECISION / RESOLUTION ladder -- the SECOND axis (how DETAILED an answer the
 # present+fresh evidence can honestly support), orthogonal to confidence (how SURE
 # someone is present). Finest detail each modality can HONESTLY deliver:
@@ -77,11 +102,30 @@ def _as_utc(value) -> datetime:
 
 
 class FusionEngine:
-    """Explainable fusion. Per room, confidence = agreement × strength, where
-    `agreement` is the fraction of trusted mass saying "present" and `strength`
-    is the best present evidence (weight × the source's own confidence). This stops
-    a lone weak source (e.g. coarse network) from ever reporting 100%, and lets a
-    trusted source dominate when modalities disagree.
+    """Explainable fusion. Per room, confidence = agreement × strength, where `strength`
+    is the best present evidence (weight × the source's own confidence × freshness decay).
+    This stops a lone weak source (e.g. coarse network) from ever reporting 100% — that
+    claim holds, and it is `strength` that delivers it.
+
+    HONEST NOTE on `agreement` (measured, not assumed): it is INERT in production and the
+    fused confidence is, in practice, exactly `strength`. `agreement` is num/den over
+    weight×confidence×decay mass, but EVERY first-party source emits confidence=0.0 when
+    it reports presence=False — so an absent source contributes mass=0 to the numerator
+    AND the denominator, drops out of the ratio entirely, and `agreement` is identically
+    1.0 whenever at least one source is present. Verified: camera(0.9, present) alone,
+    camera(0.9, present) + network(absent), and camera(0.9, present) + network(0.8,
+    present) all fuse to 0.9 — an absent source changes nothing. So there is NO
+    disagreement arbitration here today; no amount of contradicting first-party evidence
+    lowers the number.
+
+    That is arguably CORRECT rather than a gap, for the same reason TRUSTED_ABSENCE_
+    MODALITIES exists above: an absent source usually means "I cannot see them" (a still
+    person vanishing from radar, someone outside the camera's FOV), not "nobody is here" —
+    so it should not vote a present room down. It is recorded here so the next reader does
+    not trust a promise the code never kept. Wiring real arbitration would mean deciding
+    which absences are EVIDENCE (the TRUSTED_ABSENCE question) rather than mere silence —
+    a product decision, not a refactor. Each source's own reading still rides in
+    `sources[]`, so a disagreement is SURFACED to the UI, never silently resolved.
 
     Each source's trust is additionally scaled by a freshness decay: full weight
     while the reading is fresh, fading to zero once it is stale, so a source that
@@ -237,6 +281,12 @@ class FusionEngine:
         sources = []
         vitals: dict = {}
         decays: dict[str, float] = {}  # modality -> trust multiplier, reused for target gating
+        # modality -> the event's OWN parsed ts. The count latch stamps itself with this, not
+        # with `ref`: stamping with `ref` re-dated the latch on every fuse that still saw a
+        # decay>0 counting event, so the stale_s bound measured from the last FUSE instead of
+        # from the last real COUNT and the latch outlived its documented window (see the stamp
+        # below).
+        event_ts: dict[str, datetime] = {}
         for modality, e in events.items():
             try:
                 e_ts = _as_utc(e.ts)
@@ -253,6 +303,7 @@ class FusionEngine:
             age_s = max(0.0, (ref - e_ts).total_seconds())
             decay, health = self._freshness(age_s)
             decays[modality] = decay
+            event_ts[modality] = e_ts
             mass = self._weights.get(modality, 0.5) * e.confidence * decay
             den += mass
             if e.presence:
@@ -276,6 +327,7 @@ class FusionEngine:
         # here (unknown, not a fabricated 0). `live_count` is the CURRENT frame's count;
         # the FUSION-B latch below decides the RoomState's actual `person_count`.
         live_count: int | None = None
+        live_count_ts = None   # the winning count event's OWN ts -- what the latch stamps with
         best_cw = -1.0
         for modality, e in events.items():
             if modality not in COUNTING_MODALITIES:
@@ -288,6 +340,7 @@ class FusionEngine:
             if w > best_cw:
                 best_cw = w
                 live_count = int(e.count)
+                live_count_ts = event_ts.get(modality)
 
         agreement = num / den if den > 0 else 0.0
         # Defensive clamp: a single out-of-range source confidence (negative or
@@ -365,11 +418,49 @@ class FusionEngine:
             self._count_latch.pop(room, None)
             person_count = None
         elif live_count is not None:
-            self._count_latch[room] = {"count": live_count, "targets": best_targets, "ts": ref}
+            # Stamp with the COUNT EVENT's own ts, never with `ref`. A counting source is
+            # allowed to be up to stale_s old and still vouch (decay>0), so stamping with
+            # `ref` re-dated the latch on EVERY fuse that still saw that same aging event:
+            # the stale_s bound then measured from the last FUSE, not from the last real
+            # COUNT, and a dead counting source + a chatty presence-only source could keep
+            # vouching for a headcount for ~2x stale_s. The docstring below promises the
+            # bound is stale_s — this is what makes that true.
+            self._count_latch[room] = {"count": live_count, "targets": best_targets,
+                                       "ts": live_count_ts or ref}
             person_count = live_count
         else:
+            # FUSION-C FIX: `live_count is None` conflates TWO OPPOSITE states — a counting
+            # source that went SILENT (a dropout: stale/dead/no count this frame — the only
+            # thing FUSION-B exists to bridge, "we don't know") and a counting source that is
+            # AWAKE and explicitly reporting presence=False (a LIVE NEGATIVE — "we DO know:
+            # empty"). The loop above skips a fresh present=False counting source entirely
+            # (`if not (e.presence and decay > 0): continue`), so it lands here looking exactly
+            # like a dropout.
+            # Before FUSION-C the difference was academic: a sustained live negative dropped
+            # the blended confidence, `occupied` went False, and the `not occupied` branch
+            # cleared the latch. FUSION-C holds `occupied` True off ANY present presence-only
+            # source, which removed that release path — so a camera reporting EMPTY would keep
+            # vouching for a stale headcount, with the stale exact targets, which the precision
+            # ladder then promotes back to "position"/100%, for the whole stale_s window.
+            # Phantom people on the map of a room the camera says is empty.
+            # A live negative is STRONGER evidence than the stale_s timer: a source that is
+            # awake and says empty releases the latch NOW. The room may still read occupied
+            # (a presence-only source vouches for THAT honestly) but with person_count=None and
+            # no targets — "someone is home, we don't know how many" — which is exactly what a
+            # presence-only detection can honestly claim. A real dropout still latches.
+            # Only TRUSTED_ABSENCE_MODALITIES qualify: a fresh mmwave presence=False is a
+            # STILL PERSON vanishing from the radar (the very dropout FUSION-B bridges), not
+            # an empty room — reading it as a negative would re-introduce the count flicker.
+            counting_live_negative = any(
+                (not e.presence) and decays.get(m, 0.0) > 0.0
+                for m, e in events.items()
+                if m in COUNTING_MODALITIES and m in TRUSTED_ABSENCE_MODALITIES
+            )
             latch = self._count_latch.get(room)
-            if latch is not None and (ref - latch["ts"]).total_seconds() <= self._stale_s:
+            if counting_live_negative:
+                self._count_latch.pop(room, None)
+                person_count = None
+            elif latch is not None and (ref - latch["ts"]).total_seconds() <= self._stale_s:
                 person_count = latch["count"]
                 if not best_targets:
                     best_targets = list(latch["targets"])
