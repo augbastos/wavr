@@ -35,14 +35,21 @@ def send_report(store: ConnectorStore, endpoint: str, report: str,
     """Ship one MAC-redacted report to `endpoint`. Returns {"ok": bool, "status": ...};
     never raises (an unreachable diagnostics endpoint must never break the doctor).
 
-    Gate: `manual=True` (explicit admin tap — per-action consent) OR the
-    `diagnostics` registry toggle (standing consent). Read fresh on every call, so
-    turning the toggle off stops the next automatic send immediately.
+    Gate (all read fresh on every call, so revocation takes effect on the next send):
+      * the standing-consent `diagnostics` registry toggle gates the AUTOMATIC path; a
+        `manual=True` tap is the per-action consent and does not need the toggle.
+      * the system EGRESS MASTER (`store.egress_allowed()`) gates BOTH paths — the
+        operator's global block always wins, even over a manual tap. It is enforced HERE,
+        in the module, not only at the app.py call sites, so http.py's single-egress-
+        chokepoint claim ("audit ONE place") holds by construction: no future caller,
+        test double, or refactor can ship a report while egress is blocked.
     """
     if not endpoint:
         return {"ok": False, "status": None, "reason": "no endpoint configured"}
     if not manual and not store.is_enabled("diagnostics"):
         return {"ok": False, "status": None, "reason": "diagnostics connector off"}
+    if not store.egress_allowed():
+        return {"ok": False, "status": None, "reason": "egress blocked by the operator"}
     clean = redact_macs(str(report))[:MAX_REPORT_BYTES]
     try:
         # post_json returns the endpoint's parsed JSON body and RAISES on transport

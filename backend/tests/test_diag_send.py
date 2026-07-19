@@ -89,6 +89,28 @@ def test_send_report_enabled_toggle_allows_auto():
     assert res["ok"] is True
 
 
+def _block_egress(store):
+    # flip the reserved sys:egress master row OFF (System-tab "Egress: blocked")
+    store.upsert("sys:egress", "system", "egress")
+    store.set_enabled("sys:egress", False)
+
+
+def test_send_report_refuses_when_egress_master_blocked_even_manual():
+    # the module self-guards on the egress master: the operator's global block wins over a
+    # manual tap AND the standing toggle — no caller can ship a report while egress is blocked.
+    s = ConnectorStore(":memory:")
+    _block_egress(s)
+    sent = []
+    def _t(url, payload, **kw):
+        sent.append(payload); return {"ok": True}
+    manual = send_report(s, "https://diag.example/report", "x", manual=True, transport=_t)
+    assert manual["ok"] is False and "egress" in manual["reason"]
+    s.upsert("diagnostics", "builtin", "Diagnostics reporting"); s.set_enabled("diagnostics", True)
+    auto = send_report(s, "https://diag.example/report", "x", transport=_t)
+    assert auto["ok"] is False and "egress" in auto["reason"]
+    assert sent == []   # transport never even attempted while egress is blocked
+
+
 def test_send_report_transport_failure_degrades_clean():
     def _boom(*a, **k):
         raise OSError("unreachable")
@@ -179,3 +201,61 @@ def test_doctor_never_auto_sends_when_toggle_off(monkeypatch):
         c.get("/api/health/doctor")
         time.sleep(0.2)
     assert sent == []       # opt-in means OPT-IN
+
+
+def _healthy_doctor_app(store, sender, monkeypatch):
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+    monkeypatch.setenv("WAVR_DIAG_ENDPOINT", "https://diag.example/report")
+
+    async def _probe():
+        return 6            # 15 devices, 6 responders -> discovery_reach ok=True (no problem)
+
+    async def _viability():
+        return None
+
+    return _app(net_inventory=_FakeInv(), net_mcast_probe=_probe,
+                net_mcast_viability=_viability, connector_store=store,
+                diag_sender=sender)
+
+
+def test_doctor_toggle_on_but_healthy_never_auto_sends(monkeypatch):
+    # QA-lens gap: auto-send is gated on `any(check.ok is False)`. With the toggle ON but the
+    # doctor HEALTHY, nothing must leave -- this guards the exact clause that separates
+    # "opt-in reporting WHEN SOMETHING'S WRONG" from "phone home on every poll". Drop/invert
+    # that clause and THIS is the test that turns red.
+    store = ConnectorStore(":memory:")
+    store.upsert("diagnostics", "builtin", "Diagnostics reporting")
+    store.set_enabled("diagnostics", True)
+    sent = []
+
+    async def _sender(report):
+        sent.append(report)
+        return {"ok": True}
+
+    app = _healthy_doctor_app(store, _sender, monkeypatch)
+    with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
+        body = c.get("/api/health/doctor").json()
+        time.sleep(0.2)
+    dr = next(x for x in body["checks"] if x["id"] == "discovery_reach")
+    assert dr["ok"] is True                 # sanity: the doctor really is healthy this run
+    assert not any(x["ok"] is False for x in body["checks"])
+    assert sent == []                       # healthy + toggle ON => still nothing leaves
+
+
+# ---- the REAL send wiring (no injected diag_sender) --------------------------
+
+def test_diag_send_route_wires_to_real_send_report(monkeypatch):
+    # QA-lens gap: every other send test injects a fake diag_sender, bypassing the real
+    # asyncio.to_thread(diag_send_report, _connectors, cfg.diag_endpoint, report, manual=True)
+    # glue. Exercise it for real WITHOUT leaving the box: point the endpoint at a refused local
+    # port, do NOT inject a sender, and assert the route surfaces a real transport failure --
+    # proving the store + manual=True + endpoint actually reach send_report.
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+    monkeypatch.setenv("WAVR_DIAG_ENDPOINT", "http://127.0.0.1:1/report")   # nothing listens on :1
+    store = ConnectorStore(":memory:")
+    with TestClient(_app(connector_store=store), headers={"X-Wavr-Local": "1"}) as c:
+        r = c.post("/api/health/doctor/send", json={"report": "gw aa:bb:cc:dd:ee:ff"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and body.get("reason")   # a real connection failure, not a mock
+    assert body["status"] is None
