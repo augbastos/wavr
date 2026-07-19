@@ -53,22 +53,12 @@ honest about each one's confidence. Every source implements one small `SensorSou
 reads occupied. When an upstream engine's headline feature turns out to be weaker than its README
 (it happens), Wavr consumes what actually works and the weights tell the truth.
 
-## Roadmap
-
-- **mmWave bring-up** — HLK-LD2450 over USB serial (~€15): real x/y target tracking on the radar.
-  Parser + source are done and tested; needs the device.
-- **Camera posture live** — YOLO-pose (`[camera]` extra) on RTSP cameras: standing/sitting/lying.
-- **3D house view** — extrude the `house.json` floor plan with walls (isometric SVG first) + an
-  in-app floor-plan editor.
-- **Cross-source track association** — fuse targets from multiple sensors in the same room.
-- **Fallen-person detection** — lying + location + duration on top of the above.
-
 ## Contributing
 
 Issues and PRs welcome. Ground rules: privacy invariants are non-negotiable (nothing leaves the
 LAN except the opt-in narrator; frames are never persisted; new sources must be mock-testable
 without hardware), and every PR needs green tests (`pytest backend/tests -q`). Good first
-contributions: roadmap items above, or a new `SensorSource` (BLE presence, zigbee occupancy, …).
+contributions: a new `SensorSource` (BLE presence, zigbee occupancy, …).
 
 ## Docs
 
