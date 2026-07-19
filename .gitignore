@@ -45,3 +45,20 @@ docs/competitive-analysis/
 # already matches backend/house.json recursively, listed explicitly (wavr.db* style).
 house.json
 backend/house.json
+
+# --- local-only: build artifacts (never public) ---
+core-launcher/app/build/
+core-launcher/.gradle/
+core-launcher/local.properties
+desktop/src-tauri/target/
+# --- local-only: private notes, logs, scratch (never public) ---
+docs/ROADMAP.md
+docs/stack-netdoctor/
+docs/feedback-sim/
+docs/competitive-analysis/
+_fable/
+council-report.md
+graphify-out/
+logs/
+house.json
+*.log

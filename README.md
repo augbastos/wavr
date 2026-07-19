@@ -84,7 +84,7 @@ isn't required).
   where a camera is pointed) — not per-person map coordinates yet.
 - **Most rooms need a sensor to see them.** A room with no live sensor shows as **no coverage** — Wavr
   says so rather than guessing. Blind, offline, and confirmed-empty are three distinct states on the map.
-- **Live posture (standing/sitting/lying) is roadmap**, not shipped — it needs YOLO-pose on a GPU.
+- **Live posture (standing/sitting/lying) is planned**, not shipped — it needs YOLO-pose on a GPU.
 - **mmWave x/y target tracking** needs the physical LD2450; the code is written and mock-tested but
   hasn't been run on-device here.
 - **AR floor-plan measuring and a native mobile app are roadmap** (see below). Non-biometric "who is
@@ -146,32 +146,6 @@ sources (network / ruview CSI / camera / mmwave / BLE / sim)
 - **Frontend:** single static HTML file (three.js), no build step, installable as a PWA. Off-localhost it
   self-switches to a simulator and makes zero requests to the backend.
 
-## Roadmap
-
-Tiers are ordered by what they actually cost — engineering time, ~€15 of hardware, a GPU / open
-research, or a whole company plus regulatory work. Later tiers are direction, not commitments. Full
-detail in [`docs/ROADMAP.md`](docs/ROADMAP.md).
-
-- **Just engineering time** — camera → floor-plan homography (place people on the map, not just flag the
-  room), wall-occlusion fusion weighting, floor-plan / CAD import as a backdrop.
-- **~€15 of hardware** — mmWave LD2450 bring-up on the physical device for real per-person x/y.
-- **A mobile app** — a Capacitor (native shell) Android-first companion beyond the already-installable
-  PWA, where the pairing/2FA flow is native and the app pins the central's certificate at pairing
-  (stronger than a browser's fingerprint-compare). Architecture and phased plan are in progress.
-- **Precision tiers** — richer sensing modes beyond the shipped Off/Presence/Precise meter, as
-  per-camera pose, homography, and a second per-room signal (mmWave/BLE) land.
-- **Needs a GPU / open research** — live camera YOLO-pose (standing/sitting/lying), cross-source track
-  association (Kalman + Hungarian) instead of best-source pass-through, and real fall detection (a
-  research demo, **not** a certified safety system — ADR-0003). *(The fully-local LLM narrator that
-  removes the last optional cloud egress already ships — point the provider-agnostic narrator at
-  Ollama.)*
-- **Face recognition** — a heavily-gated, always-opt-in, default-OFF, local-only, deletable module to
-  identify household members by face. It crosses into biometric special-category data (GDPR Art. 9) even
-  stored locally, so it is **explicitly gated and undecided** — designed-for, not committed. (The
-  non-biometric device-to-person "who is home" above already ships.)
-- **Device-participation opt-out** — any paired device (even a User) instantly leaving Wavr's sensing
-  like an airplane-mode toggle; the Admin sees it left but cannot force it back on, only request.
-
 ## Design stance: your home, understood — without giving it away
 
 The industry's default trajectory is the opposite of this project: your home read by someone else's
@@ -186,12 +160,11 @@ anyone.
 Issues and PRs welcome. Ground rules: privacy invariants are non-negotiable (nothing leaves the LAN
 except an opt-in egress you enabled; frames are never persisted; new sources must be mock-testable
 without hardware), and every PR needs green tests (`python -m pytest backend/tests -q`). Good first
-contributions: roadmap items above, or a new `SensorSource` (zigbee occupancy, a new BLE beacon type, …).
+contributions: a new `SensorSource` (zigbee occupancy, a new BLE beacon type, …).
 
 ## Docs
 
 - `PRODUCT.md` — product definition and design principles
-- `docs/ROADMAP.md` — buildable-now vs long-horizon vision, tiered by cost
 - `docs/deploy/` — hardening, Docker, hardware tiers, multi-device bring-up
 - `docs/adr/` — architecture decision records (0001–0007: mmWave-over-fork, RAM-only privacy
   boundaries, not-a-medical-device, defensive-only, MCP control boundary, authenticated LAN access,
