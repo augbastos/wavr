@@ -38,7 +38,7 @@
 //   1. spawn  `python -m wavr.serve`  (from WAVR_BACKEND_DIR so its load_dotenv() finds
 //      ./.env) as a child process, remembered so we can kill it on quit,
 //   2. (HTTPS mode, Windows) install the scoped WebView2 cert pin BEFORE any navigation,
-//   3. poll   <scheme>://127.0.0.1:<port>/api/state  until it answers, then navigate the
+//   3. poll   <scheme>://127.0.0.1:<port>/healthz  until it answers, then navigate the
 //      window from the "Starting…" placeholder to the live dashboard,
 //   4. tray:  Open Wavr / Quit; closing the window hides to tray (sensing keeps running),
 //      Quit kills the backend child so the process exits and GPU VRAM is released.
@@ -342,7 +342,9 @@ fn spawn_backend() -> std::io::Result<Child> {
 /// mode this waits for the cert file to appear, then probes with the pinned agent.
 fn wait_healthy(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    let probe = format!("{}/api/state", backend_url());
+    // /healthz is token-exempt (see backend/wavr/app.py's _TOKEN_EXEMPT_PATHS); /api/state
+    // is scope-gated, so probing it would 401 forever when WAVR_LOCAL_TOKEN is set.
+    let probe = format!("{}/healthz", backend_url());
 
     if scheme() == "https" {
         // The backend writes cert.pem before uvicorn binds, so once the port answers the
@@ -497,17 +499,83 @@ fn describe_alert(alert: &serde_json::Value) -> (String, String) {
     ("Wavr Alert".to_string(), body)
 }
 
+/// Filename the backend persists the auto-generated token under (see
+/// `backend/wavr/local_token.py::_TOKEN_FILENAME`) when `WAVR_LOCAL_TOKEN=auto`.
+const LOCAL_TOKEN_FILENAME: &str = "local_token";
+
+/// Mirrors `wavr.local_token._token_path()`: the persisted auto-token lives next to the
+/// db file (`WAVR_DB`, default `wavr.db`), resolved relative to the SAME directory the
+/// backend itself resolves it from -- `WAVR_BACKEND_DIR` if set (that's what
+/// `spawn_backend()` passes as the child's `current_dir()`), else this process's own cwd
+/// (which the child then inherits, Rust's `Command` default when `current_dir()` is never
+/// called). `:memory:`/empty mirrors the Python side's `Path.cwd()` fallback.
+fn local_token_file_path() -> PathBuf {
+    let base = std::env::var("WAVR_BACKEND_DIR")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::current_dir())
+        .unwrap_or_default();
+    let db_path = effective("WAVR_DB")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "wavr.db".to_string());
+    let dir = if db_path == ":memory:" {
+        base
+    } else {
+        let p = Path::new(&db_path);
+        let joined = if p.is_absolute() { p.to_path_buf() } else { base.join(p) };
+        joined.parent().map(Path::to_path_buf).unwrap_or(base)
+    };
+    dir.join(LOCAL_TOKEN_FILENAME)
+}
+
+/// Resolve `WAVR_LOCAL_TOKEN` the same way `wavr.local_token.resolve_local_token()` does:
+/// unset/empty -> "" (disabled); `auto` -> read the token the backend already generated
+/// and persisted at `local_token_file_path()` (the backend resolves this at app-creation
+/// time, BEFORE uvicorn ever answers `/healthz` -- see `app.py`'s `resolve_local_token()`
+/// call happening inside `create_app()`, well before `serve.py`'s `uvicorn.run()` -- so by
+/// the time `wait_healthy()` returns true the file is guaranteed to already exist);
+/// anything else -> used verbatim. Without this, "auto" mode would send the literal
+/// string `"auto"` as the token on every call below, which can never match the backend's
+/// real generated secret. Read fresh each call (no caching), same reasoning as
+/// `pinned_cert_der()`'s re-read-every-time. This shell only ever READS that file --
+/// only the backend generates/persists it.
+fn resolved_local_token() -> String {
+    let cfg = effective("WAVR_LOCAL_TOKEN").unwrap_or_default().trim().to_string();
+    if cfg.is_empty() {
+        return cfg;
+    }
+    if cfg.eq_ignore_ascii_case("auto") {
+        return std::fs::read_to_string(local_token_file_path())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+    }
+    cfg
+}
+
 /// One GET /api/alerts round-trip, using the same http/https + pinned-cert-agent split as
 /// `wait_healthy()`. `https_agent` is cached across calls (lazily built once the cert is
 /// readable) so we are not re-doing a TLS handshake setup on every poll tick.
 fn fetch_alerts(url: &str, https_agent: &mut Option<ureq::Agent>) -> Option<Vec<serde_json::Value>> {
+    // /api/alerts is scope-gated (NOT token-exempt like /healthz), so when
+    // WAVR_LOCAL_TOKEN is set the backend requires it even on loopback. Send it via
+    // X-Wavr-Token -- the header app.py's token middleware reads. resolved_local_token()
+    // mirrors wavr.local_token.resolve_local_token() (including WAVR_LOCAL_TOKEN=auto);
+    // empty = disabled.
+    let token = resolved_local_token();
     let text = if scheme() == "https" {
         if https_agent.is_none() {
             *https_agent = pinned_cert_der().map(pinned_https_agent);
         }
-        https_agent.as_ref()?.get(url).call().ok()?.into_string().ok()?
+        let mut req = https_agent.as_ref()?.get(url);
+        if !token.is_empty() {
+            req = req.set("X-Wavr-Token", &token);
+        }
+        req.call().ok()?.into_string().ok()?
     } else {
-        ureq::get(url).timeout(Duration::from_secs(5)).call().ok()?.into_string().ok()?
+        let mut req = ureq::get(url).timeout(Duration::from_secs(5));
+        if !token.is_empty() {
+            req = req.set("X-Wavr-Token", &token);
+        }
+        req.call().ok()?.into_string().ok()?
     };
     let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
     parsed.get("alerts")?.as_array().cloned()
@@ -603,6 +671,118 @@ fn spawn_alert_notifier(app: tauri::AppHandle) {
             }
         }
     });
+}
+
+/// Item 2 (crash recovery): detect the backend child dying AFTER the initial
+/// `wait_healthy()` already succeeded (a Python traceback, an OOM kill, someone
+/// `taskkill`ing this specific pid, ...) and attempt ONE respawn before giving up -- so an
+/// unexpected backend death doesn't silently wedge the app on a dashboard that can no
+/// longer reach anything, with zero explanation or recourse. Only ever called after the
+/// INITIAL `wait_healthy()` already returned true (see the call site in `setup()`), so
+/// there is always a live child in `Backend` when this starts polling.
+///
+/// Bounded, not an unbounded supervisor loop -- `restarted_once` caps this at exactly one
+/// respawn attempt ever, so a backend that keeps crashing can't trigger a restart storm.
+/// `kill_backend()` (tray Quit / `RunEvent::ExitRequested`) always takes the child OUT of
+/// the `Mutex` (sets it to `None`) BEFORE killing it, so a deliberate shutdown is
+/// indistinguishable from "nothing left to monitor" here -- the poll loop simply stops the
+/// moment it observes `None`, same as it would for any other reason to stop watching. A
+/// respawned child is re-confined to its own (Windows-only) Job Object exactly like the
+/// first one -- see `confine_backend_to_job_object()`'s doc comment: each call's job
+/// outlives this process independently, so the crash-safety net still holds even if this
+/// second child later also needs a forced kill.
+fn spawn_backend_monitor(app: tauri::AppHandle) {
+    const POLL_INTERVAL: Duration = Duration::from_secs(5);
+    std::thread::spawn(move || {
+        let mut restarted_once = false;
+        loop {
+            std::thread::sleep(POLL_INTERVAL);
+
+            let exited = {
+                let state = app.state::<Backend>();
+                let mut guard = state.0.lock().unwrap();
+                match guard.as_mut() {
+                    None => return, // deliberate shutdown already took it -- stop watching
+                    Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+                }
+            };
+            if !exited {
+                continue;
+            }
+            *app.state::<Backend>().0.lock().unwrap() = None; // already dead, nothing to kill
+
+            if restarted_once {
+                report_backend_crashed(
+                    &app,
+                    "Wavr backend exited unexpectedly and the automatic restart also did not \
+                     become healthy. Restart Wavr Desktop manually, or check \
+                     ~/.wavr/desktop.log.",
+                );
+                return;
+            }
+            restarted_once = true;
+            log_issue("Wavr: backend process exited unexpectedly -- attempting one restart");
+
+            match spawn_backend() {
+                Ok(child) => {
+                    #[cfg(windows)]
+                    confine_backend_to_job_object(&child);
+                    *app.state::<Backend>().0.lock().unwrap() = Some(child);
+                    if wait_healthy(HEALTH_TIMEOUT) {
+                        log_issue("Wavr: backend restarted and is healthy again");
+                        if let Some(w) = app.get_webview_window("main") {
+                            if let Ok(u) = backend_url().parse::<tauri::Url>() {
+                                let _ = w.navigate(u);
+                            }
+                        }
+                        // Keep polling: a second crash of this new child still hits the
+                        // `restarted_once` branch above and gives up cleanly.
+                    } else {
+                        report_backend_crashed(
+                            &app,
+                            "Wavr backend exited unexpectedly and the restart did not become \
+                             healthy in time. Restart Wavr Desktop manually, or check \
+                             ~/.wavr/desktop.log.",
+                        );
+                        return;
+                    }
+                }
+                Err(e) => {
+                    report_backend_crashed(
+                        &app,
+                        &format!(
+                            "Wavr backend exited unexpectedly and could not be restarted: {e}. \
+                             Restart Wavr Desktop manually, or check ~/.wavr/desktop.log."
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
+    });
+}
+
+/// Native-notification + in-webview-banner surfacing for `spawn_backend_monitor()`'s
+/// give-up path. Reuses the same `window.wavrShowStartupError` hook and "sanctioned
+/// `eval()`, Rust-authored + JSON-escaped `msg`" reasoning as the initial-boot timeout
+/// path in `setup()` below.
+fn report_backend_crashed(app: &tauri::AppHandle, msg: &str) {
+    log_issue(&format!("Wavr: {msg}"));
+    if let Some(w) = app.get_webview_window("main") {
+        if let Ok(js_msg) = serde_json::to_string(msg) {
+            let _ = w.eval(format!(
+                "window.wavrShowStartupError && window.wavrShowStartupError({js_msg});"
+            ));
+        }
+    }
+    if notifications_enabled() {
+        let _ = app
+            .notification()
+            .builder()
+            .title("Wavr backend stopped")
+            .body(msg)
+            .show();
+    }
 }
 
 fn kill_backend(app: &tauri::AppHandle) {
@@ -1124,6 +1304,11 @@ fn main() {
                         }
                     }
                     spawn_alert_notifier(handle.clone());
+                    // Item 2: now that the FIRST health check has passed and a live child
+                    // is in `Backend`, start watching for it dying later (see
+                    // spawn_backend_monitor()'s doc comment for why it's safe to start
+                    // exactly here and not before).
+                    spawn_backend_monitor(handle.clone());
                     if autostart_launch {
                         // This launch's window started (and stays) hidden -- nothing
                         // ever calls hide_window() for it, so nothing would otherwise

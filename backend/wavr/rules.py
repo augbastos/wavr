@@ -39,9 +39,13 @@ class RulesEngine:
     static allowlist only."""
 
     def __init__(self, publish: Callable[[str, str, bool], None], prefix: str = "wavr",
-                 known_macs=None, known_provider=None):
+                 known_macs=None, known_provider=None, on_edge=None):
         self._publish = publish
         self._prefix = prefix
+        # `on_edge(room, occupied)` -- the in-process seam the routines engine taps for
+        # room_occupied/room_empty triggers, fired on the SAME per-room flip as the
+        # MQTT event below (so it inherits the flip debounce). None -> unchanged.
+        self._on_edge = on_edge
         self._last: dict[str, bool] = {}   # room -> last occupied
         self._known = {
             m.strip().replace("-", ":").lower()
@@ -87,6 +91,8 @@ class RulesEngine:
         if prev is not None and prev != occupied:
             self._publish(room_event_topic(self._prefix, room),
                           "occupied" if occupied else "vacant", False)
+            if self._on_edge:
+                self._on_edge(room, occupied)   # same flip guard as the event above
         self._last[room] = occupied
 
     def handle_devices(self, devices) -> None:

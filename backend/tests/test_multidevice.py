@@ -114,11 +114,13 @@ def test_add_rejects_invalid_role(tmp_path):
     store = _store(tmp_path)
     with pytest.raises(ValueError):
         store.add("x", "admin")
-    # Phase 2A / B4 added 'agent' (the bounded MCP-client principal) as the third
-    # grantable role -- see test_wavr_pass_scopes.py for its scope/tool-scope
-    # behaviour. This assertion is intentionally exact so any FUTURE role addition
-    # is a deliberate, reviewed edit here too, not a silent widening.
-    assert VALID_ROLES == {"central", "user", "agent"}
+    # Phase 2A / B4 added 'agent' (the bounded MCP-client principal); guest mode
+    # (2026-07-16) added 'guest' (the presence:write-only visitor principal, absent
+    # from can_view/can_change_state, credential auto-expiring via expires_at) -- see
+    # test_guest_mode.py / test_wavr_pass_scopes.py for their behaviour. This assertion
+    # is intentionally exact so any FUTURE role addition is a deliberate, reviewed edit
+    # here too, not a silent widening.
+    assert VALID_ROLES == {"central", "user", "agent", "guest"}
 
 
 # --------------------------------------------------------------------------- #

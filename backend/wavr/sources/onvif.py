@@ -154,7 +154,16 @@ def _mask_rtsp(url: str) -> str:
         if "@" not in url or "://" not in url:
             return url
         scheme, rest = url.split("://", 1)
-        creds, host = rest.split("@", 1)
+        # rpartition = the LAST "@" (the RFC 3986 userinfo/host boundary, and what ffmpeg
+        # does). Splitting on the FIRST "@" leaked the password TAIL verbatim whenever the
+        # password contained an "@". Keep in lockstep with app._mask_rtsp -- this is a
+        # deliberate copy, so a fix in one is a fix owed to the other.
+        creds, at, host = rest.rpartition("@")
+        if not at:
+            # No "@" in the AUTHORITY (it was in the scheme, e.g. "a@b://c"). rpartition never
+            # raises, so unlike the old split-unpack there is no ValueError to fall into the
+            # except below -- return unchanged explicitly, as the docstring promises.
+            return url
         if ":" in creds:
             user = creds.split(":", 1)[0]
             creds = f"{user}:***"

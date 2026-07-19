@@ -337,6 +337,13 @@ def _mmc(room, targets, ts="2026-07-01T10:00:00+00:00"):
                         count=len(tg))
 
 
+def _pir(room, present, ts="2026-07-01T10:00:00+00:00"):
+    """Presence-only node (not in COUNTING_MODALITIES) -- knows "someone", never "how many"."""
+    return SensingEvent(room=room, modality="pir", presence=present, motion=1.0,
+                        breathing_bpm=None, heart_bpm=None,
+                        confidence=0.6 if present else 0.0, ts=ts)
+
+
 def test_camera_count_flows_to_person_count():
     f = FusionEngine()
     rs = f.update(_camc("sala", True, 0.9, 3))
@@ -503,6 +510,62 @@ def test_still_person_count_latched_across_single_frame_dropout():
     assert "contagem mantida" not in back.explanation
 
 
+def test_camera_live_negative_releases_latch_despite_presence_only_holding_occupied():
+    # FUSION-C REGRESSION (found + fixed 2026-07-15). FUSION-C holds `occupied` True off ANY
+    # present presence-only source -- which silently removed the `not occupied` branch that was
+    # the count latch's only everyday release. A camera that is FRESH and reporting empty is
+    # SKIPPED by the live_count loop (`if not (e.presence and decay>0): continue`), so it lands
+    # in the latch branch looking exactly like a dropout, and kept vouching for the stale
+    # headcount -- WITH the stale exact targets, which the precision ladder then promotes back
+    # to position/100% -- for the whole stale_s window. Phantom people on the map of a room the
+    # camera says is empty, and (via watch.room_unrecognized reading person_count) a false
+    # intrusion alert with nobody home.
+    f = FusionEngine()
+    f.update(_pir("sala", True, ts=_at(0)))
+    seen = f.update(_camc("sala", True, 0.9, 2, ts=_at(0)))
+    assert seen.person_count == 2                      # camera counted 2 -> latched
+
+    # Both people leave. The camera is AWAKE and says empty; the PIR false-trips and holds
+    # present, so FUSION-C keeps the room occupied for the whole window.
+    for t in (5, 30, 60, 80):
+        f.update(_pir("sala", True, ts=_at(t)))
+        rs = f.update(_camc("sala", False, 0.0, 0, ts=_at(t)))
+        assert rs.occupied is True, f"t={t}: the PIR honestly vouches that someone is home"
+        assert rs.person_count is None, f"t={t}: PHANTOM -- the camera is awake saying empty"
+        assert rs.targets == [], f"t={t}: phantom targets would draw markers at exact coords"
+        assert "contagem mantida" not in rs.explanation, f"t={t}: latch must not be held"
+        assert rs.precision_level != "position", f"t={t}: stale targets must not earn position"
+
+
+def test_trusted_absence_is_a_subset_of_counting():
+    # Drift guard. TRUSTED_ABSENCE_MODALITIES only means anything for sources that VOUCH for a
+    # count -- a presence-only source has no latch to release. More importantly this is the 4th
+    # modality-keyed set in fusion.py and the "keep in sync" comments are convention, not
+    # enforcement: a new counting modality inherits absence-DISTRUST by default, i.e. it fails
+    # toward the phantom rather than toward honesty. If this fails, someone added a modality
+    # without deciding its absence semantics on purpose.
+    from wavr.fusion import COUNTING_MODALITIES, TRUSTED_ABSENCE_MODALITIES
+    assert TRUSTED_ABSENCE_MODALITIES <= COUNTING_MODALITIES
+    assert "mmwave" not in TRUSTED_ABSENCE_MODALITIES, (
+        "mmwave infers presence from motion -- a still person vanishes from it, which is the "
+        "dropout FUSION-B exists to bridge. Trusting its absence re-introduces the count flicker."
+    )
+
+
+def test_mmwave_live_negative_still_latches_a_still_person():
+    # The CONTROL for the fix above, and the reason it is modality-gated. A fresh mmwave
+    # presence=False is NOT "the room is empty" -- radar infers presence from motion, so a very
+    # still person VANISHES from it. That is precisely the dropout FUSION-B exists to bridge.
+    # Only TRUSTED_ABSENCE_MODALITIES (camera: it SEES the room, a still person stays visible)
+    # may release the latch. If this ever fails, the count flicker None->N->None is back.
+    f = FusionEngine()
+    f.update(_mmc("sala", 1, ts=_at(0)))
+    held = f.update(_mmc("sala", 0, ts=_at(1)))    # fresh mmwave, presence=False = still person
+    assert held.occupied is True
+    assert held.person_count == 1, "a still person must not un-count themselves on mmwave"
+    assert "contagem mantida" in held.explanation
+
+
 def test_latch_cleared_when_room_confirmed_vacant():
     f = FusionEngine(weights={"camera": 1.0})
     f.update(_camc("sala", True, 0.9, 2, ts=_at(0)))
@@ -526,6 +589,41 @@ def test_held_count_expires_after_stale_window():
     rs = f.update(csi)                                            # held occupied by wifi_csi alone
     assert rs.occupied is True
     assert rs.person_count is None
+
+
+def _csi(room, ts):
+    return SensingEvent(room=room, modality="wifi_csi", presence=True, motion=0.0,
+                        breathing_bpm=None, heart_bpm=None, confidence=0.9, ts=ts)
+
+
+def test_latch_bound_measures_from_the_count_not_from_the_last_fuse():
+    # The latch docstring promises the bound is stale_s. It stamped with `ref` (the fusion
+    # time), but a counting source may be up to stale_s old and STILL vouch (decay>0) -- so
+    # every fuse that saw the same aging count event re-dated the latch. The bound then
+    # measured from the last FUSE instead of from the last real COUNT, and a dead camera plus
+    # a chatty presence-only source kept vouching for a headcount for ~2x stale_s.
+    # test_held_count_expires_after_stale_window cannot catch this: it JUMPS the clock 0->100
+    # with no intermediate fuse. The bug only appears when you fuse THROUGH the window.
+    clock = {"t": _BASE}
+    f = FusionEngine(now_fn=lambda: clock["t"])
+    f.update(_camc("sala", True, 0.9, 2, ts=_at(0)))    # the ONLY real count, at t=0
+
+    # A chatty presence-only source fuses repeatedly INSIDE the window. Each of these fuses
+    # still sees the t=0 camera event at decay>0 -- exactly what used to re-date the latch.
+    for t in range(10, 90, 10):
+        clock["t"] = _BASE + timedelta(seconds=t)
+        held = f.update(_csi("sala", ts=_at(t)))
+        assert held.person_count == 2, f"t={t}: a camera inside stale_s still legitimately vouches"
+
+    # Past stale_s measured from the COUNT (t=0) the headcount must be gone, no matter how
+    # many fuses happened in between.
+    clock["t"] = _BASE + timedelta(seconds=95)
+    rs = f.update(_csi("sala", ts=_at(95)))
+    assert rs.occupied is True, "wifi_csi honestly still holds the room occupied"
+    assert rs.person_count is None, (
+        "the latch must expire stale_s after the COUNT, not after the last fuse -- "
+        "stamping with `ref` let a dead counting source vouch for ~2x stale_s"
+    )
 
 
 def test_count_latch_is_per_room_never_leaks_across_rooms():

@@ -99,13 +99,15 @@ def test_empty_registry_lists_builtins_all_inactive(tmp_path, monkeypatch):
     c, _s = _client(tmp_path, monkeypatch)
     body = c.get("/api/connectors").json()
     by_id = {x["id"]: x for x in body["connectors"]}
-    # 5 built-ins + the generic rows app.py always seeds: "assistant-cloud" (Phase 2B's
-    # Wavr Assistant cloud-egress kill switch) + the 2C first-wave external connectors
+    # 6 built-ins (diagnostics joined 2026-07-17: opt-in doctor-report auto-send) + the
+    # generic rows app.py always seeds: "assistant-cloud" (Phase 2B's Wavr Assistant
+    # cloud-egress kill switch) + the 2C first-wave external connectors
     # (open-meteo/telegram/digest/urlhaus/abuseipdb/wikipedia), all DEFAULT-OFF on
     # first sight -- see app.py's ConnectorStore.upsert(...) wiring for each.
     _seeded_generics = {"assistant-cloud", "open-meteo", "telegram", "digest",
                         "urlhaus", "abuseipdb", "wikipedia"}
-    assert set(by_id) == ({"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http"}
+    assert set(by_id) == ({"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http",
+                           "diagnostics"}
                           | _seeded_generics)
     # DEFAULT-OFF: nothing is active with a bare env + empty registry.
     assert all(x["active"] is False for x in by_id.values())
@@ -123,7 +125,8 @@ def test_empty_registry_lists_builtins_all_inactive(tmp_path, monkeypatch):
     assert by_id["ha-control"]["enforcement"] == "env"
     # catalog is the built-ins only, decoupled from generics
     cat = c.get("/api/connectors/catalog").json()["catalog"]
-    assert {x["id"] for x in cat} == {"narrator", "ha-import", "ha-control", "mcp-read", "mcp-http"}
+    assert {x["id"] for x in cat} == {"narrator", "ha-import", "ha-control", "mcp-read",
+                                      "mcp-http", "diagnostics"}
 
 
 def test_empty_registry_status_badge_zero_and_byte_identical_narrate(tmp_path, monkeypatch):
