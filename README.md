@@ -1,23 +1,32 @@
-# 🌊 Wavr — Fused Home Sensing
+# 🌊 Wavr — Local, Explainable Home Sensing for AI Agents
 
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
 [![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
-**Your home, understood — without giving it away.**
+**2,479 tests · 144 test files · 121 modules · 8 ADRs · 9 network-fix guides · 6 sensing modalities · local-only · MCP-for-agents · AGPL-3.0**
+
+**Local, explainable home sensing your AI agents can query over MCP — runs 100% on hardware you own.**
+
+Built by **Augusto Bastos** — portfolio [augustobastos.pages.dev](https://augustobastos.pages.dev) · open to AI / multi-agent-orchestration roles.
 
 ![Wavr — the home that knows who's home. Privacy-first presence sensing that runs 100% on your local network, shown next to the Command Center dashboard](docs/img/card-hero.png)
 
-Wavr is a local, explainable, privacy-first presence and network dashboard for your home — one you
-(and your agents) can actually query. It fuses several sensing modalities into a single *explainable*
-`RoomState` per room: occupied or not, a confidence score, and the per-modality *why* behind it — over
-a floor plan you draw yourself. Nothing leaves the box unless you turn on an optional, clearly-labelled
-egress. No account, no cloud, no telemetry.
+Wavr fuses several sensing modalities into a single *explainable* `RoomState` per room: occupied or
+not, a confidence score, and the per-modality *why* behind it — over a floor plan you draw yourself.
+It ships a read-only MCP server so your own agents can query "who's home" as structured context, no
+scraping required — see [MCP for agents](#mcp-for-agents) below. Nothing leaves the box unless you turn
+on an optional, clearly-labelled egress. No account, no cloud, no telemetry.
 
-- **Local-only, zero cloud egress by default** — runs on your own hardware (laptop, Raspberry Pi, or a
+- **🤖 Built for agents** — a read-only MCP server (stdio + HTTP) exposes `RoomState` and the house map
+  as structured context for your own agents, plus an opt-in, default-OFF, gated Home Assistant control
+  tool. See [MCP for agents](#mcp-for-agents) below.
+- **🔍 Explainable fusion** — fused `confidence = strength`: the best present evidence (trust weight ×
+  the source's own confidence × freshness decay), so a lone weak source never fakes 100%. Every
+  source's own reading is surfaced, never silently arbitrated — disagreement-weighting is designed-for
+  but inert today.
+- **🏠 Local-only, zero cloud egress by default** — runs on your own hardware (laptop, Raspberry Pi, or a
   dedicated phone), loopback-only out of the box. The only paths off the machine are opt-in and default-OFF.
-- **Explainable fusion** — `confidence = agreement × strength`; the dashboard always shows *why* a room
-  reads occupied, per modality, with trust weights you can see.
-- **You are admin, totally** — you draw the rooms, toggle every sensor on and off, and choose what (if
+- **🛡️ You are admin, totally** — you draw the rooms, toggle every sensor on and off, and choose what (if
   anything) is ever shared. Cameras boot OFF; credentials never leave the box.
 
 **Try it locally (no backend, no hardware):** open `frontend/index.html` — off-localhost the dashboard
@@ -27,13 +36,13 @@ self-switches to a built-in simulator (simulated data only, zero network request
 
 ## 🧩 The Wavr family
 
-Wavr is a small family of surfaces around one local fusion engine — pick the ones you need, add more over time. Every surface talks to the central over the same authenticated, local-only channel.
+Wavr is a small family of surfaces around one local fusion engine — pick the ones you need, add more over time. Every surface talks to the central over the same authenticated, local-only channel. Maturity is honest, not inflated:
 
-- **Desktop** — the full dashboard as a native Tauri app; the machine that runs it is the "central".
-- **Mobile** — an Android-first companion (native shell) that pairs to a central over pinned TLS. In active development.
-- **Core** — an always-on appliance (a dedicated phone or Raspberry Pi) that *is* the household hub: an ambient on-screen panel, zero-config mDNS discovery, and a boots-into-Wavr kiosk launcher. Early and experimental.
-- **Nodes** — cheap ESP32 + mmWave sensor nodes reporting presence over the pinned transport. Roadmap.
-- **MCP** — a read-only Model Context Protocol surface so your own agents can query presence over the LAN, with an opt-in, gated Home-Assistant control tool.
+- **Desktop** *(solid)* — the full dashboard as a native Tauri app; the machine that runs it is the "central".
+- **MCP** *(solid)* — a read-only Model Context Protocol surface so your own agents can query presence over the LAN, with an opt-in, gated Home-Assistant control tool.
+- **Mobile** *(in dev)* — an Android-first companion (native shell) that pairs to a central over pinned TLS.
+- **Core** *(early / experimental)* — an always-on appliance (a dedicated phone or Raspberry Pi) that *is* the household hub: an ambient on-screen panel, zero-config mDNS discovery, and a boots-into-Wavr kiosk launcher.
+- **Nodes** *(roadmap)* — cheap ESP32 + mmWave sensor nodes reporting presence over the pinned transport.
 
 ![One brain, every screen — the same open core as a web dashboard, a Tauri desktop app, a certificate-pinned Android companion, and the always-on Core hub](docs/img/card-platforms.png)
 
@@ -47,90 +56,68 @@ Wavr is a small family of surfaces around one local fusion engine — pick the o
 
 ## ✅ What's real today
 
-Everything below ships in this tree and is tested (hardware is mock-tested where the physical device
-isn't required).
+Each item below ships in this tree with tests (hardware modalities are mock-tested where the physical
+device isn't required). Full detail: `PRODUCT.md`, `docs/adr/`, `docs/ROADMAP.md`.
 
 ![Presence that explains itself — camera, network scan and Bluetooth fused into one confidence score per room, on a 3D house map you draw yourself](docs/img/card-explainable.png)
 
-- **Multi-modal fusion** — a small `SensorSource` seam feeds one transparent fusion engine:
-  - **Network scan** — presence from LAN device activity. Works today with **zero extra hardware**.
-  - **BLE presence** — the host Bluetooth adapter as a modality (lazy `bleak`).
-  - **Camera** — RTSP person-detection via the `[camera]` extra (torch/cv2), lazily loaded. Cameras
-    boot **OFF**; frames are processed in RAM and never persisted (ADR-0002).
-  - **mmWave radar** — the HLK-LD2450 parser and source are written and mock-tested; running it on the
-    physical ~€15 device is a roadmap step (see below).
-  - **WiFi CSI (ruview)** — a source seam for channel-state-information presence.
-- **3D house map + in-app editor** — draw multi-floor rooms, walls, and stairs in meters, right in the
-  dashboard; persisted via `PUT /api/house` (central-only). The authored geometry is the coordinate
-  frame the sensors report into.
-- **Sensing-mode meter** — a top-level **Off / Presence / Precise** control that shows how much of your
-  home Wavr is actually sensing right now, and lets you switch camera person-detection on or off. It
-  states honestly that *Precise* processes video in memory, on your GPU, and never sends it anywhere.
-- **Device liveness — an unplugged camera never fakes presence** — fusion runs a periodic re-fuse pass
-  (`WAVR_REFUSE_S`, default 5s) against the wall clock, so a source that stops reporting **decays to
-  zero instead of freezing** at its last reading. A camera that is unplugged or disabled is latched
-  *down* by the health monitor after `WAVR_CAM_UNHEALTHY_SECS`, and the map paints that room as **offline
-  (amber, never trusted-empty)** — visibly distinct from a sensor-confirmed empty room and from a room
-  with **no coverage** at all. The liveness signal carries camera *names* and an enum only — never a
-  frame, URL, or credential.
-- **Wavr Core (early, experimental)** — the appliance form-factor: a dedicated always-on phone or Pi
-  that *is* the household hub. Ships in [`core-launcher/`](core-launcher/) as a native Android kiosk
-  launcher (fullscreen WebView, boots-into-Wavr, becomes HOME), an ambient on-screen **Core Panel** — a
-  calm presence wave that **shifts colour by state** (green = calm, amber = unresolved alerts, red =
-  a critical/security alert) and comes to life when the assistant voice speaks — with a glance-free,
-  control-gated lock (**PIN, biometric, or no lock**). Tap the alert count for a glance-box that
-  explains each alert and jumps you straight to it. Because the Core is mobile-ish (docked or not),
-  its screen-awake behaviour is a **configurable policy** — stays lit while charging, sleeps on
-  battery so an undocked Core lasts, while the backend keeps sensing with the screen off. A landscape-first **Settings rail** (Layout,
-  Devices, Connectors, Privacy, Panel lock, About) keeps the panel navigable on a phone screen, and a
-  first-run **What's New** card surfaces each update. Plus **mDNS/DNS-SD discovery** so companions find
-  the Core with zero config, and an on-device loopback camera. It is early: treat one as a project
-  appliance, not yet a hardened product (see the roadmap).
-- **Wavr Pass — scoped local authorization** — a small, fully backward-compatible capability layer over
-  the pairing tokens. Each device carries a set of *scopes* (presence read, network read, camera config,
-  control, admin) derived from its role, enforced per-route on the box, so "read-only user" and "full
-  admin" are real boundaries — not just labels. Zero cloud: the central is both the authorization and
-  the resource server (ADR-0006).
-- **Multi-device pairing** — a phone or second PC on the same Wi-Fi pairs with the desktop "central":
-  local **HTTPS/WSS** (auto self-signed cert via `python -m wavr.serve`), a **rotating 8-digit pairing
-  code** that auto-refreshes on screen (single-use, 120s TTL, rate-limited) so you never race the clock,
-  per-device hashed revocable tokens, single-use WS tickets, and an in-subnet real-peer check. At pairing
-  you verify an **out-of-band certificate fingerprint** — read it off the trusted loopback dashboard,
-  compare it against what the phone's browser shows — which defeats a pairing-time TLS man-in-the-middle.
-  Devices pair with a **role — Admin (full control) or User (read-only)** — and a device's role can be
-  changed after pairing (Admin-only; a User can never promote itself). Opt-in, default-OFF, zero cloud
-  (ADR-0006).
-- **Who is home (non-biometric)** — an **opt-in, default-OFF** identity layer maps a known device
-  (a phone's Bluetooth address or Wi-Fi MAC) to a named person, so the dashboard can show *who* is home —
-  **not just that someone is**. It is **house-level** (one adapter localizes to the house, not a room —
-  Wavr says so, never faking per-room identity) and **non-biometric** (device-to-person, no faces). With
-  the flag off, no person label is ever created, so it can't leak to `/api/state`, the DB, or an agent.
-  Person labels are stripped from the MCP read path as PII. **Face recognition is a separate, gated,
-  undecided item — not shipped** (see roadmap).
-- **MCP for agents — read presence, gated control** — Wavr exposes `RoomState` and the house map to
-  agents (read-only), **plus** an opt-in gated control tool (`WAVR_MCP_CONTROL`, default-OFF) that asks
-  Home Assistant to run a service. Allowlist + consent refusal on both the service *and* the target
-  entity; camera / lock / scene refused even if allowlisted; mass actuation blocked; every call
-  audit-logged (ADR-0005). Besides the stdio MCP server, Wavr can mount a **read-only `/mcp` over HTTP**
-  behind the same LAN auth (opt-in, default-OFF `mcp-http` connector) so a paired agent queries presence
-  over the network, person labels stripped as PII (ADR-0008).
-- **Desktop Tauri shell** — a native desktop wrapper (`desktop/`) around the backend + dashboard so the
-  "Wavr desktop is the central" story ships as one app (ADR-0007).
-- **Installable PWA** — the dashboard is an installable Progressive Web App (manifest + service worker)
-  that caches only the shell and makes zero external requests.
-- **Defensive LAN inventory ("Wavr Net")** — offline OUI vendor + device-type classification,
-  rogue-device / gateway-MAC / rogue-DHCP alerts on a five-tier ladder, and opt-in port/speed/WOL
-  utilities. Defensive only (ADR-0004) — Wavr never surveils a network the host isn't authorized on.
-- **Network doctor — honest self-diagnosis when discovery fails** — one tap correlates how many
-  devices are reachable (ARP) against how many answer name-discovery (mDNS/SSDP); when the mesh is
-  silent, it names the *likely* cause **without ever blaming your router unproven**. A host-viability
-  probe first proves the hub itself can receive inbound LAN multicast, so client isolation, a second
-  network, and a container that simply can't receive multicast are told apart honestly — always a
-  hypothesis ("probably"), never CONFIRMED (ADR-0003). Ships plain-language, per-router **fix guides**
-  ([`docs/network-fixes/`](docs/network-fixes/)) and a shareable, **MAC-redacted** `wavr doctor`
-  report you can paste into an issue. Sending it off your LAN is **opt-in, default-OFF** (the
-  `diagnostics` connector); a single universal *egress* pictogram marks every control that leaves
-  your home, and nothing is ever sent without your tap.
+- <a id="mcp-for-agents"></a>**MCP for agents, read-only by default** — a stdio and HTTP MCP server
+  exposes `RoomState` and the house map so your own agents can query presence as structured context; an
+  opt-in, default-OFF, gated Home Assistant control tool sits behind an allowlist + audit log
+  (ADR-0005, ADR-0008).
+  <details><summary>Detail</summary>
+
+  Allowlist + consent refusal on both the service *and* the target entity; camera / lock / scene
+  refused even if allowlisted; mass actuation blocked; every call audit-logged. Person labels are
+  stripped from the MCP read path as PII.
+  </details>
+
+- **Multi-modal fusion, explainable by construction** — 6 sensing sources (network scan, BLE, camera,
+  mmWave, WiFi CSI/ruview, simulator) feed one `FusionEngine`. Fused `confidence` equals `strength` —
+  trust weight × the source's own confidence × freshness decay — so a lone weak source never fakes
+  100%, and every source's own reading rides in `sources[]`, never silently arbitrated.
+  <details><summary>Per-modality status</summary>
+
+  - Network scan — works today, zero extra hardware.
+  - BLE presence — host Bluetooth adapter (lazy `bleak`).
+  - Camera — RTSP person-detection via the `[camera]` extra (torch/cv2), lazy-loaded; boots **OFF**,
+    frames processed in RAM, never persisted (ADR-0002).
+  - mmWave radar — HLK-LD2450 parser is written and mock-tested; running it on the physical ~€15
+    device is a roadmap step.
+  - WiFi CSI (ruview) — a source seam for channel-state-information presence.
+  - A periodic re-fuse pass (`WAVR_REFUSE_S`, default 5s) decays a stopped source to zero instead of
+    freezing on its last reading; an unhealthy camera is latched down and painted **offline (amber)**,
+    visibly distinct from a sensor-confirmed empty room or a room with no coverage at all.
+  </details>
+
+- **3D house map + live sensing control** — draw multi-floor rooms, walls, and stairs yourself, in
+  meters, persisted via `PUT /api/house`; a top-level **Off / Presence / Precise** meter shows exactly
+  how much of the home Wavr is sensing right now and lets you toggle camera detection on or off.
+
+- **Locally authenticated, scoped multi-device access** — Wavr Pass gives each paired device
+  role-based scopes (read / control / admin) enforced per-route on the box (ADR-0006); pairing uses
+  local HTTPS/WSS, a rotating single-use 8-digit code, and an out-of-band certificate-fingerprint check
+  that defeats a pairing-time MITM.
+  <details><summary>Detail</summary>
+
+  Per-device hashed revocable tokens, single-use WS tickets, an in-subnet real-peer check. A device's
+  role can be changed after pairing (Admin-only; a User can never promote itself). Opt-in, default-OFF,
+  zero cloud.
+  </details>
+
+- **Non-biometric "who is home"** — an opt-in, default-OFF layer maps a known device (Bluetooth
+  address or Wi-Fi MAC) to a named person; house-level, not per-room, and non-biometric (device-to-person,
+  no faces). Stripped from the MCP read path as PII when the flag is off. Face recognition specifically
+  is a separate, gated, undecided item — not shipped.
+
+- **Ships as a desktop app + installable PWA** — a native Tauri shell (`desktop/`, ADR-0007) and a
+  zero-build installable Progressive Web App that makes zero external requests off-localhost. Wavr Core
+  (dedicated always-on hub) is early / experimental — see maturity tags above.
+
+- **Defensive LAN inventory + honest network diagnosis** — offline OUI vendor/device-type
+  classification, rogue-device / gateway-MAC / rogue-DHCP alerts on a five-tier ladder (ADR-0004,
+  defensive-only), and a network doctor that names a *likely* cause without ever confirming blame —
+  backed by 9 fix guides in [`docs/network-fixes/`](docs/network-fixes/).
 
 ![Ready for the agent era — a built-in MCP server turns the whole house into context any AI agent can query, read-only by design](docs/img/card-mcp.png)
 
@@ -161,12 +148,13 @@ consumes what actually works and the trust weights tell the truth.
   (ADR-0002). Position targets are live-only — never SQLite, never MQTT.
 - **Only derived state is ever stored or (optionally) published** — occupancy / confidence / timestamp.
   Never frames, never raw targets, never credentials. Credentials are never logged or echoed.
-- **Every egress is opt-in and default-OFF** — LAN multi-device (TLS), MQTT to Home Assistant (derived
-  state only), the MCP control tool, and the optional natural-language narrator. Turn none on and Wavr is
-  an island. **The narrator is provider-agnostic** — point it at a **local Ollama** (or any loopback
-  OpenAI-compatible server) and even that last summarizing step stays on your box with **zero cloud
-  egress**; or pick Gemini / OpenAI / Claude if you'd rather (opt-in cloud). Every provider is fed the
-  same allowlisted prompt — occupancy and confidence only, never a frame, vital, MAC, or credential.
+- **Every egress is opt-in and default-OFF.** The only paths off the box — LAN multi-device (TLS), MQTT
+  to Home Assistant (derived state only), the MCP control tool, and the natural-language narrator — are
+  each a switch you flip. Turn none on and Wavr is an island.
+- **Even the AI narrator can stay local.** It's provider-agnostic: point it at a **local Ollama** (or any
+  loopback OpenAI-compatible server) and that last summarizing step stays on your box with **zero cloud
+  egress** — or pick Gemini / OpenAI / Claude if you'd rather (opt-in cloud). Every provider gets the same
+  allowlisted prompt: occupancy and confidence only, never a frame, vital, MAC, or credential.
 - **No analytics, no telemetry SDK, no account.** The frontend makes zero external requests; the public
   simulator declares itself fake on screen.
 
@@ -191,7 +179,7 @@ TLS + pairing) and the Tauri shell in [`desktop/`](desktop/).
 ```
 sources (network / ruview CSI / camera / mmwave / BLE / sim)
    └─> SensingEvent (+ Target: x/y, posture)
-        └─> FusionEngine (agreement × strength, explainable weights, wall-clock ageing)
+        └─> FusionEngine (strength = best present evidence, explainable weights, wall-clock ageing)
              └─> RoomState ─> WS /ws/live + REST ─> dashboard (cards + radar + house map)
                   ├─> SQLite (derived state only — never frames, never targets)
                   ├─> RulesEngine / AwayMonitor ─> MQTT (opt-in; occupied/confidence/ts only)
