@@ -34,7 +34,7 @@ isn't required).
   - **Camera** — RTSP person-detection via the `[camera]` extra (torch/cv2), lazily loaded. Cameras
     boot **OFF**; frames are processed in RAM and never persisted (ADR-0002).
   - **mmWave radar** — the HLK-LD2450 parser and source are written and mock-tested; running it on the
-    physical ~€15 device is a roadmap step (see below).
+    physical ~€15 device is a planned step.
   - **WiFi CSI (ruview)** — a source seam for channel-state-information presence.
 - **3D house map + in-app editor** — draw multi-floor rooms, walls, and stairs in meters, right in the
   dashboard; persisted via `PUT /api/house` (central-only). The authored geometry is the coordinate
@@ -64,7 +64,7 @@ isn't required).
   Wavr says so, never faking per-room identity) and **non-biometric** (device-to-person, no faces). With
   the flag off, no person label is ever created, so it can't leak to `/api/state`, the DB, or an agent.
   Person labels are stripped from the MCP read path as PII. **Face recognition is a separate, gated,
-  undecided item — not shipped** (see roadmap).
+  undecided item — not shipped**.
 - **MCP "brain on Home Assistant"** — Wavr exposes `RoomState` and the house map to agents (read-only),
   **plus** an opt-in gated control tool (`WAVR_MCP_CONTROL`, default-OFF) that asks Home Assistant to
   run a service. Allowlist + consent refusal on both the service *and* the target entity; camera / lock
@@ -87,7 +87,7 @@ isn't required).
 - **Live posture (standing/sitting/lying) is planned**, not shipped — it needs YOLO-pose on a GPU.
 - **mmWave x/y target tracking** needs the physical LD2450; the code is written and mock-tested but
   hasn't been run on-device here.
-- **AR floor-plan measuring and a native mobile app are roadmap** (see below). Non-biometric "who is
+- **AR floor-plan measuring and a native mobile app are planned**. Non-biometric "who is
   home" ships today (opt-in, default-OFF); **face recognition** specifically is explicitly gated and
   undecided.
 
