@@ -1,0 +1,48 @@
+name: scpe
+
+# SCPE level 1 — https://github.com/augbastos/scpe
+#
+# Checks that every pull request carries an AI-use disclosure: an `Assisted-by:` commit
+# trailer, or a checked box in the PR template. Nothing is signed, no key is needed, and
+# nothing is installed on the runner — the Action runs one stdlib-only Python file out of
+# its own checkout at the tag pinned below.
+#
+# It is INFORMATIONAL right now: `require: "false"` posts the result as a comment and
+# never fails the check. Flip it to "true" to make the disclosure a merge requirement.
+#
+# TWO FILES, NOT ONE. The companion scpe-seal.yml holds the write token and posts the
+# comment; this file runs contributor code with no secrets. They cannot be merged: a
+# workflow that names itself in `workflow_run.workflows` fails to register with GitHub.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:                       # UNTRUSTED — no secrets; safe to run contributor code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false   # never write the token into .git/config
+          # Level 1 reads the commit messages in the PR range, and level 2 (if this repo
+          # ever moves up) recomputes `git diff BASE...HEAD` to check it against the
+          # signed digest. Neither is possible with the default shallow checkout.
+          fetch-depth: 0
+
+      - id: seal
+        uses: augbastos/scpe@v0.2.1
+        with:
+          level: "1"                   # 1 = disclosure lint · 2 = signed envelope required
+          require: "false"             # "true" makes a missing disclosure fail the check
+
+      # Hand the verdict + PR number to the trusted job. The number MUST travel in the
+      # artifact: github.event.workflow_run.pull_requests is empty for fork PRs.
+      - run: echo "${{ github.event.pull_request.number }}" > pr-number.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scpe-results
+          path: |
+            results.json
+            pr-number.txt
