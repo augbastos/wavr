@@ -7,8 +7,6 @@
 
 **Local, explainable home sensing your AI agents can query over MCP — runs 100% on hardware you own.**
 
-Built by **Augusto Bastos** — portfolio [augustobastos.pages.dev](https://augustobastos.pages.dev) · open to AI / multi-agent-orchestration roles.
-
 ![Wavr — live per-room presence on a 3D map of your own home, fused from network, Bluetooth and camera, all running 100% on your local network (animated demo)](docs/hero.gif)
 
 Wavr fuses several sensing modalities into a single *explainable* `RoomState` per room: occupied or
