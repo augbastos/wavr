@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from wavr.occupancy_log import OccupancyLog
+from wavr.occupancy_log import DEFAULT_RETENTION_DAYS, OccupancyLog
 
 
 def _store(tmp_path=None):
@@ -137,9 +137,45 @@ def test_timeline_limit_is_clamped_defensively():
 
 # ---- routine() -- time-weighted hourly baseline ------------------------------------
 
+def _d0() -> datetime:
+    """Midnight UTC, three days ago -- the synthetic-history epoch for the routine tests.
+
+    Deliberately RELATIVE to now, never a frozen calendar date. ``OccupancyLog`` prunes
+    rows older than ``retention_days`` (default 60) measured from the real wall clock, so a
+    hardcoded epoch silently rots: every routine/is_unusual test below passed until the
+    epoch drifted past retention, at which point the post-insert prune deleted the fixture
+    rows and the assertions failed with ``samples == 0`` -- a failure that reads like a
+    routine() regression but is really an expired fixture. Anchoring here keeps the
+    fixtures permanently inside retention; the arithmetic these tests actually assert on
+    (hour-of-day duty cycle, distinct-day sample counts) is unaffected -- it only needs d0
+    to be midnight UTC.
+    """
+    return datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
+
+
 def _dt(days_from_d0: int, hh: int, mm: int = 0) -> str:
-    d0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    return (d0 + timedelta(days=days_from_d0, hours=hh, minutes=mm)).isoformat()
+    return (_d0() + timedelta(days=days_from_d0, hours=hh, minutes=mm)).isoformat()
+
+
+def test_routine_fixture_epoch_stays_inside_default_retention():
+    """Guard against the whole routine/is_unusual block silently rotting again.
+
+    Every test below writes its history through a store with DEFAULT retention, so the
+    post-insert prune is live. If ``_d0()`` ever drifts outside ``DEFAULT_RETENTION_DAYS``
+    the fixture rows are deleted the moment they are written and the assertions collapse
+    to ``samples == 0``. This fails FIRST, and says exactly why.
+    """
+    age_days = (datetime.now(timezone.utc) - _d0()).total_seconds() / 86400
+    assert 0 < age_days < DEFAULT_RETENTION_DAYS, (
+        f"routine-test epoch is {age_days:.1f} days old; default retention is "
+        f"{DEFAULT_RETENTION_DAYS} days -- fixtures would be pruned on insert"
+    )
+    # And prove it end to end: a default-retention store really does keep them.
+    log = _store()
+    log.append_if_changed("sala", True, 0.9, None, _dt(0, 10, 0))
+    log.append_if_changed("sala", False, 0.1, None, _dt(2, 11, 0))
+    assert len(log.timeline("sala")) == 2
 
 
 def test_routine_time_weights_across_three_days():
@@ -157,7 +193,7 @@ def test_routine_time_weights_across_three_days():
     log.append_if_changed("sala", True, 0.9, None, _dt(2, 10, 0))
     log.append_if_changed("sala", False, 0.1, None, _dt(2, 11, 0))
 
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=2, hours=12)
+    now = _d0() + timedelta(days=2, hours=12)
     base = log.routine("sala", weeks=1, now=now)
     hour10 = base["hours"][10]
     assert hour10["samples"] == 3
@@ -184,8 +220,8 @@ def test_routine_hours_before_the_very_first_ever_row_are_honestly_no_data():
     hold their state from (no `prior` row exists at all) -- unlike the hold-over case
     above, this is a genuine "no data yet" gap."""
     log = _store()
-    log.append_if_changed("sala", True, 0.9, None, "2026-06-01T14:00:00+00:00")
-    now = datetime(2026, 6, 1, 20, 0, 0, tzinfo=timezone.utc)
+    log.append_if_changed("sala", True, 0.9, None, _dt(0, 14, 0))
+    now = _d0() + timedelta(hours=20)
     base = log.routine("sala", weeks=1, now=now)
     assert base["hours"][5]["samples"] == 0
     assert base["hours"][5]["probability"] is None
@@ -211,7 +247,7 @@ def test_is_unusual_false_when_current_matches_baseline():
     log.append_if_changed("sala", False, 0.1, None, _dt(1, 11, 0))
     log.append_if_changed("sala", True, 0.9, None, _dt(2, 10, 0))
     log.append_if_changed("sala", False, 0.1, None, _dt(2, 11, 0))
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=2, hours=10, minutes=30)
+    now = _d0() + timedelta(days=2, hours=10, minutes=30)
     # Room usually occupied at 10h (baseline 1.0) and IS occupied now -> not unusual.
     result = log.is_unusual("sala", True, at=now, weeks=1)
     assert result["samples"] == 3
@@ -227,7 +263,7 @@ def test_is_unusual_true_when_current_contradicts_baseline():
     log.append_if_changed("sala", False, 0.1, None, _dt(1, 11, 0))
     log.append_if_changed("sala", True, 0.9, None, _dt(2, 10, 0))
     log.append_if_changed("sala", False, 0.1, None, _dt(2, 11, 0))
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=2, hours=10, minutes=30)
+    now = _d0() + timedelta(days=2, hours=10, minutes=30)
     # Room is ALWAYS occupied at 10h (baseline 1.0) but is reported VACANT right now.
     result = log.is_unusual("sala", False, at=now, weeks=1)
     assert result["baseline_probability"] == 1.0
@@ -241,7 +277,7 @@ def test_is_unusual_insufficient_when_hour_has_fewer_than_min_samples_days():
     log.append_if_changed("sala", False, 0.1, None, _dt(0, 11, 0))
     log.append_if_changed("sala", True, 0.9, None, _dt(1, 10, 0))
     log.append_if_changed("sala", False, 0.1, None, _dt(1, 11, 0))
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=1, hours=10, minutes=30)
+    now = _d0() + timedelta(days=1, hours=10, minutes=30)
     result = log.is_unusual("sala", True, at=now, weeks=1)
     assert result["unusual"] is None
     assert result["samples"] == 2
