@@ -5,6 +5,14 @@ on:
     branches: [master]
   pull_request:
 
+# A new push to the same ref makes the previous run obsolete: it reports a
+# verdict on a commit nobody is looking at any more. Cancelling keeps the
+# checks list honest about HEAD. (Public repo, so standard runners are not
+# billed — this is about a clean signal, not about minutes.)
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
