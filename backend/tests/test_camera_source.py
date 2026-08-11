@@ -210,8 +210,24 @@ def _real_weights_cached() -> bool:
     return os.path.exists("yolov8n.pt")
 
 
-@pytest.mark.skipif(not _real_weights_cached(),
-                    reason="yolov8n.pt not cached in CWD; skip network-dependent real-model test")
+def _ultralytics_installed() -> bool:
+    """True only if the [camera] extra is actually installed.
+
+    The real-model test needs TWO independent preconditions and the weights check above
+    only covers one of them. `ultralytics` is an OPTIONAL extra that the default
+    `pip install -e backend[dev]` -- what CI runs -- deliberately does not pull in,
+    because it drags torch/CUDA along. The weights can sit cached in the repo root (they
+    are committed here) while the package is absent, and then this test raised
+    ModuleNotFoundError instead of skipping, turning the whole default-install suite red.
+    `find_spec` locates the top-level package WITHOUT importing it, so this check stays
+    free of the torch import the rest of the suite is careful to avoid."""
+    import importlib.util
+    return importlib.util.find_spec("ultralytics") is not None
+
+
+@pytest.mark.skipif(not (_real_weights_cached() and _ultralytics_installed()),
+                    reason="needs the [camera] extra installed AND yolov8n.pt cached in "
+                           "CWD; skip the network/torch-dependent real-model test")
 def test_yolo_detect_real_model_surfaces_sub_quarter_conf_detections():
     # HONEST real-model regression (not a hand-rolled fake Results/Boxes object):
     # ultralytics' OWN predict() defaults conf to 0.25 and strips anything below
