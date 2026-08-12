@@ -1,5 +1,7 @@
 """Route tests for POST /api/core/pin, POST /api/core/pin/verify,
 GET /api/core/pin/status. Mirrors test_identity_api.py's fixture style."""
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from wavr.app import create_app
@@ -184,6 +186,43 @@ def test_verify_oversized_pin_is_false_never_hashed(tmp_path):
     r = c.post("/api/core/pin/verify", json={"pin": "1" * 200})
     assert r.status_code == 200
     assert r.json() == {"ok": False}
+
+
+# --------------------------------------------------------------------------- #
+# the pbkdf2 compare must not run on the event loop
+# --------------------------------------------------------------------------- #
+class _LoopProbePinStore(PinStore):
+    """Records whether verify() ran on a thread that has a running event loop.
+    `asyncio.get_running_loop()` succeeds only on the loop thread itself, so the
+    RuntimeError branch is positive proof the call was handed to a worker."""
+
+    def __init__(self):
+        super().__init__(":memory:")
+        self.ran_off_the_loop = None
+
+    def verify(self, pin: str) -> bool:
+        try:
+            asyncio.get_running_loop()
+            self.ran_off_the_loop = False
+        except RuntimeError:
+            self.ran_off_the_loop = True
+        return super().verify(pin)
+
+
+def test_verify_runs_pbkdf2_off_the_event_loop(tmp_path):
+    """PinStore.verify is ~90ms of straight-line pbkdf2 CPU (200_000 iterations,
+    slow by design). verify_core_pin is an `async def`, so FastAPI runs it ON the
+    loop -- a bare call stalls every other task for that whole window on every
+    attempt, including the /ws/live fan-out feeding the very Core Panel asking to
+    unlock. It must be handed to a thread."""
+    store = _LoopProbePinStore()
+    store.set_pin("1234")
+    c, _ = _client(tmp_path, pin_store=store)
+    assert c.post("/api/core/pin/verify", json={"pin": "1234"}).json() == {"ok": True}
+    assert store.ran_off_the_loop is True, (
+        "pbkdf2 ran on the event loop thread -- verify_core_pin must await "
+        "asyncio.to_thread(_pin_store.verify, pin) rather than calling it directly"
+    )
 
 
 # --------------------------------------------------------------------------- #
