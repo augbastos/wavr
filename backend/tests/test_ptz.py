@@ -247,6 +247,41 @@ async def test_discover_resolves_and_caches():
     assert len(sink) == 2                          # no further SOAP
 
 
+async def test_forget_drops_the_cached_endpoint_so_a_moved_camera_is_rediscovered():
+    """The cache is keyed by camera NAME but its value embeds the resolved HOST, and
+    `discover` short-circuits on a cache hit. After the camera behind a name moves (a
+    DHCP rebind, or a delete + re-add under the same name) the stale entry would keep
+    aiming every later PTZ command -- including the runaway-slew auto-stop -- at the
+    previous IP. forget() is what the delete/rebind routes call to prevent that."""
+    sink: list = []
+    ptz = CameraPTZ(soap=_fake_ptz_soap(sink=sink))
+    assert await ptz.discover("cam", _LAN_RTSP) == (
+        "http://10.0.0.5:2020/onvif/service", "Profile_1")
+    assert len(sink) == 2
+    await ptz.discover("cam", _LAN_RTSP)
+    assert len(sink) == 2                          # cached, as the test above proves
+
+    ptz.forget("cam")
+    # Same name, camera now at a different LAN address -> must re-resolve, and the
+    # fresh discovery must be addressed to the NEW host, not the remembered one.
+    # (What the resolved PTZ url ends up being is decided by the device's own
+    # GetServices reply, which this fake pins to a fixed host -- so the load-bearing
+    # assertion is where the SOAP was SENT.)
+    await ptz.discover("cam", "rtsp://admin:pw@10.0.0.9:554/s")
+    assert len(sink) == 4                          # discovery really ran again
+    urls = [url for url, _body, _action in sink[2:]]
+    assert all("10.0.0.9" in u for u in urls), urls
+    assert not any("10.0.0.5" in u for u in urls), urls
+
+
+async def test_forget_is_idempotent_for_an_unknown_name():
+    """delete/rebind call it unconditionally, including for a camera that never had a
+    PTZ command issued (so nothing was ever cached)."""
+    ptz = CameraPTZ(soap=_fake_ptz_soap())
+    ptz.forget("never-seen")       # must not raise
+    ptz.forget("never-seen")
+
+
 async def test_discover_falls_back_when_no_ptz_service():
     ptz = CameraPTZ(soap=_fake_ptz_soap(with_ptz_service=False))
     got = await ptz.discover("cam", _LAN_RTSP)

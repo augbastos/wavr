@@ -3728,6 +3728,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         except KeyError:
             pass   # not registered (e.g. removed before a restart re-registered it)
         _camera_health.clear(name)   # drop any stale drift suggestion for the removed cam
+        # The PTZ endpoint cache is keyed by name but holds the resolved HOST, so a new
+        # camera later registered under this same name would inherit the deleted one's
+        # address. Also cancels any pending auto-stop aimed at the old endpoint.
+        _ptz.forget(name)
         return _masked_cameras()
 
     def _calib_view(name: str) -> dict:
@@ -4063,6 +4067,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         manager.register(name, _camera_factory(_cameras.get(name), cfg, _camera_health.report, _calib, _house,
                                             on_privacy=_camera_health.report_privacy), False)
         _camera_health.clear(name)
+        # The whole point of a rebind is that the host moved, and the PTZ endpoint cache
+        # holds the OLD host under this name -- without this, every later pan/tilt/zoom
+        # (and the runaway-slew auto-stop) would keep addressing the previous IP.
+        _ptz.forget(name)
         return _masked_cameras()
 
     @app.post("/api/cameras/{name}/privacy-mode")
