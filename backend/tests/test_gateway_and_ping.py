@@ -79,6 +79,50 @@ def test_parse_gateway_linux_and_mac_and_none():
     assert parse_default_gateway("no gateway here") is None
 
 
+def test_parse_gateway_ipconfig_all_layout():
+    txt = (
+        "Windows IP Configuration\n\n"
+        "Ethernet adapter Ethernet:\n"
+        "   IPv4 Address. . . . . . . . . . . : 192.168.1.100(Preferred)\n"
+        "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n"
+        "   Lease Obtained. . . . . . . . . . : Monday, January 1, 2024 10:00:00 AM\n"
+        "   Lease Expires . . . . . . . . . . : Tuesday, January 2, 2024 10:00:00 AM\n"
+        "   Default Gateway . . . . . . . . . : 192.168.1.1\n"
+        "   DHCP Server . . . . . . . . . . . : 192.168.1.254\n"
+    )
+    assert parse_default_gateway(txt) == "192.168.1.1"
+
+
+def test_parse_gateway_empty_gateway_with_dhcp_server():
+    txt = (
+        "Windows IP Configuration\n\n"
+        "Ethernet adapter Ethernet:\n"
+        "   IPv4 Address. . . . . . . . . . . : 192.168.1.100(Preferred)\n"
+        "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n"
+        "   Default Gateway . . . . . . . . . : \n"
+        "   DHCP Server . . . . . . . . . . . : 192.168.1.254\n"
+    )
+    assert parse_default_gateway(txt) is None
+
+
+def test_parse_gateway_two_adapters_second_has_gateway_blank_line():
+    txt = (
+        "Windows IP Configuration\n\n"
+        "Ethernet adapter Ethernet 1:\n"
+        "   IPv4 Address. . . . . . . . . . . : 192.168.1.100(Preferred)\n"
+        "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n"
+        "   Default Gateway . . . . . . . . . : \n"
+        "   DHCP Server . . . . . . . . . . . : 192.168.1.254\n"
+        "\n"
+        "Ethernet adapter Ethernet 2:\n"
+        "   IPv4 Address. . . . . . . . . . . : 10.0.0.100(Preferred)\n"
+        "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n"
+        "   Default Gateway . . . . . . . . . : 10.0.0.1\n"
+        "   DHCP Server . . . . . . . . . . . : 10.0.0.254\n"
+    )
+    assert parse_default_gateway(txt) == "10.0.0.1"
+
+
 async def test_default_gateway_uses_injected_run(monkeypatch):
     async def fake_run(*args):
         return IPCONFIG
