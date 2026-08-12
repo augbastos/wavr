@@ -22,6 +22,17 @@ Interface: 192.168.0.10 --- 0x5
   224.0.0.22            01-00-5E-00-00-16     static
 """
 
+# The SAME LAN as WINDOWS_ARP, as net-tools/BusyBox/BSD/macOS `arp -a` prints it:
+# `host (ip) at mac [ether] on iface`. Kept host-for-host identical to WINDOWS_ARP so
+# the two can be asserted to parse to the same result.
+UNIX_ARP = """
+? (192.168.0.1) at A4:83:E7:11:22:33 [ether] on eth0
+esp32-sensor.lan (192.168.0.23) at 24:0A:C4:AA:BB:CC [ether] on eth0
+? (192.168.0.42) at DE:AD:BE:EF:00:01 [ether] on wlan0
+? (192.168.0.255) at FF:FF:FF:FF:FF:FF [ether] on eth0
+? (224.0.0.22) at 01:00:5E:00:00:16 [ether] on eth0
+"""
+
 
 # ---- OUI -> vendor -----------------------------------------------------------
 
@@ -99,6 +110,40 @@ def test_parse_arp_inventory_pairs_ip_and_mac_and_filters_multicast():
 def test_parse_arp_inventory_dedupes_by_mac_first_ip_wins():
     text = "10.0.0.5 a4-83-e7-11-22-33 dynamic\n10.0.0.9 a4-83-e7-11-22-33 dynamic\n"
     assert parse_arp_inventory(text) == [("10.0.0.5", "a4:83:e7:11:22:33")]
+
+
+def test_parse_arp_inventory_reads_the_unix_arp_layout():
+    """`arp -a` on net-tools/BusyBox/BSD/macOS puts `) at ` between ip and mac.
+
+    Not a hypothetical platform: `_arp_output` shells out to a bare `arp -a` on
+    EVERY platform, and this parser is the single choke point seeding the whole
+    discovery pipeline -- so a parser that only understands the Windows column
+    layout yields a permanently EMPTY device inventory on the Linux appliance
+    targets (Pi / phone-in-proot Core), with no error surfaced anywhere.
+    """
+    pairs = parse_arp_inventory(UNIX_ARP)
+    by_mac = dict((m, ip) for ip, m in pairs)
+    assert by_mac["a4:83:e7:11:22:33"] == "192.168.0.1"
+    assert by_mac["24:0a:c4:aa:bb:cc"] == "192.168.0.23"
+    assert by_mac["de:ad:be:ef:00:01"] == "192.168.0.42"
+    assert "ff:ff:ff:ff:ff:ff" not in by_mac          # broadcast still dropped
+    assert "01:00:5e:00:00:16" not in by_mac          # multicast still dropped
+    assert len(pairs) == 3
+
+
+def test_parse_arp_inventory_skips_macos_incomplete_rows():
+    """macOS prints `at (incomplete)` for an unresolved neighbour -- there is no
+    MAC to pair, so the row must be skipped, never paired with a neighbouring
+    line's address."""
+    text = ("? (192.168.0.7) at (incomplete) on en0 ifscope [ethernet]\n"
+            "? (192.168.0.8) at a4:83:e7:11:22:33 on en0 ifscope [ethernet]\n")
+    assert parse_arp_inventory(text) == [("192.168.0.8", "a4:83:e7:11:22:33")]
+
+
+def test_parse_arp_inventory_agrees_across_platform_layouts():
+    """Same LAN, same hosts, two `arp -a` dialects -> identical parse. Pins the
+    cross-platform contract itself rather than either dialect's spelling."""
+    assert parse_arp_inventory(WINDOWS_ARP) == parse_arp_inventory(UNIX_ARP)
 
 
 # ---- inventory shape ---------------------------------------------------------

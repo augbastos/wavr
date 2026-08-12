@@ -29,9 +29,21 @@ from wavr.sources import network
 
 _LOG = logging.getLogger(__name__)
 
-# ip + mac on one `arp -a` line. Separator-agnostic (Windows "-", Unix ":").
+# ip + mac on one `arp -a` line. Agnostic to BOTH the MAC separator (Windows "-",
+# Unix ":") and the LINE LAYOUT, which differs by platform:
+#   Windows:                      "  192.168.1.1        aa-bb-cc-dd-ee-ff     dynamic"
+#   net-tools / BusyBox / BSD / macOS:  "? (192.168.1.1) at aa:bb:cc:dd:ee:ff [ether] on eth0"
+# The original pattern required bare whitespace between ip and mac, so it matched ZERO
+# pairs against the second layout. `arp -a` is invoked unconditionally on every platform
+# (_arp_output -> network._run("arp", "-a")) and parse_arp_inventory is the single choke
+# point seeding the whole discovery pipeline, so the device inventory came back
+# permanently EMPTY on Linux/macOS -- the same class of Windows-only assumption already
+# fixed once in network.ping_argv (see its docstring, "silently no-op'd on Linux,
+# breaking the ARP sweep"); this is the parser half of that bug.
+# `)` and `at` are both optional, so the Windows column layout still parses identically.
+# macOS "(incomplete)" rows carry no MAC and are simply not matched.
 _ARP_LINE_RE = re.compile(
-    r"(\d{1,3}(?:\.\d{1,3}){3})\s+((?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})"
+    r"(\d{1,3}(?:\.\d{1,3}){3})\)?\s+(?:at\s+)?((?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})"
 )
 
 
