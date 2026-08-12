@@ -3365,7 +3365,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         if not isinstance(pin, str) or not pin or len(pin) > 128:
             _pin_limiter.record_failure()
             return {"ok": False}
-        ok = _pin_store.verify(pin)
+        # Off the event loop: PinStore.verify runs pbkdf2-hmac at 200_000 iterations,
+        # which is ~90ms of straight-line CPU (deliberately slow -- that is the point of
+        # the KDF). This is an `async def` handler, so FastAPI runs it ON the loop, and a
+        # bare call would stall every other task for that whole window -- including the
+        # /ws/live fan-out driving the very Core Panel that is asking to unlock, once per
+        # attempt. PinStore opens its sqlite connection with check_same_thread=False and
+        # guards every statement with its own threading.Lock, so it is safe to call from
+        # a worker thread (same to_thread idiom used throughout this module).
+        ok = await asyncio.to_thread(_pin_store.verify, pin)
         if ok:
             _pin_limiter.record_success()
         else:
