@@ -472,6 +472,24 @@ class CameraPTZ:
             return
         self._timers[name] = loop.create_task(self._autostop_after(name, rtsp_url))
 
+    def forget(self, name: str) -> None:
+        """Drop everything cached for `name`: the resolved endpoint and any pending
+        auto-stop timer.
+
+        The cache is keyed by camera NAME but its VALUE embeds the host
+        (`http://{host}:{port}/...`, resolved once in `discover`). Nothing else
+        invalidates it, and `discover`/`_move` short-circuit on a cache hit, so after
+        the camera behind a name moves -- a DHCP rebind, or a delete followed by a new
+        camera registered under the same name -- every later PTZ command keeps being
+        addressed to the OLD IP. That silently aims commands at whatever host now owns
+        that address, and it takes the runaway-slew auto-stop with it: the guard fires
+        against the stale endpoint, so a camera left slewing never receives its Stop.
+
+        Idempotent, safe to call for a name that was never cached.
+        """
+        self._cache.pop(name, None)
+        self._cancel_autostop(name)
+
     def _cancel_autostop(self, name: str) -> None:
         task = self._timers.pop(name, None)
         if task is not None:
