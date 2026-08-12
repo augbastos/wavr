@@ -4,7 +4,7 @@ from wavr.occupancy_log import OccupancyLog
 
 
 def _store(tmp_path=None):
-    return OccupancyLog(str(tmp_path / "t.db") if tmp_path else ":memory:")
+    return OccupancyLog(str(tmp_path / "t.db") if tmp_path else ":memory:", retention_days=0)
 
 
 # ---- append_if_changed() -- edge-triggered dedup -------------------------------
