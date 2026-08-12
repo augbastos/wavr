@@ -94,31 +94,62 @@ def _valid_nonzero_ipv4(ip: str) -> bool:
     return all(0 <= o <= 255 for o in octets) and any(octets)
 
 
+def _is_subnet_mask(ip: str) -> bool:
+    if not _valid_nonzero_ipv4(ip):
+        return False
+    parts = ip.split(".")
+    val = (int(parts[0]) << 24) | (int(parts[1]) << 16) | (int(parts[2]) << 8) | int(parts[3])
+    inv = (~val) & 0xFFFFFFFF
+    return (inv & (inv + 1)) == 0
+
+
 def _parse_win_gateway(output: str) -> "str | None":
     """Windows `ipconfig`: the first real IPv4 after a "Default Gateway ... :"
-    label. Handles the dual-stack layout where an IPv6 gateway sits on the label
-    line and the IPv4 on an indented continuation line below it. Skips empty /
-    0.0.0.0 gateways and IPv6-only entries. Under-claims (returns None) rather
-    than guessing on an unusual layout -- is_gateway is then honestly False,
-    never a false positive."""
+    label, or the line immediately following the subnet mask (structural fallback
+    for non-English locales). Handles the dual-stack layout where an IPv6 gateway
+    sits on the label line and the IPv4 on an indented continuation line below it.
+    Skips empty / 0.0.0.0 gateways and IPv6-only entries. Under-claims (returns
+    None) rather than guessing on an unusual layout -- is_gateway is then honestly
+    False, never a false positive."""
     lines = output.splitlines()
+    expect_gateway = False
+
     for i, line in enumerate(lines):
-        if "Default Gateway" not in line or ":" not in line:
+        if ":" not in line:
+            if not line.strip():
+                expect_gateway = False
             continue
-        m = re.search(_IPV4_RE, line.split(":", 1)[1])
-        if m and _valid_nonzero_ipv4(m.group(0)):
-            return m.group(0)
-        # The IPv4 may continue on indented, label-less lines under this one; an
-        # IPv4 continuation starts with a digit, an IPv6 one may too ("2001:") --
-        # keep scanning digit-first lines, stop at a new labelled field or an
-        # IPv6-letter-first line ("fe80:"), both of which start with a non-digit.
-        for cont in lines[i + 1:]:
-            stripped = cont.strip()
-            if not stripped or not stripped[0].isdigit():
-                break
-            m = re.search(_IPV4_RE, cont)
+
+        label, value = line.split(":", 1)
+
+        is_gateway_line = False
+        if "Default Gateway" in label:
+            is_gateway_line = True
+            expect_gateway = False
+        elif expect_gateway:
+            is_gateway_line = True
+            expect_gateway = False
+
+        m = re.search(_IPV4_RE, value)
+
+        if m and _is_subnet_mask(m.group(0)):
+            expect_gateway = True
+            continue
+
+        if is_gateway_line:
             if m and _valid_nonzero_ipv4(m.group(0)):
                 return m.group(0)
+            # The IPv4 may continue on indented, label-less lines under this one; an
+            # IPv4 continuation starts with a digit, an IPv6 one may too ("2001:") --
+            # keep scanning digit-first lines, stop at a new labelled field or an
+            # IPv6-letter-first line ("fe80:"), both of which start with a non-digit.
+            for cont in lines[i + 1:]:
+                stripped = cont.strip()
+                if not stripped or not stripped[0].isdigit():
+                    break
+                m_cont = re.search(_IPV4_RE, cont)
+                if m_cont and _valid_nonzero_ipv4(m_cont.group(0)):
+                    return m_cont.group(0)
     return None
 
 

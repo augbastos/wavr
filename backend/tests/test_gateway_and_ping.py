@@ -29,6 +29,34 @@ def test_parse_gateway_windows_single_line():
     assert parse_default_gateway(IPCONFIG) == "192.168.0.1"
 
 
+def test_parse_gateway_windows_structural_no_false_positive():
+    # If a gateway line is empty, it shouldn't pick the next line's IP as gateway.
+    # It just returns None if no non-zero IP is found on the gateway line.
+    txt = ("\nEthernet adapter Ethernet:\n"
+           "   IPv4 Address. . . . . . . . . . . : 192.168.0.10\n"
+           "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n"
+           "   Default Gateway . . . . . . . . . : \n"
+           "   DHCP Server . . . . . . . . . . . : 192.168.0.99\n")
+    assert parse_default_gateway(txt) is None
+
+def test_parse_gateway_windows_non_english_locales():
+    fr = ("\nCarte Ethernet Ethernet:\n"
+          "   Adresse IPv4. . . . . . . . . . . : 192.168.0.10\n"
+          "   Masque de sous-reseau . . . . . . : 255.255.255.0\n"
+          "   Passerelle par defaut . . . . . . : 192.168.0.1\n")
+    de = ("\nEthernet-Adapter Ethernet:\n"
+          "   IPv4-Adresse  . . . . . . . . . . : 192.168.0.10\n"
+          "   Subnetzmaske  . . . . . . . . . . : 255.255.255.0\n"
+          "   Standardgateway . . . . . . . . . : 192.168.0.1\n")
+    pt = ("\nAdaptador de Rede sem Fio Wi-Fi:\n"
+          "   Endereco IPv4 . . . . . . . .  . . : 192.168.0.10\n"
+          "   Mascara de Sub-rede . . . . . . . . : 255.255.255.0\n"
+          "   Gateway Padrao. . . . . . . . . . . : 192.168.0.1\n")
+    assert parse_default_gateway(fr) == "192.168.0.1"
+    assert parse_default_gateway(de) == "192.168.0.1"
+    assert parse_default_gateway(pt) == "192.168.0.1"
+
+
 def test_parse_gateway_windows_dual_stack_ipv4_on_continuation():
     txt = ("   Default Gateway . . . . . . . . . : fe80::1%12\n"
            "                                       192.168.1.254\n"
