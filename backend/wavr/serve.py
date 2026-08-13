@@ -31,6 +31,7 @@ import os
 import uvicorn
 
 from wavr.app import DEFAULT_MAX_BODY_BYTES, app
+from wavr.app import MaxBodySizeMiddleware as MaxBodySizeMiddleware  # noqa: F401 (re-exported)
 from wavr.config import load_config
 
 
