@@ -14,7 +14,7 @@ invariants below are load-bearing, not style.
 ## Verified commands
 ```powershell
 cd backend; pip install -e .[dev]; python -m wavr.serve   # loopback 127.0.0.1:8000
-python -m pytest backend/tests -q                          # ~2477 tests (all hardware mocked)
+python -m pytest backend/tests -q                          # full suite; all hardware mocked
 cd desktop; npm run dev                                    # Tauri dev (needs Rust MSVC + Node 18+)
 powershell scripts/wavr-desktop.ps1                        # zero-Rust launcher (backend + browser)
 # frontend/index.html opens directly — no build step; off-localhost it self-switches to simulator

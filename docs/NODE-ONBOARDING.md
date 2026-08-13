@@ -12,7 +12,7 @@ a feature that isn't wired yet:
 
 | Piece | State |
 |---|---|
-| Backend (`NodeStore`, `NodeEnroller`, the 3 `/api/nodes/*` routers) | Built, 35 tests green |
+| Backend (`NodeStore`, `NodeEnroller`, the 3 `/api/nodes/*` routers) | Built and covered by the suite |
 | Firmware (`firmware/wavr_node/`, PlatformIO project) | Written, **not compiled** — no ESP toolchain in the dev environment. Run `pio run -e esp32dev` once before your first real flash; see `firmware/README.md`'s *Compile status* section for the two spots most likely to need a first-pass fix. |
 | `app.py` mounting the routers + `config.py`'s `WAVR_NODES_ENABLED` flag + `fusion.py`'s `pir`/`node` weights | **Not yet applied.** Specified verbatim in the *WIRING SPEC* of `docs/superpowers/specs/2026-07-11-wavr-sensor-node-onboarding-design.md` for the lead to apply. Until it lands, a running Wavr instance does not expose `/api/nodes/*`. |
 | Frontend *Nodes* panel (Add a node / list / Disable / Remove) | **Not yet built** — same wiring spec, §D. |
