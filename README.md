@@ -3,7 +3,7 @@
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
 [![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
-**2,479 tests · 144 test files · 121 modules · 8 ADRs · 9 network-fix guides · 6 sensing modalities · local-only · MCP-for-agents · AGPL-3.0**
+**6 sensing modalities · 8 ADRs · 9 network-fix guides · every hardware path mock-tested, so the suite runs with no devices attached · local-only · MCP-for-agents · AGPL-3.0**
 
 **Local, explainable home sensing your AI agents can query over MCP — runs 100% on hardware you own.**
 
