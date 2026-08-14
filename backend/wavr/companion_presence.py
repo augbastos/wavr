@@ -19,7 +19,7 @@ on the very next scan cycle with no restart, and survives one.
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from wavr.netinventory import _same_ip, parse_arp_inventory
 from wavr.sources import network
