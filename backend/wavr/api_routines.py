@@ -18,7 +18,7 @@ BOTH created and enabled, and its actions still pass every call_ha_service gate.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 
 def build_routines_router(store, run_test=None, ha_entities_fn=None,
