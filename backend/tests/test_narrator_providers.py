@@ -29,7 +29,7 @@ class _FakeResp:
     def __init__(self, payload):
         self._data = json.dumps(payload).encode("utf-8")
 
-    def read(self):
+    def read(self, max_bytes=None):
         return self._data
 
     def __enter__(self):
@@ -51,7 +51,7 @@ def _patch_urlopen(monkeypatch, response, captured):
         captured["body"] = json.loads(req.data.decode("utf-8"))
         return _FakeResp(response)
 
-    monkeypatch.setattr("wavr.narrator._NO_REDIRECT_OPENER",
+    monkeypatch.setattr("wavr.connectors.http._NO_REDIRECT_OPENER",
                         SimpleNamespace(open=fake_open))
 
 
@@ -234,7 +234,7 @@ def test_api_key_never_in_http_error(monkeypatch):
 
     # Patch the opener seam (same as _patch_urlopen) so this stays hermetic --
     # no real network call to the OpenAI endpoint.
-    monkeypatch.setattr("wavr.narrator._NO_REDIRECT_OPENER", SimpleNamespace(open=boom))
+    monkeypatch.setattr("wavr.connectors.http._NO_REDIRECT_OPENER", SimpleNamespace(open=boom))
     gen = make_openai_generate("https://api.openai.com/v1", "sk-super-secret", "m")
     with pytest.raises(urllib.error.HTTPError) as ei:
         gen("p")

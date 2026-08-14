@@ -1,25 +1,8 @@
 from __future__ import annotations
 
-import json
-import urllib.request
-from typing import Callable
+from collections.abc import Callable
 
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Blocks HTTP redirects entirely (identical pattern to connectors/http.py's
-    _NoRedirect). Defence-in-depth: `_post_json` attaches
-    `Authorization: Bearer <OpenAI/Anthropic/… key>` and the default urllib
-    opener follows 3xx re-sending headers, so a redirect from a compromised
-    endpoint (or an operator-set malicious base_url) could forward the API key to
-    the redirect target. Returning None makes the redirect terminal -- no follow,
-    no header leaked -- matching the no-redirect discipline every other
-    credential-bearing egress path in this codebase uses."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+from wavr.connectors.http import post_json as _post_json
 
 
 def build_prompt(state: dict, history: list) -> str:
@@ -50,19 +33,7 @@ class Narrator:
         return self._generate(build_prompt(state, history))
 
 
-def _post_json(url: str, payload: dict, headers: dict | None = None,
-               timeout: float = 30) -> dict:
-    """Minimal stdlib JSON POST — no third-party HTTP dependency. Credentials, when
-    present, live ONLY in the `headers` dict (never in the URL or body), so a urllib
-    error string / traceback (which carries the URL + status, not headers) can never
-    echo an API key."""
-    data = json.dumps(payload).encode("utf-8")
-    hdrs = {"Content-Type": "application/json"}
-    if headers:
-        hdrs.update(headers)
-    req = urllib.request.Request(url, data=data, headers=hdrs, method="POST")
-    with _NO_REDIRECT_OPENER.open(req, timeout=timeout) as resp:   # nosec B310 (fixed https/http LAN, redirects blocked)
-        return json.loads(resp.read().decode("utf-8"))
+
 
 
 # ----------------------------------------------------------------------------- #
@@ -122,7 +93,7 @@ def make_gemini_generate(api_key: str, model: str = "gemini-1.5-flash") -> Calla
     def generate(prompt: str) -> str:
         global _MODEL
         if _MODEL is None:
-            import google.generativeai as genai   # optional dep
+            import google.generativeai as genai  # optional dep
             genai.configure(api_key=api_key)
             _MODEL = genai.GenerativeModel(model)
         return _MODEL.generate_content(prompt, request_options={"timeout": 30}).text
