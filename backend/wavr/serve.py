@@ -30,7 +30,8 @@ import os
 
 import uvicorn
 
-from wavr.app import DEFAULT_MAX_BODY_BYTES, MaxBodySizeMiddleware, app
+from wavr.app import DEFAULT_MAX_BODY_BYTES, app
+from wavr.app import MaxBodySizeMiddleware as MaxBodySizeMiddleware  # noqa: F401 (re-exported)
 from wavr.config import load_config
 
 
@@ -45,7 +46,8 @@ def main() -> None:
     # and a genuine torch/DLL failure is logged, never crashing startup.
     import logging as _lg
     try:
-        from ultralytics import YOLO as _Y  # noqa: F401  (import for its side effect: load torch now)
+        from ultralytics import YOLO
+        _ = YOLO  # (import for its side effect: load torch now)
         _lg.getLogger("wavr").info("torch/ultralytics warmed up in main thread (camera detection ready)")
     except ImportError:
         pass  # [camera] extra not installed — normal for a network-only install
