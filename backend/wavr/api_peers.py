@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import urllib.parse
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
@@ -67,7 +67,7 @@ def _validate_peer_url(peer_base_url: str, local_ip: str) -> tuple[str, int]:
     Even though `/confirm`/`/observe` are loopback-root-only (a remote peer can never
     reach them), the local operator's own input must not be able to coerce the server
     into dialing an arbitrary internal host."""
-    parts = urllib.parse.urlsplit(peer_base_url or "")
+    parts = urlsplit(peer_base_url or "")
     if parts.scheme != "https":
         raise HTTPException(status_code=400, detail="peer_base_url must use https")
     host = parts.hostname
