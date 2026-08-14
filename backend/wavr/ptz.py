@@ -47,9 +47,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import urllib.parse
 import urllib.request as _urllib_request
 from typing import Awaitable, Callable
+from urllib.parse import urlsplit
 
 from .sources.onvif import (
     _NO_REDIRECT_OPENER,
@@ -57,7 +57,6 @@ from .sources.onvif import (
     _SOAP_READ_CAP,
     _envelope,
     _first_text,
-    _host_of,
     _is_lan_ip,
     _iter_local,
     _safe_root,
@@ -301,7 +300,7 @@ class CameraPTZ:
         """Parse (host, user, pw) from the stored rtsp_url. Returns None if the host is
         not a LAN IP literal (SSRF: refuse -- never contact a non-LAN camera)."""
         try:
-            p = urllib.parse.urlsplit(rtsp_url)
+            p = urlsplit(rtsp_url)
         except ValueError:
             return None
         host = p.hostname
