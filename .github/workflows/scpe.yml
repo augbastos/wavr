@@ -18,4 +18,4 @@ jobs:
     uses: augbastos/.github/.github/workflows/scpe-verify.yml@main
     with:
       level: "1"                   # 1 = disclosure lint · 2 = signed envelope required
-      require: "false"             # "true" makes a missing disclosure fail the check
+      require: "true"             # "true" makes a missing disclosure fail the check
