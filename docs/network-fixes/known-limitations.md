@@ -1,4 +1,4 @@
-# Discovery diagnosis — known limitations
+# Discovery diagnosis — how the check reaches its verdict
 
 Wavr's `discovery_reach` check correlates how many devices are reachable (ARP) against how many
 answer a name-discovery (mDNS/SSDP) probe. When many devices are reachable but the mesh is
