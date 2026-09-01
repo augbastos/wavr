@@ -4,7 +4,14 @@ from wavr.occupancy_log import DEFAULT_RETENTION_DAYS, OccupancyLog
 
 
 def _store(tmp_path=None):
-    return OccupancyLog(str(tmp_path / "t.db") if tmp_path else ":memory:")
+    # retention_days=None disables pruning. These tests write rows at fixed 2026-07-01
+    # timestamps, and _prune_locked runs inside the same transaction as the insert: once
+    # the wall clock passed DEFAULT_RETENTION_DAYS after that date, every row was deleted
+    # the instant it was written and the suite went red on a calendar boundary rather
+    # than on a code change. Pruning has its own tests below, which build their own store
+    # with an explicit retention_days.
+    return OccupancyLog(str(tmp_path / "t.db") if tmp_path else ":memory:",
+                        retention_days=None)
 
 
 # ---- append_if_changed() -- edge-triggered dedup -------------------------------
@@ -62,10 +69,11 @@ def test_rooms_are_independent():
 
 def test_dedup_cache_survives_restart_against_the_same_file(tmp_path):
     p = str(tmp_path / "t.db")
-    OccupancyLog(p).append_if_changed("sala", True, 0.9, 1, "2026-07-01T10:00:00+00:00")
+    OccupancyLog(p, retention_days=None).append_if_changed(
+        "sala", True, 0.9, 1, "2026-07-01T10:00:00+00:00")
     # A brand-new instance against the SAME file must warm its cache from disk, so an
     # identical repeat right after "restart" is still correctly a no-op.
-    log2 = OccupancyLog(p)
+    log2 = OccupancyLog(p, retention_days=None)
     inserted = log2.append_if_changed("sala", True, 0.9, 1, "2026-07-01T10:05:00+00:00")
     assert inserted is False
     assert len(log2.timeline("sala")) == 1
