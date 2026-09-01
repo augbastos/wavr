@@ -44,7 +44,10 @@ def test_live_fusion_events_get_logged_into_occupancy_history():
 # ---- /api/occupancy/history ---------------------------------------------------------
 
 def test_history_route_room_filter():
-    log = OccupancyLog(":memory:")
+    # retention_days=None: these rows carry a fixed 2026-07-01 timestamp, and pruning
+    # runs in the same transaction as the insert — with the default retention the row
+    # is gone before the route can read it. See _store() in test_occupancy_log.py.
+    log = OccupancyLog(":memory:", retention_days=None)
     log.append_if_changed("sala", True, 0.9, None, "2026-07-01T10:00:00+00:00")
     log.append_if_changed("quarto", False, 0.1, None, "2026-07-01T10:00:00+00:00")
     with _client(occupancy_log=log) as client:
