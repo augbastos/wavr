@@ -551,6 +551,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _notify = notify
     if _notify is None and cfg.ntfy_url:
         _notify = make_notifier(cfg.ntfy_url)
+    # Audit fix (P1): every OTHER egress path in this file re-reads the system-toggles
+    # egress master (`_connectors.egress_allowed()`) fresh on each call -- Telegram/
+    # mcp-http/assistant-cloud all funnel through `wavr.connectors.http.guarded_call`,
+    # which does exactly that. This plain ntfy closure did not, so "Egress: blocked"
+    # left it (and everything downstream that just calls whatever `_notify` currently
+    # is -- `_notify_all` below, `InternetMonitor`, the rogue-DHCP `on_rogue` callback,
+    # and the daily digest's ntfy fallback) reachable even with the master switched
+    # off, contradicting the switch's own tooltip ("blocks every egress path below at
+    # once, even if a feature is individually enabled"). Wrap ONCE at the source, right
+    # after construction and before any of those consumers capture this reference, so
+    # every one of them inherits the gate for free with the SAME read-fresh contract.
+    if _notify is not None:
+        _raw_notify = _notify
+
+        def _notify(message: str) -> None:
+            if _connectors.egress_allowed():
+                _raw_notify(message)
 
     # 2C notify fan-out: Telegram alongside the existing ntfy `_notify`, on its OWN
     # "telegram" connector row (default-OFF, independent of WAVR_NTFY_URL). The
@@ -823,6 +840,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _rules_publish = rules_publish
     if _rules_publish is None and cfg.mqtt_enabled:
         _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port, cfg.mqtt_prefix)
+    # Audit fix (P1, same gap as `_notify` above): MQTT publish had no egress-master
+    # check at all, even though the Egress screen's own row for it ("publishes events
+    # to an MQTT broker") is listed as one of the paths the master switch claims to
+    # block. Wrapped ONCE here, before RulesEngine/AwayMonitor/the routine-anomaly and
+    # Watch/Guard MQTT ticks below all capture this same reference, so every one of
+    # them inherits the read-fresh-every-call gate for free.
+    if _rules_publish is not None:
+        _raw_rules_publish = _rules_publish
+
+        def _rules_publish(topic: str, payload: str, retain: bool) -> None:
+            if _connectors.egress_allowed():
+                _raw_rules_publish(topic, payload, retain)
+
     _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
     # AwayMonitor runs whenever MQTT OR ntfy OR Telegram is opt-in'd -- all three
     # consumers need the SAME house-level arrived/left edge detection. `_rules_publish`
@@ -1614,8 +1644,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 start=start, end=now, now=now)
             # send_digest's own gate: telegram_send re-checks is_enabled("telegram")
             # internally; ntfy_notify is `_notify` (None unless WAVR_NTFY_URL/an
-            # injected test notify is configured) -- a no-op with zero egress when
-            # neither sink is actually usable, even with "digest" enabled.
+            # injected test notify is configured), which -- since the egress-master
+            # wrap above -- also re-checks `_connectors.egress_allowed()` on every
+            # call. A no-op with zero egress when neither sink is actually usable OR
+            # the operator has blocked egress, even with "digest" enabled.
             return await asyncio.to_thread(
                 send_digest, digest, telegram_send=_telegram_send, ntfy_notify=_notify)
         except Exception:
@@ -4294,13 +4326,36 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 await ws.close(code=1008)
                 return
         else:
-            # Loopback (or multidevice off): unchanged — loopback peer + Origin allowlist.
+            # Loopback (or multidevice off): loopback peer + Origin allowlist, unchanged.
             if not _is_loopback(host):
                 await ws.close(code=1008)  # WS isn't covered by the http middleware
                 return
             if origin is not None and not _ORIGIN_RE.match(origin):
                 await ws.close(code=1008)  # cross-site WS: block drive-by reads
                 return
+            # A5.1 audit fix (P1): loopback_or_authed (the @app.middleware("http") above)
+            # NEVER RUNS for a websocket scope -- Starlette only invokes HTTP middleware
+            # for http scopes -- so this route was completely unaffected by
+            # WAVR_LOCAL_TOKEN: a same-box process that can open a loopback socket but
+            # not read the token (exactly the threat local_token.py defends against)
+            # could still open the per-person x/y + vitals stream even with the token
+            # set. A browser `WebSocket` can never attach a custom header, so this only
+            # re-closes the door for a caller that CAN send one (curl/websockets-lib/a
+            # native companion) -- the same class of same-box process the token already
+            # gates on every other /api/* route. The dashboard's own live view is not
+            # newly broken by this: with the token set it already can't reach ANY other
+            # /api/* route either (every fetch() call here sends X-Wavr-Local, the CSRF
+            # header, never X-Wavr-Token -- see /api/status), so this closes the one
+            # remaining gap rather than opening a new one. FOLLOW-UP (not done here):
+            # wiring the dashboard to carry the token (e.g. a ticket-based handshake
+            # like the multidevice LAN branch above) so the live view keeps working
+            # once an operator turns the token on.
+            if _local_token:
+                supplied = (ws.headers.get("x-wavr-token")
+                            or parse_bearer(ws.headers.get("authorization")) or "")
+                if not hmac.compare_digest(supplied.encode("utf-8"), _local_token.encode("utf-8")):
+                    await ws.close(code=1008)
+                    return
         await ws.accept()
         q = _hub.subscribe()
         # M1 (revoke latency): the stream loop re-checks the revoked flag on a wall-clock

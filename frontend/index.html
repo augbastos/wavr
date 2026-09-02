@@ -16747,10 +16747,22 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
     var now = Date.now();
     if(pinStatusCache && (now - pinStatusCache.at) < PIN_CACHE_MS) return Promise.resolve(pinStatusCache.value);
     return fetch(location.origin + "/api/core/pin/status", {headers:{"X-Wavr-Local":"1"}})
-      .then(function(r){ return r.ok ? r.json() : {pin_set:false}; })
+      .then(function(r){
+        // A5.1 audit fix (P1): this route isn't in the backend's token-exempt list, so
+        // turning on WAVR_LOCAL_TOKEN (which this page never sends — only the CSRF
+        // header above) makes every call here 401. r.ok===false used to fall through to
+        // {pin_set:false} exactly like an unreachable backend does below — reading our
+        // OWN hardening flag's explicit DENY as "no PIN configured" revealed the kiosk
+        // unlocked the moment the token was turned on. A 401 means "ask again once
+        // authorized", not "no lock" — fail SAFE (assume locked) so the panel stays
+        // behind the PIN screen instead of falling open.
+        if(r.status === 401) return {pin_set:true};
+        return r.ok ? r.json() : {pin_set:false};
+      })
       .then(function(j){ var v = !!(j && j.pin_set); pinStatusCache = {value:v, at:Date.now()}; return v; })
-      // Backend unreachable: fail OPEN (treat as "no PIN configured") — a transient local
-      // hiccup shouldn't lock the owner out of their own kiosk. Flagged assumption, see report.
+      // Backend unreachable (network error, not an explicit 401 handled above): fail OPEN
+      // (treat as "no PIN configured") — a transient local hiccup shouldn't lock the owner
+      // out of their own kiosk. Flagged assumption, see report.
       .catch(function(){ return false; });
   }
   fetchPinConfigured();   // eager warm-up: primes pinStatusCache so the very first real wake

@@ -2,7 +2,9 @@
 the optional same-machine local-API token, and the optional /api/v1 alias. All
 default-off paths must be byte-identical to before; the token/versioning must never
 become an auth-bypass."""
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from wavr.app import create_app
 from wavr.storage import Storage
@@ -126,3 +128,56 @@ def test_v1_alias_does_not_bypass_token(monkeypatch):
         assert c.get("/api/v1/status").status_code == 401       # token still required
         assert c.get("/api/v1/status",
                      headers={"X-Wavr-Token": "s3cr3t-value"}).status_code == 200
+
+
+# ---- A5.1 audit fix (P1): /ws/live must inherit the SAME token gate -----------
+# Starlette's `@app.middleware("http")` (loopback_or_authed, where the token check
+# above lives) never runs for a websocket scope, so /ws/live -- the per-person x/y
+# + vitals stream -- was reachable on loopback with no token check at all, even
+# with WAVR_LOCAL_TOKEN set. A browser WebSocket can't send a custom header, so
+# this is checked the same way a non-browser caller (curl/websockets-lib) would
+# authenticate: X-Wavr-Token or Authorization: Bearer on the handshake.
+
+def test_ws_live_unaffected_when_token_unset(monkeypatch):
+    # Contract (b): token unset (the default) -> byte-identical to before this fix,
+    # no header required at all.
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+    with TestClient(_app()) as c:
+        with c.websocket_connect("/ws/live"):
+            pass
+
+
+def test_ws_live_closed_without_token_when_set(monkeypatch):
+    # Contract (a): token set -> a loopback websocket presenting NEITHER the token
+    # NOR a ticket must be rejected, same 1008 policy-violation the existing
+    # non-loopback-peer / cross-origin WS checks already use.
+    monkeypatch.setenv("WAVR_LOCAL_TOKEN", "s3cr3t-value")
+    with TestClient(_app()) as c:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with c.websocket_connect("/ws/live"):
+                pass
+        assert exc_info.value.code == 1008
+
+
+def test_ws_live_wrong_token_rejected(monkeypatch):
+    monkeypatch.setenv("WAVR_LOCAL_TOKEN", "s3cr3t-value")
+    with TestClient(_app()) as c:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with c.websocket_connect("/ws/live", headers={"X-Wavr-Token": "wrong"}):
+                pass
+        assert exc_info.value.code == 1008
+
+
+def test_ws_live_accepts_token_via_header(monkeypatch):
+    monkeypatch.setenv("WAVR_LOCAL_TOKEN", "s3cr3t-value")
+    with TestClient(_app()) as c:
+        with c.websocket_connect("/ws/live", headers={"X-Wavr-Token": "s3cr3t-value"}):
+            pass   # accepted -- no WebSocketDisconnect
+
+
+def test_ws_live_accepts_bearer_token(monkeypatch):
+    monkeypatch.setenv("WAVR_LOCAL_TOKEN", "s3cr3t-value")
+    with TestClient(_app()) as c:
+        with c.websocket_connect("/ws/live",
+                                 headers={"Authorization": "Bearer s3cr3t-value"}):
+            pass   # accepted -- no WebSocketDisconnect

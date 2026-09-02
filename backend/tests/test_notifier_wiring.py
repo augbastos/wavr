@@ -14,10 +14,10 @@ def _rs(room, occupied):
             "vitals": {}, "sources": [], "explanation": "", "ts": "2026-07-02T10:00:00+00:00"}
 
 
-def _build(hub=None, notify=None):
+def _build(hub=None, notify=None, connector_store=None):
     return create_app(
         sources=[], hub=hub or Hub(), storage=Storage(":memory:"), fusion=FusionEngine(),
-        camera_store=CameraStore(":memory:"), notify=notify,
+        camera_store=CameraStore(":memory:"), notify=notify, connector_store=connector_store,
     )
 
 
@@ -68,6 +68,29 @@ async def test_injected_notify_fires_on_house_left_and_arrived(monkeypatch):
         await hub.publish(_rs("sala", True))
         await asyncio.sleep(0.02)
     assert notified == ["Wavr: casa vazia", "Wavr: alguém chegou em casa"]
+
+
+async def test_egress_master_blocks_ntfy_edge_notify():
+    # Audit fix (P1): the "Egress: blocked" system-toggles master must gate the ntfy
+    # notifier too, exactly like every connector already routed through guarded_call
+    # (telegram/mcp-http/assistant-cloud) -- previously it did not, so blocking egress
+    # from the System tab left the away-edge ntfy push (and everything downstream of
+    # the same `_notify` reference) reachable.
+    from wavr.connector_store import ConnectorStore
+
+    notified = []
+    store = ConnectorStore(":memory:")
+    store.upsert("sys:egress", "system", "egress")
+    store.set_enabled("sys:egress", False)   # operator blocked egress from the System tab
+    hub = Hub()
+    app = _build(hub=hub, notify=notified.append, connector_store=store)
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0)
+        await hub.publish(_rs("sala", True))
+        for _ in range(3):                    # away_grace default 3 -> house-left edge
+            await hub.publish(_rs("sala", False))
+        await asyncio.sleep(0.02)
+    assert notified == []   # egress blocked -> zero network attempted despite ntfy configured
 
 
 async def test_injected_notify_messages_are_derived_only():
