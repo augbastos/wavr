@@ -3694,6 +3694,11 @@
          (renderKill()/wireSysToggleMaster()/showGearSection()) — nothing new invented here.
          Visible in EVERY mode (demo included); each control fail-hides exactly like its other
          surfaced instance when live data isn't available. -->
+    <!-- "Show me my data": the live posture plus every category Wavr keeps,
+         rendered by js/trust.js (same row/head builders as the Trust screen —
+         a second copy would drift). Placed ABOVE the commitments prose because
+         a measured fact beats a promise. -->
+    <div id="privacyDataBody" aria-live="polite"></div>
     <div class="tile" id="gearPrivacy" aria-labelledby="gpriv-h">
       <div class="tile-head"><h2 id="gpriv-h">Privacy &amp; security</h2><span class="hint">Wavr's contract with your home</span></div>
       <!-- kill-switch shortcut: intentionally duplicates Devices→Active (§2.6). SAME renderKill()/
@@ -12566,6 +12571,7 @@ try {
     // Trust makes four requests and nobody reads it every session, so it renders
     // when opened rather than on load. `js/trust.js` publishes the hook.
     if(id === "gearSecTrust" && window.__wavrRenderTrust) window.__wavrRenderTrust();
+    if(id === "gearSecPrivacy" && window.__wavrRenderPrivacyData) window.__wavrRenderPrivacyData();
   }
   gearRailItems.forEach(function(btn){
     btn.addEventListener("click", function(){ showGearSection(btn.getAttribute("data-section")); });
@@ -12615,6 +12621,7 @@ try {
     // `__wavrRenderTrust` rebuilds its own host, so this and the rail click
     // are both safe.
     if(window.__wavrRenderTrust) window.__wavrRenderTrust();
+    if(window.__wavrRenderPrivacyData) window.__wavrRenderPrivacyData();
     // Live/central only: bring the map tile (the house editor's drawing surface) into the
     // overlay so drawing/zone editing works here; it returns to Home on close. The node
     // itself moves, so every id still exists exactly once (same move-a-panel technique

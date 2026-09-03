@@ -103,6 +103,7 @@ from wavr.discovery_inbox import DiscoveryInbox
 from wavr.discovery_feed import (feed_core_topology, feed_devices,
                                  feed_pending_nodes)
 from wavr.api_coverage import build_coverage_router
+from wavr.api_privacy import build_privacy_router
 from wavr.api_topology import build_topology_router
 from wavr.api_trace import build_trace_router
 from wavr.api_validation import build_validation_router
@@ -2827,6 +2828,43 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         _trace_state,
         engine_factory=lambda now_fn: FusionEngine(
             threshold=cfg.fusion_threshold, now_fn=now_fn),
+        deps=[Depends(require_local), Depends(require_scope("admin"))]))
+    def _privacy_posture() -> dict:
+        """What Wavr is doing right now, in the terms a person worries about.
+
+        Every value is read live rather than remembered: a posture screen that
+        reports a cached "cameras off" is exactly the kind of comfortable lie
+        this surface exists to prevent.
+        """
+        cams_on = 0
+        with suppress(Exception):
+            st = manager.status()
+            cam_names = {c["name"] for c in _cameras.list()}
+            cams_on = sum(1 for s in st.get("sources", [])
+                          if s.get("enabled") and s.get("name") in cam_names)
+        connectors_on = 0
+        with suppress(Exception):
+            connectors_on = sum(1 for c in _connectors.list()
+                                if c.get("enabled"))
+        return {
+            "internet_required": False,
+            "account_required": False,
+            "telemetry": "none",
+            "lan_access": bool(cfg.multidevice),
+            "cameras_enabled": cams_on,
+            "network_scanning": bool(cfg.net_inventory),
+            "identity_labels": bool(cfg.identity_enabled),
+            "external_connections": connectors_on,
+            "note": ("Wavr needs no internet connection to do its job. "
+                     "External connections are the only way anything leaves "
+                     "this network, and there "
+                     + ("are none enabled." if connectors_on == 0
+                        else f"{'is' if connectors_on == 1 else 'are'} "
+                             f"{connectors_on} enabled.")),
+        }
+
+    app.include_router(build_privacy_router(
+        db_path=cfg.db_path, posture_fn=_privacy_posture,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
     app.include_router(build_topology_router(
         house_fn=lambda: _house, store=_topology_store,

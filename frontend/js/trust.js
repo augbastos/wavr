@@ -327,7 +327,112 @@
     buildWalk(walk);
   }
 
+  // ---- Privacy: what Wavr is doing, and what it keeps ---------------------
+  // Same helpers as Trust, deliberately. The two screens answer neighbouring
+  // questions and a second copy of row()/head() would drift from the first edit.
+
+  var POSTURE_ROWS = [
+    ["internet_required", "Internet needed", function (v) { return v ? "yes" : "no"; }],
+    ["account_required", "Account needed", function (v) { return v ? "yes" : "no"; }],
+    ["telemetry", "Telemetry", function (v) { return String(v); }],
+    ["external_connections", "External connections",
+     function (v) { return v === 0 ? "none enabled" : v + " enabled"; }],
+    ["lan_access", "Other devices may connect",
+     function (v) { return v ? "yes" : "no — this machine only"; }],
+    ["cameras_enabled", "Cameras switched on",
+     function (v) { return v === 0 ? "none" : String(v); }],
+    ["network_scanning", "Looking at the network",
+     function (v) { return v ? "yes" : "no"; }],
+    ["identity_labels", "Naming devices after people",
+     function (v) { return v ? "yes" : "no"; }]
+  ];
+
+  async function renderPosture(into) {
+    var body;
+    try { body = await api("/api/privacy/posture"); } catch (e) { return; }
+    if (!body || body.available === false) {
+      row(into, "Current posture", "cannot be read right now",
+          (body && body.note) || "This is not a statement that nothing is enabled.");
+      return;
+    }
+    POSTURE_ROWS.forEach(function (spec) {
+      if (body[spec[0]] === undefined) return;
+      row(into, spec[1], spec[2](body[spec[0]]));
+    });
+    if (body.note) {
+      var n = document.createElement("p");
+      n.className = "panel-note";
+      n.textContent = body.note;
+      into.appendChild(n);
+    }
+  }
+
+  async function renderStored(into) {
+    var body;
+    try { body = await api("/api/privacy/data"); } catch (e) { return; }
+    var cats = (body && body.categories) || [];
+    if (!cats.length) return;
+
+    // Never-stored first, because that is the answer people actually came for.
+    var order = { never: 0, session: 1, persistent: 2 };
+    var word = {
+      never: "never stored",
+      session: "in memory only — a restart clears it",
+      persistent: "stored on this machine"
+    };
+    // NOT `order[x] || 9` — `never` is 0, which is falsy, and that single
+    // character put the most reassuring facts at the bottom of the screen.
+    function rank(r) {
+      return Object.prototype.hasOwnProperty.call(order, r) ? order[r] : 9;
+    }
+    cats.slice().sort(function (a, b) {
+      return rank(a.retention) - rank(b.retention);
+    }).forEach(function (c) {
+      var value = word[c.retention] || c.retention;
+      if (c.retention === "persistent") {
+        if (c.rows === null || c.rows === undefined) {
+          value += " · not counted";
+        } else if (c.counts) {
+          // The number means something narrower than "rows in a table", and the
+          // backend said what. Never render "7 rows" for "7 enabled".
+          value += " · " + c.rows + " " + c.counts;
+        } else {
+          value += " · " + c.rows + " row" + (c.rows === 1 ? "" : "s");
+        }
+      }
+      row(into, c.label, value, c.what);
+    });
+
+    [body.note, body.secrets_note].forEach(function (text) {
+      if (!text) return;
+      var n = document.createElement("p");
+      n.className = "panel-note";
+      n.textContent = text;
+      into.appendChild(n);
+    });
+  }
+
+  async function renderPrivacyData() {
+    if (MODE !== "live") return;
+    var host = el("privacyDataBody");
+    if (!host) return;
+    host.textContent = "";
+
+    var now = document.createElement("div");
+    now.className = "tile";
+    now.appendChild(head("What Wavr is doing right now", "read live, never cached"));
+    host.appendChild(now);
+    await renderPosture(now);
+
+    var keeps = document.createElement("div");
+    keeps.className = "tile";
+    keeps.appendChild(head("What Wavr keeps", "including what it never keeps"));
+    host.appendChild(keeps);
+    await renderStored(keeps);
+  }
+
   // Rendered when the section is opened rather than on load: it makes four
   // requests and nobody looks at it every session.
   window.__wavrRenderTrust = renderTrust;
+  window.__wavrRenderPrivacyData = renderPrivacyData;
 })();
