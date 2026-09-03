@@ -103,8 +103,10 @@ from wavr.discovery_inbox import DiscoveryInbox
 from wavr.discovery_feed import (feed_core_topology, feed_devices,
                                  feed_pending_nodes)
 from wavr.api_coverage import build_coverage_router
+from wavr.api_topology import build_topology_router
 from wavr.api_validation import build_validation_router
 from wavr.reliability import CAP_PRESENCE, ReliabilityStore
+from wavr.topology import TopologyStore
 from wavr.validation import ValidationSession, ValidationStore
 from wavr.services.discovery import run_discovery_pass
 from wavr.sensor_coverage import collect_coverage, summarize as coverage_summary
@@ -624,6 +626,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _calib = CalibrationStore(cfg.db_path)
     _reliability = ReliabilityStore(cfg.db_path)
     _validation_store = ValidationStore(cfg.db_path)
+    # Only the operator's CORRECTIONS are stored; adjacency itself is re-derived
+    # from the live house map on every read, so redrawing a room updates it with
+    # nothing to invalidate.
+    _topology_store = TopologyStore(cfg.db_path)
 
     def _reliability_for(sensor_id: str, room: str):
         """(factor, reason) for one sensor in one room.
@@ -2799,6 +2805,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(build_validation_router(
         session=_validation_session, reliability=_reliability,
         store=_validation_store,
+        deps=[Depends(require_local), Depends(require_scope("admin"))]))
+    # Topology explains evidence; it never creates any. Same admin gate as the
+    # rest: editing a link changes how Wavr reasons about contradictions.
+    app.include_router(build_topology_router(
+        house_fn=lambda: _house, store=_topology_store,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
     app.include_router(build_coverage_router(
         coverage_fn=_sensor_coverage,
