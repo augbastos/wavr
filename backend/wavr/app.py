@@ -2591,7 +2591,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # so they carry the same exemption -- otherwise a companion loads a
         # dashboard whose setup screen and Discoveries tab quietly do nothing.
         if _p in ("/", "/index.html", "/measure.html", "/manifest.webmanifest",
-                  "/sw.js", "/icon.svg", "/js/wizard.js", "/js/discoveries.js") \
+                  "/sw.js", "/icon.svg", "/js/wizard.js", "/js/discoveries.js",
+                  "/js/trust.js") \
                 or _p.startswith("/vendor/"):
             if in_subnet(host, _local_ip):
                 request.state.role = None
@@ -5108,6 +5109,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/js/discoveries.js")
     async def js_discoveries():
         return FileResponse(_FRONTEND / "js" / "discoveries.js",
+                            media_type="text/javascript")
+
+    @app.get("/js/trust.js")
+    async def js_trust():
+        return FileResponse(_FRONTEND / "js" / "trust.js",
                             media_type="text/javascript")
 
     # F2 phone-capture shell (WebXR "medir com o celular"). Static, carries nothing

@@ -92,7 +92,7 @@ jobs:
           # The shell is no longer one file. index.html loading while its
           # scripts 404 gives a dashboard whose setup screen and Discoveries tab
           # quietly do nothing -- the same class of failure, one layer down.
-          for f in js/wizard.js js/discoveries.js; do
+          for f in js/wizard.js js/discoveries.js js/trust.js; do
             curl -fsS "http://127.0.0.1:8000/$f" -o /dev/null \
               || { echo "shell script $f is missing from the image" >&2; exit 1; }
           done

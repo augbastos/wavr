@@ -3156,6 +3156,7 @@
       <button type="button" class="gear-rail-item" data-section="gearSecConnectors" aria-pressed="false">Connectors</button>
       <button type="button" class="gear-rail-item" data-section="gearSecAssistant" aria-pressed="false">Assistant</button>
       <button type="button" class="gear-rail-item" data-section="gearSecSettings" aria-pressed="false">Core settings</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecTrust" aria-pressed="false">Trust</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPrivacy" aria-pressed="false">Privacy</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPanelLock" aria-pressed="false">Panel lock</button>
       <button type="button" class="gear-rail-item" data-section="gearSecAbout" aria-pressed="false">About</button>
@@ -3672,6 +3673,18 @@
     </div>
     <p class="panel-note" id="settingsNote" hidden></p>
     </div><!-- /#gearSecSettings -->
+    <!-- Trust Check: a COMPOSITION of coverage, reliability, guided validation
+         and topology. No backend of its own — every verdict on this screen is
+         the sentence the system that measured it produced. Rendered on open
+         (js/trust.js), not on load: it makes four requests and nobody reads it
+         every session. -->
+    <div class="settings-section" id="gearSecTrust" aria-labelledby="gearSecTrust-h">
+    <h3 id="gearSecTrust-h" class="settings-section-h">Trust</h3>
+    <p class="panel-note">How well Wavr works in this space, measured rather
+      than claimed. Everything here comes from checks you can run yourself.</p>
+    <div id="trustBody" aria-live="polite"></div>
+    </div><!-- /#gearSecTrust -->
+
     <div class="settings-section" id="gearSecPrivacy" aria-labelledby="gearSecPrivacy-h">
     <h3 id="gearSecPrivacy-h" class="settings-section-h">Privacy</h3>
     <!-- Stage 3b (§2.6/§7#6/#10 + §9) revamp: real controls FIRST (kill-switch, network-sensing
@@ -12550,6 +12563,9 @@ try {
       if(gearSections[k]) gearSections[k].classList.toggle("active", k === id);
     });
     if(gearRightPane) gearRightPane.scrollTop = 0;
+    // Trust makes four requests and nobody reads it every session, so it renders
+    // when opened rather than on load. `js/trust.js` publishes the hook.
+    if(id === "gearSecTrust" && window.__wavrRenderTrust) window.__wavrRenderTrust();
   }
   gearRailItems.forEach(function(btn){
     btn.addEventListener("click", function(){ showGearSection(btn.getAttribute("data-section")); });
@@ -12592,6 +12608,13 @@ try {
     // Only meaningful under the panel-MQ rail — a no-op elsewhere (sections are
     // display:contents on desktop, so .active never gates visibility there).
     showGearSection("gearSecDevices");
+    // Trust renders on demand, and on DESKTOP nothing ever calls
+    // showGearSection: the rail is panel-width-only and every section is
+    // display:contents there, so the panel would sit permanently empty —
+    // a screen that works on a phone and not on a laptop, silently.
+    // `__wavrRenderTrust` rebuilds its own host, so this and the rail click
+    // are both safe.
+    if(window.__wavrRenderTrust) window.__wavrRenderTrust();
     // Live/central only: bring the map tile (the house editor's drawing surface) into the
     // overlay so drawing/zone editing works here; it returns to Home on close. The node
     // itself moves, so every id still exists exactly once (same move-a-panel technique
@@ -17152,6 +17175,7 @@ try {
   };
 })();
 </script>
+<script src="js/trust.js"></script>
 <script src="js/discoveries.js"></script>
 <script>
 // ============================================================================
