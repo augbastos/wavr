@@ -33,11 +33,18 @@ def parse_ld2450_frame(frame: bytes) -> list[Target]:
         vel = _signmag(rs) / 100.0                  # cm/s -> m/s
         out.append(Target(
             id=i + 1,
-            x=_signmag(rx) / 1000.0,               # mm -> m
+            x=_signmag(rx) / 1000.0,               # mm -> m, FROM THE RADAR
             y=_signmag(ry) / 1000.0,
             velocity=abs(vel),
             posture="walking" if abs(vel) > _WALK_MS else None,
             confidence=0.9,
+            # The LD2450 reports relative to ITSELF: origin at the module, its
+            # own axes. This used to be emitted as though it were room-local,
+            # so the map drew the person wherever they happened to be relative
+            # to the radar and called it position-level precision. Declaring the
+            # frame is what lets `spatial_frames` either place it properly (when
+            # the radar's mount is known) or honestly drop the coordinate.
+            frame="sensor",
         ))
     return out
 
@@ -79,6 +86,11 @@ class MmWaveSource:
                  interval: float = 0.2, reconnect_delay: float = 3.0):
         self._room = room
         self._port = port
+        # The wired radar has no name of its own, so it takes the SAME id
+        # `sensor_coverage._host_rows` gives it. Two surfaces describing one
+        # physical sensor must agree on what it is called, or coverage reports
+        # the kitchen radar healthy while reliability has never heard of it.
+        self._sensor_id = f"wired-radar-{room or 'unassigned'}"
         self._frames = frames
         self._interval = interval
         self._reconnect_delay = reconnect_delay
@@ -92,6 +104,7 @@ class MmWaveSource:
                         targets = tuple(parse_ld2450_frame(raw))
                         speed = max((t.velocity or 0.0 for t in targets), default=0.0)
                         yield SensingEvent(
+                            sensor_id=self._sensor_id,
                             room=self._room, modality="mmwave",
                             presence=bool(targets), motion=speed,
                             breathing_bpm=None, heart_bpm=None,

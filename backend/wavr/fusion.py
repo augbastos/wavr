@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timezone
 
 from wavr.events import SensingEvent
+from wavr.spatial_frames import transform_target
 from wavr.roomstate import RoomState
 
 # Default trust weights per modality. Camera (video) is most precise; network
@@ -140,7 +141,8 @@ class FusionEngine:
 
     def __init__(self, weights: dict | None = None, threshold: float = 0.5,
                  now_fn=None, freshness_s: float | None = None,
-                 stale_s: float | None = None, vacate_s: float | None = None):
+                 stale_s: float | None = None, vacate_s: float | None = None,
+                 reliability_fn=None, mount_fn=None):
         self._weights = weights if weights is not None else DEFAULT_WEIGHTS
         self._threshold = threshold
         # Injectable clock returning an aware UTC "now". When None (default) each
@@ -170,7 +172,26 @@ class FusionEngine:
         # confidence falls below threshold before it may flip to vacant
         # (0 disables the dwell).
         self._vacate_s = _DEFAULT_VACATE_S if vacate_s is None else vacate_s
-        self._latest: dict[str, dict[str, SensingEvent]] = {}  # room -> modality -> event
+        # `reliability_fn(sensor_id, room) -> (factor, reason)` — what THIS
+        # sensor has earned in THIS room, from counted checks. None = no
+        # reliability wired, every sensor at its modality constant, which is the
+        # behaviour every install had before this existed and the behaviour a
+        # fresh install must keep. A callable rather than a store so this module
+        # imports no storage and a test can pass a lambda.
+        self._reliability_fn = reliability_fn
+        # `mount_fn(sensor_id, room) -> MountPose | None` — where a sensor sits
+        # and which way it faces, so a target it reported in its OWN frame can be
+        # placed on the floor plan. None (or no mount for that sensor) means the
+        # coordinate is dropped rather than guessed: a radar reports millimetres
+        # from itself, and rendering that as room-local puts the person in the
+        # wrong corner and then calls it position-level precision.
+        self._mount_fn = mount_fn
+        # room -> (modality, sensor_id) -> event. Keyed per SENSOR, not per
+        # modality: two cameras in one room are two independent voices that may
+        # disagree, carry their own reliability and fail independently. A source
+        # with no per-instance identity has sensor_id "", so it occupies the
+        # single slot `(modality, "")` and behaves exactly as it always did.
+        self._latest: dict[str, dict[tuple[str, str], SensingEvent]] = {}
         self._occupied_state: dict[str, bool] = {}     # room -> last debounced occupied
         self._vacate_since: dict[str, datetime] = {}   # room -> when a pending vacate began
         # FUSION-B: last-known person_count/targets while `occupied` is held, keyed by
@@ -190,11 +211,11 @@ class FusionEngine:
             valid_ts = False
 
         if valid_ts:
-            room_events[event.modality] = event
+            room_events[(event.modality, event.sensor_id)] = event
             ts = event.ts
         else:
             # A malformed/unparseable ts must never be stored: once in
-            # `_latest` it would poison this modality's slot and make every
+            # `_latest` it would poison this sensor's slot and make every
             # later fuse touching the room raise (killing healthy sources
             # one-by-one). Reject the event instead and fuse whatever's
             # already known for the room.
@@ -280,39 +301,72 @@ class FusionEngine:
         strength = 0.0   # best present evidence (weight × confidence)
         sources = []
         vitals: dict = {}
-        decays: dict[str, float] = {}  # modality -> trust multiplier, reused for target gating
-        # modality -> the event's OWN parsed ts. The count latch stamps itself with this, not
+        # Keyed by the SENSOR key, not the modality: two cameras decay
+        # independently, and one going stale must not silently gate the other's
+        # targets out of the merge.
+        decays: dict[tuple[str, str], float] = {}
+        # sensor key -> the event's OWN parsed ts. The count latch stamps itself with this, not
         # with `ref`: stamping with `ref` re-dated the latch on every fuse that still saw a
         # decay>0 counting event, so the stale_s bound measured from the last FUSE instead of
         # from the last real COUNT and the latch outlived its documented window (see the stamp
         # below).
-        event_ts: dict[str, datetime] = {}
-        for modality, e in events.items():
+        event_ts: dict[tuple[str, str], datetime] = {}
+        for key, e in events.items():
+            modality = e.modality
             try:
                 e_ts = _as_utc(e.ts)
             except (TypeError, ValueError):
                 # Defensive: a stored event with an unparseable ts must never
                 # crash fusion for the room's other, healthy sources. Treat it
                 # as contributing no evidence (same as a dead source).
-                decays[modality] = 0.0
-                sources.append({"modality": modality, "presence": e.presence,
+                decays[key] = 0.0
+                sources.append({"modality": modality, "sensor_id": e.sensor_id,
+                                "presence": e.presence,
                                 "confidence": round(e.confidence, 3),
                                 "age_s": None, "health": "invalid_ts",
                                 "count": None})
                 continue
             age_s = max(0.0, (ref - e_ts).total_seconds())
             decay, health = self._freshness(age_s)
-            decays[modality] = decay
-            event_ts[modality] = e_ts
-            mass = self._weights.get(modality, 0.5) * e.confidence * decay
+            decays[key] = decay
+            event_ts[key] = e_ts
+            # Reliability SCALES the modality constant; it never replaces it.
+            # A modality's weight is a statement about physics (a camera can see
+            # more than a PIR); reliability is a statement about this particular
+            # unit in this particular room. Bounded at 1.0 upward, so a lucky
+            # sensor can never out-vote a physically better one.
+            rel_factor, rel_reason = 1.0, ""
+            if self._reliability_fn is not None and e.sensor_id:
+                try:
+                    rel_factor, rel_reason = self._reliability_fn(e.sensor_id, room)
+                except Exception:      # noqa: BLE001
+                    # A reliability lookup is an OPINION about a sensor. If it
+                    # fails, the sensor's own reading is still evidence — falling
+                    # back to the modality constant is the honest degradation,
+                    # and dropping the source would be the sensor paying for a
+                    # storage fault.
+                    rel_factor, rel_reason = 1.0, ""
+            mass = self._weights.get(modality, 0.5) * e.confidence * decay * rel_factor
             den += mass
             if e.presence:
                 num += mass
                 strength = max(strength, mass)
-            sources.append({"modality": modality, "presence": e.presence,
-                            "confidence": round(e.confidence, 3),
-                            "age_s": round(age_s), "health": health,
-                            "count": (e.count if modality in COUNTING_MODALITIES else None)})
+            # `sensor_id` rides along so a consumer can tell two cameras apart --
+            # the whole point of the per-sensor key. Empty for a source with no
+            # per-instance identity, never invented.
+            row = {"modality": modality, "sensor_id": e.sensor_id,
+                   "presence": e.presence,
+                   "confidence": round(e.confidence, 3),
+                   "age_s": round(age_s), "health": health,
+                   "count": (e.count if modality in COUNTING_MODALITIES else None)}
+            # Published ONLY when it actually changed the arithmetic. A
+            # `reliability: 1.0` on every row is noise that trains a reader to
+            # stop looking; a row that carries one is a row where the answer
+            # moved, and the reason says by how much and on what evidence.
+            if rel_factor != 1.0:
+                row["reliability"] = round(rel_factor, 3)
+                row["reliability_reason"] = rel_reason
+            sources.append(row)
             if e.presence and e.breathing_bpm is not None:
                 vitals = {"breathing_bpm": e.breathing_bpm, "heart_bpm": e.heart_bpm}
         # Person COUNT (additive, honest) -- computed HERE, BEFORE raw_occupied/debounce,
@@ -329,10 +383,11 @@ class FusionEngine:
         live_count: int | None = None
         live_count_ts = None   # the winning count event's OWN ts -- what the latch stamps with
         best_cw = -1.0
-        for modality, e in events.items():
+        for key, e in events.items():
+            modality = e.modality
             if modality not in COUNTING_MODALITIES:
                 continue
-            if not (e.presence and decays.get(modality, 0.0) > 0.0):
+            if not (e.presence and decays.get(key, 0.0) > 0.0):
                 continue
             if e.count is None:
                 continue
@@ -340,7 +395,7 @@ class FusionEngine:
             if w > best_cw:
                 best_cw = w
                 live_count = int(e.count)
-                live_count_ts = event_ts.get(modality)
+                live_count_ts = event_ts.get(key)
 
         agreement = num / den if den > 0 else 0.0
         # Defensive clamp: a single out-of-range source confidence (negative or
@@ -374,8 +429,8 @@ class FusionEngine:
         # lets go and the room vacates. This is presence semantics only; `confidence`, count,
         # targets and the intrusion path are all unchanged.
         house_present = any(
-            e.presence and decays.get(m, 0.0) > 0.0
-            for m, e in events.items() if m not in COUNTING_MODALITIES
+            e.presence and decays.get(k, 0.0) > 0.0
+            for k, e in events.items() if e.modality not in COUNTING_MODALITIES
         )
         raw_occupied = (confidence >= self._threshold
                         or (live_count is not None and live_count > 0)
@@ -391,15 +446,31 @@ class FusionEngine:
 
         best_targets: list = []
         best_w = -1.0
-        for modality, e in events.items():
+        for key, e in events.items():
             # Same freshness/decay gate as the confidence loop: a stale/dead
             # (or invalid-ts) source must not pass its targets through — a
             # decayed-to-zero source is indistinguishable from an absent one.
-            if e.presence and e.targets and decays.get(modality, 0.0) > 0.0:
-                w = self._weights.get(modality, 0.5)
+            if e.presence and e.targets and decays.get(key, 0.0) > 0.0:
+                w = self._weights.get(e.modality, 0.5)
                 if w > best_w:
                     best_w = w
-                    best_targets = [t.to_dict() for t in e.targets]
+                    # Into the room frame, or without a position at all. A
+                    # coordinate whose frame Wavr cannot resolve is not a
+                    # position — the same rule the rest of this engine applies
+                    # to unknown counts and unknown capabilities.
+                    mount = None
+                    if self._mount_fn is not None and e.sensor_id:
+                        try:
+                            mount = self._mount_fn(e.sensor_id, room)
+                        except Exception:      # noqa: BLE001
+                            # A mount lookup failing is a configuration fault.
+                            # It must not place the person anywhere; leaving
+                            # `mount` None drops the coordinate, which is the
+                            # honest direction.
+                            mount = None
+                    placed = [transform_target(t, mount=mount)[0]
+                              for t in e.targets]
+                    best_targets = [t.to_dict() for t in placed]
 
         # FUSION-B: latch person_count/targets across a single/multi-frame presence
         # dropout of a STILL counting source while `occupied` is held by the debounce
@@ -452,9 +523,10 @@ class FusionEngine:
             # STILL PERSON vanishing from the radar (the very dropout FUSION-B bridges), not
             # an empty room — reading it as a negative would re-introduce the count flicker.
             counting_live_negative = any(
-                (not e.presence) and decays.get(m, 0.0) > 0.0
-                for m, e in events.items()
-                if m in COUNTING_MODALITIES and m in TRUSTED_ABSENCE_MODALITIES
+                (not e.presence) and decays.get(k, 0.0) > 0.0
+                for k, e in events.items()
+                if e.modality in COUNTING_MODALITIES
+                and e.modality in TRUSTED_ABSENCE_MODALITIES
             )
             latch = self._count_latch.get(room)
             if counting_live_negative:
@@ -484,8 +556,9 @@ class FusionEngine:
         # boot-OFF is never in events; a stale source has decay==0 -> excluded).
         best_rank = 0
         if occupied:
-            for modality, e in events.items():
-                if e.presence and decays.get(modality, 0.0) > 0.0:
+            for key, e in events.items():
+                modality = e.modality
+                if e.presence and decays.get(key, 0.0) > 0.0:
                     best_rank = max(best_rank,
                                     _SCOPE_RANK[RESOLUTION_SCOPE.get(modality, "house")])
             # A count in hand (live OR honestly latched by FUSION-B) floors the rung
@@ -519,8 +592,8 @@ class FusionEngine:
         # entry with the stronger (higher/closer) rssi; a labelled entry with an
         # rssi always beats one without.
         merged: dict[str, dict] = {}
-        for modality, e in events.items():
-            if not (e.presence and e.identities and decays.get(modality, 0.0) > 0.0):
+        for key, e in events.items():
+            if not (e.presence and e.identities and decays.get(key, 0.0) > 0.0):
                 continue
             for ident in e.identities:
                 d = ident.to_dict()

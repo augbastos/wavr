@@ -6,9 +6,27 @@ from datetime import datetime, timezone
 
 @dataclass(frozen=True)
 class Target:
-    """One tracked person. Room-local frame: meters, origin = room's top-left
-    on the house map, x right / y down. x/y None = source knows posture but
-    not position (e.g. camera without homography)."""
+    """One tracked person.
+
+    `frame` says which coordinate system x/y are in, and it is load-bearing:
+    two sources were filling these fields in DIFFERENT frames while this
+    docstring claimed one.
+
+      * "room"   — metres, offset from the room polygon's min corner, x right,
+                   y down. What this class always promised, and what the map
+                   expects. The camera path produces it (localize.to_room_local).
+      * "sensor" — the emitting sensor's own origin and axes. What an LD2450
+                   radar actually reports. Meaningless anywhere else until the
+                   sensor's mount is known, so `spatial_frames.transform_target`
+                   either converts it or REMOVES the position.
+
+    x/y None = the source knows posture but not position (a camera without a
+    homography, or a sensor-frame target Wavr cannot place). None is the honest
+    answer; a coordinate in an unknown frame is not.
+
+    Defaults to "room" so every existing producer and stored event keeps its
+    current meaning.
+    """
     id: int
     x: float | None
     y: float | None
@@ -16,6 +34,7 @@ class Target:
     posture: str | None = None      # open vocab: standing/sitting/lying/walking/...
     velocity: float | None = None   # m/s, magnitude
     confidence: float = 0.0
+    frame: str = "room"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -55,6 +74,21 @@ class SensingEvent:
     # (network/ble/wifi_csi/sim) leave it None = count-unknown, NEVER 0 -- a source
     # that cannot count must never assert a number it lacks (honesty).
     count: int | None = None
+    # WHICH sensor produced this, when the sensor has a stable identity: a
+    # camera's operator-given name, an enrolled node's id, a wired radar's port.
+    # Empty for a source with no per-instance identity -- the host's single
+    # network scan is the house's one network sense, not one of several.
+    #
+    # Load-bearing for reliability (a profile is per SENSOR, not per modality --
+    # two cameras in one house behave differently) and for ground-truth
+    # measurement (every hit and miss must attribute to something). Optional with
+    # an empty default so every existing source and stored event stays valid, and
+    # an anonymous event falls back to its modality's constant.
+    #
+    # NEVER self-declared by the device: a node's id comes from its enrolment
+    # row, a camera's from the store. A sensor may not assert its own identity
+    # any more than it may assert its own sensor type.
+    sensor_id: str = ""
 
     def to_dict(self) -> dict:
         d = asdict(self)

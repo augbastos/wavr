@@ -20,12 +20,23 @@ def test_normalize_sets_wifi_csi_modality_and_maps_fields():
     assert ev.ts.startswith("2026-") and ev.ts.endswith("+00:00")
 
 def test_to_dict_has_exact_canonical_keys():
+    """The wire shape, pinned. Adding a key here must be a deliberate act —
+    this dict is what gets stored, replayed and read by other surfaces."""
     ev = normalize_ruview(RUVIEW_FRAME, room="sala")
     assert set(ev.to_dict().keys()) == {
         "room", "modality", "presence", "motion",
         "breathing_bpm", "heart_bpm", "confidence", "ts", "targets", "identities",
-        "count",
+        "count", "sensor_id",
     }
+
+
+def test_a_source_with_no_instance_identity_reports_an_empty_sensor_id():
+    """Empty, not absent and not invented.
+
+    The CSI/RuView normalizer has no per-instance identity to give: there is one
+    such sense in the house. Reliability keyed on an empty id falls back to the
+    modality constant, which is the pre-existing behaviour."""
+    assert normalize_ruview(RUVIEW_FRAME, room="sala").sensor_id == ""
 
 def test_missing_vitals_and_confidence_default():
     frame = {"type": "sensing_update", "classification": {"presence": False},

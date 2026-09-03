@@ -184,6 +184,7 @@ class CameraSource:
                                 confidence = det.confidence
                             present = count > 0
                             yield SensingEvent(
+                                sensor_id=self._name,
                                 room=self.room, modality="camera", presence=present,
                                 motion=0.0, breathing_bpm=None, heart_bpm=None,
                                 confidence=confidence if present else 0.0,

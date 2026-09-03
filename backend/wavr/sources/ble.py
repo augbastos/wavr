@@ -110,6 +110,7 @@ class BLESource:
                     for a in sorted(present_addrs) if known.get(a)
                 )
             yield SensingEvent(
+                sensor_id="host-bluetooth",
                 room=self._room, modality="ble", presence=present,
                 motion=0.0, breathing_bpm=None, heart_bpm=None,
                 confidence=self._conf if present else 0.0,

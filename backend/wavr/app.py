@@ -103,6 +103,9 @@ from wavr.discovery_inbox import DiscoveryInbox
 from wavr.discovery_feed import (feed_core_topology, feed_devices,
                                  feed_pending_nodes)
 from wavr.api_coverage import build_coverage_router
+from wavr.api_validation import build_validation_router
+from wavr.reliability import CAP_PRESENCE, ReliabilityStore
+from wavr.validation import ValidationSession, ValidationStore
 from wavr.services.discovery import run_discovery_pass
 from wavr.sensor_coverage import collect_coverage, summarize as coverage_summary
 from wavr.api_space import (build_discovery_router, build_self_manifest_router,
@@ -611,8 +614,51 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # fixed-timestamp determinism is unaffected. now_fn flips _fuse from ageing
     # against the room's newest event (age 0 -> frozen reading) to the wall clock,
     # so a source that stops reporting decays to zero instead of freezing.
+    # What each sensor has EARNED here, from counted checks against a truth the
+    # operator declared during a guided walk. Derived state: it can be deleted
+    # and rebuilt by walking the house again, which is why it needs no migration
+    # story. Constructed BEFORE the engine because the engine consumes it.
+    # Built HERE rather than further down: `_mount_for` below closes over it,
+    # and a fuse during startup would otherwise hit an unbound local, swallow
+    # the NameError, and silently unplace every radar target.
+    _calib = CalibrationStore(cfg.db_path)
+    _reliability = ReliabilityStore(cfg.db_path)
+    _validation_store = ValidationStore(cfg.db_path)
+
+    def _reliability_for(sensor_id: str, room: str):
+        """(factor, reason) for one sensor in one room.
+
+        Presence is the capability that scales the merge: it is the one every
+        modality has, and the one a walk always measures. Count and
+        still-person reliability are reported to the operator but do not move
+        the confidence — a sensor being bad at counting should not make its
+        "someone is here" less believable.
+        """
+        p = _reliability.profile(sensor_id, CAP_PRESENCE, room=room)
+        return p.factor, p.reason
+
+    def _mount_for(sensor_id: str, room: str):
+        """Where a sensor sits, so a target it reported in its OWN frame can be
+        placed on the floor plan. None means "we do not know", and the caller
+        drops the coordinate rather than guessing.
+
+        Reuses the calibration store: it already models a sensor's position and
+        heading for cameras, and a radar mount is that minus the optics. A second
+        mount model would be two records of one physical fact, guaranteed to
+        drift.
+        """
+        if not sensor_id:
+            return None
+        try:
+            row = _calib.get(sensor_id)
+        except Exception:      # noqa: BLE001 -- a storage fault must not place
+            return None        # somebody at the origin
+        return (row or {}).get("mount")
+
     _fusion = fusion or FusionEngine(threshold=cfg.fusion_threshold,
-                                     now_fn=lambda: datetime.now(timezone.utc))
+                                     now_fn=lambda: datetime.now(timezone.utc),
+                                     reliability_fn=_reliability_for,
+                                     mount_fn=_mount_for)
     latest: dict[str, dict] = {}  # room -> last RoomState dict (Camada 4 seam)
     # Watch/Guard ("Vigia") -- server-side, in-memory, DEFAULT OFF (privacy-first boot).
     # A single toggle that, while on, suppresses the family geometry/identity/vitals from
@@ -1756,7 +1802,6 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # Spec A per-camera localization calibration (mount prior + optional 4-point
     # homography). Always built (like CameraStore/DeviceMeta) -- inert until a camera has
     # a row; NEVER a frame, only stored matrices/detection-space parameters (ADR-0002).
-    _calib = CalibrationStore(cfg.db_path)
     # Walk-to-calibrate feet-pixel sink (Spec A). In-memory, ephemeral, coordinate-only
     # -- NEVER a frame (ADR-0002). Populated ONLY while a calibration session is active
     # (see POST /api/cameras/{name}/calib-session); read by GET calib-sample. Inert and
@@ -2745,6 +2790,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                    deps=[Depends(require_authenticated)]))
     # Coverage names every room and every sensor, so it carries the same gate as
     # administration rather than a read-only one.
+    # Guided validation. `latest` is the FULL internal room state (never the
+    # suppressed view) -- grading has to see what the sensors actually said, or
+    # a privacy toggle would silently corrupt the measurements. Same admin gate
+    # as the rest: a walk rewrites the weights fusion applies.
+    _validation_session = ValidationSession(
+        _validation_store, _reliability, lambda room: latest.get(room))
+    app.include_router(build_validation_router(
+        session=_validation_session, reliability=_reliability,
+        store=_validation_store,
+        deps=[Depends(require_local), Depends(require_scope("admin"))]))
     app.include_router(build_coverage_router(
         coverage_fn=_sensor_coverage,
         rooms_fn=lambda: list(_fusion.rooms()),

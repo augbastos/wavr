@@ -106,7 +106,11 @@ def test_health_and_age_fields_present_across_states():
     assert by_mod["wifi_csi"]["health"] == "stale" and by_mod["wifi_csi"]["age_s"] == 60
     assert by_mod["network"]["health"] == "dead" and by_mod["network"]["age_s"] == 120
     # additive only — existing keys stay, plus the two new ones.
-    assert set(by_mod["camera"]) == {"modality", "presence", "confidence", "age_s", "health", "count"}
+    # `sensor_id` joined the projection when the merge became per-SENSOR: two
+    # cameras in one room are two entries now, and a consumer has to be able
+    # to tell them apart.
+    assert set(by_mod["camera"]) == {"modality", "sensor_id", "presence",
+                                     "confidence", "age_s", "health", "count"}
 
 
 def test_custom_windows_are_respected():

@@ -829,4 +829,6 @@ def node_event(node: Node, payload: dict, now_iso: str | None = None) -> Sensing
         room=node.room, modality=node.modality, presence=presence, motion=motion,
         breathing_bpm=None, heart_bpm=None, confidence=confidence, ts=ts,
         targets=tuple(targets), count=count,
+        # From the ENROLMENT row, never from the node's payload.
+        sensor_id=node.node_id,
     )

@@ -85,7 +85,10 @@ def test_malformed_timestamp_does_not_cascade_and_kill_later_good_events():
     f.update(bad)  # must not raise
     rs = f.update(ev("sala", "camera", True, 0.9))  # later good event, another modality
     assert rs.occupied is True
-    assert rs.sources == [{"modality": "camera", "presence": True,
+    # `sensor_id` is part of the projection now: the merge is keyed per SENSOR,
+    # so a consumer must be able to tell two cameras apart. Empty here because
+    # this fixture's event declares no instance identity.
+    assert rs.sources == [{"modality": "camera", "sensor_id": "", "presence": True,
                            "confidence": 0.9, "age_s": 0, "health": "fresh",
                            "count": None}]
 
