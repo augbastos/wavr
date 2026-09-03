@@ -104,6 +104,7 @@ from wavr.discovery_feed import (feed_core_topology, feed_devices,
                                  feed_pending_nodes)
 from wavr.api_coverage import build_coverage_router
 from wavr.api_topology import build_topology_router
+from wavr.api_trace import build_trace_router
 from wavr.api_validation import build_validation_router
 from wavr.reliability import CAP_PRESENCE, ReliabilityStore
 from wavr.topology import TopologyStore
@@ -630,6 +631,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # from the live house map on every read, so redrawing a room updates it with
     # nothing to invalidate.
     _topology_store = TopologyStore(cfg.db_path)
+    # OFF by default and never persisted. A trace is a minute-by-minute record of
+    # where people were; it must never accumulate because a switch was left on.
+    _trace_state: dict = {"recorder": None, "last": None}
 
     def _reliability_for(sensor_id: str, room: str):
         """(factor, reason) for one sensor in one room.
@@ -1511,6 +1515,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return d
 
     async def _ingest(event):
+        # One dict lookup on a path that runs at ~5 Hz per sensor, and None
+        # unless somebody deliberately started recording. Guarded because losing
+        # live sensing to protect a debug artefact is the wrong way round.
+        _rec = _trace_state.get("recorder")
+        if _rec is not None:
+            with suppress(Exception):
+                _rec.record(event)
         rs = _fusion.update(event)
         # PERF-CRITICAL (SD-card write-wear on the live G9 Core): mmwave publishes at
         # ~0.2s cadence, camera at ~0.5s -- writing a full sqlite INSERT+commit to
@@ -2808,6 +2819,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
     # Topology explains evidence; it never creates any. Same admin gate as the
     # rest: editing a link changes how Wavr reasons about contradictions.
+    # Replay builds a FRESH engine per call: running a recording through the
+    # live one would inject the past into the present and make the dashboard
+    # report a house that no longer exists.
+    app.include_router(build_trace_router(
+        _trace_state,
+        engine_factory=lambda now_fn: FusionEngine(
+            threshold=cfg.fusion_threshold, now_fn=now_fn),
+        deps=[Depends(require_local), Depends(require_scope("admin"))]))
     app.include_router(build_topology_router(
         house_fn=lambda: _house, store=_topology_store,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
