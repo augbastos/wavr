@@ -16,6 +16,8 @@ still bounded by the pairing code's ~2-min one-time window.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 
 from wavr.auth import parse_bearer
@@ -33,10 +35,18 @@ def _deps_not_wired() -> None:
                         detail="device management routes have no auth gate wired")
 
 
-def build_pair_router(store, pairing) -> APIRouter:
+def build_pair_router(store, pairing, on_redeem=None) -> APIRouter:
     """POST /api/pair {code, device_name} -> {device_id, token}. The token is
     returned exactly once. `store` is accepted for symmetry/future use; the redeem
-    goes through `pairing`, which owns the store."""
+    goes through `pairing`, which owns the store.
+
+    `on_redeem(code, device_id)` is an optional post-mint hook. app.py uses it to
+    stamp the PERSON the code was minted for onto the device that redeemed it --
+    which is what lets that person's role later cap this credential. It runs
+    AFTER the mint and its failure never fails the pairing: a device that paired
+    successfully but could not be associated is recoverable from the admin
+    screen, whereas a pairing that 500s after minting a token leaves the operator
+    with a credential they were never shown."""
     router = APIRouter()
 
     @router.post("/api/pair")
@@ -52,6 +62,13 @@ def build_pair_router(store, pairing) -> APIRouter:
         if result is None:
             raise HTTPException(status_code=403, detail="invalid or expired pairing code")
         device_id, token = result
+        if on_redeem is not None:
+            try:
+                on_redeem(code, device_id)
+            except Exception:      # noqa: BLE001 -- see the docstring
+                logging.warning("pairing: could not associate the device with its "
+                                "person; associate it from the admin screen",
+                                exc_info=True)
         return {"device_id": device_id, "token": token}
 
     return router

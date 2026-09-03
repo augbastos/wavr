@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Nodes — Wavr</title>
+<meta name="description" content="What a Wavr Node is, what it costs, and the honest status of the sensor-node hardware path: backend and dashboard built and tested, firmware written but not yet run on real hardware.">
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="install.html" class="nav-install">Install</a>
+      <a href="compatibility.html">Compatibility</a>
+      <a href="nodes.html" aria-current="page">Nodes</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>Nodes</h1>
+    <p class="lede">A Node is a small, headless sensor board (an ESP32 with a radar or motion
+      sensor) that joins Wavr over Wi-Fi and reports into fusion for one room. It's how you
+      cover a room without running a cable to a camera or plugging a sensor straight into
+      your Core.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>Status, read this first</h2>
+    <p class="section-lede">What's actually built and tested versus what's still ahead, so
+      you don't go shopping for a feature that isn't wired up yet.</p>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>Piece</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td>Backend (device store, enrollment, the node API routes)</td><td><span class="tag tag-ready">Built and covered by tests</span></td></tr>
+          <tr><td>Firmware (ESP32 + HLK-LD2450 reference build)</td><td><span class="tag tag-note">Written, not yet compiled or flashed against real hardware</span></td></tr>
+          <tr><td>Dashboard "Nodes" panel (add / list / disable / remove by clicking)</td><td><span class="tag tag-note">Built</span> &mdash; in Settings, once you turn sensor nodes on</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">Full detail, wiring diagrams and troubleshooting live in
+      <a href="https://github.com/augbastos/wavr/blob/master/docs/NODE-ONBOARDING.md">the
+      canonical Node onboarding guide</a> on GitHub. This page is the plain-language summary.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>What it takes</h2>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <div class="tile-eyebrow">Shopping list</div>
+        <ul>
+          <li>An ESP32 dev board (~€5&ndash;8)</li>
+          <li>An HLK-LD2450 24&nbsp;GHz radar module (~€10&ndash;15)</li>
+          <li>4 jumper wires and a USB cable</li>
+        </ul>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Toolchain</div>
+        <p><a href="https://platformio.org/install">PlatformIO</a> (CLI or the VS Code
+          extension). Everything else is pulled automatically on first build.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Time</div>
+        <p>Roughly 15&ndash;20 minutes end to end once your toolchain is set up, including
+          Wi-Fi provisioning and enrollment.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>How a Node joins, in plain terms</h2>
+    <ol>
+      <li><strong>You name it first.</strong> In Wavr, you pick a name, a room, and a sensor
+        type before the Node exists to the system. The Node itself never chooses these: a
+        compromised board can't relocate itself or relabel what it claims to be.</li>
+      <li><strong>Wavr shows a one-time code</strong> (five-minute expiry, rate-limited).</li>
+      <li><strong>You type that code into the Node's own setup page</strong>, which it opens
+        as a temporary Wi-Fi hotspot the first time it boots.</li>
+      <li><strong>The Node joins your Wi-Fi and redeems the code.</strong> Its room lights up
+        in fusion within seconds of its first reading.</li>
+    </ol>
+    <p>The Node also pins Wavr's certificate the first time it connects, so a later
+      man-in-the-middle can't quietly intercept its credentials. The one moment that trust is
+      established is worth watching: compare the fingerprint the Node prints on its setup
+      page against your Core's own, before you walk away.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>The kill switch is physical on purpose</h2>
+    <p class="section-lede">Wavr can turn a Node off remotely. It can never turn one back on
+      remotely.</p>
+    <p>Disabling a Node from the dashboard (or the API) stops it from feeding fusion
+      immediately. Re-enabling it requires someone physically at the device: a short press on
+      its button. That asymmetry isn't a missing feature, it's the design: there is no admin
+      or remote "turn back on" route anywhere in the code for a Node to be re-armed without a
+      person standing next to it.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>Ready to try it?</h2>
+    <p class="section-lede">In Wavr's Settings (the gear icon), turn on
+      <strong>"Let other devices connect"</strong> and then <strong>"Accept sensor
+      nodes"</strong>. Both ask you to confirm, because together they are what lets
+      something other than this machine talk to Wavr. Then go to Nodes &rarr; Add a node.
+      Everything else, including flashing the board itself, is in the full guide.</p>
+    <a class="btn btn-primary" href="https://github.com/augbastos/wavr/blob/master/docs/NODE-ONBOARDING.md">Read the full Node onboarding guide</a>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="docs.html">Docs</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/wavr.js"></script>
+</body>
+</html>

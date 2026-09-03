@@ -1,6 +1,7 @@
 package dev.wavr.core
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.Rect
@@ -16,7 +17,7 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
-import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.LifecycleOwner
 import org.json.JSONObject
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -48,6 +49,15 @@ import java.util.concurrent.Executors
  *    camera is off. With no camera bound there are simply no frames to serve, so
  *    a listening-but-idle loopback socket leaks nothing.
  *
+ * OWNERSHIP (changed for the Android Core, ADR-0010): the streamer takes a
+ * [LifecycleOwner] rather than an Activity, because the camera must be able to
+ * outlive the panel. When [CoreService] owns it the camera keeps sensing with the
+ * screen off; when the kiosk Activity owns it the old behaviour is unchanged
+ * (a FragmentActivity is both a Context and a LifecycleOwner, so the call site
+ * barely moved). A service cannot show a permission dialog, so
+ * [requestCameraPermission] is nullable: with no requester and no grant, [start]
+ * fails honestly with `permission_denied` and the panel does the asking.
+ *
  * Threading:
  *  - CameraX bind/unbind runs on the main thread (required).
  *  - Frame JPEG encoding runs on a single background analysis executor.
@@ -58,9 +68,22 @@ import java.util.concurrent.Executors
  * throttled to [TARGET_FPS] regardless of the sensor's native rate.
  */
 class CameraMjpegStreamer(
-    private val activity: FragmentActivity,
-    /** Invoked (posted to main) to launch the runtime CAMERA permission dialog. */
-    private val requestCameraPermission: () -> Unit,
+    private val context: Context,
+    /** Whose lifecycle the camera is bound to: the kiosk Activity, or CoreService. */
+    private val lifecycleOwner: LifecycleOwner,
+    /**
+     * Invoked (posted to main) to launch the runtime CAMERA permission dialog.
+     * NULL when there is no UI to show it from (the service) — in that case a
+     * missing grant is reported, never silently retried.
+     */
+    private val requestCameraPermission: (() -> Unit)? = null,
+    /**
+     * Fired (off the main thread) whenever the camera actually starts or stops
+     * producing frames. [CoreService] uses it to re-assert its foreground
+     * service type, which on Android 14+ must include `camera` for as long as,
+     * and only as long as, the camera is genuinely open.
+     */
+    private val onStreamingChanged: ((Boolean) -> Unit)? = null,
 ) {
 
     enum class Lens(val jsName: String) {
@@ -80,6 +103,8 @@ class CameraMjpegStreamer(
         const val TARGET_H = 480
         const val TARGET_FPS = 8
         const val FRAME_INTERVAL_MS = 1000L / TARGET_FPS // ~125ms
+        /** Interval used while the device is thermally throttled (half rate). */
+        const val DERATED_INTERVAL_MS = FRAME_INTERVAL_MS * 2
         const val JPEG_QUALITY = 60
         const val BOUNDARY = "wavrframe"
         const val CLIENT_WAIT_MS = 2000L
@@ -92,6 +117,15 @@ class CameraMjpegStreamer(
     @Volatile private var streaming = false
     @Volatile private var lens: Lens = Lens.BACK
     @Volatile private var lastReason: String? = null
+
+    /**
+     * Thermal shedding, driven by [CoreService]'s thermal governor. On
+     * THERMAL_STATUS_MODERATE the encode rate is halved before anything else is
+     * given up: fewer JPEGs per second is the cheapest real watt saving here, and
+     * it degrades the picture rather than removing it. SEVERE releases the camera
+     * outright, which is [setEnabled] (false) and not this flag.
+     */
+    @Volatile private var thermalDerate = false
 
     // ---- latest-frame single buffer (no queue) --------------------------
     private val frameLock = Object()
@@ -126,11 +160,24 @@ class CameraMjpegStreamer(
         if (streaming) mainHandler.post { bindCamera() }
     }
 
-    /** `{"on":Boolean,"lens":"back|front","port":8081[,"reason":"..."]}` */
+    /** True while the camera device is open and frames are being encoded. */
+    fun isStreaming(): Boolean = streaming
+
+    /**
+     * Halve the frame rate (true) or restore it (false). Called by the thermal
+     * governor; takes effect on the next frame with no rebind, so it cannot
+     * flap the camera device.
+     */
+    fun setThermalDerate(on: Boolean) {
+        thermalDerate = on
+    }
+
+    /** `{"on":Boolean,"lens":"back|front","port":8081,"derated":Boolean[,"reason":"..."]}` */
     fun state(): String = JSONObject().apply {
         put("on", streaming)
         put("lens", lens.jsName)
         put("port", PORT)
+        put("derated", thermalDerate)
         lastReason?.let { put("reason", it) }
     }.toString()
 
@@ -161,10 +208,19 @@ class CameraMjpegStreamer(
         lastReason = null
         if (hasCameraPermission()) {
             doStart()
-        } else {
-            lastReason = "permission_pending"
-            mainHandler.post { requestCameraPermission() }
+            return
         }
+        val ask = requestCameraPermission
+        if (ask == null) {
+            // No UI to prompt from (we are the service). Fail closed and say so
+            // — do NOT bind, do NOT retry in a loop. The panel, which does have a
+            // UI, is where the grant gets requested.
+            desiredOn = false
+            lastReason = "permission_denied"
+            return
+        }
+        lastReason = "permission_pending"
+        mainHandler.post { ask() }
     }
 
     private fun doStart() {
@@ -174,7 +230,9 @@ class CameraMjpegStreamer(
 
     private fun stop() {
         desiredOn = false
+        val was = streaming
         streaming = false
+        if (was) notifyStreaming(false)
         // Wake any client writers so they observe streaming=false and finish.
         synchronized(frameLock) {
             latestJpeg = null   // drop residual frame from memory
@@ -191,8 +249,17 @@ class CameraMjpegStreamer(
         }
     }
 
+    /** Never let a listener's exception reach the camera pipeline. */
+    private fun notifyStreaming(on: Boolean) {
+        try {
+            onStreamingChanged?.invoke(on)
+        } catch (t: Throwable) {
+            Log.w(TAG, "streaming listener threw: ${t.javaClass.simpleName}")
+        }
+    }
+
     private fun hasCameraPermission(): Boolean =
-        ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) ==
+        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
 
     // =====================================================================
@@ -201,7 +268,7 @@ class CameraMjpegStreamer(
 
     private fun bindCamera() {
         if (!desiredOn) return
-        val future = ProcessCameraProvider.getInstance(activity)
+        val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             if (!desiredOn) return@addListener
             try {
@@ -235,15 +302,19 @@ class CameraMjpegStreamer(
                 }
 
                 provider.unbindAll()
-                provider.bindToLifecycle(activity, selector, imageAnalysis)
+                provider.bindToLifecycle(lifecycleOwner, selector, imageAnalysis)
+                val was = streaming
                 streaming = true
                 lastReason = null
+                if (!was) notifyStreaming(true)
             } catch (t: Throwable) {
+                val was = streaming
                 streaming = false
                 lastReason = "camera_error"
+                if (was) notifyStreaming(false)
                 Log.w(TAG, "bindCamera failed: ${t.javaClass.simpleName}")
             }
-        }, ContextCompat.getMainExecutor(activity))
+        }, ContextCompat.getMainExecutor(context))
     }
 
     // =====================================================================
@@ -254,7 +325,8 @@ class CameraMjpegStreamer(
         try {
             if (!streaming) return
             val now = System.currentTimeMillis()
-            if (now - lastEncodeAt < FRAME_INTERVAL_MS) return // throttle to TARGET_FPS
+            val interval = if (thermalDerate) DERATED_INTERVAL_MS else FRAME_INTERVAL_MS
+            if (now - lastEncodeAt < interval) return // throttle to TARGET_FPS
             lastEncodeAt = now
 
             val jpeg = encodeJpeg(image) ?: return

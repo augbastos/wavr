@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import tarfile
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
@@ -88,9 +89,28 @@ from wavr.bonded import read_bonded
 from wavr.api_identity import build_identity_router
 from wavr.api_routines import build_routines_router
 from wavr.devices import DeviceStore, VALID_CONSENT, _is_expired
+from wavr.space_store import SpaceStore
+from wavr.core_registry import CoreRegistry, VERDICT_CONTESTED, VERDICT_YIELD
+from wavr.discovery_inbox import KIND_PEER_CORE
+from wavr import peer_client
+
+# The Wavr Protocol version this Core speaks (docs/WAVR-PROTOCOL.md). Advertised
+# over mDNS and returned to paired peers, so a future version can be detected
+# rather than misread.
+WAVR_PROTOCOL_VERSION = 1
+from wavr.settings_store import SettingsStore, apply_stored_settings
+from wavr.discovery_inbox import DiscoveryInbox
+from wavr.discovery_feed import (feed_core_topology, feed_devices,
+                                 feed_pending_nodes)
+from wavr.api_coverage import build_coverage_router
+from wavr.services.discovery import run_discovery_pass
+from wavr.sensor_coverage import collect_coverage, summarize as coverage_summary
+from wavr.api_space import (build_discovery_router, build_self_manifest_router,
+                            build_settings_router, build_setup_router,
+                            build_space_router)
 from wavr.pairing import PairingManager
 from wavr.pair_requests import PairApprovalManager
-from wavr.auth import access_for_scoped, parse_bearer, can_change_state, can_view, in_subnet, has_scope, effective_scopes
+from wavr.auth import access_for_scoped, narrower_role, parse_bearer, can_change_state, can_view, in_subnet, has_scope, effective_scopes, scopes_for_device
 from wavr.api_devices import build_pair_router, build_ws_ticket_router, build_devices_router
 from wavr.api_pair_requests import build_pair_request_router, build_pending_pairings_router
 from wavr.peers import PeerStore
@@ -106,7 +126,44 @@ from wavr.pin_store import PinStore
 from wavr.pin_ratelimit import PinAttemptLimiter
 
 
-_INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
+def _find_frontend() -> Path:
+    """Locate `frontend/index.html`, whatever shape this install is.
+
+    The old single guess -- `parents[2]/frontend` -- only holds for a repo
+    checkout, and that has already caused two real failures: a non-editable
+    `pip install` leaves the package in site-packages with no dashboard beside
+    it, and the Docker image served the API and 404'd on `GET /` until
+    `frontend/` was baked in. A frozen build breaks it a third way, because
+    `__file__` then points inside a temporary extraction directory.
+
+    Candidates, in order. The checkout layout stays FIRST so a developer's tree
+    behaves exactly as it always has:
+
+      1. the repo layout (`frontend/` beside `backend/`)
+      2. `sys._MEIPASS` -- PyInstaller's extraction dir, for the frozen sidecar
+      3. beside the executable -- a onedir frozen build
+      4. `WAVR_FRONTEND` -- the explicit override, for anything unforeseen
+
+    Returns the first that exists; falls back to candidate 1 so the error a
+    caller sees is still the familiar missing-file one rather than something
+    stranger."""
+    here = Path(__file__).resolve()
+    candidates = [here.parents[2] / "frontend"]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "frontend")
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "frontend")
+    override = os.getenv("WAVR_FRONTEND", "").strip()
+    if override:
+        candidates.insert(0, Path(override))
+    for candidate in candidates:
+        if (candidate / "index.html").is_file():
+            return candidate
+    return candidates[-1] if override else here.parents[2] / "frontend"
+
+
+_INDEX = _find_frontend() / "index.html"
 _VENDOR_DIR = _INDEX.parent / "vendor"
 _CATALOG_PATH = _VENDOR_DIR / "device-catalog.json"
 
@@ -128,20 +185,27 @@ _HOUSE_STATUS_ROUTINE_TTL_S = 5.0
 _WS_REVOKE_RECHECK_S = 2.0
 
 
-async def _stream_live(ws, q, did, get_device, recheck_s):
+async def _stream_live(ws, q, did, get_device, recheck_s, person_role_fn=None):
     """Pump hub frames to an accepted /ws/live socket, severing the stream within
-    `recheck_s` of the companion being revoked. The revoked flag is re-read on a WALL-CLOCK
+    `recheck_s` of the companion losing the right to it. The check runs on a WALL-CLOCK
     cadence -- `q.get()` is bounded by a timeout -- so a SILENT hub (no frames at all) still
-    drops a revoked device; the old frame-COUNT throttle parked forever on `await q.get()`
-    and never rechecked. `did` is None for loopback root: no revoke check, streams until the
-    socket closes. `get_device(did)` -> Device|None (None, or a truthy `.revoked`, ends it).
-    A WebSocketDisconnect from send_json propagates to the caller, which owns unsubscribe."""
+    drops it; the old frame-COUNT throttle parked forever on `await q.get()`
+    and never rechecked. `did` is None for loopback root: no check, streams until the
+    socket closes. `get_device(did)` -> Device|None (None ends it).
+
+    THREE ways to lose it, not one. Revocation and expiry were always checked;
+    losing the SCOPE was not, and that is the one a person-role change causes.
+    Demote someone from admin to guest and their open socket used to keep
+    streaming per-person x/y and vitals forever, because this loop re-read
+    `revoked` and nothing else -- while ADR-0011 promised in a MUST that a
+    demotion lands on the very next request. `person_role_fn` closes it, through
+    the same `auth.scopes_for_device` the handshake and the HTTP middleware use."""
     last_check = 0.0
     while True:
         try:
             await ws.send_json(await asyncio.wait_for(q.get(), recheck_s))
         except asyncio.TimeoutError:
-            pass   # no frame this interval -- fall through to the revoke re-check
+            pass   # no frame this interval -- fall through to the re-check
         if did is not None:
             now = asyncio.get_running_loop().time()
             if now - last_check >= recheck_s:
@@ -149,12 +213,21 @@ async def _stream_live(ws, q, did, get_device, recheck_s):
                 dev = get_device(did)
                 if dev is None or dev.revoked or _is_expired(dev.expires_at):
                     return   # drop the live stream the moment the credential dies/expires
+                # A demotion is not a revocation, and it must still end this.
+                sc = scopes_for_device(dev, person_role_fn)
+                if sc is None or not has_scope(sc, "presence:read"):
+                    return
 
 # 2C: cadence of the opt-in daily-digest scheduler task (see _digest_loop below) --
 # one composition+send pass every 24h. Gated on the SEPARATE "digest" connector row
 # (default-OFF), so this constant only controls the wakeup cadence, never whether
 # anything is actually sent. A test drives one deterministic tick via the
 # app.state.digest_once seam instead of waiting on this interval.
+# How often the Discovery Inbox re-reads already-collected state. Slower than
+# the inventory scan itself (30s default) on purpose: an inbox is read by a
+# human, and there is nothing to gain from noticing something 20 seconds
+# sooner than they will look at it.
+_DISCOVERY_FEED_INTERVAL_S = 60.0
 _DIGEST_INTERVAL_S = 24 * 3600.0
 # How often the routines loop evaluates time/deadline triggers (schedule,
 # house_away_by_time). 30s is fine-grained enough for an "at 23:00" routine while
@@ -488,7 +561,33 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                net_inventory=None, identity_store=None, bonded_reader=None,
                connector_store=None, pin_store=None, companion_resolve_mac=None,
                known_store=None, occupancy_log=None, assistant_store=None,
-               routine_store=None) -> FastAPI:
+               routine_store=None, space_store=None, core_registry=None,
+               settings_store=None, discovery_inbox=None) -> FastAPI:
+    # Publish operator-written settings into the environment BEFORE load_config()
+    # reads it. This is the whole integration point between the settings UI and
+    # the existing configuration system, and it has to be the first thing that
+    # happens: load_config() calls os.getenv ~90 times and the module-level
+    # `app = MaxBodySizeMiddleware(create_app(), ...)` runs at import, so there
+    # is no later hook.
+    #
+    # No chicken-and-egg: the database path comes from WAVR_DB, and WAVR_DB is
+    # deliberately absent from the settings allow-list, so the store can never
+    # relocate the store. The environment still wins over anything stored (see
+    # settings_store.export_to_env) -- an operator's own `.env` is never
+    # overridden by a UI click.
+    #
+    # An INJECTED store exports itself instead of opening the db: a test hands in
+    # a :memory: store, so this is a no-op there rather than reaching for the
+    # shared on-disk db and leaking one test's settings into the next.
+    if settings_store is not None:
+        _applied = settings_store.export_to_env()
+    else:
+        _applied = apply_stored_settings(os.getenv("WAVR_DB", "wavr.db"))
+    if _applied:
+        # Logged, because the alternative is a settings screen that says
+        # "stored" while the process runs on defaults and nothing anywhere says
+        # the export did not happen.
+        logging.info("applied %d stored setting(s): %s", len(_applied), _applied)
     cfg = load_config()
     # Peer pairing (Phase 1) is a strict superset of multidevice: a peer authenticates
     # as a `role=central` device, so the whole DeviceStore/PairingManager/middleware
@@ -1082,6 +1181,203 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _node_store = NodeStore(cfg.db_path) if cfg.nodes_enabled else None
     _node_enroller = NodeEnroller(_node_store) if cfg.nodes_enabled else None
 
+    # -- Wavr Space (2026-09-03) -------------------------------------------------
+    # The Space model is NOT gated on multidevice: a single loopback Core still
+    # belongs to a Space, still has an Owner, and still wants its settings written
+    # by the UI rather than by hand in .env. These four stores share cfg.db_path and
+    # each own their own tables, the same pattern every other *_store.py here uses;
+    # all four are closed in the lifespan finally below.
+    #
+    # None of them touch auth. `devices.py` remains the credential table and
+    # `auth.py` remains the only gate -- SpaceStore adds the PERSON and FUNCTION
+    # axes beside it (see its module docstring), and feeds the existing gate via
+    # space_store.device_role_for_person rather than bypassing it.
+    # Injectable (same idiom as identity_store/routine_store above) so a test can
+    # hand in a :memory: store -- a Space is a SINGLETON row, so a suite sharing
+    # one on-disk db would otherwise let the first test that creates a Space
+    # decide the outcome of every later one.
+    _space_store = space_store or SpaceStore(cfg.db_path)
+    _core_registry = core_registry or CoreRegistry(cfg.db_path)
+    _settings_store = settings_store or SettingsStore(cfg.db_path)
+    _discovery_inbox = discovery_inbox or DiscoveryInbox(cfg.db_path)
+
+    # code -> person_id for codes minted against a named person. In-memory and
+    # short-lived by construction: a pairing code lives ~2 minutes
+    # (pairing.CODE_TTL_SECONDS) and is consumed on first use. Bounded so a burst
+    # of un-redeemed codes cannot grow it without limit.
+    _pending_person: dict = {}
+    _PENDING_PERSON_MAX = 64
+
+    def _remember_pairing_person(code: str, person_id: str) -> None:
+        # Drop the OLDEST entry at the cap, not all of them. dicts keep insertion
+        # order, so this is a one-line LRU. Clearing everything would lose an
+        # admin's other in-flight invite -- the device would still pair with the
+        # correctly-narrowed role, but it would not be bound to its person, so a
+        # later demotion would not reach it.
+        while len(_pending_person) >= _PENDING_PERSON_MAX:
+            _pending_person.pop(next(iter(_pending_person)))
+        _pending_person[code] = person_id
+
+    def _claim_pairing_person(code: str, device_id: str) -> None:
+        """Stamp the person onto a device that just redeemed a code. Single-use:
+        the mapping is popped, so a replayed code cannot re-associate."""
+        person_id = _pending_person.pop(code, None)
+        if person_id and _devices is not None:
+            with suppress(Exception):
+                _devices.set_person(device_id, person_id)
+            with suppress(Exception):
+                _space_store.associate_device(device_id, person_id,
+                                              origin="confirmed")
+
+    def _core_status() -> dict:
+        """This Core's own leadership state, for a paired peer to reconcile
+        against. Deliberately tiny: nothing here describes the house."""
+        space = _space_store.get_space()
+        me = _core_registry.self_core()
+        if space is None or me is None:
+            return {}
+        return {"space_id": space.space_id, "core_id": me.core_id,
+                "epoch": me.epoch, "status": me.status,
+                "protocol_version": WAVR_PROTOCOL_VERSION,
+                "name": me.name}
+
+    def _observe_peer_cores() -> int:
+        """Reconcile our leadership belief against every PAIRED peer Core.
+
+        Only paired peers, and only over the authenticated, certificate-pinned
+        channel `peer_client` already provides. That restriction IS the security
+        design: `observe_peer` can demote this Core, so its input must come from
+        something that proved its identity. An mDNS advertisement -- which any
+        device on the segment can forge -- is handled separately below, as a
+        Discovery Inbox card for a human, and influences nothing.
+
+        Returns the number of peers successfully reached."""
+        if _peer_store is None:
+            return 0
+        me = _core_registry.self_core()
+        space = _space_store.get_space()
+        if me is None or space is None:
+            return 0
+
+        reached = 0
+        for peer in _peer_store.list():
+            if peer.revoked:
+                continue
+            token = _peer_store.token_for(peer.peer_id)
+            if not token:
+                continue
+            try:
+                state = peer_client.get_json(
+                    peer.base_url, "/api/peers/core-status", token=token,
+                    pinned_fingerprint=peer.cert_fingerprint, timeout=4.0)
+            except Exception:      # noqa: BLE001 -- an unreachable peer is normal
+                logging.debug("peer %s unreachable for core-status", peer.peer_id,
+                              exc_info=True)
+                continue
+            if not isinstance(state, dict):
+                continue
+            # A peer serving a DIFFERENT Space has no say over ours. Two Wavr
+            # installs sharing a LAN is an ordinary situation, not a conflict.
+            if state.get("space_id") != space.space_id:
+                continue
+            reached += 1
+            try:
+                verdict = _core_registry.observe_peer(
+                    str(state.get("core_id", "")),
+                    int(state.get("epoch", 0) or 0),
+                    state.get("status") == "primary")
+            except (ValueError, TypeError):
+                continue      # a peer sending junk is not a leadership event
+            if verdict == VERDICT_YIELD:
+                logging.warning(
+                    "stood down as primary: peer %s holds a newer epoch",
+                    state.get("core_id"))
+            elif verdict == VERDICT_CONTESTED:
+                logging.error(
+                    "two Cores claim this Space at the same epoch (%s vs %s) -- "
+                    "tie broken deterministically, raising it for review",
+                    me.core_id, state.get("core_id"))
+        return reached
+
+    def _observe_unpaired_cores() -> int:
+        """Surface Cores advertising in OUR Space that we have not paired with.
+
+        This is the mDNS half, and it is discovery only: an inbox card asking a
+        human whether to connect. Nothing here reaches the leadership logic."""
+        space = _space_store.get_space()
+        if space is None:
+            return 0
+        known = set()
+        if _peer_store is not None:
+            known = {p.base_url.rstrip("/") for p in _peer_store.list()
+                     if not p.revoked}
+        seen = 0
+        for peer in _browse_wavr_peers():
+            sid = getattr(peer, "space_id", "")
+            if not sid or not space.space_id.startswith(sid):
+                continue          # a different Space, or too old to say
+            base = f"https://{getattr(peer, 'host', '')}:{getattr(peer, 'port', 0)}"
+            if base.rstrip("/") in known:
+                continue
+            with suppress(Exception):
+                _discovery_inbox.observe(
+                    KIND_PEER_CORE, base,
+                    f"{getattr(peer, 'name', 'A Wavr Core')} is running on this "
+                    "network and serves this Space.",
+                    detail={"host": getattr(peer, "host", ""),
+                            "port": getattr(peer, "port", 0),
+                            "core_id": getattr(peer, "core_id", ""),
+                            "advertised_status": getattr(peer, "status", ""),
+                            "note": "Advertised over mDNS, which anything on the "
+                                    "network can send. Nothing is trusted until "
+                                    "you connect to it."},
+                    confidence=0.6)
+                seen += 1
+        return seen
+
+    def _node_decided(node_id: str, outcome: str) -> None:
+        """Close out a node's inbox item once an operator has decided.
+
+        Without this the card would sit there after being actioned, and the next
+        feed pass would keep re-observing it -- the exact nagging the inbox is
+        built to avoid."""
+        from wavr.discovery_inbox import (KIND_NODE_PENDING, STATUS_ACCEPTED,
+                                          STATUS_DISMISSED)
+        with suppress(Exception):
+            item = _discovery_inbox.observe(
+                KIND_NODE_PENDING, node_id, "Sensor decided", confidence=1.0)
+            _discovery_inbox.decide(
+                item.discovery_id,
+                STATUS_ACCEPTED if outcome == "approved" else STATUS_DISMISSED)
+
+    def _person_role(person_id: str):
+        """The CURRENT role of the person a credential belongs to, or None if
+        they are no longer in this Space.
+
+        Read fresh on every authenticated request, which is what makes a
+        demotion take effect immediately rather than at the next re-pair. `None`
+        makes `auth._apply_person_cap` DENY -- a credential whose owner was
+        removed stops working, even if the revoke that should have accompanied
+        the removal never happened.
+
+        A storage fault also resolves to None. That fails the request closed,
+        which is the correct direction: it is better to reject a legitimate
+        request during a database hiccup than to serve one at un-narrowed
+        authority."""
+        try:
+            person = _space_store.get_person(person_id)
+        except Exception:      # noqa: BLE001
+            # ANY failure denies. The docstring above promises None on failure,
+            # and catching only sqlite3.Error made that true for storage faults
+            # and false for everything else -- an unexpected exception would
+            # escape the middleware as a 500 instead of a clean 403.
+            logging.debug("person lookup failed for %s", person_id, exc_info=True)
+            return None
+        if person is None or person.removed:
+            return None
+        from wavr.space_store import device_role_for_person
+        return device_role_for_person(person.role)
+
     async def _publish(rs, *, persist=True):
         # Shared publish path for both the event-driven ingest and the periodic
         # re-fuse tick. `persist=False` skips the DB write (the tick stores
@@ -1659,6 +1955,130 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             await asyncio.sleep(_DIGEST_INTERVAL_S)
             await _digest_once()
 
+    # -- Discovery Inbox feed ---------------------------------------------------
+    # Translates ALREADY-COLLECTED state into things a human can decide. It never
+    # scans: the inventory service is the thing that looks at the network, and it
+    # only runs when the operator turned it on. With that off, this pass simply
+    # finds nothing, which is the correct behaviour rather than a reason to skip
+    # the loop.
+    _discovery_ips: dict = {}     # mac -> last address, so a MOVE is a fact not a guess
+
+    def _discovery_once() -> int:
+        """Hand this Core's stores to the service that knows what to do with them.
+
+        The pass itself lives in `services.discovery` — it coordinates six stores
+        and has nothing to do with HTTP, so keeping it here meant it could only
+        be exercised by standing up a whole application. What is left is wiring,
+        which is what this file is for.
+        """
+        return run_discovery_pass(
+            inbox=_discovery_inbox, cores=_core_registry, cameras=_cameras,
+            inventory=_inventory, last_seen_ips=_discovery_ips,
+            nodes=_node_store,
+            observe_peers=_observe_peer_cores,
+            discover_unpaired=_observe_unpaired_cores)
+
+    async def _discovery_loop():
+        while True:
+            await asyncio.sleep(_DISCOVERY_FEED_INTERVAL_S)
+            # Guarded like _routines_loop and _refuse_loop: without this, one
+            # unexpected exception ends the `while` and the Discovery Inbox stops
+            # updating for the life of the process, with nothing in the log --
+            # the task's exception is never retrieved either.
+            try:
+                # Off the event loop: the pass touches SQLite, and a fsync on the
+                # loop is what makes a live dashboard stutter.
+                await asyncio.to_thread(_discovery_once)
+            except asyncio.CancelledError:
+                raise
+            except Exception:      # noqa: BLE001
+                logging.warning("discovery feed tick failed", exc_info=True)
+
+    def _space_mcp_providers() -> dict:
+        """Zero-arg readers over the Space model, for the MCP tools.
+
+        Each returns a plain dict/list and NEVER raises: an MCP read tool that
+        500s because a store hiccuped is worse than one that answers "not
+        available". `space_devices_fn` deliberately omits the device NAME and the
+        person association -- `mcp.get_device_context` strips them too, but the
+        cheapest place to not leak PII is to not fetch it."""
+        def _space():
+            try:
+                sp = _space_store.get_space()
+                return sp.to_dict() if sp else None
+            except sqlite3.Error:
+                return None
+
+        def _cores():
+            try:
+                return _core_registry.topology()
+            except sqlite3.Error:
+                return None
+
+        def _people_count():
+            try:
+                return len(_space_store.list_people())
+            except sqlite3.Error:
+                return None
+
+        def _space_devices():
+            try:
+                rows = []
+                for fn in _space_store.list_functions():
+                    manifest = _space_store.get_manifest(fn.device_id)
+                    rows.append({
+                        "device_id": fn.device_id,
+                        "functions": sorted(fn.functions),
+                        "room": fn.room, "portable": fn.portable,
+                        "platform": fn.platform,
+                        "capabilities": manifest.to_dict() if manifest else None,
+                    })
+                return rows
+            except (sqlite3.Error, ValueError):
+                return None
+
+        return {"space_fn": _space, "cores_fn": _cores,
+                "people_count_fn": _people_count,
+                "space_devices_fn": _space_devices,
+                "coverage_fn": _coverage_summary}
+
+    def _sensor_coverage():
+        """Every sensor this Core has, whether or not it is currently talking.
+
+        The distinction is the whole reason this exists. Reading coverage off
+        live room state — which is what the MCP tool used to do — cannot tell a
+        room nobody ever sensed from a room whose radar was unplugged an hour
+        ago, and reports both as uncovered. One is a shopping list and the other
+        is a repair.
+
+        The per-camera enable state comes from the source manager, not from a
+        single process-wide flag: Wavr genuinely runs one camera on and another
+        off, and a camera that is merely switched off is a settings click away
+        from working."""
+        enabled = set()
+        with suppress(Exception):
+            st = manager.status()
+            enabled = {s["name"] for s in st.get("sources", []) if s.get("enabled")}
+        # A radar cabled straight into this machine has no store row; it exists
+        # because the config names a serial port for it.
+        serial_rooms = (cfg.mmwave_room,) if cfg.mmwave_port else ()
+        return collect_coverage(
+            cameras=_cameras.list if _cameras is not None else None,
+            nodes=(lambda: [n.to_dict() for n in _node_store.list()])
+                  if _node_store is not None else None,
+            calib=_calib,
+            cameras_enabled=enabled,
+            ble=bool(cfg.ble_known), ble_room=cfg.ble_room,
+            network=bool(cfg.net_inventory),
+            serial_rooms=serial_rooms)
+
+    def _coverage_summary():
+        """The serialized shape both the API and the MCP tool render."""
+        rooms = []
+        with suppress(Exception):
+            rooms = list(_fusion.rooms())
+        return coverage_summary(rooms, _sensor_coverage())
+
     def _assistant_tool_deps() -> dict:
         # The SAME already-built, already-scanned data sources the MCP-HTTP mount
         # below reuses -- built here UNCONDITIONALLY (not gated behind
@@ -1707,7 +2127,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     intrusion_log=_intrusion, fall_log=_fall,
                     intrusion_house_loud=cfg.watch_intrusion_loud),
                 occupancy_provider=_occupancy_log,
-                house_status_fn=_compute_house_status)
+                house_status_fn=_compute_house_status,
+                # The Space model, assembled for an agent rather than left for it
+                # to rebuild from parts. All four read state Wavr already holds.
+                **_space_mcp_providers())
         except ImportError:
             logging.info("MCP-over-HTTP mount skipped: [mcp] extra not installed")
 
@@ -1734,10 +2157,27 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # and the whole start is wrapped so a missing dep or a registration failure LOGS
         # and continues instead of crashing startup: peer discovery is a convenience,
         # never load-bearing for the app booting. Handle stopped in the finally.
-        if cfg.peers_enabled:
+        # Advertise whenever LAN access is on -- NOT only when Core-to-Core
+        # peering is. This is what gives a household `wavr.local`, which is one
+        # of the two ways a phone reaches the Core without anyone typing an IP
+        # (the other, and the better one, is scanning the pairing QR). Gating it
+        # behind a Core-to-Core feature meant the ordinary case never got it.
+        if cfg.multidevice:
             try:
                 from wavr.mdns_peers import advertise_self
-                _mdns_state["handle"] = advertise_self(cfg.instance_name, cfg.port, role="desktop")
+                # Advertise the OPAQUE space id alongside the instance name, so a
+                # joining device can tell same-Space Cores from unrelated installs
+                # on the same LAN. The Space's human NAME is deliberately never
+                # broadcast (see api_space.nearby_spaces).
+                _adv_space = _space_store.get_space()
+                _adv_core = _core_registry.self_core()
+                _mdns_state["handle"] = advertise_self(
+                    cfg.instance_name, cfg.port, role="desktop",
+                    space_id=(_adv_space.space_id[:16] if _adv_space else ""),
+                    core_id=(_adv_core.core_id if _adv_core else ""),
+                    epoch=(_adv_core.epoch if _adv_core else 0),
+                    status=(_adv_core.status if _adv_core else ""),
+                    protocol_version=WAVR_PROTOCOL_VERSION)
             except Exception:
                 logging.warning("peer mDNS self-advertise unavailable "
                                 "(zeroconf missing or registration failed)", exc_info=True)
@@ -1769,6 +2209,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # Telegram wiring above.
         digest_task = asyncio.create_task(_digest_loop())
         routines_task = asyncio.create_task(_routines_loop())
+        discovery_task = asyncio.create_task(_discovery_loop())
         # A plain timer (not a task/coroutine) flips the presence-edge warm-up flag, so
         # there is nothing to leak/await if the app is torn down before it fires. Size it to
         # cover the SLOWEST presence source's first-detection latency, not just multi-room
@@ -1793,7 +2234,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             with suppress(Exception):
                 _routines_warmup_handle.cancel()   # a TimerHandle, cancel is enough
             for t in (rules_task, away_task, refuse_task, digest_task, routines_task,
-                      *list(_routine_tasks)):
+                      discovery_task, *list(_routine_tasks)):
                 if t:
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -1853,6 +2294,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _devices is not None:
                 with suppress(Exception):
                     _devices.close()
+            for _store in (_space_store, _core_registry, _settings_store,
+                           _discovery_inbox):
+                with suppress(Exception):
+                    _store.close()
             if _mcp_cm is not None:
                 with suppress(Exception):
                     await _mcp_cm.__aexit__(None, None, None)
@@ -1864,6 +2309,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #  * camera_health: the F3 monitor, so a test can latch a camera down/up and
     #    assert the /api/cameras liveness tri-state (names only, no frame/creds).
     app.state.refuse_once = _refuse_once
+    #  * space_store / core_registry / settings_store / discovery_inbox: the Space
+    #    model's four stores, so a test can seed a Discovery or a Core directly
+    #    instead of driving a whole LAN to produce one. Carry no secrets.
+    #  * discovery_once: one Discovery-Inbox feed pass, so a test can seed an
+    #    inventory and assert exactly what lands in the inbox without waiting out
+    #    the loop interval.
+    app.state.discovery_once = _discovery_once
+    # Test/diagnostic seam, same idiom as discovery_once above.
+    app.state.sensor_coverage = _sensor_coverage
+    app.state.space_store = _space_store
+    app.state.core_registry = _core_registry
+    app.state.settings_store = _settings_store
+    app.state.discovery_inbox = _discovery_inbox
     #  * publish_derived_mqtt: Build C4's routine-anomaly/house-status MQTT tick, so a
     #    test can drive one deterministic push without waiting on cfg.refuse_interval.
     app.state.publish_derived_mqtt = _publish_derived_mqtt
@@ -1950,7 +2408,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return _dep
 
     if cfg.multidevice:
-        app.include_router(build_pair_router(_devices, _pairing))
+        # `on_redeem` closes the person loop: a code minted for a named person
+        # stamps that person onto the device that redeems it, so the middleware
+        # can cap the credential by their role from the very next request.
+        app.include_router(build_pair_router(_devices, _pairing,
+                                             on_redeem=_claim_pairing_person))
         # ws-ticket unlocks /ws/live, which streams per-person x/y + vitals -- the
         # most sensitive live-only class (ADR-0002). It MUST carry the same scope
         # its stream does: without this the router had NO dependency (unlike the
@@ -2040,6 +2502,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             "/api/pair", "/api/peers/redeem",
             "/api/nodes/enroll", "/api/nodes/telemetry",
             "/api/nodes/heartbeat", "/api/nodes/reactivate",
+            # Node-INITIATED enrollment. Same in-subnet-bounded exemption and
+            # same reasoning as /api/nodes/enroll: a board that has never been
+            # approved holds no credential, so it cannot authenticate to ask for
+            # one. `request` mints nothing and is per-IP rate limited; `claim`
+            # is bounded by a 192-bit capability the requester was handed.
+            "/api/nodes/request", "/api/nodes/claim",
             "/api/pair-request", "/api/pair-request/status",
         ):
             if in_subnet(host, _local_ip):
@@ -2056,7 +2524,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # "/measure.html" is the F2 phone-capture shell: an unpaired LAN phone must be
         # able to LOAD it, but PUT /api/house/room still needs a central token.
         _p = request.url.path
-        if _p in ("/", "/index.html", "/measure.html", "/manifest.webmanifest", "/sw.js", "/icon.svg") or _p.startswith("/vendor/"):
+        # "/js/*" are the blocks lifted out of index.html (the first-run wizard
+        # and the Discovery Inbox). They are the same shell, split across files,
+        # so they carry the same exemption -- otherwise a companion loads a
+        # dashboard whose setup screen and Discoveries tab quietly do nothing.
+        if _p in ("/", "/index.html", "/measure.html", "/manifest.webmanifest",
+                  "/sw.js", "/icon.svg", "/js/wizard.js", "/js/discoveries.js") \
+                or _p.startswith("/vendor/"):
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 request.state.scopes = None
@@ -2073,7 +2547,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # decision for every already-paired device; `tool_scopes` is a brand-new
         # third value that resolves to None (unrestricted) for every role except
         # the new 'agent' principal, so this is additive-only for root/central/user.
-        role, scopes, tool_scopes = access_for_scoped(host, _local_ip, token, _devices)
+        # `person_role_fn` caps the credential by its owner's CURRENT role --
+        # narrowing only, never widening (auth._apply_person_cap). A device with
+        # no person association is unaffected, so every pre-existing device
+        # resolves exactly as it did before.
+        role, scopes, tool_scopes = access_for_scoped(
+            host, _local_ip, token, _devices, person_role_fn=_person_role)
         if role is None:
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         request.state.role = role
@@ -2174,7 +2653,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _peer_store, _pairing, _devices, cfg, cfg.instance_name,
             self_base_url=f"https://{_local_ip}:{cfg.port}", local_ip=_local_ip,
             admin_deps=[Depends(require_local), Depends(require_root)],
-            linkback_deps=[Depends(require_central)]))
+            linkback_deps=[Depends(require_central)],
+            # What a PAIRED peer may ask us about our own leadership. Same
+            # require_central gate as link-back -- the answer feeds their
+            # observe_peer, which can demote them, so it must not be readable
+            # by anything that has not proved who it is.
+            core_status_fn=_core_status))
 
     # Sensor nodes (design 2026-07-11). Three routers, three DIFFERENT auth boundaries
     # (mirrors the peer-pairing split just above):
@@ -2194,7 +2678,101 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         app.include_router(build_nodes_ingest_router(_node_store, _ingest))
         app.include_router(build_nodes_admin_router(
             _node_store, _node_enroller,
-            admin_deps=[Depends(require_local), Depends(require_root)]))
+            admin_deps=[Depends(require_local), Depends(require_root)],
+            on_decision=_node_decided))
+
+    def _space_cert_fp() -> str:
+        """This Core's own TLS fingerprint, or "" when there is no cert yet.
+
+        Mirrors the `_live_cert_fp` used by the pairing routers, but must ALSO
+        survive the default (non-multidevice) install where no cert has ever been
+        generated -- the setup screen runs before TLS exists, so a missing cert is
+        an ordinary state here, not an error."""
+        try:
+            from wavr.tls import cert_fingerprint, resolved_cert_path
+            return cert_fingerprint(resolved_cert_path(cfg.tls_cert)) or ""
+        except Exception:      # noqa: BLE001 -- no cert / no [tls] extra / bad PEM
+            return ""
+
+    def _browse_wavr_peers():
+        """Other Wavr Cores advertising on this LAN, or [] when we cannot look.
+
+        Returns [] (never raises, never 500s) when the `[mdns]` extra is absent --
+        a fresh install without zeroconf should show "no Cores found", not an
+        error the operator cannot act on."""
+        try:
+            from wavr import mdns_peers
+            return mdns_peers.browse_wavr_peers(timeout=2.0)
+        except Exception:      # noqa: BLE001
+            return []
+
+    # -- Wavr Space routers ------------------------------------------------------
+    # Three surfaces, all loopback-root-or-admin, mounted unconditionally (a single
+    # loopback Core has a Space too):
+    #
+    #  * setup   -- FIRST RUN. The most privileged surface in the app: it creates the
+    #    Space and mints its Owner. Gated require_local + require_root, i.e. the
+    #    loopback screen ONLY -- never an authenticated LAN central, because a device
+    #    that merely holds a central token must not be able to re-found the Space it
+    #    was paired into. It is deliberately reachable BEFORE a Space exists (that is
+    #    its whole job), and every route on it is a no-op or a 400 once one does.
+    #  * space   -- administration. require_local + require_scope("admin"), the same
+    #    gate the device-management router already carries, so a LAN admin device can
+    #    manage people and functions but a 'user' or 'agent' cannot.
+    #  * settings/discoveries -- same gate as administration. The settings store
+    #    refuses a sensitive key without an explicit consent phrase on top of this
+    #    (SS15: discover aggressively, activate conservatively).
+    app.include_router(build_setup_router(
+        _space_store, _settings_store, _core_registry, devices=_devices,
+        instance_name=cfg.instance_name, port=cfg.port, local_ip=_local_ip,
+        cert_fingerprint=_space_cert_fp(),
+        browse_peers=_browse_wavr_peers,
+        # serve.py only turns on TLS in multidevice mode; anything else is
+        # plain HTTP and the URLs we hand the operator must say so.
+        scheme="https" if cfg.multidevice else "http",
+        # Matches the `server=` mdns_peers advertises, so the URL we hand out is
+        # the name that is actually being published.
+        hostname=f"{cfg.instance_name.lower().replace(' ', '-')}.local",
+        deps=[Depends(require_local), Depends(require_root)]))
+    # A device describing ITSELF. Mounted here, not beside the other device
+    # routes, because `require_authenticated` is defined further down this
+    # function. No scope beyond "is a real principal": the id comes from the
+    # credential, so the only row reachable is the caller's own, and a manifest
+    # is evidence for a recommendation rather than authority. Without this the
+    # Capability Manifest had no writer a companion could reach and stayed NULL.
+    app.include_router(
+        build_self_manifest_router(_space_store, _devices,
+                                   deps=[Depends(require_authenticated)]))
+    # Coverage names every room and every sensor, so it carries the same gate as
+    # administration rather than a read-only one.
+    app.include_router(build_coverage_router(
+        coverage_fn=_sensor_coverage,
+        rooms_fn=lambda: list(_fusion.rooms()),
+        deps=[Depends(require_local), Depends(require_scope("admin"))]))
+    app.include_router(build_space_router(
+        _space_store, _core_registry, devices=_devices,
+        deps=[Depends(require_local), Depends(require_scope("admin"))],
+        # Ownership transfer is the one act an Admin's paired device must not be
+        # able to perform: nothing in the request identifies WHICH person holds
+        # the credential, so the store's Owner-only rule cannot be applied.
+        # require_root confines it to the Core's own screen.
+        owner_deps=[Depends(require_local), Depends(require_root)]))
+    app.include_router(build_settings_router(
+        _settings_store,
+        deps=[Depends(require_local), Depends(require_scope("admin"))],
+        # `role == "root"` is set by the middleware for a loopback peer and
+        # nothing else, so this is "the request came from the machine Wavr runs
+        # on" -- the same test require_root makes.
+        is_local_fn=lambda request: getattr(request.state, "role", None) == "root"))
+    app.include_router(build_discovery_router(
+        _discovery_inbox,
+        deps=[Depends(require_local), Depends(require_scope("admin"))],
+        # So a "looks like a camera" card can become a working camera without
+        # anyone typing an RTSP URL. The probe is the SAME hardened one
+        # /api/onvif/probe uses (LAN-literal hosts only, no redirects, no XXE).
+        cameras=_cameras,
+        onvif_probe=ONVIFProbe(discover=onvif_discover, soap=onvif_soap).probe,
+        onvif_enabled=cfg.net_onvif_probe))
 
     # Consent-first identity registry routes. Router-level require_central keeps the
     # person-labelled PII list off a multidevice 'user' (loopback root always passes);
@@ -4202,12 +4780,36 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
     if cfg.multidevice:
         @app.post("/api/pair-code")
-        async def pair_code(role: str = Body("user", embed=True), _=Depends(require_local),
+        async def pair_code(role: str = Body("user", embed=True),
+                            person_id: str = Body(None, embed=True),
+                            _=Depends(require_local),
                             __=Depends(require_scope("admin"))):
             # Operator (loopback root / central) mints a one-time pairing code that a
             # companion then redeems at POST /api/pair. Gated by require_local.
+            #
+            # `person_id` is the new, preferred form: say WHOSE device this is and
+            # the credential role is derived from that person's role rather than
+            # typed. It is what makes a later demotion take effect on this device,
+            # because the middleware re-resolves the cap on every request.
+            #
+            # When both are given the person is a CEILING, never a floor: an
+            # operator may deliberately pair an Admin's tablet as a plain `user`,
+            # but may not pair a User's phone as `central`. Honouring the wider
+            # request would make the person axis decorative.
             if role not in ("central", "user"):
                 raise HTTPException(status_code=400, detail="role must be central or user")
+            if person_id:
+                granted = _person_role(person_id)
+                if granted is None:
+                    raise HTTPException(status_code=404, detail="unknown person")
+                role = narrower_role(role, granted) or role
+                if role not in ("central", "user"):
+                    # A Guest's device is minted through /api/guest/invite, which
+                    # stamps an expiry. Falling through here would create a
+                    # never-expiring guest.
+                    raise HTTPException(
+                        status_code=400,
+                        detail="guests are invited via /api/guest/invite, not paired")
             # Out-of-band MitM defense (audit blocking #1): return the SHA-256 fingerprint
             # of the LIVE serving cert, read off this TRUSTED loopback response, so the
             # operator can verify it against the fingerprint the phone's browser shows in
@@ -4229,7 +4831,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # self_base_url already uses for the peers-admin router above; TLS is coupled 1:1 to
             # multidevice (see serve.py), so "https" here is exactly as safe as line ~1675.
             lan_url = f"https://{_local_ip}:{cfg.port}"
+            if person_id:
+                # Remember whose code this is, so the redeem can stamp the
+                # association onto the device it mints.
+                _remember_pairing_person(code, person_id)
             return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6,
+                    "person_id": person_id, "role": role,
                     "lan_url": lan_url}
 
         @app.post("/api/guest/invite")
@@ -4313,16 +4920,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # must never reach it even if it somehow obtained a ticket. Belt AND
             # braces -- the ticket mint is already scope-gated, but the socket must
             # not depend on that being the only door. (2026-07-16)
-            if not has_scope(effective_scopes(dev.role, dev.scopes), "presence:read"):
-                await ws.close(code=1008)
-                return
             # A WS carries no scope through the http middleware, so gate it here for
             # the SAME reason ws-ticket is gated at include-time: the stream is the
             # per-person geometry + vitals class, and an 'agent' (scopes = {mcp})
             # must never reach it even if it somehow obtained a ticket. Belt AND
             # braces -- the ticket mint is already scope-gated, but the socket must
             # not depend on that being the only door. (2026-07-16)
-            if not has_scope(effective_scopes(dev.role, dev.scopes), "presence:read"):
+            #
+            # Through `scopes_for_device`, NOT `effective_scopes(dev.role, ...)`:
+            # the latter reads the role the credential was ISSUED with and skips
+            # the person cap entirely, so a demoted -- or removed -- person could
+            # still open this socket. Same function the HTTP middleware uses, so
+            # the two cannot drift again.
+            _ws_scopes = scopes_for_device(dev, _person_role)
+            if _ws_scopes is None or not has_scope(_ws_scopes, "presence:read"):
                 await ws.close(code=1008)
                 return
         else:
@@ -4363,7 +4974,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # always present when did is set (multidevice on), but guard the attribute read anyway.
         get_device = _devices.get if _devices is not None else None
         try:
-            await _stream_live(ws, q, did, get_device, _WS_REVOKE_RECHECK_S)
+            await _stream_live(ws, q, did, get_device, _WS_REVOKE_RECHECK_S,
+                               person_role_fn=_person_role)
         except WebSocketDisconnect:
             pass
         finally:
@@ -4398,6 +5010,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/icon.svg")
     async def icon():
         return FileResponse(_FRONTEND / "icon.svg", media_type="image/svg+xml")
+
+    # The two blocks lifted out of index.html. Named explicitly rather than
+    # served from a StaticFiles mount: an allowlist of two filenames has no
+    # traversal surface, and the shell is small enough that naming it is
+    # clearer than a directory.
+    @app.get("/js/wizard.js")
+    async def js_wizard():
+        return FileResponse(_FRONTEND / "js" / "wizard.js",
+                            media_type="text/javascript")
+
+    @app.get("/js/discoveries.js")
+    async def js_discoveries():
+        return FileResponse(_FRONTEND / "js" / "discoveries.js",
+                            media_type="text/javascript")
 
     # F2 phone-capture shell (WebXR "medir com o celular"). Static, carries nothing
     # sensitive -- like "/" it is token/subnet-exempt so an unpaired LAN phone can load

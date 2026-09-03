@@ -100,7 +100,13 @@ def test_pair_code_response_includes_matching_verify6(tmp_path, monkeypatch):
     assert body["verify6"] == verification_code(cert_fingerprint(cert), body["code"])
     assert len(body["verify6"]) == 6 and body["verify6"].isdigit()
     # Response shape stays additive: the pre-existing keys are untouched.
-    assert set(body.keys()) == {"code", "cert_fingerprint", "verify6", "lan_url"}
+    # `person_id` and `role` joined in 2026-09 -- a pairing code can now be minted
+    # FOR a named person, and the response echoes the role that person's own role
+    # actually permits (which may be NARROWER than the one asked for). Both take
+    # their legacy values on this path, which is what "additive" has to mean.
+    assert set(body.keys()) == {"code", "cert_fingerprint", "verify6", "lan_url",
+                                "person_id", "role"}
+    assert body["person_id"] is None
 
 
 def test_user_role_cannot_change_state(app):
@@ -218,7 +224,13 @@ class _FakeWS:
     async def send_json(self, item): self.sent += 1
 
 class _Dev:
-    def __init__(self, revoked): self.revoked = revoked
+    def __init__(self, revoked, *, role="user", scopes=None, person_id="",
+                 expires_at=None):
+        self.revoked = revoked
+        self.role = role
+        self.scopes = scopes
+        self.person_id = person_id
+        self.expires_at = expires_at
 
 
 def test_stream_live_drops_on_quiet_hub_after_revoke():
@@ -250,6 +262,98 @@ def test_stream_live_loopback_root_ignores_revoke():
         # still-running task proves the revoke check is skipped for root, exactly as before.
         task = asyncio.create_task(_stream_live(ws, q, None, lambda did: None, 0.02))
         await asyncio.sleep(0.1)                  # several recheck intervals elapse
+        alive = not task.done()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return alive
+
+    assert asyncio.run(scenario()) is True
+
+
+# --- person-cap on the live stream (appsec pass 3) --------------------------
+# /ws/live carries per-person x/y and vitals -- the most sensitive live-only class
+# in the product. Its gate read the RAW issued Device.role and never applied the
+# person cap, so demoting or removing someone left their socket streaming while
+# ADR-0011 promised in a MUST that a demotion lands on the very next request.
+
+def test_stream_live_drops_when_the_person_is_demoted():
+    from wavr.app import _stream_live
+
+    async def scenario():
+        q = asyncio.Queue()                      # silent hub: only the recheck can act
+        # Never revoked, never expired. The ONLY thing that changes is the role
+        # their person holds -- which is exactly the case the old loop missed.
+        dev = _Dev(False, role="user", person_id="p1")
+        held = {"role": "user"}
+        ws = _FakeWS()
+        task = asyncio.create_task(_stream_live(
+            ws, q, "dev1", lambda did: dev, 0.05,
+            person_role_fn=lambda pid: held["role"]))
+        await asyncio.sleep(0.02)
+        held["role"] = "guest"                   # guest has no presence:read
+        await asyncio.wait_for(task, timeout=1.0)
+        return ws.sent
+
+    assert asyncio.run(scenario()) == 0
+
+
+def test_stream_live_drops_when_the_person_is_removed():
+    from wavr.app import _stream_live
+
+    async def scenario():
+        q = asyncio.Queue()
+        dev = _Dev(False, role="user", person_id="p1")
+        gone = {"v": False}
+        ws = _FakeWS()
+        task = asyncio.create_task(_stream_live(
+            ws, q, "dev1", lambda did: dev, 0.05,
+            person_role_fn=lambda pid: None if gone["v"] else "user"))
+        await asyncio.sleep(0.02)
+        gone["v"] = True          # association now dangles -> deny, not degrade
+        await asyncio.wait_for(task, timeout=1.0)
+        return ws.sent
+
+    assert asyncio.run(scenario()) == 0
+
+
+def test_stream_live_keeps_streaming_while_the_person_still_qualifies():
+    """The negative control: the new check must not sever a legitimate stream."""
+    from wavr.app import _stream_live
+
+    async def scenario():
+        q = asyncio.Queue()
+        dev = _Dev(False, role="user", person_id="p1")
+        ws = _FakeWS()
+        task = asyncio.create_task(_stream_live(
+            ws, q, "dev1", lambda did: dev, 0.02,
+            person_role_fn=lambda pid: "central"))   # promoted, still allowed
+        await asyncio.sleep(0.1)                     # several rechecks elapse
+        alive = not task.done()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return alive
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_a_device_with_no_person_is_unaffected():
+    """Every pre-existing paired device has no person_id. It must stream on."""
+    from wavr.app import _stream_live
+
+    async def scenario():
+        q = asyncio.Queue()
+        dev = _Dev(False, role="user", person_id="")
+        ws = _FakeWS()
+        task = asyncio.create_task(_stream_live(
+            ws, q, "dev1", lambda did: dev, 0.02,
+            person_role_fn=lambda pid: None))    # would deny IF it were consulted
+        await asyncio.sleep(0.08)
         alive = not task.done()
         task.cancel()
         try:

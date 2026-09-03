@@ -36,8 +36,11 @@ The shell reads the SAME effective config the backend reads — process env firs
 1. **Rust** — install via [rustup](https://rustup.rs). On Windows this also needs the
    **Microsoft C++ Build Tools** (MSVC) + the Windows SDK (the rustup installer links them).
 2. **Node** ≥ 18 (you have v24) — for the Tauri CLI.
-3. **The Wavr backend installed** in a venv, since the MVP spawns it (it does not bundle
-   Python yet):
+3. **The Wavr backend installed** in a venv — needed for `npm run dev` (which spawns
+   `python -m wavr.serve` directly) and for hacking on the backend itself. The
+   **release installer no longer needs this at runtime** (see "Building the
+   self-contained installer" below) — a machine with no Python at all can still run
+   the installed app — but you still want a venv for day-to-day shell development:
    ```bash
    cd ..                       # repo root
    python -m venv .venv
@@ -77,9 +80,43 @@ and `$env:WAVR_BACKEND_DIR = "...\wavr"`.
   `Get-Process python -ErrorAction SilentlyContinue` returns nothing. (This is what frees
   GPU VRAM.)
 
-## Later (not MVP)
+## Building the self-contained installer (release)
 
-- **Self-contained installer:** bundle the backend as a PyInstaller one-file sidecar wired
-  through `tauri-plugin-shell` so end users don't need a Python install.
-- **Auto-start on login:** `tauri-plugin-autostart` (kept off by default — a sensing app
-  should not silently start at boot without opt-in).
+`npm run build` / `npm run tauri build` produces an MSI and an NSIS installer via
+`bundle.externalBin` in `tauri.conf.json`, which points at
+`desktop/src-tauri/binaries/wavr-core-<target-triple>.exe` — **a file that does not
+exist in a fresh checkout.** `desktop/src-tauri/binaries/` is gitignored on purpose
+(it holds a ~40 MB generated binary that has no business being committed), so you
+must freeze it yourself first:
+
+```bash
+cd ..                       # repo root, same venv as above
+pip install pyinstaller
+python -m PyInstaller desktop/sidecar/wavr-core.spec --distpath desktop/sidecar/dist --noconfirm
+mkdir -p desktop/src-tauri/binaries
+# Tauri resolves externalBin by target triple, e.g. x86_64-pc-windows-msvc:
+TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
+cp desktop/sidecar/dist/wavr-core.exe "desktop/src-tauri/binaries/wavr-core-${TRIPLE}.exe"
+
+cd desktop
+npm run icon                # bundle icons are gitignored too (generated)
+npm run tauri build
+```
+
+Skip the PyInstaller step and `tauri build` fails with `resource path
+binaries\wavr-core-<triple>.exe doesn't exist` — that message means exactly this,
+not a Tauri misconfiguration. `.github/workflows/release.yml`'s `windows-desktop`
+job runs these same steps (plus a smoke test of the frozen sidecar's `/healthz`
+and dashboard) on every tagged release build; read it if you want the
+exact, CI-verified sequence.
+
+**Installed layout is three files**, not one: `wavr-desktop.exe` (the shell, ~7 MB),
+`wavr-core.exe` (the frozen Core, ~38 MB), and an uninstaller. The shell binary is
+named after the Cargo package (`wavr-desktop`, from `[package] name` in
+`Cargo.toml`), **not** after `tauri.conf.json`'s `productName` ("Wavr Desktop") —
+a check or script that greps for the product name instead of the binary name will
+find nothing.
+
+**Unsigned.** Wavr has no code-signing certificate; Windows SmartScreen warns on
+first run of either installer format. This is the one item still genuinely
+outstanding from the original MVP scope, not something to route around locally.

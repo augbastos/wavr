@@ -469,6 +469,219 @@ def query_occupancy_history(provider: StateProvider,
 _HOUSE_STATUS_REASON_FIELDS = ("layer", "kind", "severity", "ts")
 
 
+# -- The Space: Wavr's own answer to "what is happening here?" ----------------
+#
+# These assemble the model Wavr already maintains into shapes an agent can use
+# directly, rather than making it reconstruct the model from raw parts. Every one
+# is an EXPLICIT ALLOWLIST projection, same discipline as the tools above:
+# default-DENY, so a future field is withheld until someone deliberately adds it.
+#
+# TWO THINGS ARE DELIBERATELY ABSENT and must stay absent:
+#   * Per-person x/y targets. ADR-0002 keeps them live-only (never SQLite, never
+#     MQTT) and ADR-0008 strips them from the MCP read path. A `get_live_targets`
+#     tool would be a hole in both at once -- an agent asking every few seconds
+#     reconstructs exactly the movement history the invariant forbids storing.
+#   * Person NAMES. The MCP read path is PII-stripped by design. Counts and
+#     confidence, never labels.
+
+
+def get_space_context(space_fn, provider: StateProvider, cores_fn=None,
+                      people_count_fn=None) -> dict:
+    """What this Space is and how it is doing, right now.
+
+    The one call an agent makes first. Three distinguishable answers, because
+    conflating the last two is how an agent ends up asserting something false
+    about someone's home:
+
+      * a Space                            -> the full picture
+      * `space: null, available: true`     -> genuinely not set up yet
+      * `space: null, available: false`    -> could not find out
+
+    The Space NAME is included. It is in the same disclosure class as the room
+    names `list_rooms` already returns in the default grant: a label the operator
+    typed for their own space. (It is still never put on the wire by mDNS -- that
+    advertises an opaque id only, which is a different threat: every device on
+    the segment can read a broadcast, only a deliberately-paired agent gets this.)"""
+    # Three outcomes, not two. A Space, no Space, and "I could not find out" --
+    # which used to be reported as no Space, i.e. a confident false claim about
+    # the operator's house. Same rule as `capabilities.py`: an inconclusive probe
+    # says so.
+    if space_fn is None:
+        return {"space": None, "available": False,
+                "note": "This Wavr build has no Space model wired in."}
+    try:
+        space = space_fn()
+    except Exception:      # noqa: BLE001 -- any failure means "could not read"
+        return {"space": None, "available": False,
+                "note": "Could not read this Core's Space — it may be starting "
+                        "up or unreachable. This is NOT a statement that the "
+                        "Core has no Space."}
+    if not space:
+        return {"space": None, "available": True,
+                "note": "This Core has not been set up yet — it has no Space."}
+
+    rooms = []
+    occupied = 0
+    for name in provider.list_rooms():
+        rs = provider.room_state(name)
+        if rs is None:
+            continue
+        is_occ = bool(rs.get("occupied", False))
+        occupied += int(is_occ)
+        rooms.append({
+            "room": rs.get("room", name),
+            "occupied": is_occ,
+            "confidence": rs.get("confidence", 0.0),
+            # The honest count: an int only when a counting-capable source
+            # vouches for it, None when unknown -- NEVER a fabricated 0.
+            "person_count": rs.get("person_count"),
+            "precision_level": rs.get("precision_level", "none"),
+        })
+
+    people = people_count_fn() if people_count_fn else None
+    topology = cores_fn() if cores_fn else None
+
+    return {
+        "space": {"space_id": space.get("space_id"), "name": space.get("name"),
+                  "kind": space.get("kind")},
+        "rooms": rooms,
+        "rooms_occupied": occupied,
+        "rooms_total": len(rooms),
+        # How many people the Space knows OF (registered), never who they are and
+        # never who is currently present -- presence-by-name is not an MCP answer.
+        "people_registered": people,
+        "cores": _minimize_topology_for_agent(topology) if topology else None,
+        "note": ("Occupancy is inferred from sensors and carries a confidence. "
+                 "A person_count of null means no source could honestly count."),
+    }
+
+
+_CORE_HEALTH_FIELDS = ("core_id", "name", "status", "stale", "epoch",
+                       "platform", "portable", "room")
+
+
+def _minimize_topology_for_agent(topology: dict) -> dict:
+    """Core topology minus its network detail.
+
+    `base_url` and `cert_fingerprint` are dropped: they are LAN addressing and a
+    TLS pin, i.e. exactly the material a caller would need to go and talk to
+    another Core directly. An agent answering "is my Core healthy" needs neither."""
+    return {
+        "primary_core_id": topology.get("primary_core_id"),
+        "contested": topology.get("contested", False),
+        "leaderless": topology.get("leaderless", False),
+        "primary_stale": topology.get("primary_stale", False),
+        "cores": [{k: c.get(k) for k in _CORE_HEALTH_FIELDS}
+                  for c in topology.get("cores", [])],
+    }
+
+
+def get_core_health(cores_fn) -> dict:
+    """Which Core is authoritative for this Space, and whether it is answering.
+
+    `contested` true means two Cores each believe they are in charge -- report it
+    as a problem to resolve, not as a detail. `primary_stale` means the
+    authoritative Core has not checked in; that is "we have lost contact with
+    it", NOT "it handed over"."""
+    topology = cores_fn() if cores_fn else None
+    if not topology:
+        return {"cores": [], "available": False}
+    out = _minimize_topology_for_agent(topology)
+    out["available"] = True
+    return out
+
+
+def get_sensor_coverage(provider: StateProvider, coverage_fn=None) -> dict:
+    """What is sensing each room, and which rooms nothing is sensing.
+
+    The blind spots are the point, and there are two kinds. A room with no
+    sensor at all is unobserved; a room whose sensor is switched off or has gone
+    quiet is unobserved AND repairable. An agent that cannot tell those apart
+    gives opposite advice — "buy a sensor" versus "go plug yours back in".
+
+    `coverage_fn` returns `sensor_coverage.summarize(...)`: what this Core has
+    INSTALLED, with each sensor's health and the precision it can honestly
+    support. This used to be derived from live room state instead, which sees
+    only what reported recently — so an unplugged radar and a room nobody ever
+    sensed came out identical. When `coverage_fn` is absent the tool says so
+    rather than silently answering the weaker question."""
+    if coverage_fn is None:
+        return {"rooms": [], "uncovered": [], "house_wide": [],
+                "available": False,
+                "note": "This Wavr build cannot enumerate its sensors."}
+    try:
+        body = coverage_fn()
+    except Exception:      # noqa: BLE001 — a read failure is not "no sensors"
+        return {"rooms": [], "uncovered": [], "house_wide": [],
+                "available": False,
+                "note": "Could not read this Core's sensors just now. This is "
+                        "NOT a statement that it has none."}
+    if not isinstance(body, dict):
+        return {"rooms": [], "uncovered": [], "house_wide": [],
+                "available": False,
+                "note": "Could not read this Core's sensors just now."}
+    out = dict(body)
+    out["available"] = True
+    return out
+
+
+def explain_room_state(provider: StateProvider, room: str) -> dict | None:
+    """Why Wavr believes what it believes about one room.
+
+    Same field allowlist as `get_room_context` (so this can never widen it),
+    reshaped around the evidence: what each source contributed, how sure the
+    fusion is, how detailed an answer that evidence can honestly support, and
+    what would raise it. `None` for an unknown room."""
+    state = provider.room_state(room)
+    if state is None:
+        return None
+    base = {k: state[k] for k in _ROOM_CONTEXT_FIELDS if k in state}
+    return {
+        "room": base.get("room", room),
+        "occupied": base.get("occupied", False),
+        "confidence": base.get("confidence", 0.0),
+        "person_count": base.get("person_count"),
+        "evidence": base.get("sources", []),
+        "explanation": base.get("explanation", ""),
+        "precision": {
+            "level": base.get("precision_level", "none"),
+            "next": base.get("precision_next"),
+        },
+        "as_of": base.get("ts"),
+        "note": ("`confidence` is how sure Wavr is that someone is present. "
+                 "`precision.level` is how detailed an answer the evidence "
+                 "supports (house / room / count / position) — a different "
+                 "axis, not a certainty."),
+    }
+
+
+_DEVICE_CONTEXT_FIELDS = ("device_id", "functions", "room", "portable", "platform")
+
+
+def get_device_context(devices_fn) -> dict:
+    """What job each device does for this Space, and what it can do.
+
+    Deliberately NOT the paired-device list: no device NAME (operators name
+    devices after people), no person association, no token material, no address.
+    Only the id, the job the operator assigned it, and a coarse capability
+    summary — which is what "could this Space see the kitchen if I asked?"
+    actually needs."""
+    rows = devices_fn() if devices_fn else None
+    if rows is None:
+        return {"devices": [], "available": False}
+    out = []
+    for row in rows:
+        d = {k: row.get(k) for k in _DEVICE_CONTEXT_FIELDS}
+        manifest = row.get("capabilities") or {}
+        caps = manifest.get("capabilities") or {}
+        # Tristate preserved: null means "could not determine", never "no".
+        d["can"] = {k: caps.get(k) for k in
+                    ("camera", "ble", "wifi", "ethernet", "mmwave", "display")}
+        d["compute_tier"] = manifest.get("compute_tier")
+        out.append(d)
+    return {"devices": out, "available": True}
+
+
 def _minimize_house_status_reason_for_agent(reason: dict) -> dict:
     """One reason dict (`wavr.house_status.compose_house_status`'s shape) -> the
     coarse MCP-agent projection. See `get_house_status`'s docstring for the
@@ -661,7 +874,9 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
                      network_inventory_fn=None,
                      alerts_fn=None,
                      occupancy_provider: OccupancyHistoryProvider | None = None,
-                     house_status_fn=None):
+                     house_status_fn=None,
+                     space_fn=None, cores_fn=None, people_count_fn=None,
+                     space_devices_fn=None, coverage_fn=None):
     """Build the MCP server: the always-on read tools + the opt-in control tool.
 
     The MCP SDK is imported HERE, lazily: importing `wavr.mcp` never needs the [mcp]
@@ -735,6 +950,37 @@ def build_mcp_server(provider: StateProvider, name: str = "wavr",
     def _tool_get_room_context(room: str) -> dict | None:
         """Full state for one room, including the explainable sources + explanation."""
         return get_room_context(provider, room)
+
+    @server.tool(name="get_space_context")
+    def _tool_get_space_context() -> dict:
+        """What this Space is and how it is doing right now: its name and kind,
+        every room with occupancy and confidence, and Core health. Start here."""
+        return get_space_context(space_fn, provider, cores_fn, people_count_fn)
+
+    @server.tool(name="explain_room_state")
+    def _tool_explain_room_state(room: str) -> dict | None:
+        """Why Wavr believes what it believes about one room: the per-source
+        evidence, the confidence, and how detailed an answer it can support."""
+        return explain_room_state(provider, room)
+
+    @server.tool(name="get_sensor_coverage")
+    def _tool_get_sensor_coverage() -> dict:
+        """Which sensors this Space has, per room, with each one's health and the
+        precision it can honestly support — plus the rooms nothing senses. A room
+        with no coverage is not an empty room, and a room whose sensor is quiet is
+        not a room with no sensor."""
+        return get_sensor_coverage(provider, coverage_fn)
+
+    @server.tool(name="get_core_health")
+    def _tool_get_core_health() -> dict:
+        """Which Core is authoritative for this Space and whether it is answering."""
+        return get_core_health(cores_fn)
+
+    @server.tool(name="get_device_context")
+    def _tool_get_device_context() -> dict:
+        """What job each device does for this Space and what it can do. No device
+        names, no people, no addresses."""
+        return get_device_context(space_devices_fn)
 
     @server.tool(name="get_house_map")
     def _tool_get_house_map() -> dict:

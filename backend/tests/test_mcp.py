@@ -497,9 +497,10 @@ import anyio  # noqa: E402
 pytest.importorskip("mcp.server.fastmcp")
 
 _EXPECTED_TOOLS = [
-    "call_ha_service", "get_alerts", "get_ha_entities", "get_house_map",
-    "get_house_status", "get_network_inventory", "get_room_context", "list_rooms",
-    "query_occupancy_history",
+    "call_ha_service", "explain_room_state", "get_alerts", "get_core_health",
+    "get_device_context", "get_ha_entities", "get_house_map", "get_house_status",
+    "get_network_inventory", "get_room_context", "get_sensor_coverage",
+    "get_space_context", "list_rooms", "query_occupancy_history",
 ]
 
 

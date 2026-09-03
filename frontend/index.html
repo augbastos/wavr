@@ -912,6 +912,41 @@
   .pair-role input{background:var(--elevated);color:var(--text);border:1px solid var(--line);
                    border-radius:8px;padding:8px 11px;font-size:.82rem;min-width:0;max-width:200px;
                    font-variant-numeric:tabular-nums;}
+
+  /* ---------------- Core settings (gear) — one row per SETTING_SPECS entry. Reuses
+     .pair/.pair-role/.pair-dev-list/.action-fb/.why(<details>) verbatim; only the row shape
+     and the sensitive-change confirm box are genuinely new. ---------------- */
+  .setting-row{padding:12px 0;border-top:1px dashed var(--line);}
+  .setting-row:first-child{border-top:none;padding-top:0;}
+  .setting-row-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .setting-desc{margin:5px 0 0;color:var(--dim);font-size:.8rem;max-width:62ch;line-height:1.5;}
+  .setting-note{margin:6px 0 0;font-size:.78rem;color:var(--dim);}
+  .setting-note.locked{color:var(--warn);}
+  .setting-note.err{color:var(--danger);}
+  .setting-confirm{margin-top:10px;padding:10px 12px;background:var(--warn-soft);
+    border:1px solid rgba(232,161,58,.4);border-radius:10px;max-width:62ch;}
+  .setting-confirm p{margin:0 0 8px;font-size:.82rem;color:var(--text);line-height:1.5;}
+
+  /* ---------------- Space (gear) — People/Devices/Cores lists, same visual language as
+     Devices → Pairing/Peers/Nodes above. ---------------- */
+  .space-dev-row{flex-wrap:wrap;row-gap:8px;}
+  .space-func-wrap{display:inline-flex;gap:8px;flex-wrap:wrap;}
+  .space-func-chk{display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:var(--dim);cursor:pointer;}
+  .space-func-chk input{accent-color:var(--accent);}
+  .space-room-inp{width:96px;background:var(--elevated);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:6px 8px;font-size:.78rem;}
+  /* Cores topology warnings (contested/leaderless) reuse .pair-approve's amber attention card;
+     "contested" is the more severe of the two, so it gets the reserved danger family instead. */
+  .pair-approve.danger{background:var(--danger-soft);border-color:rgba(232,114,106,.4);}
+
+  /* ---------------- Discoveries: pending-count badge on the nav tab — a real number (never a
+     bare color dot), so the same signal reaches colorblind users and screen readers alike.
+     Amber, the "needs a decision" family (.pair-approve/.has-pending), never the reserved
+     live/primary green. ---------------- */
+  .nav-count{display:inline-flex;align-items:center;justify-content:center;min-width:17px;
+    height:17px;padding:0 4px;border-radius:999px;background:var(--warn);color:#1a1300;
+    font-size:.68rem;font-weight:700;font-variant-numeric:tabular-nums;margin-left:6px;}
+  .disc-conf{color:var(--dim);font-variant-numeric:tabular-nums;}
   .id-bonded-box{border:1px solid var(--line);border-radius:8px;padding:11px 13px;
                  margin:2px 0 6px;background:var(--elevated);max-width:52ch;}
   .id-bonded-list{display:flex;flex-direction:column;}
@@ -2045,6 +2080,8 @@
   <symbol id="ic-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 5 13.5h5.5L10 21l8-10.5h-5.5Z"/></symbol>
   <!-- Who's home tab: two people, mirrors the .who-chip roster glyph style elsewhere -->
   <symbol id="ic-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3.5 19.5c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5"/><circle cx="17" cy="9" r="2.3"/><path d="M15.2 14.3c2.4.3 4.3 2.3 4.3 5"/></symbol>
+  <!-- Discoveries tab: an inbox tray — a queue of things Wavr noticed that need a decision -->
+  <symbol id="ic-inbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h4l1.5 2.5h5L16 12h4"/><path d="M4 12 5.5 5.5A1.7 1.7 0 0 1 7.15 4h9.7a1.7 1.7 0 0 1 1.65 1.5L20 12v5.3A1.7 1.7 0 0 1 18.3 19H5.7A1.7 1.7 0 0 1 4 17.3Z"/></symbol>
 </svg>
 
 <div class="app" id="app">
@@ -2052,7 +2089,10 @@
   <nav class="sidenav" id="mainNav" aria-label="Main navigation">
     <div class="nav-brand">
       <span class="logo-badge"><svg width="16" height="16" aria-hidden="true"><use href="#ic-radar"/></svg></span>
-      <span class="brand-name">Wavr<small>Command Center</small></span>
+      <!-- The strapline doubles as the Space name once this Core belongs to
+           one (filled in by the Space identity block at the end of this file).
+           Until then it reads exactly as it always did. -->
+      <span class="brand-name">Wavr<small id="brandSpace">Command Center</small></span>
     </div>
     <div class="nav-tabs" role="tablist" aria-label="Sections">
       <!-- v2 tooltips: native title -> aria-label + data-tip (one tooltip system, never two;
@@ -2108,6 +2148,22 @@
               aria-selected="false" tabindex="-1" aria-controls="panel-novos" aria-label="New devices"
               data-tip="New devices — anything on your Wi-Fi you don't recognize yet">
         <svg aria-hidden="true"><use href="#ic-qmark"/></svg><span class="nav-label">New devices</span>
+      </button>
+      <!-- Discoveries: the missing UI half of "discover aggressively, activate conservatively"
+           (§15) -- backend/wavr/discovery_inbox.py already queues cameras/nodes/peers/moved
+           devices/identity hints; until now there was nowhere to see or decide on them. Its own
+           top-level tab (not a gear-overlay section) because it is a decision QUEUE, same tier
+           as History/Network, not a configuration screen. Loopback-root or an admin-scoped
+           device only (require_local + require_scope("admin")); companion/demo get an honest
+           explanation instead of the list, same convention as the Devices gear panels. The
+           pending count is a plain number on the badge (never a bare color dot) so the same
+           signal reaches screen readers and colorblind users. See the Discoveries script block
+           near the end of the file for loadDiscoveries(). -->
+      <button class="nav-item" id="tab-discoveries" type="button" data-tab="discoveries" role="tab"
+              aria-selected="false" tabindex="-1" aria-controls="panel-discoveries" aria-label="Discoveries"
+              data-tip="Discoveries — things Wavr noticed that need your decision">
+        <svg aria-hidden="true"><use href="#ic-inbox"/></svg><span class="nav-label">Discoveries</span>
+        <span id="discNavCount" class="nav-count" aria-hidden="true" hidden>0</span>
       </button>
       <!-- What Wavr knows (feature #6): the trust screen -- reads GET /api/transparency
            (presence:read) and answers "what does Wavr know, and what can leave my home?" in
@@ -3006,6 +3062,40 @@
         </div>
       </section>
 
+      <!-- ==================== DISCOVERIES: the decision inbox (§15 "discover aggressively,
+           activate conservatively" made concrete). GET /api/discoveries?status=, POST
+           .../accept, .../dismiss -- backend/wavr/discovery_inbox.py. The backend decides which
+           actions are renderable per item (item.actions); this screen renders ONLY those, never
+           invents a button. "dismiss" calls its own endpoint; every other action id routes the
+           admin to the relevant existing screen (Space/Devices/Network) AND calls accept, since
+           accepting never performs the privileged action itself -- that stays behind its own
+           gate. Loopback-root or admin-scoped device only, live-only -- companion/demo show an
+           honest explanation instead of the list. See the Discoveries script block near the end
+           of the file for loadDiscoveries(). -->
+      <section class="tab-panel" data-tab="discoveries" id="panel-discoveries" role="tabpanel" aria-labelledby="tab-discoveries">
+        <div id="discTile" class="tile" aria-labelledby="disc-h">
+          <div class="tile-head">
+            <h2 id="disc-h">Discoveries</h2>
+            <span class="hint">things Wavr noticed that need your decision</span>
+          </div>
+          <div class="controls-row" id="discFilterRow">
+            <label class="pair-role">Show
+              <select id="discFilter" aria-label="filter discoveries by status">
+                <option value="pending" selected>Needs a decision</option>
+                <option value="accepted">Accepted</option>
+                <option value="dismissed">Dismissed</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+            <span id="discCounts" class="pair-dev-meta" aria-live="polite"></span>
+          </div>
+          <p id="discLoading" class="empty" aria-live="polite">Loading…</p>
+          <p id="discEmpty" class="empty" aria-live="polite" hidden>Nothing needs your attention.</p>
+          <div id="discList" class="dev-list" aria-live="polite"></div>
+          <p class="panel-note" id="discNote" hidden></p>
+        </div>
+      </section>
+
       <!-- ==================== WHAT WAVR KNOWS (feature #6): the trust screen -- an honest,
            non-technical summary for someone who has never opened a settings panel. Reads
            GET /api/transparency (presence:read) -- same MODE gate/auth shape as
@@ -3061,9 +3151,11 @@
          the pre-existing single scrolling column, byte-identical). -->
     <nav id="gearRail" class="gear-rail" aria-label="Settings sections">
       <button type="button" class="gear-rail-item" data-section="gearSecLayout" aria-pressed="false">Layout</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecSpace" aria-pressed="false">Space</button>
       <button type="button" class="gear-rail-item" data-section="gearSecDevices" aria-pressed="false">Devices</button>
       <button type="button" class="gear-rail-item" data-section="gearSecConnectors" aria-pressed="false">Connectors</button>
       <button type="button" class="gear-rail-item" data-section="gearSecAssistant" aria-pressed="false">Assistant</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecSettings" aria-pressed="false">Core settings</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPrivacy" aria-pressed="false">Privacy</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPanelLock" aria-pressed="false">Panel lock</button>
       <button type="button" class="gear-rail-item" data-section="gearSecAbout" aria-pressed="false">About</button>
@@ -3111,6 +3203,70 @@
       <p class="hed-hint" id="hedHint">Select: click a room/wall/stairs to mark and delete it · + Room/+ Wall: drag on the plan · + Stairs: click on the plan.</p>
     </section>
     </div><!-- /#gearSecLayout -->
+    <div class="settings-section" id="gearSecSpace" aria-labelledby="gearSecSpace-h">
+    <h3 id="gearSecSpace-h" class="settings-section-h">Space</h3>
+    <!-- The Wavr Space model (backend/wavr/space_store.py + api_space.py): one physical place,
+         its people, its devices' three independent axes (credential role / job / person), and
+         the Core topology that decides which machine is authoritative. Loopback-root or an
+         admin-scoped device only (require_local + require_scope("admin")), live-only, same gate
+         idiom as the rest of this overlay -- see renderSpace() near renderNodes(). Every name/
+         room/id below is operator/server data -> textContent, never innerHTML. Credential role
+         (user/central/agent/guest) is shown here as a plain fact only -- it stays editable in
+         Devices -> Authorized devices, so there is exactly one control that can widen what a
+         credential reaches, not two. -->
+    <div id="spaceTile" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="space-h">This Space</h2><span class="hint">what Wavr calls this place</span></div>
+      <form id="spaceForm" class="pair-form" aria-labelledby="space-h">
+        <label class="pair-role">Name
+          <input type="text" id="spaceName" maxlength="64" aria-label="Space name" autocomplete="off">
+        </label>
+        <label class="pair-role">Kind
+          <select id="spaceKind" aria-label="Space kind"></select>
+        </label>
+        <button type="submit" class="ctl small">Save</button>
+        <span id="spaceFb" class="action-fb" aria-live="polite"></span>
+      </form>
+    </div>
+    <div id="spacePeopleTile" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="space-people-h">People</h2><span class="hint">who lives or works here, and what they may do</span></div>
+      <h4 class="pair-sub">Add a person</h4>
+      <form id="spacePersonForm" class="pair-form" aria-labelledby="space-people-h">
+        <label class="pair-role">Name
+          <input type="text" name="display_name" maxlength="64" aria-label="person's name" autocomplete="off">
+        </label>
+        <label class="pair-role">Role
+          <select name="role" aria-label="person's role">
+            <option value="admin">Admin</option>
+            <option value="user" selected>User</option>
+            <option value="guest">Guest</option>
+          </select>
+        </label>
+        <button type="submit" class="ctl small">Add person</button>
+        <span id="spacePersonFb" class="action-fb" aria-live="polite"></span>
+      </form>
+      <h4 class="pair-sub">People <span id="spacePeopleFb" class="action-fb" aria-live="polite"></span></h4>
+      <div id="spacePeopleList" class="pair-dev-list" aria-live="polite"></div>
+    </div>
+    <div id="spaceDevicesTile" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="space-devices-h">Devices</h2><span class="hint">credential role, job, and who it belongs to — three separate things</span></div>
+      <div id="spaceDeviceList" class="pair-dev-list space-dev-list" aria-live="polite"></div>
+      <p class="panel-note" id="spaceDeviceNote" hidden>Credential role (User/Admin/Guest) is set on the Devices tab, under “Authorized devices” — this list only shows it.</p>
+    </div>
+    <div id="spaceCoresTile" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="space-cores-h">Cores</h2><span class="hint">which machine is authoritative right now</span>
+        <span id="spaceCoresFb" class="action-fb" aria-live="polite"></span></div>
+      <div id="spaceCoresWarn"></div>
+      <div id="spaceCoresList" class="pair-dev-list" aria-live="polite"></div>
+    </div>
+    <div id="spaceCoverageTile" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="space-coverage-h">What Wavr can see</h2>
+        <span class="hint">per room, and where it is blind</span></div>
+      <div id="spaceCoverageList" class="pair-dev-list" aria-live="polite"></div>
+      <p class="panel-note">No coverage percentage is shown: Wavr has no floor
+        plan to work one out from, and a made-up number is worse than none.</p>
+    </div>
+    <p class="panel-note" id="spaceNote" hidden></p>
+    </div><!-- /#gearSecSpace -->
     <div class="settings-section active" id="gearSecDevices" aria-labelledby="gearSecDevices-h">
     <h3 id="gearSecDevices-h" class="settings-section-h">Devices</h3>
     <div id="pairing" class="pair tile" hidden>
@@ -3493,6 +3649,29 @@
       <div id="asstLogList" class="asst-log-list" aria-live="polite"></div>
     </div>
     </div><!-- /#gearSecAssistant -->
+    <div class="settings-section" id="gearSecSettings" aria-labelledby="gearSecSettings-h">
+    <h3 id="gearSecSettings-h" class="settings-section-h">Core settings</h3>
+    <!-- Operator settings that used to mean editing .env by hand (backend/wavr/settings_store.py
+         SETTING_SPECS is the single source of truth -- this screen renders whatever the API
+         returns, never a hardcoded list, so a new setting shows up here with zero frontend
+         change). `locked: true` means an environment variable already answers this key: the
+         control renders DISABLED with a plain sentence, because silently accepting a click that
+         can never take effect is worse than refusing it. `sensitive: true` means the change
+         widens what Wavr is exposed to (§15) -- a reveal-then-confirm step is required first,
+         carrying the exact phrase settings_store.CONSENT_PHRASE checks for, never a single-click
+         flip. Loopback-root or admin-scoped device only, live-only, same gate idiom as the rest
+         of this overlay -- see renderCoreSettings() near renderNodes(). -->
+    <div id="settingsTile" class="pair tile" hidden>
+      <div class="tile-head"><h2 id="settings-h">Core settings</h2><span class="hint">the knobs that used to mean editing a config file</span></div>
+      <p class="panel-note" id="settingsRestartNote"></p>
+      <div id="settingsNormalList"></div>
+      <details id="settingsAdvanced" class="why" hidden>
+        <summary>Advanced — network exposure, nodes, peers</summary>
+        <div id="settingsAdvancedList"></div>
+      </details>
+    </div>
+    <p class="panel-note" id="settingsNote" hidden></p>
+    </div><!-- /#gearSecSettings -->
     <div class="settings-section" id="gearSecPrivacy" aria-labelledby="gearSecPrivacy-h">
     <h3 id="gearSecPrivacy-h" class="settings-section-h">Privacy</h3>
     <!-- Stage 3b (§2.6/§7#6/#10 + §9) revamp: real controls FIRST (kill-switch, network-sensing
@@ -3869,6 +4048,83 @@ function companionAuthFailed(){        // token revoked/expired (401/403) -> cle
   companionClearToken();
   try{ location.reload(); }catch{}
 }
+// ---- Capability Manifest: this device describing ITSELF --------------------
+// The Core scans its own host (capabilities.scan_host); a companion has to say
+// what it is, or the Devices screen and get_device_context stay empty forever.
+//
+// HONESTY RULE, same as the backend's: a key we cannot determine is OMITTED, so
+// it reads as "unknown". Never `false`. `navigator.bluetooth` missing means this
+// BROWSER has no Web Bluetooth (Safari, Firefox), not that the phone has no
+// radio -- writing `ble: false` there would be a confident wrong answer about
+// someone's hardware.
+async function describeThisDevice(){
+  const caps = {};
+
+  // enumerateDevices() lists input KINDS without permission, so this is a real
+  // probe: an answer of "no videoinput" is a genuine false, not a shrug.
+  try{
+    if(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){
+      const list = await navigator.mediaDevices.enumerateDevices();
+      caps.camera = list.some(d => d.kind === "videoinput");
+      caps.microphone = list.some(d => d.kind === "audioinput");
+    }
+  }catch{ /* the API refused -> stays unknown, which is the truth */ }
+
+  // Presence of the API is evidence of capability; absence is evidence of
+  // nothing, so there is no `else`.
+  if(navigator.bluetooth) caps.ble = true;
+  if(typeof navigator.getBattery === "function") caps.battery = true;
+
+  const conn = navigator.connection || null;
+  if(conn && typeof conn.type === "string"){
+    if(conn.type === "wifi") caps.wifi = true;
+    else if(conn.type === "ethernet") caps.ethernet = true;
+  }
+
+  const ua = (navigator.userAgent || "").toLowerCase();
+  const platform =
+    /android/.test(ua) ? "android" :
+    /iphone|ipad|ipod/.test(ua) ? "ios" :
+    /windows/.test(ua) ? "windows" :
+    /mac os/.test(ua) ? "macos" :
+    /linux/.test(ua) ? "linux" : "unknown";
+
+  // What this device could technically DO. `client` always -- it is running the
+  // dashboard. `node` only when it has something that actually senses; claiming
+  // otherwise would put a "could be a Node" suggestion in front of an admin for
+  // a device that cannot sense anything.
+  const functions = ["client"];
+  if(caps.camera === true || caps.ble === true) functions.push("node");
+
+  const body = {platform: platform, capabilities: caps,
+                functions_supported: functions, protocol_version: 1};
+  if(typeof navigator.hardwareConcurrency === "number")
+    body.cpu_count = navigator.hardwareConcurrency;
+  if(typeof navigator.deviceMemory === "number")
+    body.ram_mb = Math.round(navigator.deviceMemory * 1024);
+  return body;
+}
+
+let __manifestSent = false;
+async function reportOwnManifest(){
+  if(__manifestSent || MODE !== "companion") return;   // the Core scans itself
+  const tok = companionToken();
+  if(!tok) return;
+  __manifestSent = true;          // once per session, whatever the outcome
+  try{
+    const body = await describeThisDevice();
+    const nf = (path, opt)=> window.WAVR_MOBILE
+      ? window.WAVR_MOBILE.netFetch(window.WAVR_MOBILE.base + path, opt)
+      : fetch(location.origin + path, opt);
+    await nf("/api/devices/me/manifest", {
+      method: "PUT",
+      headers: {"Authorization": "Bearer " + tok,
+                "Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+  }catch{ /* describing itself is a nicety; failing must not break the app */ }
+}
+
 // Cluster D (admin-companion System tab): the shim's window.WAVR_MOBILE.role hint is a UX
 // signal only -- the backend's GET /api/devices/me (Bearer-authed) is the ONE authoritative
 // read of this companion's role, same as every other write path in this file. Resolved lazily
@@ -3889,6 +4145,8 @@ function companionIsCentral(){
         if(r.status===401||r.status===403){ companionAuthFailed(); return; }
         const j = await r.json();
         companionRoleCache = (j && j.role) || false;
+        // The token is proven good at this point, so describe ourselves once.
+        reportOwnManifest();
         // Repaint now that the role is known: renderControls (gated, sets up its own poll)
         // + a fresh /api/status fetch, whose window.__wavrStatus hook repaints the paint-only
         // Health/Doctor tiles (same "refresh it when the system panel refreshes" contract the
@@ -5053,6 +5311,16 @@ async function renderCameras(){
         cal.setAttribute("aria-expanded","true");
       };
       row.appendChild(cal);
+      // Somewhere else asked for this camera's calibration panel (a camera just
+      // added from a discovery, or the Coverage tile). The list is rendered
+      // asynchronously, so the request is left as a name and claimed by whichever
+      // row turns out to be that camera. Single-use: cleared on claim, so a later
+      // refresh does not reopen it under the operator.
+      if(window.__wavrCalibrateNext === c.name){
+        window.__wavrCalibrateNext = null;
+        cal.click();
+        setTimeout(()=>{ try{ cal.scrollIntoView({block:"center"}); }catch{} }, 0);
+      }
       row.appendChild(rm); list.appendChild(row);
       // Lazily probe PTZ capability for this camera; if the ONVIF camera exposes PTZ, drop the
       // d-pad in on its own line just below the row. Hidden entirely when ptz:false / offline.
@@ -7466,6 +7734,800 @@ async function renderNodes(){
   renderList(seed);                            // seed the list from the probe we already read
 }
 renderNodes();
+
+// ============================================================================
+// Core settings (Settings → Core settings): the screen that replaces editing .env by hand.
+// GET /api/settings, PUT /api/settings/{key}, DELETE /api/settings/{key} —
+// backend/wavr/settings_store.py. SETTING_SPECS there is the single source of truth: this
+// renders every setting the API returns, never a hardcoded list, so a key added to the
+// allow-list shows up here with zero frontend change. Loopback-root or an admin-scoped
+// device only (require_local + require_scope("admin")), live-only — same gate idiom as
+// renderPairing()/renderNodes() above.
+// ============================================================================
+
+// Must match settings_store.CONSENT_PHRASE exactly — the store rejects a sensitive write
+// without it. Not a secret (anyone who can reach this admin API can read this source), it
+// exists so a sensitive flip can never happen as a side effect of a generic "save" click.
+var SETTINGS_CONSENT_PHRASE = "i-understand";
+
+// Settings this screen files under the "Advanced" disclosure — network exposure, bind host,
+// nodes, peers, per the product decision that these are the knobs an ordinary user never
+// needs to touch. Anything SETTING_SPECS adds later that isn't named here simply stays in
+// the open "Normal" list — visible by default, never hidden by omission.
+var SETTINGS_ADVANCED_KEYS = ["lan_access", "bind_host", "port", "nodes_enabled", "peers_enabled"];
+
+// One row per setting. Every control kind funnels a change through `requestChange()`, which
+// is the ONLY place that decides whether a reveal-then-confirm step is required —
+// `spec.sensitive` is read from the API response, never assumed from the key name, so a
+// future sensitive key is protected automatically.
+function buildSettingRow(spec){
+  var row = document.createElement("div"); row.className = "setting-row";
+  var top = document.createElement("div"); top.className = "setting-row-top";
+  var desc = document.createElement("p"); desc.className = "setting-desc";
+  desc.textContent = spec.description || "";                    // textContent — still server data
+  var note = document.createElement("p"); note.className = "setting-note"; note.hidden = true;
+  var confirmBox = null;
+
+  function showNote(text, cls){
+    note.hidden = false; note.className = "setting-note" + (cls ? " " + cls : ""); note.textContent = text;
+  }
+  // `local_only` settings are the ones that take Wavr OFF this machine: LAN
+  // access, the bind address, node and peer intake. They are writable only at
+  // the Core itself, so on a companion they are read-only for the same reason an
+  // env-locked value is -- and get the same grammar. Folding it into
+  // `spec.locked` means every control kind (switch, select, input, reset) picks
+  // it up without a second flag to remember.
+  var lockedHere = MODE === "companion" && !!spec.local_only;
+  if(lockedHere) spec.locked = true;
+
+  if(spec.locked){
+    showNote(lockedHere
+      ? ("This switch decides who else can reach Wavr, so it can only be " +
+         "changed on the machine running it \u2014 in front of it.")
+      : ("This value comes from this machine's own configuration (" + spec.env +
+         ") and can't be changed here."), "locked");
+  }
+
+  async function put(value, consent){
+    var body = { value: value };
+    if(consent) body.consent = consent;
+    var r;
+    try{
+      r = await fetch(location.origin + "/api/settings/" + encodeURIComponent(spec.key), {
+        method: "PUT", headers: {"Content-Type":"application/json","X-Wavr-Local":"1"},
+        body: JSON.stringify(body)});
+    }catch(e){}
+    if(r && r.ok){
+      showNote(spec.restart_required ? "Saved — takes effect the next time Wavr starts." : "Saved.");
+      return true;
+    }
+    var msg = "couldn't save — try again";
+    try{ if(r){ var j = await r.json(); if(j && j.detail) msg = String(j.detail); } }catch(e2){}
+    showNote(msg, "err");
+    return false;
+  }
+
+  // Sensitive: reveal the setting's OWN description again inside an explicit confirm step
+  // (it is written for exactly this) and only PUT on Confirm, carrying the consent phrase.
+  // Not sensitive: PUT immediately. Either way resolves to whether the save succeeded, so
+  // every control kind can repaint itself (or revert) from one return value.
+  function requestChange(value, changeLabel, revert){
+    if(spec.locked) return Promise.resolve(false);
+    if(!spec.sensitive) return put(value).then(function(ok){ if(!ok && revert) revert(); return ok; });
+    if(confirmBox){ confirmBox.remove(); confirmBox = null; }
+    confirmBox = document.createElement("div"); confirmBox.className = "setting-confirm";
+    var p = document.createElement("p"); p.textContent = spec.description;
+    var actions = document.createElement("div"); actions.className = "controls-row";
+    var yes = document.createElement("button"); yes.type = "button"; yes.className = "ctl small primary";
+    yes.textContent = "Confirm — " + changeLabel;
+    var no = document.createElement("button"); no.type = "button"; no.className = "ctl small off";
+    no.textContent = "Cancel";
+    actions.appendChild(yes); actions.appendChild(no);
+    confirmBox.appendChild(p); confirmBox.appendChild(actions);
+    row.appendChild(confirmBox);
+    return new Promise(function(resolve){
+      no.onclick = function(){ confirmBox.remove(); confirmBox = null; if(revert) revert(); resolve(false); };
+      yes.onclick = async function(){
+        yes.disabled = true; no.disabled = true;
+        var ok = await put(value, SETTINGS_CONSENT_PHRASE);
+        confirmBox.remove(); confirmBox = null;
+        if(!ok && revert) revert();
+        resolve(ok);
+      };
+    });
+  }
+
+  // Visible whenever there is a stored override to remove. Starts from the page-load
+  // snapshot, but a successful save/reset within THIS session also flips it — otherwise the
+  // button would only reflect reality again after a reload, which reads as broken.
+  function buildResetBtn(applyDefault){
+    if(spec.locked) return null;
+    var reset = document.createElement("button");
+    reset.type = "button"; reset.className = "ctl small off"; reset.textContent = "Reset to default";
+    reset.hidden = spec.source !== "stored";
+    reset.onclick = async function(){
+      reset.disabled = true;
+      var r;
+      try{ r = await fetch(location.origin + "/api/settings/" + encodeURIComponent(spec.key),
+        {method:"DELETE", headers:{"X-Wavr-Local":"1"}}); }catch(e){}
+      reset.disabled = false;
+      if(r && r.ok){ applyDefault(); reset.hidden = true; showNote("Reset to default."); }
+      else showNote("couldn't reset — try again", "err");
+    };
+    return reset;
+  }
+
+  if(spec.kind === "bool"){
+    var on = spec.value === "1" || spec.value === true || spec.value === "true";
+    var btn = document.createElement("button");
+    btn.type = "button"; btn.setAttribute("role", "switch");
+    function paint(nowOn){
+      on = nowOn;
+      btn.className = "ctl switch small " + (on ? "on" : "off");
+      btn.setAttribute("aria-checked", on ? "true" : "false");
+      btn.textContent = spec.label + ": " + (on ? "On" : "Off");
+    }
+    paint(on);
+    btn.disabled = !!spec.locked;
+    btn.onclick = function(){
+      if(confirmBox) return;                       // a confirm is already open on this row
+      var next = !on;
+      btn.disabled = true;
+      requestChange(next, "turn " + (next ? "on" : "off")).then(function(ok){
+        btn.disabled = !!spec.locked;
+        if(ok){ paint(next); if(rb1) rb1.hidden = false; }
+      });
+    };
+    top.appendChild(btn);
+    var rb1 = buildResetBtn(function(){ paint(spec.default === "1"); });
+    if(rb1) top.appendChild(rb1);
+  } else if(spec.kind === "choice"){
+    var label = document.createElement("label"); label.className = "pair-role";
+    label.appendChild(document.createTextNode(spec.label));
+    var sel = document.createElement("select"); sel.setAttribute("aria-label", spec.label);
+    (spec.choices || []).forEach(function(c){
+      var o = document.createElement("option"); o.value = c; o.textContent = c;
+      if(c === spec.value) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.disabled = !!spec.locked;
+    var prevVal = spec.value;
+    sel.onchange = function(){
+      var next = sel.value;
+      sel.disabled = true;
+      requestChange(next, "set to " + next, function(){ sel.value = prevVal; }).then(function(ok){
+        sel.disabled = !!spec.locked;
+        if(ok){ prevVal = next; if(rb2) rb2.hidden = false; }
+      });
+    };
+    label.appendChild(sel);
+    top.appendChild(label);
+    var rb2 = buildResetBtn(function(){ sel.value = spec.default; prevVal = spec.default; });
+    if(rb2) top.appendChild(rb2);
+  } else {
+    // int / float / str: a plain input + an explicit Save — typing never autosubmits.
+    var label2 = document.createElement("label"); label2.className = "pair-role";
+    label2.appendChild(document.createTextNode(spec.label));
+    var inp = document.createElement("input");
+    inp.type = (spec.kind === "int" || spec.kind === "float") ? "number" : "text";
+    if(spec.kind === "float") inp.step = "any";
+    if(spec.minimum != null) inp.min = spec.minimum;
+    if(spec.maximum != null) inp.max = spec.maximum;
+    if(spec.kind === "str") inp.maxLength = 128;
+    inp.value = spec.value;
+    inp.disabled = !!spec.locked;
+    inp.setAttribute("aria-label", spec.label);
+    label2.appendChild(inp);
+    top.appendChild(label2);
+    var saveBtn = document.createElement("button");
+    saveBtn.type = "button"; saveBtn.className = "ctl small"; saveBtn.textContent = "Save";
+    saveBtn.disabled = !!spec.locked;
+    saveBtn.onclick = function(){
+      saveBtn.disabled = true;
+      requestChange(inp.value, "save this value", function(){}).then(function(ok){
+        saveBtn.disabled = !!spec.locked;
+        if(ok && rb3) rb3.hidden = false;
+      });
+    };
+    top.appendChild(saveBtn);
+    var rb3 = buildResetBtn(function(){ inp.value = spec.default; });
+    if(rb3) top.appendChild(rb3);
+  }
+
+  row.appendChild(top);
+  row.appendChild(desc);
+  row.appendChild(note);
+  return row;
+}
+
+async function renderCoreSettings(){
+  if(MODE !== "live") return;                 // live-only; never companion or Plano B (demo)
+  var tile = document.getElementById("settingsTile");
+  var note = document.getElementById("settingsNote");
+  if(!tile || !note) return;
+  var probe;
+  try{ probe = await fetch(location.origin + "/api/settings", {headers:{"X-Wavr-Local":"1"}}); }
+  catch{ note.hidden = false; note.textContent = "Couldn't reach the hub — try again in a moment."; return; }
+  if(!probe.ok){
+    note.hidden = false;
+    note.textContent = "Core settings need local admin access on this hub.";
+    return;
+  }
+  var payload; try{ payload = await probe.json(); }catch{ payload = {}; }
+  note.hidden = true;
+  tile.hidden = false;
+
+  var restartNote = document.getElementById("settingsRestartNote");
+  if(restartNote) restartNote.textContent = payload.restart_required_note || "";
+
+  var normalList = document.getElementById("settingsNormalList");
+  var advList = document.getElementById("settingsAdvancedList");
+  var advDetails = document.getElementById("settingsAdvanced");
+  normalList.textContent = ""; advList.textContent = "";
+  var settings = Array.isArray(payload.settings) ? payload.settings : [];
+  var advancedCount = 0;
+  settings.forEach(function(spec){
+    var row = buildSettingRow(spec);
+    if(SETTINGS_ADVANCED_KEYS.indexOf(spec.key) !== -1){ advList.appendChild(row); advancedCount++; }
+    else normalList.appendChild(row);
+  });
+  if(advDetails) advDetails.hidden = advancedCount === 0;
+}
+renderCoreSettings();
+
+// ============================================================================
+// Space (Settings → Space): the Space model's admin surface (backend/wavr/space_store.py +
+// api_space.py) — name/kind, People, Devices' three independent axes, and Core topology.
+// GET/PUT /api/space, /api/space/people, /api/space/devices, /api/space/cores. Loopback-root
+// or an admin-scoped device only, live-only — same gate idiom as the rest of this overlay.
+// Every name/room/id below is operator/server data -> textContent, never innerHTML.
+// ============================================================================
+
+// `fb` is a SHARED, persistent feedback span living OUTSIDE the list this row belongs to
+// (matches renderPairing()'s own pairFb precedent) — `onChanged` rebuilds the whole list on
+// success, which would destroy a per-row feedback node before it could be read, so the
+// message has to live somewhere the rebuild does not touch.
+function buildPersonRow(p, roles, fb, onChanged){
+  var row = document.createElement("div"); row.className = "pair-dev-row";
+  var left = document.createElement("span");
+  var name = document.createElement("b"); name.textContent = p.display_name || "(unnamed)";
+  var meta = document.createElement("span"); meta.className = "pair-dev-meta";
+  meta.textContent = " · " + p.role + (p.expired ? " · expired" : "");
+  left.appendChild(name); left.appendChild(meta);
+  row.appendChild(left);
+
+  var ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
+  if(p.role === "owner"){
+    // Deliberately not editable from here: space_store.set_person_role() refuses to demote
+    // or promote-into an Owner (transfer_ownership is a separate, loopback-root-ONLY act
+    // this screen does not expose) — a neutral badge, not a dead-end control.
+    var badge = document.createElement("span"); badge.className = "pill off"; badge.textContent = "Owner";
+    ctl.appendChild(badge);
+  } else {
+    var sel = document.createElement("select"); sel.className = "pair-dev-role";
+    sel.setAttribute("aria-label", "role for " + (p.display_name || "person"));
+    (roles || []).filter(function(r){ return r !== "owner"; }).forEach(function(r){
+      var o = document.createElement("option"); o.value = r;
+      o.textContent = r.charAt(0).toUpperCase() + r.slice(1);
+      if(r === p.role) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.onchange = async function(){
+      var prev = p.role;
+      sel.disabled = true;
+      var r;
+      try{ r = await fetch(location.origin + "/api/space/people/" + encodeURIComponent(p.person_id) + "/role",
+        {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+         body: JSON.stringify({role: sel.value})}); }catch(e){}
+      if(r && r.ok){
+        var j; try{ j = await r.json(); }catch(e2){ j = {}; }
+        // Honest disclosure the endpoint itself returns: a role change never revokes an
+        // already-issued credential — surface that note rather than implying it happened.
+        actionFeedback(fb, true, null, j.note ? "✓ changed — " + j.note : "✓ changed");
+        onChanged();
+      } else {
+        sel.disabled = false; sel.value = prev;
+        actionFeedback(fb, false, "couldn't change the role");
+      }
+    };
+    ctl.appendChild(sel);
+
+    var rm = document.createElement("button"); rm.type = "button"; rm.className = "rm"; rm.textContent = "Remove";
+    rm.setAttribute("aria-label", "remove " + (p.display_name || "person"));
+    rm.onclick = function(){
+      // Two-step reveal-then-confirm, never a native confirm() — mirrors Unpair/Remove elsewhere.
+      ctl.textContent = "";
+      var warn = document.createElement("span"); warn.className = "pair-dev-meta";
+      warn.textContent = "Remove " + (p.display_name || "this person") + "? Their devices lose access immediately. ";
+      var yes = document.createElement("button"); yes.type = "button"; yes.className = "rm"; yes.textContent = "Confirm";
+      var no = document.createElement("button"); no.type = "button"; no.className = "ctl small off"; no.textContent = "Cancel";
+      no.onclick = function(){ onChanged(); };
+      yes.onclick = async function(){
+        yes.disabled = true; no.disabled = true;
+        var r;
+        try{ r = await fetch(location.origin + "/api/space/people/" + encodeURIComponent(p.person_id),
+          {method:"DELETE", headers:{"X-Wavr-Local":"1"}}); }catch(e){}
+        if(r && r.ok){ actionFeedback(fb, true, null, "✓ removed"); onChanged(); }
+        else {
+          // Never a silent no-op: e.g. the Owner can't be removed (422) — say so, don't just
+          // quietly leave them in the list with no explanation.
+          var msg = "couldn't remove";
+          try{ if(r){ var j = await r.json(); if(j && j.detail) msg = String(j.detail); } }catch(e2){}
+          actionFeedback(fb, false, msg);
+          onChanged();
+        }
+      };
+      ctl.appendChild(warn); ctl.appendChild(yes); ctl.appendChild(no);
+    };
+    ctl.appendChild(rm);
+  }
+  row.appendChild(ctl);
+  return row;
+}
+
+function buildDeviceRow(d, people, funcsAvailable, onChanged){
+  var row = document.createElement("div"); row.className = "pair-dev-row space-dev-row";
+  var left = document.createElement("span");
+  var name = document.createElement("b"); name.textContent = d.name || "(unnamed)";
+  var meta = document.createElement("span"); meta.className = "pair-dev-meta";
+  meta.textContent = " · role: " + (d.role || "?") + (d.revoked ? " · revoked" : "");
+  left.appendChild(name); left.appendChild(meta);
+  row.appendChild(left);
+
+  var ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
+
+  var funcWrap = document.createElement("span"); funcWrap.className = "space-func-wrap";
+  var boxes = {};
+  funcsAvailable.forEach(function(f){
+    var lab = document.createElement("label"); lab.className = "space-func-chk";
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.value = f;
+    cb.checked = (d.functions || []).indexOf(f) !== -1;
+    boxes[f] = cb;
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(f));
+    funcWrap.appendChild(lab);
+  });
+  var roomInp = document.createElement("input"); roomInp.type = "text"; roomInp.className = "space-room-inp";
+  roomInp.placeholder = "room"; roomInp.value = d.room || "";
+  roomInp.setAttribute("aria-label", "room for " + (d.name || "device"));
+  var portableChk = document.createElement("input"); portableChk.type = "checkbox"; portableChk.checked = !!d.portable;
+  var portableLab = document.createElement("label"); portableLab.className = "space-func-chk";
+  portableLab.appendChild(portableChk); portableLab.appendChild(document.createTextNode("portable"));
+
+  var funcFb = document.createElement("span"); funcFb.className = "action-fb"; funcFb.setAttribute("aria-live","polite");
+  var saveFn = document.createElement("button"); saveFn.type = "button"; saveFn.className = "ctl small";
+  saveFn.textContent = "Save functions";
+  saveFn.onclick = async function(){
+    var wanted = Object.keys(boxes).filter(function(f){ return boxes[f].checked; });
+    saveFn.disabled = true;
+    var r;
+    try{ r = await fetch(location.origin + "/api/space/devices/" + encodeURIComponent(d.device_id) + "/functions",
+      {method:"PUT", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+       body: JSON.stringify({functions: wanted, room: roomInp.value, portable: portableChk.checked})}); }catch(e){}
+    saveFn.disabled = false;
+    if(r && r.ok) actionFeedback(funcFb, true);
+    else actionFeedback(funcFb, false, "couldn't save");
+  };
+
+  var personSel = document.createElement("select"); personSel.className = "pair-dev-role";
+  personSel.setAttribute("aria-label", "person for " + (d.name || "device"));
+  var noneOpt = document.createElement("option"); noneOpt.value = ""; noneOpt.textContent = "(unassigned)";
+  personSel.appendChild(noneOpt);
+  people.forEach(function(p){
+    var o = document.createElement("option"); o.value = p.person_id; o.textContent = p.display_name;
+    if(p.person_id === d.person_id) o.selected = true;
+    personSel.appendChild(o);
+  });
+  var personFb = document.createElement("span"); personFb.className = "action-fb"; personFb.setAttribute("aria-live","polite");
+  personSel.onchange = async function(){
+    var pid = personSel.value || null;
+    personSel.disabled = true;
+    var r;
+    try{ r = await fetch(location.origin + "/api/space/devices/" + encodeURIComponent(d.device_id) + "/person",
+      {method:"POST", headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+       body: JSON.stringify({person_id: pid})}); }catch(e){}
+    personSel.disabled = false;
+    if(r && r.ok) actionFeedback(personFb, true);
+    else actionFeedback(personFb, false, "couldn't save");
+  };
+
+  ctl.appendChild(funcWrap); ctl.appendChild(roomInp); ctl.appendChild(portableLab);
+  ctl.appendChild(saveFn); ctl.appendChild(funcFb);
+  ctl.appendChild(personSel); ctl.appendChild(personFb);
+  row.appendChild(ctl);
+  return row;
+}
+
+function renderCoresWarn(container, topo){
+  container.textContent = "";
+  var msgs = [];
+  if(topo.contested) msgs.push({txt:"Two Cores both claim to be authoritative right now. Promote " +
+    "the one you want to keep — the other should be demoted.", danger:true});
+  else if(topo.leaderless) msgs.push({txt:"No Core is authoritative right now. Promote one below " +
+    "to bring the Space back to life.", danger:true});
+  else if(topo.primary_stale) msgs.push({txt:"The current primary Core hasn't checked in recently.", danger:false});
+  msgs.forEach(function(m){
+    var box = document.createElement("div"); box.className = "pair-approve" + (m.danger ? " danger" : "");
+    var p = document.createElement("p"); p.className = "pa-h"; p.textContent = m.txt;
+    box.appendChild(p);
+    container.appendChild(box);
+  });
+}
+
+// `fb` is a SHARED, persistent feedback span living OUTSIDE #spaceCoresList (same reasoning
+// as buildPersonRow's own `fb` param) — `onChanged` rebuilds the whole list, which would
+// otherwise destroy a per-row feedback node before its message could be read.
+// The three states that lead to different actions. `observing` is what the
+// backend computed from each sensor's health; nothing is recomputed here, so the
+// dashboard and an agent asking over MCP cannot disagree.
+async function renderCoverage(){
+  var tile = document.getElementById("spaceCoverageTile");
+  var list = document.getElementById("spaceCoverageList");
+  if(!tile || !list) return;
+  var r;
+  try{ r = await fetch(location.origin + "/api/coverage", {headers:{"X-Wavr-Local":"1"}}); }
+  catch{ return; }                              // hub unreachable -> leave hidden
+  if(!r.ok) return;
+  var body;
+  try{ body = await r.json(); }catch{ return; }
+  if(!body || body.available === false) return; // could not enumerate -> say nothing
+
+  list.textContent = "";
+  (body.rooms || []).forEach(function(room){
+    var row = document.createElement("div"); row.className = "pair-dev-row";
+    var left = document.createElement("span");
+    var name = document.createElement("b"); name.textContent = room.room;
+    var meta = document.createElement("span"); meta.className = "pair-dev-meta";
+    var parts = (room.sensors || []).map(function(s){
+      // A sensor that is not observing says WHY in one word, because "camera
+      // (off)" and "radar (not answering)" are different errands.
+      var how = s.observing ? "" :
+        (s.health === "disabled" ? " (off)" :
+         s.health === "offline" ? " (not answering)" : " (" + s.health + ")");
+      return (s.modality || s.kind) + how;
+    });
+    meta.textContent = " \u00b7 " + (parts.join(", ") || "nothing") +
+      " \u00b7 " + (room.observing
+        ? "watched now, to " + room.precision_level + " detail"
+        : "NOT being watched");
+    left.appendChild(name); left.appendChild(meta);
+    row.appendChild(left);
+
+    // The room has a camera that is only counting people. Offer the walk-through
+    // that lifts it to placing them -- this is where someone asks why Wavr will
+    // not say WHERE in the room somebody is.
+    var uncal = (room.sensors || []).find(function(s){
+      return s.kind === "camera" && !s.calibrated;
+    });
+    if(uncal){
+      var ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
+      var btn = document.createElement("button");
+      btn.type = "button"; btn.className = "ctl small";
+      btn.textContent = "Set up positioning";
+      btn.onclick = function(){
+        window.__wavrCalibrateNext = uncal.sensor_id;
+        if(window.switchTab) window.switchTab("dispositivos");
+      };
+      ctl.appendChild(btn);
+      row.appendChild(ctl);
+    }
+    list.appendChild(row);
+  });
+
+  (body.uncovered || []).forEach(function(name){
+    var row = document.createElement("div"); row.className = "pair-dev-row";
+    var left = document.createElement("span");
+    var b = document.createElement("b"); b.textContent = name;
+    var meta = document.createElement("span"); meta.className = "pair-dev-meta";
+    // The sentence that matters. An unwatched room is not an empty room, and a
+    // dashboard that renders the two the same way is the reason this tile exists.
+    meta.textContent = " \u00b7 no sensor at all \u2014 Wavr cannot see this room, " +
+      "which is not the same as it being empty";
+    left.appendChild(b); left.appendChild(meta);
+    row.appendChild(left);
+    list.appendChild(row);
+  });
+
+  (body.house_wide || []).forEach(function(s){
+    var row = document.createElement("div"); row.className = "pair-dev-row";
+    var left = document.createElement("span");
+    var b = document.createElement("b"); b.textContent = s.modality || s.kind;
+    var meta = document.createElement("span"); meta.className = "pair-dev-meta";
+    meta.textContent = " \u00b7 the whole house, not a room";
+    left.appendChild(b); left.appendChild(meta);
+    row.appendChild(left);
+    list.appendChild(row);
+  });
+
+  tile.hidden = !list.children.length;
+}
+
+function buildCoreRow(c, candidateId, fb, onChanged){
+  var row = document.createElement("div"); row.className = "pair-dev-row";
+  var left = document.createElement("span");
+  var name = document.createElement("b"); name.textContent = c.name || c.core_id;
+  var meta = document.createElement("span"); meta.className = "pair-dev-meta";
+  var bits = [c.effective_status];
+  if(c.is_self) bits.push("this machine");
+  if(c.portable) bits.push("portable");
+  if(c.room) bits.push(c.room);
+  if(c.stale && c.status !== "primary") bits.push("not checking in");
+  if(c.core_id === candidateId) bits.push("recommended next primary");
+  meta.textContent = " · " + bits.join(" · ");
+  left.appendChild(name); left.appendChild(meta);
+  row.appendChild(left);
+
+  var ctl = document.createElement("span"); ctl.className = "pair-dev-ctl";
+
+  function confirmAction(label, btnClass, warnTxt, path){
+    ctl.textContent = "";
+    var warn = document.createElement("span"); warn.className = "pair-dev-meta"; warn.textContent = warnTxt;
+    var yes = document.createElement("button"); yes.type = "button"; yes.className = btnClass; yes.textContent = "Confirm";
+    var no = document.createElement("button"); no.type = "button"; no.className = "ctl small off"; no.textContent = "Cancel";
+    no.onclick = function(){ onChanged(); };
+    yes.onclick = async function(){
+      yes.disabled = true; no.disabled = true;
+      var r;
+      try{ r = await fetch(location.origin + path, {method:"POST", headers:{"X-Wavr-Local":"1"}}); }catch(e){}
+      if(r && r.ok){ actionFeedback(fb, true, null, "✓ " + label.toLowerCase() + "d"); onChanged(); }
+      else {
+        var msg = "couldn't " + label.toLowerCase();
+        try{ if(r){ var j = await r.json(); if(j && j.detail) msg = String(j.detail); } }catch(e2){}
+        actionFeedback(fb, false, msg);
+        onChanged();
+      }
+    };
+    ctl.appendChild(warn); ctl.appendChild(yes); ctl.appendChild(no);
+  }
+
+  if(c.status !== "primary"){
+    var promote = document.createElement("button"); promote.type = "button"; promote.className = "ctl small";
+    promote.textContent = "Promote";
+    promote.onclick = function(){
+      confirmAction("Promote", "ctl small primary", "Make " + (c.name || "this Core") + " authoritative? ",
+        "/api/space/cores/" + encodeURIComponent(c.core_id) + "/promote");
+    };
+    ctl.appendChild(promote);
+  } else {
+    var demote = document.createElement("button"); demote.type = "button"; demote.className = "ctl small off";
+    demote.textContent = "Demote";
+    demote.onclick = function(){
+      confirmAction("Demote", "rm", "Stand " + (c.name || "this Core") + " down? Nothing else becomes primary automatically. ",
+        "/api/space/cores/" + encodeURIComponent(c.core_id) + "/demote");
+    };
+    ctl.appendChild(demote);
+  }
+
+  // Re-home a portable Core. Only offered for one that is actually portable:
+  // a desk machine does not move, and a control for something that never
+  // happens is noise on the row that matters.
+  if(c.portable){
+    var rehome = document.createElement("button");
+    rehome.type = "button"; rehome.className = "ctl small";
+    rehome.textContent = c.room ? "Change room" : "Set room";
+    rehome.onclick = function(){
+      ctl.textContent = "";
+      var inp = document.createElement("input");
+      inp.type = "text"; inp.maxLength = 64; inp.className = "space-room-inp";
+      inp.placeholder = "which room is it in?";
+      inp.value = c.room || "";
+      var save = document.createElement("button");
+      save.type = "button"; save.className = "ctl small primary";
+      save.textContent = "Save";
+      var cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "ctl small off";
+      cancel.textContent = "Cancel";
+      cancel.onclick = function(){ onChanged(); };
+      save.onclick = async function(){
+        save.disabled = true; cancel.disabled = true;
+        var r;
+        try{
+          r = await fetch(location.origin + "/api/space/cores/" +
+                          encodeURIComponent(c.core_id) + "/room", {
+            method: "POST",
+            headers: {"X-Wavr-Local":"1", "Content-Type":"application/json"},
+            body: JSON.stringify({room: inp.value})
+          });
+        }catch(e){}
+        if(r && r.ok){ actionFeedback(fb, true, null, "\u2713 room saved"); onChanged(); }
+        else { actionFeedback(fb, false, "couldn\u2019t save the room"); onChanged(); }
+      };
+      ctl.appendChild(inp); ctl.appendChild(save); ctl.appendChild(cancel);
+      inp.focus();
+    };
+    ctl.appendChild(rehome);
+  }
+
+  // Forget a Core that is gone for good. Never offered for THIS machine: a Core
+  // cannot sensibly forget itself, and the button would only ever return 422.
+  if(!c.is_self){
+    var forget = document.createElement("button");
+    forget.type = "button"; forget.className = "ctl small off";
+    forget.textContent = "Forget";
+    forget.onclick = function(){
+      ctl.textContent = "";
+      var warn = document.createElement("span");
+      warn.className = "pair-dev-meta";
+      warn.textContent = "Remove " + (c.name || "this Core") +
+        " from this Space? Do this only if it is gone for good. ";
+      var yes = document.createElement("button");
+      yes.type = "button"; yes.className = "rm"; yes.textContent = "Confirm";
+      var no = document.createElement("button");
+      no.type = "button"; no.className = "ctl small off"; no.textContent = "Cancel";
+      no.onclick = function(){ onChanged(); };
+      yes.onclick = async function(){
+        yes.disabled = true; no.disabled = true;
+        var r;
+        try{
+          r = await fetch(location.origin + "/api/space/cores/" +
+                          encodeURIComponent(c.core_id),
+                          {method:"DELETE", headers:{"X-Wavr-Local":"1"}});
+        }catch(e){}
+        if(r && r.ok){ actionFeedback(fb, true, null, "\u2713 forgotten"); }
+        else {
+          var msg = "couldn\u2019t forget it";
+          try{ if(r){ var j = await r.json(); if(j && j.detail) msg = String(j.detail); } }catch(e2){}
+          actionFeedback(fb, false, msg);
+        }
+        onChanged();
+      };
+      ctl.appendChild(warn); ctl.appendChild(yes); ctl.appendChild(no);
+    };
+    ctl.appendChild(forget);
+  }
+
+  row.appendChild(ctl);
+  return row;
+}
+
+async function renderSpace(){
+  if(MODE !== "live") return;                 // live-only; never companion or Plano B (demo)
+  var note = document.getElementById("spaceNote");
+  var spaceTile = document.getElementById("spaceTile");
+  var peopleTile = document.getElementById("spacePeopleTile");
+  var devicesTile = document.getElementById("spaceDevicesTile");
+  var coresTile = document.getElementById("spaceCoresTile");
+  if(!note || !spaceTile || !peopleTile || !devicesTile || !coresTile) return;
+  var hdr = {"X-Wavr-Local":"1"};
+
+  var probe;
+  try{ probe = await fetch(location.origin + "/api/space", {headers:hdr}); }
+  catch{ note.hidden = false; note.textContent = "Couldn't reach the hub — try again in a moment."; return; }
+  if(probe.status === 404){
+    note.hidden = false;
+    note.textContent = "This Core has no Space yet — finish the setup wizard first.";
+    return;
+  }
+  if(!probe.ok){
+    note.hidden = false;
+    note.textContent = "Space management needs local admin access on this hub.";
+    return;
+  }
+  var space; try{ space = await probe.json(); }catch{ space = {}; }
+  note.hidden = true;
+  spaceTile.hidden = false; peopleTile.hidden = false; devicesTile.hidden = false; coresTile.hidden = false;
+
+  var nameInp = document.getElementById("spaceName");
+  var kindSel = document.getElementById("spaceKind");
+  var spaceFb = document.getElementById("spaceFb");
+  nameInp.value = space.name || "";
+  kindSel.textContent = "";
+  (space.kinds || []).forEach(function(k){
+    var o = document.createElement("option"); o.value = k;
+    o.textContent = k.charAt(0).toUpperCase() + k.slice(1);
+    if(k === space.kind) o.selected = true;
+    kindSel.appendChild(o);
+  });
+  document.getElementById("spaceForm").onsubmit = async function(e){
+    e.preventDefault();
+    var btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true;
+    var r;
+    try{ r = await fetch(location.origin + "/api/space", {method:"PUT",
+      headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+      body: JSON.stringify({name: nameInp.value, kind: kindSel.value})}); }catch(e2){}
+    btn.disabled = false;
+    if(r && r.ok){
+      actionFeedback(spaceFb, true);
+      var updated; try{ updated = await r.json(); }catch(e3){ updated = null; }
+      var slot = document.getElementById("brandSpace");
+      if(slot && updated && updated.name) slot.textContent = updated.name;
+    } else {
+      var msg = "couldn't save";
+      try{ if(r){ var j = await r.json(); if(j && j.detail) msg = String(j.detail); } }catch(e4){}
+      actionFeedback(spaceFb, false, msg);
+    }
+  };
+
+  var peopleCache = [];
+
+  async function refreshPeople(){
+    var listEl = document.getElementById("spacePeopleList");
+    var peopleFb = document.getElementById("spacePeopleFb");
+    var r; try{ r = await fetch(location.origin + "/api/space/people", {headers:hdr}); }catch(e){ return; }
+    if(!r.ok) return;
+    var j; try{ j = await r.json(); }catch(e){ j = {}; }
+    peopleCache = Array.isArray(j.people) ? j.people : [];
+    var roles = Array.isArray(j.roles) ? j.roles : ["admin", "user", "guest"];
+    listEl.textContent = "";
+    if(!peopleCache.length){
+      var e2 = document.createElement("div"); e2.className = "empty"; e2.textContent = "No one added yet.";
+      listEl.appendChild(e2);
+    } else {
+      peopleCache.forEach(function(p){ listEl.appendChild(buildPersonRow(p, roles, peopleFb, refreshPeople)); });
+    }
+    refreshDevices();      // person names feed the device "person" select below
+  }
+
+  var personForm = document.getElementById("spacePersonForm");
+  var personFb = document.getElementById("spacePersonFb");
+  personForm.onsubmit = async function(e){
+    e.preventDefault();
+    var fd = new FormData(personForm);
+    var btn = personForm.querySelector("button[type=submit]");
+    btn.disabled = true;
+    var r;
+    try{ r = await fetch(location.origin + "/api/space/people", {method:"POST",
+      headers:{"Content-Type":"application/json","X-Wavr-Local":"1"},
+      body: JSON.stringify({display_name: fd.get("display_name"), role: fd.get("role")})}); }catch(e2){}
+    btn.disabled = false;
+    if(r && r.ok){
+      var j; try{ j = await r.json(); }catch(e3){ j = {}; }
+      // The endpoint's own preview of what a paired device will get — surfaced here rather
+      // than discovered later, since a person's role isn't wired into pairing yet (see
+      // space_store.device_role_for_person's own docstring).
+      actionFeedback(personFb, true, null, j.device_role
+        ? "✓ added — their next paired device would get " + j.device_role + " access"
+        : "✓ added");
+      personForm.reset();
+      refreshPeople();
+    } else {
+      var msg = "couldn't add";
+      try{ if(r){ var jj = await r.json(); if(jj && jj.detail) msg = String(jj.detail); } }catch(e4){}
+      actionFeedback(personFb, false, msg);
+    }
+  };
+
+  async function refreshDevices(){
+    var listEl = document.getElementById("spaceDeviceList");
+    var r; try{ r = await fetch(location.origin + "/api/space/devices", {headers:hdr}); }catch(e){ return; }
+    if(!r.ok) return;
+    var j; try{ j = await r.json(); }catch(e){ j = {}; }
+    var devs = Array.isArray(j.devices) ? j.devices : [];
+    var funcsAvailable = Array.isArray(j.functions_available) ? j.functions_available : [];
+    listEl.textContent = "";
+    if(!devs.length){
+      var e2 = document.createElement("div"); e2.className = "empty"; e2.textContent = "No paired devices yet.";
+      listEl.appendChild(e2);
+      return;
+    }
+    devs.forEach(function(d){ listEl.appendChild(buildDeviceRow(d, peopleCache, funcsAvailable, refreshDevices)); });
+  }
+
+  async function refreshCores(){
+    var listEl = document.getElementById("spaceCoresList");
+    var warnEl = document.getElementById("spaceCoresWarn");
+    var coresFb = document.getElementById("spaceCoresFb");
+    var r; try{ r = await fetch(location.origin + "/api/space/cores", {headers:hdr}); }catch(e){ return; }
+    if(!r.ok) return;
+    var topo; try{ topo = await r.json(); }catch(e){ topo = {}; }
+    if(warnEl) renderCoresWarn(warnEl, topo);
+    listEl.textContent = "";
+    var cores = Array.isArray(topo.cores) ? topo.cores : [];
+    if(!cores.length){
+      var e2 = document.createElement("div"); e2.className = "empty"; e2.textContent = "No Cores registered.";
+      listEl.appendChild(e2); return;
+    }
+    var candidateId = topo.promotion_candidate ? topo.promotion_candidate.core_id : null;
+    cores.forEach(function(c){ listEl.appendChild(buildCoreRow(c, candidateId, coresFb, refreshCores)); });
+  }
+
+  refreshPeople();       // also triggers the first refreshDevices() once people are known
+  refreshCores();
+  // Last, and independent: coverage reads its own route and hides itself if the
+  // Core cannot enumerate its sensors, so a failure here leaves the rest intact.
+  renderCoverage();
+}
+renderSpace();
 
 // ---- Connectors & services: the single outward-facing surface ----
 // (project_wavr_connectors_vision) Wavr is local and MUTE by default; this is the ONLY screen
@@ -11361,7 +12423,7 @@ try {
 // (window.__wavrMap) that renderRadar() exposes at the end of its closure.
 (function(){
   "use strict";
-  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas", "quemcasa", "novos", "transparencia"];
+  var TABS = ["inicio", "historico", "rede", "dispositivos", "sistema", "rotinas", "quemcasa", "novos", "discoveries", "transparencia"];
   var content = document.getElementById("content");
   var navButtons = Array.prototype.slice.call(document.querySelectorAll(".nav-item[data-tab]"));
   var panels = {};
@@ -11555,6 +12617,14 @@ try {
     syncMapLoop();
     if(lastGearTrigger && lastGearTrigger.focus) lastGearTrigger.focus();
   }
+  // Cross-block hook (same idiom as window.switchTab/__wavrSetAppInert above): lets a script
+  // block that runs later in document order (e.g. the Discoveries tab, whose "route to the
+  // relevant screen" actions need to open a specific Settings section) do so without
+  // duplicating openGear()/showGearSection()'s internals in a third place.
+  window.__wavrOpenGearSection = function(sectionId){
+    openGear();
+    showGearSection(sectionId);
+  };
   if(gearNavBtn) gearNavBtn.addEventListener("click", function(){ openGear(gearNavBtn); });
   if(gearTopBtn) gearTopBtn.addEventListener("click", function(){ openGear(gearTopBtn); });
   if(gearBack) gearBack.addEventListener("click", closeGear);
@@ -16082,6 +17152,7 @@ try {
   };
 })();
 </script>
+<script src="js/discoveries.js"></script>
 <script>
 // ============================================================================
 // Wavr Core Panel (Phase 1 of "Wavr OS"): ?core / window.WAVR_CORE ambient
@@ -17024,5 +18095,112 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
   });
 })();
 </script>
+<!-- ==========================================================================
+     FIRST-RUN SETUP WIZARD (Wavr Space, 2026-09-03)
+     ==========================================================================
+     The screen that turns "a server is running on port 8000" into "this is My
+     Home". Before this, the app booted straight into a dashboard for a Space
+     that had no name, no owner and no notion of what this machine was for.
+
+     Deliberately self-contained (own <style>, own markup, own <script>) and
+     appended at the end of the document rather than woven into the 17k lines
+     above it: a first-run screen is the one surface that must never break the
+     everyday one, and a surgical block is far easier to audit than a diff
+     scattered through the shell.
+
+     It runs ONLY on the loopback origin (MODE === "live"). A LAN companion
+     gets the pairing screen, not the wizard: founding the Space is the
+     operator's act, performed on the machine that will hold it.
+     ========================================================================== -->
+<style id="setupWizardCss">
+  #setupWizard{position:fixed;inset:0;z-index:900;display:none;flex-direction:column;
+    background:var(--bg);overflow-y:auto;overscroll-behavior:contain}
+  #setupWizard.show{display:flex}
+  .sw-wrap{width:min(680px,100%);margin:auto;padding:32px 20px 48px;display:flex;
+    flex-direction:column;gap:20px}
+  .sw-brand{display:flex;align-items:center;gap:10px;color:var(--dim);
+    font-size:.78rem;letter-spacing:.08em;text-transform:uppercase}
+  .sw-brand svg{width:20px;height:20px}
+  .sw-steps{display:flex;gap:6px;margin:2px 0 4px}
+  .sw-steps i{height:3px;flex:1;border-radius:2px;background:var(--line-strong)}
+  .sw-steps i.done{background:var(--accent)}
+  .sw-steps i.now{background:var(--accent);opacity:.55}
+  #setupWizard h1{font-size:1.5rem;font-weight:650;margin:0;line-height:1.25}
+  #setupWizard h2{font-size:1.05rem;font-weight:600;margin:0}
+  .sw-lede{color:var(--dim);font-size:.92rem;line-height:1.55;margin:0}
+  .sw-card{background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius);padding:16px}
+  .sw-choice{display:flex;flex-direction:column;gap:10px}
+  .sw-opt{display:flex;gap:12px;align-items:flex-start;text-align:left;width:100%;
+    background:var(--surface);border:1px solid var(--line);color:var(--text);
+    border-radius:var(--radius);padding:14px 16px;cursor:pointer;font:inherit}
+  .sw-opt:hover{border-color:var(--line-strong);background:var(--elevated)}
+  .sw-opt[aria-pressed="true"]{border-color:var(--accent);background:var(--elevated)}
+  .sw-opt b{display:block;font-weight:600;margin-bottom:2px}
+  .sw-opt span{color:var(--dim);font-size:.85rem;line-height:1.45}
+  .sw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+  .sw-grid .sw-opt{padding:12px 14px}
+  #setupWizard label{display:block;font-size:.8rem;color:var(--dim);margin-bottom:6px}
+  #setupWizard input[type=text]{width:100%;background:var(--elevated);color:var(--text);
+    border:1px solid var(--line-strong);border-radius:8px;padding:11px 13px;
+    font:inherit;font-size:1rem}
+  #setupWizard input[type=text]:focus-visible{outline:2px solid var(--accent);
+    outline-offset:1px;border-color:var(--accent)}
+  .sw-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:4px}
+  .sw-btn{background:var(--elevated);color:var(--text);border:1px solid var(--line-strong);
+    border-radius:8px;padding:11px 18px;font:inherit;font-weight:560;cursor:pointer}
+  /* Must exclude .primary: `.sw-btn:hover:not(:disabled)` is specificity (0,3,0)
+     and would beat `.sw-btn.primary` (0,2,0), replacing the accent fill with a
+     dark grey while the text stays near-black -- an unreadable button on hover.
+     Caught by reading the computed style, not by looking at it. */
+  .sw-btn:hover:not(:disabled):not(.primary){background:var(--elevated-2)}
+  .sw-btn.primary{background:var(--accent);border-color:var(--accent);color:#06180a}
+  .sw-btn.primary:hover:not(:disabled){filter:brightness(1.08)}
+  /* A disabled primary at opacity .5 still reads as a live green button. Strip
+     the fill entirely so "not yet" is unmistakable rather than merely dimmer. */
+  .sw-btn:disabled{cursor:default;background:var(--elevated);color:var(--dim);
+    border-color:var(--line);opacity:.75}
+  .sw-rec{border:1px solid var(--accent);background:var(--accent-soft);
+    border-radius:var(--radius);padding:16px}
+  .sw-rec b{font-size:1.05rem}
+  .sw-rec ul{margin:10px 0 0;padding-left:18px;color:var(--dim);font-size:.88rem;
+    line-height:1.6}
+  .sw-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+    gap:1px;background:var(--line);border:1px solid var(--line);
+    border-radius:var(--radius);overflow:hidden;margin-top:12px}
+  .sw-facts div{background:var(--surface);padding:10px 12px}
+  .sw-facts dt{font-size:.7rem;color:var(--dim);text-transform:uppercase;
+    letter-spacing:.05em;margin:0}
+  .sw-facts dd{margin:3px 0 0;font-size:.9rem;font-variant-numeric:tabular-nums}
+  .sw-unknown{color:var(--dim);font-style:italic}
+  .sw-note{font-size:.82rem;color:var(--dim);line-height:1.55;margin:0}
+  .sw-warn{background:var(--warn-soft);border:1px solid var(--line);
+    border-radius:var(--radius);padding:12px 14px;color:var(--text)}
+  .sw-err{color:var(--danger);font-size:.88rem;margin:0}
+  .sw-spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line-strong);
+    border-top-color:var(--accent);border-radius:50%;animation:swspin .7s linear infinite;
+    vertical-align:-2px;margin-right:8px}
+  @keyframes swspin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.sw-spin{animation:none;border-top-color:var(--dim)}}
+  @media (max-width:520px){.sw-wrap{padding:20px 14px 40px}#setupWizard h1{font-size:1.28rem}}
+</style>
+
+<div id="setupWizard" role="dialog" aria-modal="true" aria-labelledby="swTitle" hidden>
+  <div class="sw-wrap">
+    <div class="sw-brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ic-radar"/></svg>
+      <span>Wavr setup</span>
+    </div>
+    <div class="sw-steps" id="swSteps" aria-hidden="true"></div>
+    <h1 id="swTitle">Welcome to Wavr</h1>
+    <p class="sw-lede" id="swLede"></p>
+    <div id="swBody"></div>
+    <p class="sw-err" id="swErr" hidden></p>
+    <div class="sw-actions" id="swActions"></div>
+  </div>
+</div>
+
+<script src="js/wizard.js"></script>
+
 </body>
 </html>

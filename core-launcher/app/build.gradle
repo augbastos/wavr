@@ -1,6 +1,34 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
+// ===========================================================================
+// Embedded Wavr Core runtime (ADR-0010) — OPT-IN, off by default.
+//
+//   ./gradlew assembleDebug                     -> the kiosk, exactly as before
+//   ./gradlew assembleDebug -PwavrPython=true   -> the Core (CPython in the APK)
+//
+// Off by default for two concrete reasons, neither of them timidity:
+//   1. Chaquopy's pip step needs a HOST CPython 3.13 on the build machine.
+//      Making that mandatory would stop every contributor who only wants to
+//      build the kiosk, which today needs nothing but the Android SDK.
+//   2. The Core build is ~34 MB against the kiosk's ~2 MB. That is the right
+//      price for a Core and the wrong one for a WebView, so it is a choice
+//      someone makes, not a thing that happens to them.
+//
+// If auto-detection of python3.13 fails, point at it explicitly:
+//   -PwavrBuildPython="C:/path/to/python3.13.exe"
+// ===========================================================================
+def wavrPython = project.hasProperty('wavrPython') &&
+        project.property('wavrPython').toString().toBoolean()
+if (wavrPython) {
+    apply plugin: 'com.chaquo.python'
+}
+
+// Repo root, relative to core-launcher/app.
+def repoRoot = file("${projectDir}/../..")
+def pythonStage = layout.buildDirectory.dir("generated/wavrPython").get().asFile
+def assetStage = layout.buildDirectory.dir("generated/wavrAssets").get().asFile
+
 android {
     namespace = "dev.wavr.core"
     compileSdk = 35
@@ -11,6 +39,87 @@ android {
         targetSdkVersion 35
         versionCode 1
         versionName "1.0"
+
+        if (wavrPython) {
+            ndk {
+                // arm64 ONLY. Every extra ABI adds another full copy of
+                // libpython + OpenSSL + SQLite + numpy (~10 MB compressed each),
+                // and every device this Core is meant for — the Moto G Power
+                // included — is arm64. armeabi-v7a would also cap numpy at an
+                // older wheel set for nobody's benefit.
+                abiFilters "arm64-v8a"
+            }
+
+            python {
+                // 3.13, not 3.14: Chaquopy 17 supports 3.10–3.14, but its native
+                // package repository tops out at cp313 for numpy (1.26.2,
+                // arm64_v8a, android-24). Choosing 3.14 would trade a working
+                // numpy for a version number.
+                version "3.13"
+                if (project.hasProperty('wavrBuildPython')) {
+                    buildPython project.property('wavrBuildPython').toString()
+                }
+
+                pip {
+                    // EXACT pins, and they are not arbitrary: this is what pip
+                    // actually resolved for arm64-v8a from the floors declared in
+                    // backend/pyproject.toml. Pinning makes the APK reproducible
+                    // AND makes the FastAPI ceiling explicit instead of accidental.
+                    //
+                    // The ceiling: FastAPI >= 0.126 requires pydantic v2, whose
+                    // pydantic-core is a Rust extension with no Android wheel
+                    // anywhere — not on PyPI, not in Chaquopy's repository. pip
+                    // therefore backtracks to the last FastAPI that admits
+                    // pydantic v1 (pure Python). Wavr survives that because it
+                    // defines ZERO pydantic models and zero response_model:
+                    // FastAPI is a router here. See ADR-0010 "Risks".
+                    install "fastapi==0.125.0"
+                    install "starlette==0.50.0"
+                    install "pydantic==1.10.26"
+                    install "anyio==4.15.0"
+                    install "idna==3.19"
+                    install "typing-extensions==4.16.0"
+                    install "annotated-doc==0.0.5"
+
+                    // uvicorn WITHOUT [standard]: uvloop, httptools and watchfiles
+                    // have no Android wheels. asyncio + h11 is what the Core needs.
+                    install "uvicorn==0.52.4"
+                    install "h11==0.16.0"
+                    install "click==8.5.0"
+
+                    install "websockets==17.1"
+                    install "python-dotenv==1.2.3"
+
+                    // numpy is a BASE requirement of wavr.app (calib_store ->
+                    // localize's homography maths), not a camera extra. The whole
+                    // backend's numpy surface is array/asarray/all/cross/isfinite/
+                    // linalg/ndarray — all 1.x API, so 1.26.2 is not a compromise.
+                    install "numpy==1.26.2"
+
+                    // The [tls] extra. Needed the moment the operator turns on LAN
+                    // mode, because that path generates a self-signed cert.
+                    install "cryptography==42.0.8"
+                    install "cffi==1.17.1"
+                    install "pycparser==3.0"
+                }
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            if (wavrPython) {
+                // The Core itself. Staged from backend/wavr by stageWavrPython so
+                // the APK carries the SAME files the desktop runs — no Android
+                // fork, no vendored copy — while leaving tests/ and __pycache__
+                // out of the package.
+                python.srcDirs += pythonStage
+                // frontend/ has to live on a real filesystem path for FileResponse
+                // to serve it; AssetStaging.kt extracts it to filesDir on first
+                // run and WAVR_FRONTEND points there.
+                assets.srcDirs += assetStage
+            }
+        }
     }
 
     buildTypes {
@@ -28,6 +137,44 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+// ---------------------------------------------------------------------------
+// Staging tasks (only registered for the Core build).
+//
+// Sync, not Copy: a file deleted from backend/wavr must disappear from the APK
+// too, and Copy would leave it behind forever.
+// ---------------------------------------------------------------------------
+if (wavrPython) {
+    tasks.register('stageWavrPython', Sync) {
+        description = "Stage backend/wavr into the APK's Python source set."
+        from("${repoRoot}/backend/wavr") {
+            exclude '**/__pycache__/**'
+            exclude '**/*.pyc'
+        }
+        into new File(pythonStage, 'wavr')
+    }
+
+    tasks.register('stageWavrFrontend', Sync) {
+        description = "Stage frontend/ into the APK's assets."
+        from("${repoRoot}/frontend") {
+            exclude '**/.DS_Store'
+        }
+        into new File(assetStage, 'frontend')
+    }
+
+    tasks.named('preBuild').configure {
+        dependsOn 'stageWavrPython', 'stageWavrFrontend'
+    }
+    // preBuild is not a guaranteed ancestor of Chaquopy's and AGP's own source /
+    // asset merges, so wire the consumers directly rather than trusting task
+    // ordering to work out.
+    tasks.matching {
+        it.name ==~ /merge.*PythonSources/ || it.name ==~ /generate.*PythonSourceAssets/
+    }.configureEach { dependsOn 'stageWavrPython' }
+    tasks.matching {
+        it.name ==~ /merge.*Assets/ || it.name ==~ /generate.*Assets/
+    }.configureEach { dependsOn 'stageWavrFrontend' }
 }
 
 dependencies {
@@ -52,4 +199,13 @@ dependencies {
     implementation "androidx.camera:camera-core:1.4.2"
     implementation "androidx.camera:camera-camera2:1.4.2"
     implementation "androidx.camera:camera-lifecycle:1.4.2"
+
+    // NOTE: the Core runtime added NO new coordinate. ServiceCompat and
+    // ContextCompat come from androidx.core (1.13.0, already resolved through
+    // appcompat); LifecycleRegistry from androidx.lifecycle (2.6.2, likewise);
+    // the foreground service, JobScheduler, PowerManager thermal API and
+    // notification builder are all framework. `androidx.lifecycle:lifecycle-
+    // service` was deliberately NOT added — CoreService drives its own twelve
+    // lines of LifecycleRegistry instead — so this project keeps building from
+    // the versions already in the local cache.
 }

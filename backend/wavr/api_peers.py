@@ -127,7 +127,7 @@ def _linkback_deps_not_wired() -> None:
 
 def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
                              self_base_url, local_ip,
-                             admin_deps=None, linkback_deps=None) -> APIRouter:
+                             admin_deps=None, linkback_deps=None, core_status_fn=None) -> APIRouter:
     """Loopback-root control plane + the single peer-reachable reverse-leg route.
     `admin_deps` (loopback-root-only) wrap discovered/observe/confirm/list/unpair;
     `linkback_deps` (require_central) wrap link-back only. Both FAIL CLOSED if
@@ -215,6 +215,26 @@ def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
             device_store.revoke(a_did_for_b)
             return {"peer_id": peer_id, "reverse_leg_ok": False}
         return {"peer_id": peer_id, "reverse_leg_ok": True}
+
+    @router.get("/api/peers/core-status", dependencies=linkback_deps)
+    async def core_status():
+        """This Core's leadership state, for a PAIRED peer to reconcile against.
+
+        Gated by `linkback_deps` (require_central), so only a peer that completed
+        the pairing handshake -- pinned certificate, bearer token -- can read it.
+        That gate is the whole design: the answer feeds the other Core's
+        `observe_peer`, which can DEMOTE it, so an unauthenticated version of
+        this endpoint would hand every device on the LAN the ability to shut a
+        household's Core down by claiming a huge epoch.
+
+        Returns nothing about the house -- an id, an epoch, a status, a protocol
+        version."""
+        if core_status_fn is None:
+            raise HTTPException(status_code=503, detail="no Space on this Core")
+        state = core_status_fn()
+        if not state:
+            raise HTTPException(status_code=503, detail="no Space on this Core")
+        return state
 
     @router.post("/api/peers/link-back", dependencies=linkback_deps)
     async def link_back(request: Request, token: str = Body(...), base_url: str = Body(...),

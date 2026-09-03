@@ -1,0 +1,228 @@
+name: install-matrix
+
+# Validates scripts/install.sh on real Linux distros -- something docs/INSTALL.md is
+# explicit this repo has never done ("Syntax-checked... but not run on an actual Linux
+# box or real Raspberry Pi hardware. Treat this route as reviewed, not field-proven.").
+# This workflow removes the "not run" half of that sentence for five distro/arch
+# combinations; it does not (and cannot) touch real Raspberry Pi hardware -- see the
+# per-job comments below for exactly what still can't be proven here.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/install.sh"
+      - "backend/**"
+      - ".github/workflows/install-matrix.yml"
+  push:
+    branches: [master]
+    paths:
+      - "scripts/install.sh"
+      - "backend/**"
+      - ".github/workflows/install-matrix.yml"
+
+concurrency:
+  group: install-matrix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck scripts/install.sh (POSIX sh dialect, matching its own shebang)
+        run: |
+          command -v shellcheck >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y shellcheck; }
+          shellcheck --shell=sh scripts/install.sh
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian-12-amd64
+            image: debian:12
+            platform: linux/amd64
+          - name: ubuntu-24.04-amd64
+            image: ubuntu:24.04
+            platform: linux/amd64
+          - name: fedora-40-amd64
+            image: fedora:40
+            platform: linux/amd64
+          - name: alpine-3.20-amd64
+            image: alpine:3.20
+            platform: linux/amd64
+          # As close to a Raspberry Pi's architecture as CI gets: real arm64 machine
+          # code under QEMU user-mode emulation, exercising install.sh's `uname -m`
+          # architecture-detection path on non-x86. Debian only (one arch leg is enough
+          # to prove the emulation setup and the script's arch-reporting path both work;
+          # see the job-level comment for what this still doesn't prove about a real Pi).
+          - name: debian-12-arm64
+            image: debian:12
+            platform: linux/arm64
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: set up QEMU (arm64 only)
+        if: matrix.platform != 'linux/amd64'
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      # ---- Part 1: with no adequate Python reachable, install.sh must refuse cleanly ----
+      #
+      # install.sh's find_python() runs before anything else touches the filesystem or
+      # network, so this needs no prerequisites at all -- just the base image's own `sh`.
+      #
+      # VERIFIED, NOT ASSUMED (per the brief): pulled each image's actual registry layer
+      # and listed its contents rather than guessing. debian:12, ubuntu:24.04 and
+      # alpine:3.20 ship no python3 binary at all -- only their package manager. fedora:40
+      # is the exception: its base layer already contains /usr/bin/python3 ->
+      # /usr/bin/python3.12, because Fedora 40's dnf is still the classic Python-based
+      # dnf4 (confirmed via usr/bin/dnf4 in the same layer), which depends on it. So
+      # "genuinely lacks Python 3.11+" is true for three of these four images and false
+      # for the fourth on day one -- and could flip for any of them on a future rebuild.
+      # Rather than hardcode that finding as a fact that silently rots, the script below
+      # makes the precondition true itself: it hunts down and moves aside any interpreter
+      # it finds that already satisfies >=3.11, then re-checks, so this leg exercises the
+      # real failure path on every image regardless of what that image ships today.
+      - name: "no adequate Python reachable -> install.sh must print the right hint and exit non-zero"
+        run: |
+          cat > "$RUNNER_TEMP/missing-python-test.sh" <<'SCRIPT_EOF'
+          set -eu
+
+          hide_adequate_pythons() {
+              for py in python3.13 python3.12 python3.11 python3 python; do
+                  path="$(command -v "$py" 2>/dev/null || true)"
+                  [ -n "$path" ] || continue
+                  if "$path" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)' 2>/dev/null; then
+                      echo "found $path (>=3.11) on this image -- moving it aside for this test"
+                      mv "$path" "$path.hidden-for-ci"
+                  fi
+              done
+          }
+
+          echo "== ensuring no adequate Python is reachable on PATH =="
+          hide_adequate_pythons
+          hash -r 2>/dev/null || true
+
+          echo "== confirming none remain (would mean this leg cannot test the failure path) =="
+          for py in python3.13 python3.12 python3.11 python3 python; do
+              path="$(command -v "$py" 2>/dev/null || true)"
+              if [ -n "$path" ] && "$path" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)' 2>/dev/null; then
+                  echo "FAIL: $path (>=3.11) is still reachable after attempting to hide every candidate" >&2
+                  exit 1
+              fi
+          done
+          echo "confirmed: no python interpreter >=3.11 is reachable -- proceeding"
+
+          echo "== running install.sh with no adequate Python present =="
+          set +e
+          output="$(sh /host-repo/scripts/install.sh --dir /tmp/wavr-install --no-start 2>&1)"
+          rc=$?
+          set -e
+          echo "$output"
+
+          if [ "$rc" -eq 0 ]; then
+              echo "FAIL: install.sh exited 0 with no Python 3.11+ available -- expected non-zero" >&2
+              exit 1
+          fi
+          echo "confirmed: install.sh exited non-zero ($rc) as expected"
+
+          echo "== asserting the hint names the right package manager for this distro =="
+          if command -v apt-get >/dev/null 2>&1; then
+              expect='python3-venv'
+          elif command -v dnf >/dev/null 2>&1; then
+              expect='dnf install'
+          elif command -v apk >/dev/null 2>&1; then
+              expect='apk add'
+          else
+              echo "FAIL: no known package manager (apt-get/dnf/apk) found -- cannot know what hint to expect" >&2
+              exit 1
+          fi
+
+          case "$output" in
+              *"$expect"*) : ;;
+              *)
+                  echo "FAIL: expected the hint to mention '$expect', got:" >&2
+                  echo "$output" >&2
+                  exit 1
+                  ;;
+          esac
+          echo "ALL CHECKS PASSED (missing-python behaviour)"
+          SCRIPT_EOF
+
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$RUNNER_TEMP/missing-python-test.sh:/test.sh:ro" \
+            -v "${{ github.workspace }}:/host-repo:ro" \
+            ${{ matrix.image }} sh /test.sh
+
+      # ---- Part 2: with real prerequisites, the full install/start/uninstall cycle ----
+      #
+      # Package sets below are copied VERBATIM from install.sh's own
+      # print_python_install_hint() branches, so this also validates that the script's
+      # own advice actually works, not just that the script runs once someone else gets
+      # the environment right.
+      - name: "happy path: install, start, /healthz, --uninstall (data survives)"
+        run: |
+          cat > "$RUNNER_TEMP/happy-path-test.sh" <<'SCRIPT_EOF'
+          set -eu
+
+          echo "== installing prerequisites (verbatim from install.sh's own hint text) =="
+          if command -v apt-get >/dev/null 2>&1; then
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y --no-install-recommends python3 python3-venv python3-pip curl ca-certificates >/dev/null
+          elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y python3 python3-pip curl ca-certificates >/dev/null
+          elif command -v apk >/dev/null 2>&1; then
+              apk update >/dev/null
+              apk add --no-cache python3 py3-pip py3-virtualenv curl ca-certificates >/dev/null
+          else
+              echo "no known package manager (apt-get/dnf/apk) found -- cannot install prerequisites" >&2
+              exit 1
+          fi
+          python3 --version
+
+          cp -r /host-repo /work
+          cd /work
+
+          echo "== running install.sh (happy path) =="
+          sh scripts/install.sh --dir /work/.wavr-install --port 8000
+
+          echo "== asserting the venv was created =="
+          test -x /work/.wavr-install/venv/bin/python
+
+          echo "== asserting the backend answers /healthz =="
+          resp="$(curl -fsS http://127.0.0.1:8000/healthz)"
+          echo "$resp"
+          case "$resp" in
+              *'"ok":true'*) : ;;
+              *)
+                  echo "FAIL: /healthz did not report ok:true -- got: $resp" >&2
+                  exit 1
+                  ;;
+          esac
+
+          echo "== uninstalling (must remove the venv, must NEVER remove the data) =="
+          sh scripts/install.sh --dir /work/.wavr-install --uninstall
+
+          if [ -e /work/.wavr-install/venv ]; then
+              echo "FAIL: venv still present after --uninstall" >&2
+              exit 1
+          fi
+          if [ ! -f /work/.wavr-install/wavr.db ]; then
+              echo "FAIL: wavr.db missing after --uninstall -- data must never be deleted" >&2
+              exit 1
+          fi
+          echo "ALL CHECKS PASSED (happy path: install, start, healthz, uninstall-keeps-data)"
+          SCRIPT_EOF
+
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$RUNNER_TEMP/happy-path-test.sh:/test.sh:ro" \
+            -v "${{ github.workspace }}:/host-repo:ro" \
+            ${{ matrix.image }} sh /test.sh

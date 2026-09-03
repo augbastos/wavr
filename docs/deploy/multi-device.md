@@ -2,7 +2,7 @@
 
 Turn a Wavr desktop into a **central** that a mobile app or a second PC on the **same
 Wi-Fi** can connect to as an authenticated companion. Design: [ADR-0006](../adr/0006-authenticated-lan-access.md).
-Implementation: [spec](../superpowers/specs/2026-07-03-multi-device-client-auth-design.md).
+Wire-level contract: [`docs/WAVR-PROTOCOL.md`](../WAVR-PROTOCOL.md) §4, §6.
 
 **Opt-in and default-OFF.** With `WAVR_MULTIDEVICE` unset, Wavr is strict loopback-only,
 exactly as before — this whole surface is inert.

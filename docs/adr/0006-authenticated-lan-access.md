@@ -61,5 +61,5 @@ Constraints the product owner set for this model:
   UI, local cert generation.
 - This is the enabler for the mobile companion and a multi-central topology. It does
   **not** enable cross-internet / cross-site access — federation across different LANs
-  (VPN/tunnel, distributed identity) is deliberately out of scope and stays in the
-  roadmap's long-horizon tier.
+  (VPN/tunnel, distributed identity) is deliberately out of scope; see
+  `docs/WAVR-PROTOCOL.md` §13 ("No internet federation").

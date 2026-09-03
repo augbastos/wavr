@@ -26,8 +26,8 @@ Both a proot/container Core (which never receives inbound LAN multicast) and a r
 the hub with **zero** foreign multicast. From one host these are indistinguishable, so Wavr
 reports `HOST_MULTICAST_UNAVAILABLE` in both — the copy names *both* possibilities and asks the
 user to try the Core outside a container **or** check AP isolation. The clean test is to run the
-Core on a normal laptop on the same network (see `TESTPLAN` T3): there, true AP isolation shows
-as `AP_ISOLATION_OR_MDNS_FILTERING`.
+Core on a normal laptop on the same network: there, true AP isolation shows as
+`AP_ISOLATION_OR_MDNS_FILTERING`.
 
 ## 2. IGMP snooping without a querier
 

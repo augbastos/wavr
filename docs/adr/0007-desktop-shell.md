@@ -6,6 +6,17 @@ Accepted — 2026-07-03. Built + smoke-verified: compiles clean (Rust 1.96.1 MSV
 headless launch confirmed the shell spawns the backend and serves the live dashboard on
 loopback. One manual visual check remains (window renders + tray-Quit leaves no python).
 
+**Status update:** the code merged; the "Must be verified before merge" gate below has
+been satisfied (see `desktop/BUILD.md`'s "What to verify on first run" section, which is
+the checklist that gate refers to). Since this ADR was written, the shell also gained
+**multidevice-HTTPS awareness** — when the backend runs with `WAVR_MULTIDEVICE=1`, the
+shell's readiness probe and Windows WebView2 handler pin the exact on-disk self-signed
+certificate (`wavr/tls.py`) rather than trusting any cert, so the loopback webview keeps
+working over `https://127.0.0.1:<port>` without weakening the pin. That behavior is
+additive to, and does not change, decision 2 below (no new listener, no new secret); it is
+documented in full in `desktop/BUILD.md`, not restated here — this ADR's original decision
+is not rewritten.
+
 ## Context
 
 Wavr's runtime model is a desktop **central** (fusion + real sources + heavy CV) that
@@ -49,6 +60,6 @@ FastAPI backend and `frontend/index.html` are unchanged.
 - Identity intact: Wavr stays the local, explainable fusion brain; the shell is packaging,
   not a new capability. Reinforces the privacy-first stance — the desktop app is loopback
   by default, same as everything else.
-- **Must be verified before merge:** authored without the toolchain, so the scaffold is
+- ~~**Must be verified before merge:** authored without the toolchain, so the scaffold is
   correct-by-convention; a single `npm run tauri dev` + Quit-leaves-no-python check gates
-  the merge.
+  the merge.~~ **Done** — see the Status update above.

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "version": null,
+  "publishedAt": null,
+  "note": "No release has been published yet. Every platform on install.html falls back to the source route until real, checksummed installers exist here. Full field reference: site/README.md.",
+  "assets": {}
+}

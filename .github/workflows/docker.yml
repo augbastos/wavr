@@ -1,0 +1,143 @@
+name: docker
+
+# Validates backend/Dockerfile + docker-compose.yml for real: builds the image, starts
+# it, and proves the two things a build-only check cannot -- (1) GET / serves the real
+# dashboard instead of 404ing (the exact regression backend/Dockerfile's `COPY frontend`
+# fixed: wavr.app resolves the dashboard as
+# `Path(__file__).resolve().parents[2] / "frontend" / "index.html"`, and an image
+# without frontend/ builds, starts, and passes /healthz with no UI at all), and
+# (2) /data survives a restart.
+#
+# Path-filtered so an unrelated commit (docs, CI for a different surface, ...) never
+# burns a build.
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - ".github/workflows/docker.yml"
+  push:
+    branches: [master]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - ".github/workflows/docker.yml"
+
+# A new push to the same ref obsoletes the previous run's verdict (same reasoning as
+# tests.yml). Public repo, so this is about a clean signal, not minutes.
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build the image
+        run: docker build -f backend/Dockerfile -t wavr-ci:test .
+
+      - name: start the container
+        run: |
+          docker volume create wavr-ci-data
+          # network_mode: host, matching docker-compose.yml -- backend/Dockerfile's CMD
+          # binds 127.0.0.1 ONLY (loopback-peer guard, see its own comment), so a normal
+          # `-p 8000:8000` publish would NAT to the container's own interface and never
+          # reach a listener bound strictly to loopback. Host networking makes the
+          # runner's 127.0.0.1:8000 BE the container's 127.0.0.1:8000.
+          docker run -d --name wavr-ci --network host \
+            -v wavr-ci-data:/data wavr-ci:test
+
+      - name: wait for /healthz
+        run: |
+          ok=0
+          resp=""
+          for i in $(seq 1 30); do
+            if resp="$(curl -fsS http://127.0.0.1:8000/healthz 2>/dev/null)"; then
+              case "$resp" in
+                *'"ok":true'*) ok=1; break ;;
+              esac
+            fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "container never answered /healthz with ok:true within 30s (last response: '$resp')" >&2
+            exit 1
+          fi
+          echo "healthz: $resp"
+
+      - name: "REGRESSION GUARD: GET / must serve the dashboard, not a 404"
+        run: |
+          # This is exactly the bug backend/Dockerfile's `COPY frontend /app/frontend`
+          # fixed: without frontend/ baked into the image, wavr.app's dashboard-path
+          # lookup misses and GET / 404s -- while the container still builds, starts and
+          # passes /healthz with no user interface at all. `curl -f` fails outright on a
+          # 404 (belt), and grepping the body for a string ONLY the real dashboard's
+          # <title> contains (suspenders) catches a 200-but-wrong-page response too.
+          curl -fsS http://127.0.0.1:8000/ -o /tmp/index.html
+          if ! grep -qF 'Wavr — Command Center' /tmp/index.html; then
+            echo "GET / returned 200 but is not the real dashboard (missing page title)" >&2
+            head -c 500 /tmp/index.html >&2
+            exit 1
+          fi
+          # The shell is no longer one file. index.html loading while its
+          # scripts 404 gives a dashboard whose setup screen and Discoveries tab
+          # quietly do nothing -- the same class of failure, one layer down.
+          for f in js/wizard.js js/discoveries.js; do
+            curl -fsS "http://127.0.0.1:8000/$f" -o /dev/null \
+              || { echo "shell script $f is missing from the image" >&2; exit 1; }
+          done
+          echo "GET / served the real dashboard, and its scripts."
+
+      - name: verify /data persists across a restart
+        run: |
+          marker="ci-marker-$(date +%s)"
+          docker exec wavr-ci sh -c "echo '$marker' > /data/ci-marker.txt"
+          docker exec wavr-ci test -f /data/wavr.db \
+            || { echo "wavr.db was never created under /data (the app's own SQLite store)" >&2; exit 1; }
+
+          docker restart wavr-ci
+
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          [ "$ok" -eq 1 ] || { echo "container never came back healthy after restart" >&2; exit 1; }
+
+          got="$(docker exec wavr-ci cat /data/ci-marker.txt)"
+          if [ "$got" != "$marker" ]; then
+            echo "marker did not survive the restart: got '$got', want '$marker'" >&2
+            exit 1
+          fi
+          docker exec wavr-ci test -f /data/wavr.db \
+            || { echo "wavr.db did not survive the restart" >&2; exit 1; }
+          echo "the mounted /data volume (both our marker and the app's own wavr.db) survived a container restart."
+
+      - name: verify the container runs as non-root
+        run: |
+          uid="$(docker exec wavr-ci id -u)"
+          if [ "$uid" != "10001" ]; then
+            echo "container is running as uid $uid, expected 10001 (backend/Dockerfile's 'wavr' user)" >&2
+            exit 1
+          fi
+          echo "running as uid $uid (non-root), as expected."
+
+      - name: dump container logs on failure
+        if: failure()
+        run: docker logs wavr-ci || true
+
+      - name: cleanup
+        if: always()
+        run: |
+          docker rm -f wavr-ci >/dev/null 2>&1 || true
+          docker volume rm wavr-ci-data >/dev/null 2>&1 || true

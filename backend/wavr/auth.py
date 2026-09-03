@@ -75,6 +75,85 @@ def authorize(peer_host, host_subnet, bearer_token, device_store) -> str | None:
 
 
 # Role hierarchy helpers used by the per-route gate in app.py.
+# -- Person-role narrowing ----------------------------------------------------
+#
+# A credential's authority is capped by the authority of the PERSON it belongs
+# to, resolved fresh on every request. The cap can only ever narrow:
+#
+#     effective = min(role the credential was issued, role the person has today)
+#
+# Which direction is chosen is the entire security argument.
+#
+#   * Demoting someone takes effect on their device's NEXT REQUEST. No revoke,
+#     no window, no "existing devices keep their access until you get round to
+#     it". This is the direction that matters and the reason this exists.
+#   * PROMOTING someone does NOT widen a credential already in the wild. A token
+#     issued as `user` stays `user` however senior its owner becomes; widening
+#     requires deliberately re-pairing the device. So a mis-click or a hostile
+#     edit on the people screen cannot hand authority to credentials that are
+#     already out there.
+#   * A device with NO person (`person_id is None`) is untouched: every device
+#     paired before this existed, every node, every agent. Byte-identical.
+#   * A DANGLING association (the person was removed) is denied outright rather
+#     than falling back to the issued role -- fail closed.
+#
+# `agent` is deliberately outside the ladder. It is a bounded machine credential,
+# not a human's device; it has no person and no rung.
+_ROLE_RANK: dict[str, int] = {"guest": 1, "user": 2, "central": 3}
+
+
+def narrower_role(issued: str | None, person_grants: str | None) -> str | None:
+    """The lesser of two credential roles.
+
+    Returns `issued` unchanged when either side is outside the ladder (`agent`,
+    `root`, or anything unrecognised) -- an unknown rung must never be treated as
+    a high one, and must never silently rewrite a role this function does not
+    understand."""
+    a, b = _ROLE_RANK.get(issued or ""), _ROLE_RANK.get(person_grants or "")
+    if a is None or b is None:
+        return issued
+    return issued if a <= b else person_grants
+
+
+def _apply_person_cap(device, person_role_fn):
+    """Resolve a device's effective role against its person. Returns the role, or
+    None to DENY.
+
+    `person_role_fn(person_id) -> str | None` is injected (app.py supplies one
+    backed by `space_store`) so this module keeps its no-imports-from-the-app
+    discipline. Not injected, or the device has no person: nothing changes."""
+    person_id = getattr(device, "person_id", None)
+    if not person_id or person_role_fn is None:
+        return device.role
+    if device.role == "agent":
+        return device.role          # a machine principal has no person
+    person_role = person_role_fn(person_id)
+    if person_role is None:
+        # The association points at somebody who is no longer in this Space.
+        # Deny rather than degrade: a credential whose owner was removed should
+        # stop working, and `space_store.remove_person` already revokes them --
+        # this catches the case where that revoke did not happen.
+        return None
+    return narrower_role(device.role, person_role)
+
+
+def scopes_for_device(device, person_role_fn=None):
+    """The scopes a device ACTUALLY holds right now, or None to DENY.
+
+    The one answer for callers that hold a `Device` rather than a request: the
+    person cap is applied first, exactly as `access_for_scoped` applies it, then
+    the role's effective scopes are resolved. Existing as a single function is
+    the point -- `/ws/live` gated itself with a hand-rolled
+    `effective_scopes(dev.role, dev.scopes)` that skipped the cap entirely, and a
+    demoted person's socket went on streaming per-person geometry and vitals.
+    Anything holding a Device should ask here rather than reassemble it.
+    """
+    role = _apply_person_cap(device, person_role_fn)
+    if role is None:
+        return None
+    return effective_scopes(role, getattr(device, "scopes", None))
+
+
 def can_change_state(role: str | None) -> bool:
     """State-changing routes (sources/cameras/config/pairing) require central+."""
     return role in ("root", "central")
@@ -239,6 +318,10 @@ MCP_TOOL_NAMES = frozenset({
     "list_rooms", "get_room_context", "get_house_map", "get_ha_entities",
     "get_network_inventory", "get_alerts", "query_occupancy_history",
     "get_house_status", "call_ha_service",
+    # The Space tools: Wavr's own model, assembled rather than left for the
+    # caller to reconstruct from parts (see wavr.mcp).
+    "get_space_context", "explain_room_state", "get_sensor_coverage",
+    "get_core_health", "get_device_context",
 })
 
 # Named tool-scope bundles an admin grants at pairing/promotion time (design brief
@@ -285,8 +368,31 @@ AGENT_ACTUATOR_TOOL_SCOPE = MCP_TOOL_NAMES
 # cloud-relayable agent gets current-occupancy only, not the history/inventory/
 # alerts/HA-entities/floor-plan crown jewels; an operator who wants more grants
 # AGENT_READ_TOOL_SCOPE (every read tool) or a hand-picked subset explicitly.
+#
+# The Space tools follow the SAME line. Four are current, room-level state and
+# join the default:
+#   * get_space_context   -- current occupancy + Core health. Carries the Space
+#     NAME, which is the same disclosure class as the room names `list_rooms`
+#     already returns here: a label the operator typed for their own space, given
+#     to an agent they deliberately paired. (Distinct from the mDNS case, which
+#     broadcasts an opaque id only -- there, every device on the segment can read
+#     it.)
+#   * explain_room_state  -- projects through the SAME `_ROOM_CONTEXT_FIELDS`
+#     allowlist as get_room_context, so it cannot widen what that already grants.
+#   * get_sensor_coverage -- which rooms are sensed. Mostly a NEGATIVE ("nothing
+#     is watching the garage"), and withholding it is worse than granting it: an
+#     agent that cannot tell "unsensed" from "empty" will confidently report an
+#     empty house.
+#   * get_core_health     -- operational status. Minimized to drop `base_url` and
+#     `cert_fingerprint` (LAN addressing + a TLS pin).
+# One does NOT, and joins the crown-jewel set above:
+#   * get_device_context  -- even with names, people and addresses stripped, a
+#     per-device list of what each device is for and what it can sense is a
+#     household census, the same class as get_network_inventory.
 AGENT_DEFAULT_TOOL_SCOPE = frozenset({
     "list_rooms", "get_room_context", "get_house_status",
+    "get_space_context", "explain_room_state", "get_sensor_coverage",
+    "get_core_health",
 })
 
 # Role -> default MCP tool-name allow-list (the tool-axis analog of DEFAULT_SCOPES).
@@ -331,7 +437,8 @@ def tool_call_allowed(tool_scopes: frozenset[str] | None, tool_name: str) -> boo
     return tool_name in tool_scopes
 
 
-def access_for_scoped(peer_host, host_subnet, bearer_token, device_store):
+def access_for_scoped(peer_host, host_subnet, bearer_token, device_store,
+                      person_role_fn=None):
     """`access_for`'s three-way sibling: resolves the caller's MCP tool-name
     allow-list (Phase 2A / B4) in the SAME one-verify pass, so app.py's middleware
     needs only one `device_store.verify()` to populate `request.state.role`,
@@ -358,7 +465,15 @@ def access_for_scoped(peer_host, host_subnet, bearer_token, device_store):
     device = device_store.verify(bearer_token)
     if device is None:
         return None, None, None
-    role = device.role
+    # Cap the credential by its person's CURRENT role (see `_apply_person_cap`).
+    # Narrowing only, resolved fresh on every request, so a demotion lands on the
+    # very next call. Returns None to deny when the association is dangling.
+    # With no `person_role_fn` injected -- or no person on the device -- this
+    # returns `device.role` unchanged and the whole decision is byte-identical to
+    # before this parameter existed.
+    role = _apply_person_cap(device, person_role_fn)
+    if role is None:
+        return None, None, None
     scopes = effective_scopes(role, device.scopes)
     tool_scopes = effective_tool_scopes(role, device.tool_scopes)
     return role, scopes, tool_scopes

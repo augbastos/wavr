@@ -30,6 +30,22 @@ class DiscoveredPeer:
     host: str
     port: int
     role: str
+    # OPAQUE Space id (first 16 chars), advertised so a device joining the
+    # network can tell "these two Cores serve the same Space" apart from "these
+    # are two unrelated Wavr installs on one LAN" -- WITHOUT the Space's human
+    # name ever going onto the wire. Naming your home is for you; broadcasting
+    # that name to every device on the segment is a disclosure nobody asked for.
+    # "" when the peer predates this field or has no Space yet.
+    space_id: str = ""
+    # The advertising Core's own id, the epoch it believes it is primary at, its
+    # status, and the Wavr Protocol version it speaks. ALL HINTS: anything on the
+    # segment can broadcast these. They make the Discovery Inbox card meaningful
+    # and let a joiner group Cores by Space; they never reach the leadership
+    # logic, which only listens to PAIRED peers over a pinned channel.
+    core_id: str = ""
+    epoch: int = 0
+    status: str = ""
+    protocol_version: int = 0
 
 
 def _display_name(service_name: str) -> str:
@@ -55,9 +71,27 @@ def _collect_peers(zc, names) -> list[DiscoveredPeer]:
         addrs = info.parsed_addresses()
         if not addrs:
             continue
-        role = (info.properties or {}).get(b"role", b"").decode(errors="replace")
+        props = info.properties or {}
+        # Bounded + charset-clamped: this is attacker-controllable text off the
+        # LAN, and it ends up in an admin UI list.
+        def _txt(key: str, limit: int = 32) -> str:
+            raw = props.get(key.encode(), b"").decode(errors="replace")[:limit]
+            return "".join(c for c in raw if c.isalnum() or c in "-_")
+
+        def _txt_int(key: str) -> int:
+            raw = _txt(key, 12)
+            return int(raw) if raw.isdigit() else 0
+
+        # `role` and the display name were the two fields NOT going through
+        # `_txt` -- which contradicted this block's own claim to be bounding
+        # attacker-controllable text off the LAN. No exploit today (every
+        # consumer uses textContent), but code should do what it says.
         found.append(DiscoveredPeer(
-            name=_display_name(name), host=addrs[0], port=info.port, role=role,
+            name=_display_name(name)[:64], host=addrs[0], port=info.port,
+            role=_txt("role", 16),
+            space_id=_txt("sid", 16), core_id=_txt("cid", 40),
+            epoch=_txt_int("ep"), status=_txt("st", 16),
+            protocol_version=_txt_int("pv"),
         ))
     return found
 
@@ -116,21 +150,57 @@ class _AdvertiseHandle:
         self._zc.close()
 
 
-def _build_service_info(name: str, port: int, role: str):
+def txt_properties(role: str, space_id: str = "", core_id: str = "",
+                   epoch: int = 0, status: str = "",
+                   protocol_version: int = 1) -> dict:
+    """The DNS-SD TXT record this Core advertises.
+
+    Extracted from `_build_service_info` so it can be tested without zeroconf
+    installed -- these values are read by anything on the segment and are the
+    input to another Core's Discovery Inbox, so their shape and bounds matter
+    more than the ServiceInfo plumbing around them.
+
+    A STANDBY advertises no epoch and no status: only a Core that believes it is
+    authoritative says so, which is what makes a disagreement detectable at all.
+    None of it is trusted -- see `api_peers.core_status` for the authenticated
+    channel that actually feeds leadership."""
+    props = {"v": "1", "path": "/", "role": role, "pv": str(int(protocol_version))}
+    if space_id:
+        props["sid"] = str(space_id)[:16]
+    if core_id:
+        props["cid"] = str(core_id)[:40]
+    # ONLY a Core that believes it is authoritative advertises a claim. The gate
+    # used to be `if status:`, and a Core that joined a Space carries
+    # `status="standby"` -- non-empty -- so every standby advertised an epoch
+    # too, which is ambient noise rather than a signal. A disagreement is only
+    # detectable if the advertisement means something.
+    if status == "primary":
+        props["st"] = str(status)[:16]
+        props["ep"] = str(int(epoch))
+    return props
+
+
+def _build_service_info(name: str, port: int, role: str, space_id: str = "",
+                        core_id: str = "", epoch: int = 0, status: str = "",
+                        protocol_version: int = 1):
     from zeroconf import ServiceInfo  # lazy: real path only
     import socket
 
     local_ip = socket.gethostbyname(socket.gethostname())
+    props = txt_properties(role, space_id, core_id, epoch, status,
+                           protocol_version)
     return ServiceInfo(
         _SERVICE_TYPE, f"{name}.{_SERVICE_TYPE}",
         addresses=[socket.inet_aton(local_ip)], port=port,
-        properties={"v": "1", "path": "/", "role": role},
+        properties=props,
         server=f"{name.lower().replace(' ', '-')}.local.",
     )
 
 
 def advertise_self(name: str, port: int, role: str = "desktop",
-                    zeroconf_factory=None, info_factory=None) -> _AdvertiseHandle:
+                    zeroconf_factory=None, info_factory=None,
+                    space_id: str = "", core_id: str = "", epoch: int = 0,
+                    status: str = "", protocol_version: int = 1) -> _AdvertiseHandle:
     """Register THIS instance as `_wavr._tcp` (Desktop's own advertise; Core
     already does this natively via core-launcher). Returns a handle with
     `.stop()` to unregister + close.
@@ -140,7 +210,9 @@ def advertise_self(name: str, port: int, role: str = "desktop",
     handle`). Real callers pass neither: the real path lazily builds a live
     `zeroconf.Zeroconf()` and an actual `zeroconf.ServiceInfo`."""
     zc = zeroconf_factory() if zeroconf_factory is not None else _real_zeroconf()
-    info = info_factory() if info_factory is not None else _build_service_info(name, port, role)
+    info = (info_factory() if info_factory is not None
+            else _build_service_info(name, port, role, space_id, core_id,
+                                     epoch, status, protocol_version))
     zc.register_service(info)
     return _AdvertiseHandle(zc, info)
 

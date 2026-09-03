@@ -1,0 +1,347 @@
+# Release artifacts. TAG ONLY.
+#
+# Deliberately not on push/PR. A release build is minutes of runner time and a
+# pile of binaries nobody asked for; the `tests` workflow is what guards every
+# commit. This fires only when a human pushes a `v*` tag, which is the moment a
+# release is actually intended.
+#
+# WHAT THIS DOES NOT DO, and why:
+#
+#   * It does not SIGN anything. There is no Windows code-signing certificate
+#     and no Android keystore in this repo, and inventing one is not a thing CI
+#     can do. Windows will therefore show a SmartScreen warning on the installer.
+#     That is disclosed in the release notes below rather than hidden — an
+#     unsigned binary presented as if it were signed is worse than an unsigned
+#     binary that says so.
+#   * It does not build an Android APK. The Android app lives in a separate
+#     repository and builds through EAS; wiring that here would require pushing
+#     credentials into this public repo.
+#   * It does not publish to PyPI, Docker Hub or any registry. Publishing to a
+#     namespace is an irreversible, outward-facing act that belongs to the
+#     repository owner, not to a workflow.
+#
+# The release is created as a DRAFT. A human reviews the artifacts and presses
+# publish. Nothing reaches the public automatically.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual runs are allowed so the build can be exercised without cutting a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write        # needed only to create the draft release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false     # never abandon a half-uploaded release
+
+jobs:
+  # The suite must pass before anything is built. A green tag that ships a
+  # broken binary is the failure mode this exists to prevent.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e "backend[dev]"
+      - run: python -m pytest backend/tests -q
+
+  # Source distribution + wheel. The one artifact that works on every platform
+  # and needs no signing, so it is the honest baseline every install route can
+  # fall back to.
+  python-dist:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build
+      - run: python -m build backend --outdir dist
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+  # The Tauri desktop shell. Windows is the only target the shell is verified on
+  # (docs/adr/0007 + desktop/BUILD.md: macOS/Linux HTTPS cert trust is not
+  # implemented), so it is the only one built here. Building an unverified
+  # macOS bundle would produce an artifact nobody has ever run.
+  windows-desktop:
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: build the bundled Core sidecar
+        # `desktop/src-tauri/binaries/` is gitignored -- it holds a ~40 MB
+        # generated binary that has no business in a public repo. So CI builds
+        # it here, before the Tauri build that declares it as `externalBin`.
+        # Without this step `tauri build` fails with
+        # "resource path binaries\wavr-core-<triple>.exe doesn't exist".
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e backend
+          python -m PyInstaller desktop/sidecar/wavr-core.spec             --distpath desktop/sidecar/dist --workpath desktop/sidecar/build --noconfirm
+          mkdir -p desktop/src-tauri/binaries
+          # Tauri resolves externalBin by target triple.
+          TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
+          cp "desktop/sidecar/dist/wavr-core.exe"              "desktop/src-tauri/binaries/wavr-core-${TRIPLE}.exe"
+          ls -la desktop/src-tauri/binaries/
+
+      - name: the sidecar must run, and serve the dashboard
+        # Catch a broken freeze HERE, not after a four-minute Tauri build. The
+        # dashboard check is the specific regression guard: a PyInstaller bundle
+        # that omits `frontend/` starts fine and 404s on `GET /`.
+        shell: bash
+        run: |
+          ./desktop/sidecar/dist/wavr-core.exe &
+          CORE=$!
+          for _ in $(seq 1 40); do
+            sleep 1
+            curl -sf http://127.0.0.1:8000/healthz && break
+          done
+          curl -sf http://127.0.0.1:8000/healthz | grep -q '"ok":true'             || { echo "sidecar did not answer /healthz"; kill $CORE; exit 1; }
+          curl -sf http://127.0.0.1:8000/ | grep -q "<title>Wavr"             || { echo "sidecar serves no dashboard"; kill $CORE; exit 1; }
+          # The shell is split across files now: a bundle that carries index.html
+          # and not its scripts serves a dashboard with no setup screen and no
+          # Discoveries tab, and nothing else would notice.
+          curl -sf http://127.0.0.1:8000/js/wizard.js      >/dev/null || { echo "sidecar is missing js/wizard.js"; kill $CORE; exit 1; }
+          curl -sf http://127.0.0.1:8000/js/discoveries.js >/dev/null || { echo "sidecar is missing js/discoveries.js"; kill $CORE; exit 1; }
+          echo "sidecar OK: health + dashboard + shell scripts"
+          kill $CORE || true
+        env:
+          WAVR_PORT: "8000"
+          WAVR_MULTIDEVICE: "0"
+          WAVR_BIND: "127.0.0.1"
+
+      - name: install desktop toolchain
+        working-directory: desktop
+        run: npm ci
+      - name: generate bundle icons
+        working-directory: desktop
+        # The icons are gitignored (they are generated), so a clean checkout has
+        # none and `tauri build` fails on the missing paths in tauri.conf.json.
+        run: npm run icon
+      - name: build
+        working-directory: desktop
+        run: npm run tauri build
+      - name: collect + checksum
+        shell: bash
+        run: |
+          mkdir -p out
+          find desktop/src-tauri/target/release/bundle -type f \
+            \( -name '*.msi' -o -name '*.exe' \) -exec cp {} out/ \;
+          cd out
+          [ -n "$(ls -A)" ] || { echo "no installer produced"; exit 1; }
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-desktop
+          path: out/
+
+  # Smoke-tests the two installers windows-desktop just produced, before either one is
+  # allowed anywhere near a draft release. main.rs's own header comment is the spec this
+  # checks against: on launch the shell spawns `python -m wavr.serve` as a child process
+  # and polls http://127.0.0.1:<port>/healthz -- so "does the installer work" is
+  # genuinely testable here, not just "did the build not crash", PROVIDED a Python
+  # backend is available for it to spawn (main.rs: `WAVR_PYTHON`, else `python` on
+  # PATH; `WAVR_BACKEND_DIR` sets the spawned process's cwd for its own .env lookup).
+  # This job builds that backend the same way scripts/install.ps1 and this repo's own
+  # CI do (`pip install --editable backend`) and points the installed app at it.
+  windows-desktop-smoke:
+    needs: windows-desktop
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-desktop
+          path: dist-installers
+
+      - name: build a throwaway backend venv for the installed app to spawn
+        shell: pwsh
+        run: |
+          python -m venv "$env:RUNNER_TEMP\wavr-backend-venv"
+          & "$env:RUNNER_TEMP\wavr-backend-venv\Scripts\python.exe" -m pip install --upgrade pip
+          & "$env:RUNNER_TEMP\wavr-backend-venv\Scripts\python.exe" -m pip install --editable backend
+          if ($LASTEXITCODE -ne 0) { throw "editable backend install failed (exit $LASTEXITCODE)" }
+
+      - name: "MSI round-trip: silent install -> launch -> /healthz -> silent uninstall"
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Path dist-installers -Filter *.msi -Recurse | Select-Object -First 1
+          if (-not $msi) { throw "no .msi found in the windows-desktop artifact" }
+          Write-Host "MSI: $($msi.FullName) ($($msi.Length) bytes)"
+          if ($msi.Length -le 0) { throw "MSI is zero bytes" }
+
+          $log = "$env:RUNNER_TEMP\msi-install.log"
+          $p = Start-Process msiexec.exe -ArgumentList "/i", "`"$($msi.FullName)`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            Get-Content $log -ErrorAction SilentlyContinue | Write-Host
+            throw "msiexec /i failed with exit code $($p.ExitCode)"
+          }
+
+          # tauri.conf.json doesn't pin an install root, so search the normal Windows
+          # locations rather than assume one (perMachine vs perUser bundler defaults).
+          $searchRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, "$env:LOCALAPPDATA\Programs") | Where-Object { $_ }
+          $exe = $searchRoots | ForEach-Object {
+            Get-ChildItem -Path $_ -Filter "wavr-desktop.exe" -Recurse -ErrorAction SilentlyContinue
+          } | Select-Object -First 1
+          if (-not $exe) { throw "wavr-desktop.exe not found under any of: $($searchRoots -join ', ') after MSI install" }
+          Write-Host "Installed binary: $($exe.FullName) ($($exe.Length) bytes)"
+          if ($exe.Length -le 0) { throw "installed binary is zero bytes" }
+
+          # The bundled Core MUST ship beside the shell. Without it the app
+          # falls back to `python -m wavr.serve` and the no-Python-prerequisite
+          # promise is void -- and it would still pass on a machine that happens
+          # to have Python, which is exactly how that regression reaches a user.
+          $sidecar = Join-Path $exe.DirectoryName "wavr-core.exe"
+          if (-not (Test-Path $sidecar)) {
+            throw "wavr-core.exe is missing next to the shell -- the installer would need Python"
+          }
+          $sidecarSize = (Get-Item $sidecar).Length
+          Write-Host "Bundled Core: $sidecar ($([math]::Round($sidecarSize/1MB,1)) MB)"
+          if ($sidecarSize -lt 10MB) { throw "wavr-core.exe is implausibly small ($sidecarSize bytes)" }
+
+          $env:WAVR_PYTHON = "$env:RUNNER_TEMP\wavr-backend-venv\Scripts\python.exe"
+          $env:WAVR_BACKEND_DIR = (Resolve-Path "backend").Path
+          $env:WAVR_PORT = "8000"
+          $proc = Start-Process -FilePath $exe.FullName -PassThru
+
+          $healthy = $false
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/healthz" -UseBasicParsing -TimeoutSec 2
+              if ($r.StatusCode -eq 200 -and $r.Content -match '"ok":\s*true') { $healthy = $true; break }
+            } catch {}
+            if ($proc.HasExited) { throw "installed app exited early (code $($proc.ExitCode)) before answering /healthz" }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $healthy) { throw "installed app never answered /healthz within 30s" }
+          Write-Host "REGRESSION GUARD: the installed MSI build spawns the backend and answers /healthz for real."
+
+          # Kill by PID only -- never by image name (a bystander python.exe on the
+          # runner would be an unrelated process).
+          Stop-Process -Id $proc.Id -Force
+          Start-Sleep -Seconds 2
+
+          $p = Start-Process msiexec.exe -ArgumentList "/x", "`"$($msi.FullName)`"", "/qn", "/norestart" -Wait -PassThru
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "msiexec /x failed with exit code $($p.ExitCode)" }
+          if (Test-Path $exe.FullName) { throw "wavr-desktop.exe still present after msiexec /x uninstall" }
+          Write-Host "MSI uninstall removed the binary cleanly."
+
+      - name: "NSIS installer: silent install/uninstall (packaging mechanics only -- see comment)"
+        shell: pwsh
+        run: |
+          # This leg does not repeat the /healthz launch -- it is the same Rust binary
+          # the MSI leg above already proved spawns the backend correctly, so relaunching
+          # it here would only reconfirm that Tauri's two bundlers wrap identical code
+          # (true by construction). What differs between the bundlers is packaging and
+          # removal, so that is what this leg actually checks.
+          $nsis = Get-ChildItem -Path dist-installers -Filter *.exe -Recurse | Select-Object -First 1
+          if (-not $nsis) { throw "no NSIS .exe found in the windows-desktop artifact" }
+          Write-Host "NSIS installer: $($nsis.FullName) ($($nsis.Length) bytes)"
+          if ($nsis.Length -le 0) { throw "NSIS installer is zero bytes" }
+
+          $installDir = "C:\wavr-ci-nsis"
+          # `/D=` must be the LAST argument and unquoted -- a hard NSIS convention, not a
+          # style choice; quoting or reordering it breaks silently.
+          Start-Process -FilePath $nsis.FullName -ArgumentList "/S", "/D=$installDir" | Out-Null
+
+          $appExe = $null
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Get-Date) -lt $deadline) {
+            $appExe = Get-ChildItem -Path $installDir -Filter "wavr-desktop.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($appExe) { break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $appExe) { throw "wavr-desktop.exe not found under $installDir within 60s of a silent NSIS install" }
+          Write-Host "NSIS-installed binary: $($appExe.FullName) ($($appExe.Length) bytes)"
+          if ($appExe.Length -le 0) { throw "NSIS-installed binary is zero bytes" }
+
+          # UNVERIFIED ASSUMPTION, STATED HONESTLY: the NSIS uninstaller's filename is
+          # generated by the tauri-bundler crate at build time and is not vendored in
+          # this repo (desktop/src-tauri/gen has no NSIS template to read), so it cannot
+          # be confirmed by reading source. Discover it instead of guessing a name.
+          $uninstaller = Get-ChildItem -Path $installDir -Filter "*ninstall*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninstaller) {
+            Write-Host "::warning::No uninstaller executable found under $installDir by name discovery (*ninstall*.exe). This is the one check this workflow cannot do statically -- Tauri's NSIS uninstaller name/path is generated by the tauri-bundler crate, not vendored in this repo. Install-only is verified for the NSIS leg; uninstall mechanics are unverified residue."
+          } else {
+            Write-Host "Uninstaller: $($uninstaller.FullName)"
+            Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait
+            Start-Sleep -Seconds 2
+            if (Test-Path $appExe.FullName) { throw "wavr-desktop.exe still present after the discovered NSIS uninstaller ran silently" }
+            Write-Host "NSIS uninstall removed the binary cleanly."
+          }
+
+  draft-release:
+    needs: [python-dist, windows-desktop, windows-desktop-smoke]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: flatten
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true          # a human presses publish, always
+          files: release/*
+          body: |
+            ## Wavr ${{ github.ref_name }}
+
+            ### Before you install
+
+            **These binaries are not code-signed.** Wavr has no signing
+            certificate, so Windows SmartScreen will warn you when you run the
+            installer. Check the SHA-256 below against your download, or build
+            from source — both routes are documented in `docs/INSTALL.md`.
+
+            ### What's here
+
+            - `*.msi` / `*.exe` — Wavr Desktop for Windows (unsigned)
+            - `*.whl` / `*.tar.gz` — the `wavr` Python package
+            - `SHA256SUMS.txt` — checksums for everything above
+
+            ### Not here
+
+            - **Android**: the mobile app builds from a separate repository.
+            - **macOS / Linux desktop**: the desktop shell is verified on
+              Windows only. Use the source or Docker route on those platforms.

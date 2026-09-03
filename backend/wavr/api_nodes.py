@@ -56,6 +56,50 @@ def build_nodes_public_router(node_store, enroller) -> APIRouter:
     `node_store` is accepted for symmetry; the redeem goes through `enroller`."""
     router = APIRouter()
 
+    @router.post("/api/nodes/request")
+    async def request_join(request: Request, name_hint: str = Body(""),
+                           sensor_hint: str = Body(""),
+                           cert_fingerprint: str = Body("")):
+        """A node ASKS to join. Creates a pending record and returns the
+        capability it will poll with. Mints NOTHING.
+
+        This is the inverse of `/api/nodes/enroll`, which requires a code the
+        operator minted on a trusted screen. Here the node speaks first, so
+        everything it says is a HINT: `name_hint`/`sensor_hint` are stored apart
+        from the fields fusion trusts and are rendered to the operator as claims.
+        Room, sensor type and transport are decided by a human at approval. A
+        board can ask to be let in; it cannot decide it is the kitchen radar.
+
+        Unauthenticated by necessity (the node holds no credential yet) and
+        bounded the same way `/api/pair` is: in-subnet only, per-IP rate
+        limited, and the pending list is capped and aged out."""
+        source_ip = request.client.host if request.client else None
+        if not enroller.allow_request(source_ip):
+            raise HTTPException(status_code=429, detail="too many join requests")
+        node_id, request_id = node_store.request_join(
+            name_hint, sensor_hint, cert_fingerprint)
+        return {"node_id": node_id, "request_id": request_id,
+                "status": "pending", "poll_after_ms": 5000}
+
+    @router.post("/api/nodes/claim")
+    async def claim(request_id: str = Body(..., embed=True)):
+        """A node polls for the outcome of its own join request.
+
+        `request_id` travels in the BODY, never the URL, so it does not land in
+        an access log -- the same reasoning `/api/pair-request/status` uses. The
+        token comes back exactly once; the capability is consumed with it."""
+        result = node_store.claim(request_id.strip())
+        if result is None:
+            # Unknown, denied, or already collected -- deliberately one answer.
+            # A node seeing this should factory-reset and ask again rather than
+            # retry a request that no longer exists.
+            raise HTTPException(status_code=404,
+                                detail="unknown or already-completed request")
+        status, node_id, token = result
+        if status == "pending":
+            return {"status": "pending", "poll_after_ms": 5000}
+        return {"status": "approved", "node_id": node_id, "token": token}
+
     @router.post("/api/nodes/enroll")
     async def enroll(request: Request, code: str = Body(...),
                      cert_fingerprint: str = Body("")):
@@ -174,7 +218,51 @@ def _admin_deps_not_wired() -> None:
                         detail="node admin routes have no auth gate wired")
 
 
-def build_nodes_admin_router(node_store, enroller, admin_deps=None) -> APIRouter:
+def _build_pending_routes(router, node_store, on_decision=None):
+    """Approve/deny for node-initiated join requests. Mounted on the ADMIN
+    router, so these carry the same loopback-root gate as every other node
+    control-plane route -- an authenticated LAN device cannot approve a sensor
+    into the house."""
+
+    @router.get("/api/nodes/pending")
+    async def list_pending():
+        return {"pending": [n.to_dict() for n in node_store.list_pending()]}
+
+    @router.post("/api/nodes/{node_id}/approve")
+    async def approve(node_id: str, name: str = Body(...),
+                      sensor_type: str = Body(...), room: str = Body(...),
+                      transport: str = Body("native")):
+        """Let a pending node in. The operator supplies the load-bearing fields;
+        the node's hints may pre-fill the form but never reach the trusted
+        columns.
+
+        The minted token is NOT returned here. It goes to the node, once, when
+        it next polls `/api/nodes/claim` -- so an approval that is shoulder-surfed
+        on the admin screen still hands nobody a credential."""
+        try:
+            token = node_store.approve(node_id, name, sensor_type, room, transport)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        if token is None:
+            raise HTTPException(status_code=404, detail="unknown or non-pending node")
+        if on_decision is not None:
+            on_decision(node_id, "approved")
+        return {"approved": node_id, "collected": False,
+                "note": "The sensor will pick up its credential the next time it "
+                        "checks in."}
+
+    @router.post("/api/nodes/{node_id}/deny")
+    async def deny(node_id: str):
+        if not node_store.deny(node_id):
+            raise HTTPException(status_code=404, detail="unknown or non-pending node")
+        if on_decision is not None:
+            on_decision(node_id, "denied")
+        return {"denied": node_id}
+
+    return router
+
+
+def build_nodes_admin_router(node_store, enroller, admin_deps=None, on_decision=None) -> APIRouter:
     """Loopback-root control plane. `admin_deps` MUST be
     `[Depends(require_local), Depends(require_root)]` (app.py wires this, mirroring
     build_peers_admin_router). FAIL CLOSED if omitted/empty -- see
@@ -212,5 +300,9 @@ def build_nodes_admin_router(node_store, enroller, admin_deps=None) -> APIRouter
         if not node_store.revoke(node_id):
             raise HTTPException(status_code=404, detail="unknown node")
         return {"node_id": node_id, "state": STATE_REVOKED}
+
+    # Node-initiated join requests: approve/deny, same gate as the rest of
+    # this router.
+    _build_pending_routes(router, node_store, on_decision=on_decision)
 
     return router

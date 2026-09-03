@@ -1,11 +1,11 @@
-# 🌊 Wavr — Local, Explainable Home Sensing for AI Agents
+# 🌊 Wavr — The Spatial Layer for Your Local Network
 
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
 [![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
-**6 sensing modalities · 8 ADRs · 9 network-fix guides · every hardware path mock-tested, so the suite runs with no devices attached · local-only · MCP-for-agents · AGPL-3.0**
+**6 sensing modalities · 11 ADRs · 9 network-fix guides · every hardware path mock-tested, so the suite runs with no devices attached · local-only · MCP-for-agents · AGPL-3.0**
 
-**Local, explainable home sensing your AI agents can query over MCP — runs 100% on hardware you own.**
+**Your network already knows who is home. Wavr turns it, plus whatever sensors you own, into a live and explainable model of your space — and lets your own AI agents ask about it over MCP. Runs 100% on hardware you own.**
 
 ![Wavr — live per-room presence on a 3D map of your own home, fused from network, Bluetooth and camera, all running 100% on your local network (animated demo)](docs/hero.gif)
 
@@ -38,7 +38,7 @@ Wavr is a small family of surfaces around one local fusion engine — pick the o
 - **Desktop** — the full dashboard as a native Tauri app; the machine that runs it is the "central".
 - **MCP** — a read-only Model Context Protocol surface so your own agents can query presence over the LAN, with an opt-in, gated Home-Assistant control tool.
 - **Mobile** — an Android-first companion (native shell) that pairs to a central over pinned TLS.
-- **Core** — an always-on appliance (a dedicated phone or Raspberry Pi) that *is* the household hub: an ambient on-screen panel, zero-config mDNS discovery, and a boots-into-Wavr kiosk launcher.
+- **Core** — an always-on appliance that *is* the household hub: an ambient on-screen panel, zero-config mDNS discovery, and a boots-into-Wavr kiosk launcher. A Raspberry Pi or mini PC is the usual host; an Android phone can also run the Core itself, with the real Python engine embedded rather than a reduced copy ([ADR-0010](docs/adr/0010-android-core-runtime.md)) — that build is source-only and unsigned, and has not yet been run on a physical handset.
 
 ![One brain, every screen — the same open core as a web dashboard, a Tauri desktop app, a certificate-pinned Android companion, and the always-on Core hub](docs/img/card-platforms.png)
 
@@ -57,15 +57,53 @@ device isn't required). Full detail: `PRODUCT.md`, `docs/adr/`.
 
 ![Presence that explains itself — camera, network scan and Bluetooth fused into one confidence score per room, on a 3D house map you draw yourself](docs/img/card-explainable.png)
 
-- <a id="mcp-for-agents"></a>**MCP for agents, read-only by default** — a stdio and HTTP MCP server
-  exposes `RoomState` and the house map so your own agents can query presence as structured context; an
-  opt-in, default-OFF, gated Home Assistant control tool sits behind an allowlist + audit log
-  (ADR-0005, ADR-0008).
+- <a id="wavr-space"></a>**A Space, with people and device functions as separate things — and person
+  roles now actually gate access** — Wavr models the place it watches (`home`, `office`, `shop`, …),
+  the *people* in it (Owner / Admin / User / Guest, capability-based) and the *job each device does*
+  (Core / Node / Client, freely combined) as three independent axes. A first-run wizard names the
+  Space, runs a local capability scan of the machine and proposes what it should become; settings that
+  used to need a hand-edited `.env` are writable from the UI (ADR-0009, ADR-0011).
+  <details><summary>Detail</summary>
+
+  The three axes exist because one field used to mean two things: `role=central` said both "this
+  credential may administer" and "this box is a hub". The existing per-device auth model
+  (`backend/wavr/devices.py`) is deliberately **unchanged** — a person's role *derives* the credential
+  role at pairing time. A second, independent mechanism now caps an already-issued credential too,
+  resolved fresh on every request: a device's effective role is the narrower of what it was issued and
+  what its person currently holds. Demoting someone takes effect on their very next request, from
+  every device they hold; promoting someone never widens a token already out in the world — a
+  deliberately asymmetric rule (ADR-0011). A device with no associated person, every Node, and every
+  `agent` credential is unaffected.
+
+  Several Cores per Space are representable and fenced by a monotonic epoch: promotion bumps the
+  Space's generation, a Core that observes a higher epoch stands down immediately, and an equal-epoch
+  conflict is broken deterministically **and reported** rather than absorbed. Automatic failover is
+  deliberately **not** implemented — `promotion_candidate()` names who should take over and a human
+  decides. The capability scan is tristate: anything it could not determine reads "couldn't tell",
+  never "no".
+
+  The settings store is an allow-list of existing `WAVR_*` flags, no secret is storable in it, and
+  the environment always wins over it — an operator's `.env` can never be overridden by a UI click.
+  </details>
+
+- <a id="mcp-for-agents"></a>**MCP for agents, read-only by default — now with the Space itself as
+  context** — a stdio and HTTP MCP server exposes `RoomState`, the house map, and Wavr's own Space
+  model (current occupancy, sensor coverage, Core health) so your own agents can query "what's
+  happening here" as structured context; an opt-in, default-OFF, gated Home Assistant control tool
+  sits behind an allowlist + audit log (ADR-0005, ADR-0008).
   <details><summary>Detail</summary>
 
   Allowlist + consent refusal on both the service *and* the target entity; camera / lock / scene
   refused even if allowlisted; mass actuation blocked; every call audit-logged. Person labels are
   stripped from the MCP read path as PII.
+
+  Five Space-model tools: `get_space_context`, `explain_room_state`, and `get_sensor_coverage` (which
+  rooms have no sensor at all — a blind spot is not an empty room) and `get_core_health` sit in the
+  DEFAULT agent grant alongside the original `list_rooms`/`get_room_context`/`get_house_status`.
+  `get_device_context` (what job each paired device does) does **not** — like the LAN inventory,
+  alerts, occupancy history, and HA-entity tools before it, it's a household-census-shaped surface an
+  operator must explicitly grant, never a default. No per-person biometric, positional, or name data
+  is exposed by any of them — see [`docs/mcp-connect.md`](docs/mcp-connect.md) for the full tool table.
   </details>
 
 - **Multi-modal fusion, explainable by construction** — 6 sensing sources (network scan, BLE, camera,
@@ -108,7 +146,11 @@ device isn't required). Full detail: `PRODUCT.md`, `docs/adr/`.
   no faces). Stripped from the MCP read path as PII when the flag is off.
 
 - **Ships as a desktop app + installable PWA** — a native Tauri shell (`desktop/`, ADR-0007) and a
-  zero-build installable Progressive Web App that makes zero external requests off-localhost.
+  zero-build installable Progressive Web App that makes zero external requests off-localhost. On
+  Windows the shell now bundles the whole Core into the installer itself (a frozen ~40 MB executable,
+  `desktop/sidecar/`) — installing needs no separate Python. Built and verified locally with every
+  Python stripped from PATH; **no release has been published yet**, so there is nothing to download —
+  see [`docs/INSTALL.md`](docs/INSTALL.md) for the route that works today.
 
 - **Defensive LAN inventory + honest network diagnosis** — offline OUI vendor/device-type
   classification, rogue-device / gateway-MAC / rogue-DHCP alerts on a five-tier ladder (ADR-0004,
@@ -143,17 +185,22 @@ carries the trust weight and freshness that produced it.
 
 ```powershell
 cd backend; pip install -e .[dev]; cd ..
-# optional .env at repo root:
-#   WAVR_NET_MACS=<your phone's wifi MAC>
-#   WAVR_FUSION_THRESHOLD=0.35   # network-only phase; revert to 0.5 when camera/CSI join
 python -m wavr.serve            # loopback-only HTTP on http://127.0.0.1:8000
 ```
 
+Open it and Wavr asks you to name the place it is watching, scans what the machine can do, and proposes
+what it should become. No `.env` to edit — the settings the wizard writes live in the database, and the
+Settings screen exposes the rest.
+
+Already running an older Wavr? The wizard offers to adopt the existing install instead: nothing is
+re-paired, no credential is reissued, no camera is touched.
+
 Tests: `python -m pytest backend/tests -q` (full suite, all hardware mock-tested).
 
-For the desktop app + LAN companions, set `WAVR_MULTIDEVICE=1` and see
-[`docs/deploy/multi-device.md`](docs/deploy/multi-device.md) (`python -m wavr.serve` then brings up local
-TLS + pairing) and the Tauri shell in [`desktop/`](desktop/).
+Letting phones and tablets connect is a deliberate, separate step, because it changes what Wavr is
+exposed to — turn it on in Settings (Wavr explains what changes first) or set `WAVR_MULTIDEVICE=1`.
+See [`docs/deploy/multi-device.md`](docs/deploy/multi-device.md), [`docs/INSTALL.md`](docs/INSTALL.md)
+and the Tauri shell in [`desktop/`](desktop/).
 
 ## 🏗️ How it works
 
@@ -193,10 +240,17 @@ contributions: a new `SensorSource` (zigbee occupancy, a new BLE beacon type, �
 ## 📚 Docs
 
 - `PRODUCT.md` — product definition and design principles
+- [`docs/WAVR-PROTOCOL.md`](docs/WAVR-PROTOCOL.md) — Wavr Protocol v1: discovery, transport, pairing,
+  capability manifests, sensing events, Core coordination
+- [`docs/INSTALL.md`](docs/INSTALL.md) — every install route and what to do when one fails
+- [`docs/NODE-ONBOARDING.md`](docs/NODE-ONBOARDING.md) — flashing and enrolling an ESP32 sensor node
+- [`docs/mcp-connect.md`](docs/mcp-connect.md) — connecting an agent over stdio or HTTP
 - `docs/deploy/` — hardening, Docker, hardware tiers, multi-device bring-up
-- `docs/adr/` — architecture decision records (0001–0008: mmWave-over-fork, RAM-only privacy
+- `docs/network-fixes/` — why LAN discovery fails and how to fix it, per router
+- `docs/adr/` — architecture decision records (0001–0011: mmWave-over-fork, RAM-only privacy
   boundaries, not-a-medical-device, defensive-only, MCP control boundary, authenticated LAN access,
-  desktop shell, MCP-over-HTTP transport)
+  desktop shell, MCP-over-HTTP transport, Space + people + device functions, the Android Core runtime,
+  person-role authorization)
 
 ## ⚖️ License
 

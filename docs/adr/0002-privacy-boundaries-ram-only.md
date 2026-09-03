@@ -4,6 +4,35 @@
 - **Date:** 2026-07-02
 - **Deciders:** Augusto (owner-operator)
 
+## Amendments
+
+This ADR's invariants were written before multi-device access and the
+multi-provider narrator existed. Two of the seven invariants below have been
+**deliberately, explicitly** relaxed by later, superseding decisions. This ADR
+is a historical record and is not rewritten — the amendments here point at
+what changed and where that decision lives:
+
+- **Invariant 1 ("no environment variable ... can expose the API to the
+  LAN")** is superseded by [ADR-0006](0006-authenticated-lan-access.md).
+  `WAVR_MULTIDEVICE=1` does exactly that, by design, under an explicit opt-in:
+  a same-/24 LAN peer presenting a valid per-device token is admitted (see
+  `docs/WAVR-PROTOCOL.md` §4). The default — the flag unset — remains
+  byte-identical to this invariant as originally written.
+- **Invariant 7 ("the only cloud egress is the opt-in Gemini narrator,
+  text-only")** is stale. `backend/wavr/narrator.py` now supports four
+  providers — one local/zero-egress (Ollama) and three cloud (OpenAI,
+  Anthropic, Gemini) — selected by `WAVR_NARRATE_PROVIDER`, still
+  double-opt-in and still text-only (never frames/keypoints/coordinates).
+  Separately, other opt-in, individually-gated egress paths now exist behind
+  the single "Connectors & Services" master switch
+  (`backend/wavr/connector_store.py`'s `egress_allowed()`): e.g. Telegram
+  notifications, the Wavr Assistant's cloud engine, and the opt-in internet
+  reachability/speed-test checks (`WAVR_HEALTH_RESOLVERS`, the ndt7/M-Lab
+  path). Every one of these remains opt-in, individually toggleable, and
+  gated behind the same master kill-switch — the *shape* of the invariant
+  ("egress is opt-in and disclosed, never silent or default-on") holds; the
+  specific claim "only the Gemini narrator" no longer does.
+
 ## Context
 
 Wavr senses people inside a home. That makes it, by construction, a privacy-

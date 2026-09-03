@@ -52,16 +52,51 @@ def build_pair_request_router(approvals, cert_fingerprint_fn) -> APIRouter:
     -- injected so this router never touches TLS config/filesystem itself."""
     router = APIRouter()
 
+    async def _reject_coerced(request: Request, *names: str) -> None:
+        """Reject a body field that was not literally a JSON string.
+
+        Reads the RAW body rather than the parsed parameter because the two
+        pydantic majors disagree here: v2 refuses `{"requester_name": 12345}`
+        with a 422, v1 coerces it to "12345" and the handler cannot tell the
+        difference afterwards. Wavr runs both -- v2 on desktop, v1 on Android,
+        where pydantic-core has no wheels -- and this is the one surface an
+        unauthenticated in-subnet caller can reach, so the two must agree.
+
+        Starlette caches the body, so re-reading it after FastAPI has parsed it
+        costs nothing. A body that will not parse is left alone: FastAPI has
+        already answered it."""
+        try:
+            body = await request.json()
+        except Exception:      # noqa: BLE001 -- not JSON: FastAPI already 422'd
+            return
+        if not isinstance(body, dict):
+            return
+        for name in names:
+            if name not in body:
+                continue
+            # An explicit JSON `null` for an Optional field means "not supplied",
+            # which is what omitting it means. Rejecting it would be stricter
+            # than either pydantic major and would break a client that
+            # serializes its optionals rather than dropping them.
+            if body[name] is None:
+                continue
+            if not isinstance(body[name], str):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{name} must be text")
+
     @router.post("/api/pair-request")
     async def create_request(request: Request,
                              requester_name: str = Body(...),
                              platform: str | None = Body(None),
                              reported_fp: str | None = Body(None)):
-        # Untrusted in-subnet caller, pre-token: FastAPI/pydantic already
-        # rejects a non-string body field with a clean 422 (these are typed
-        # params, not a raw dict), so the only thing left to validate here is
-        # "is there actually a name" -- delegated to the manager, which also
-        # bounds every field's length before it ever sits in memory.
+        # Untrusted in-subnet caller, pre-token. The typed params above give a
+        # clean 422 for a non-string field under pydantic v2 -- but NOT under
+        # v1, which coerces. `_reject_coerced` makes both runtimes answer the
+        # same way; everything else ("is there actually a name", length bounds)
+        # is the manager's, which applies them before anything sits in memory.
+        await _reject_coerced(request, "requester_name", "platform",
+                              "reported_fp")
         source_ip = request.client.host if request.client else None
         try:
             request_id, compare_code = approvals.create(
@@ -83,9 +118,11 @@ def build_pair_request_router(approvals, cert_fingerprint_fn) -> APIRouter:
         }
 
     @router.post("/api/pair-request/status")
-    async def poll_request(request_id: str = Body(..., embed=True)):
+    async def poll_request(request: Request,
+                           request_id: str = Body(..., embed=True)):
         # request_id is the companion's ONLY capability here (192-bit secret);
         # kept in the body (never a path/query param) so it's never logged.
+        await _reject_coerced(request, "request_id")
         if not isinstance(request_id, str) or not request_id.strip():
             raise HTTPException(status_code=400, detail="request_id is required")
         return approvals.poll(request_id.strip())

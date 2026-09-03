@@ -9,5 +9,6 @@
 .wrangler
 .playwright-mcp
 docs
-frontend
 node_modules
+# NOT frontend/: the image needs it (see backend/Dockerfile's COPY).
+frontend/vendor/three/**/*.md

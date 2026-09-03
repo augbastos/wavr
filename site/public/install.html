@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Install Wavr</title>
+<meta name="description" content="Install Wavr on Windows, macOS, Linux, a Raspberry Pi, Android or iOS: a real no-Python-needed installer on Windows, one-command scripts and honest source-install steps everywhere else.">
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="install.html" class="nav-install" aria-current="page">Install</a>
+      <a href="compatibility.html">Compatibility</a>
+      <a href="nodes.html">Nodes</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>Install Wavr</h1>
+    <p class="lede">One page, every platform. We'll guess what you're on and put the right
+      steps first; everything else stays one click away.</p>
+
+    <div class="phase-note">
+      <strong>Two phases, so this page is honest about what it knows.</strong> Phase A
+      (below) is a guess about your platform from your browser, nothing more. Phase B, the
+      real scan of what your machine can actually do (cameras, Bluetooth, a serial port for a
+      radar sensor), only happens locally after you install Wavr and never touches this
+      website.
+    </div>
+
+    <p id="detect-line" class="detect-line">Checking your browser for a platform hint…</p>
+    <noscript><p class="phase-note">JavaScript is off, so Phase A can't run. That's fine.
+      Nothing else on this page needs it: pick your platform in the full list below.</p></noscript>
+  </section>
+
+  <section class="wrap" aria-labelledby="recommended-heading">
+    <h2 id="recommended-heading" class="sr-only">Recommended for you</h2>
+    <div id="install-recommended" hidden></div>
+  </section>
+
+  <section class="wrap" style="margin-top:8px">
+    <details id="other-platforms" open>
+      <summary>All platforms</summary>
+      <div class="other-platforms-grid">
+
+        <article id="platform-windows" class="tile platform-card">
+          <h3>Windows</h3>
+          <div class="release-slot" data-os="windows" hidden></div>
+          <div class="platform-body">
+            <span class="tag tag-ready">Real installer, no Python needed</span>
+            <p>A genuine double-click installer: one file, nothing else to install first.
+              It bundles the whole Core (backend, database, dashboard) into its own
+              executable, so there is no separate Python to find or install. That
+              requirement is gone. Installed, it's three files:
+              <code>wavr-desktop.exe</code> (the window/tray shell),
+              <code>wavr-core.exe</code> (the bundled Core), and an uninstaller.</p>
+            <p><strong>The installer is unsigned.</strong> There is no code-signing
+              certificate yet, so Windows SmartScreen will warn that it's from an unknown
+              publisher when you run it. That's expected, not a sign something is wrong.
+              Still, don't just click through blindly: check the download's SHA-256 against
+              the one published with the release before you trust it.</p>
+            <p><span class="tag tag-note">Not published yet</span> No release has been cut,
+              so there is nothing to download here today. Once one exists, this page shows
+              a Download button for it automatically, with no change needed here. Until
+              then, see <a href="#advanced-source">Advanced: install from source</a>, or the
+              developer bootstrap under
+              <a href="#advanced-windows-script">Advanced: install.ps1</a>.</p>
+          </div>
+        </article>
+
+        <article id="platform-macos" class="tile platform-card">
+          <h3>macOS</h3>
+          <div class="release-slot" data-os="macos" hidden></div>
+          <div class="platform-body">
+            <span class="tag tag-note">No packaged installer yet</span>
+            <p>There's no notarized macOS build published yet. Today, Wavr runs from source:</p>
+            <ol>
+              <li>Install Python 3.11 or newer (<code>brew install python@3.11</code>, or from
+                python.org).</li>
+              <li>Get the code: clone <code>https://github.com/augbastos/wavr.git</code>.</li>
+              <li>In Terminal:
+<pre><code>cd wavr/backend
+pip3 install -e .[dev]
+cd ..
+python3 -m wavr.serve</code></pre>
+              </li>
+              <li>Open <a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a>. That's your
+                dashboard, loopback-only by default.</li>
+            </ol>
+            <p>Want a real app window? See <a href="#advanced-desktop">Advanced: build the
+              desktop app</a> below. Its LAN/multi-device HTTPS trust is currently wired up
+              for Windows only; the default loopback mode is identical on every platform.</p>
+          </div>
+        </article>
+
+        <article id="platform-linux" class="tile platform-card">
+          <h3>Linux (incl. Raspberry Pi)</h3>
+          <div class="release-slot" data-os="linux" hidden></div>
+          <div class="platform-body">
+            <span class="tag tag-note">Installer script, not yet run on real hardware</span>
+            <p>There's no <code>.deb</code> or <code>.AppImage</code> yet, but there is a
+              script that does the whole job in one command: find Python, set Wavr up in
+              its own folder, start it. It never runs <code>sudo</code> itself.</p>
+            <ol>
+              <li>Download
+                <a href="https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.sh"><code>install.sh</code></a>
+                from the repository.</li>
+              <li>Run it:
+<pre><code>sh install.sh</code></pre>
+              </li>
+              <li>It prints the dashboard address once it's up, usually
+                <code>http://127.0.0.1:8000</code>: open that in a browser on the same
+                machine (there's no auto-open, since a Pi is often headless).</li>
+            </ol>
+            <p class="muted">It installs into <code>~/.local/share/wavr</code> (override
+              with <code>--dir</code>), needs Python 3.11 or newer (it prints your
+              distro's exact install command if you don't have it), and works on
+              Debian/Ubuntu/Raspberry Pi OS, Fedora, Arch and Alpine. Running it again
+              upgrades in place; <code>--uninstall</code> removes it and leaves your data
+              alone. It can offer a <code>systemd --user</code> unit for autostart at
+              login, but only if you say yes.</p>
+            <p><strong>Not yet run on real Linux or Raspberry Pi hardware.</strong> It's
+              POSIX-clean and was logic-tested (argument parsing, the download-and-extract
+              path, uninstall) on this project's own dev machine, but nobody has run it
+              end to end on an actual Linux box or a Pi yet. If a distro's package name is
+              wrong or a step behaves differently on yours, that's the most likely place to
+              look; treat it as reviewed, not field-proven. Full status:
+              <a href="https://github.com/augbastos/wavr/blob/master/docs/INSTALL.md">docs/INSTALL.md</a>.</p>
+            <p>Prefer to install by hand, or run it in Docker instead? See
+              <a href="#advanced-source">Advanced: install from source</a> or
+              <a href="#advanced-docker">Advanced: Docker</a>.</p>
+          </div>
+        </article>
+
+        <article id="platform-android" class="tile platform-card">
+          <h3>Android</h3>
+          <div class="platform-body">
+            <span class="tag tag-ready">Works today, no app to install</span>
+            <p>There's no Android app in the Play Store, and you don't need one. Your phone's
+              screen is a <strong>companion view</strong> that pairs to a Core running
+              elsewhere (a laptop, mini PC, or Pi).</p>
+            <ol>
+              <li>Set up a Core first: see Windows, macOS or Linux above.</li>
+              <li>On the Core, open <strong>Settings</strong> and turn on
+                <strong>"Let other devices connect"</strong>. It asks you to confirm,
+                because it is the one switch that takes Wavr off its own machine.</li>
+              <li>Scan the QR code the Core shows you. It carries the address and the
+                Core's certificate fingerprint, so nothing has to be typed and your phone
+                can tell it reached the right machine.</li>
+              <li>Confirm the pairing on the Core's screen.</li>
+              <li>Add the page to your home screen for a full-screen, app-like view.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article id="platform-ios" class="tile platform-card">
+          <h3>iOS / iPadOS</h3>
+          <div class="platform-body">
+            <span class="tag tag-ready">Works today, no app to install</span>
+            <p>Same idea as Android: there's no App Store app, and none is needed. Open your
+              Core's address in Safari, pair once, then use the Share sheet's
+              "Add to Home Screen" for a full-screen companion view.</p>
+            <ol>
+              <li>Set up a Core first: see Windows, macOS or Linux above.</li>
+              <li>Turn on multi-device pairing on the Core and note its LAN address.</li>
+              <li>Open that address in Safari and accept the one-time certificate trust
+                warning (it's your own Core's self-signed certificate).</li>
+              <li>Enter the pairing code shown on the Core, then add it to your home screen.</li>
+            </ol>
+          </div>
+        </article>
+
+      </div>
+    </details>
+  </section>
+
+  <section class="section wrap" id="advanced">
+    <h2>Advanced</h2>
+    <p class="section-lede">For people comfortable with a terminal. None of this is required
+      for the routes above.</p>
+
+    <div class="disclosure-group" style="margin-top:20px">
+      <details id="advanced-docker">
+        <summary>Docker (Linux / NAS / appliance)</summary>
+        <p>For a NAS, or if you already run everything in Docker. The repo ships a lean
+          <code>Dockerfile</code> and <code>docker-compose.yml</code> (network scan,
+          Bluetooth, fusion; no camera/GPU support in the base image), plus a small wrapper
+          script. Run this from inside a checkout:</p>
+<pre><code>git clone https://github.com/augbastos/wavr.git
+cd wavr
+./scripts/wavr-docker.sh up      # builds if needed, waits for /healthz, prints the URL</code></pre>
+        <p><code>wavr-docker.sh logs</code> follows the container log, <code>status</code>
+          shows <code>docker compose ps</code>, <code>down</code> stops and removes it. It's a
+          thin wrapper around <code>docker compose up -d --build</code>; running that
+          directly works too.</p>
+        <p>The dashboard is baked into the image (<code>backend/Dockerfile</code> copies
+          <code>frontend/</code> in), so <code>GET /</code> serves the real dashboard, not
+          just the API. It's bound to <code>127.0.0.1</code> using
+          <code>network_mode: host</code>, which keeps Wavr's own loopback-only guard intact.
+          Reach it from another device by tunnelling over SSH
+          (<code>ssh -L 8000:127.0.0.1:8000 user@host</code>), not by exposing the port
+          directly.</p>
+        <p><strong>Windows/macOS caveat:</strong> Docker Desktop's networking model doesn't
+          support <code>network_mode: host</code> the same way Linux does. The wrapper warns
+          (doesn't block) if it detects a non-Linux host; for the actual running service on
+          Windows or macOS, use the install script or source route for that platform instead
+          and save Docker for a real Linux box.</p>
+        <p>No image is published to a registry yet: this builds locally, there's nothing to
+          <code>docker pull</code>.</p>
+      </details>
+
+      <details id="advanced-bootstrap">
+        <summary>One-line install script (Linux / Pi)</summary>
+        <p><span class="tag tag-planned">Not live yet</span> There is no <code>wavr.dev</code>
+          today, so this exact command doesn't resolve. It's shown as the intended shape of a
+          future one-liner, once that domain exists:</p>
+<!-- The visible text below is the no-JS fallback; assets/wavr.js re-renders it from the
+             single BOOTSTRAP_DOMAIN constant on load. Keep both in sync if that constant changes. -->
+<pre><code class="js-bootstrap-cmd" data-template="curl -fsSL https://{domain}/install.sh | sh">curl -fsSL https://wavr.dev/install.sh | sh</code></pre>
+        <p>The real, working equivalent today is the
+          <a href="#platform-linux">Linux / Raspberry Pi</a> route above: download
+          <code>install.sh</code> from GitHub and run it with <code>sh</code>. Same script,
+          fetched from a URL that actually resolves.</p>
+      </details>
+
+      <details id="advanced-source">
+        <summary>Install from source (any platform)</summary>
+        <p>For contributors, or if none of the scripts above fit. This is the same workflow
+          this repo's own CI uses:</p>
+<pre><code>git clone https://github.com/augbastos/wavr.git
+cd wavr
+pip install -e "backend[dev]"
+python -m wavr.serve                   # loopback 127.0.0.1:8000
+python -m pytest backend/tests -q      # full suite, all hardware mocked</code></pre>
+        <p>On Windows, <code>scripts\wavr-desktop.ps1</code> does the same thing and also
+          opens your browser once the backend answers. Full detail:
+          <a href="https://github.com/augbastos/wavr/blob/master/docs/INSTALL.md">docs/INSTALL.md</a>.</p>
+      </details>
+
+      <details id="advanced-windows-script">
+        <summary>Windows: install.ps1 (developer bootstrap)</summary>
+        <p>Before the self-contained installer above existed, this repo's Windows route was
+          a script that finds a Python 3.11+ already on your machine and sets up an editable
+          checkout. Still useful if you want to hack on Wavr rather than just run it, but
+          unlike the installer above, it does need Python installed first.</p>
+        <ol>
+          <li>Download
+            <a href="https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.ps1"><code>install.ps1</code></a>
+            from the repository.</li>
+          <li>Run it:
+<pre><code>powershell -ExecutionPolicy Bypass -File .\install.ps1</code></pre>
+          </li>
+        </ol>
+        <p class="muted">It installs an editable checkout into
+          <code>%LOCALAPPDATA%\Wavr</code>, needs Python 3.11 or newer (it tells you where
+          to get it if you don't have it), and running it again upgrades in place.
+          <code>-Uninstall</code> removes it and leaves your data alone.</p>
+      </details>
+
+      <details id="advanced-desktop">
+        <summary>Build the desktop app (and its installer) from source</summary>
+        <p>The Windows installer above is a Tauri v2 shell wrapped around a
+          PyInstaller-frozen Core. Building it yourself, instead of waiting for a published
+          release, needs Rust, Node.js 18+, and Python 3.11+; Python is only needed to
+          freeze the Core once, the result of that step doesn't need it.</p>
+        <ol>
+          <li>Install <a href="https://rustup.rs">Rust</a> (on Windows this also needs the
+            Microsoft C++ Build Tools) and Node.js 18+.</li>
+          <li>Freeze the Core into a single executable:
+<pre><code>pip install pyinstaller
+pyinstaller desktop/sidecar/wavr-core.spec --distpath desktop/sidecar/dist
+# rename the result to the target triple Tauri expects, e.g.
+# wavr-core-x86_64-pc-windows-msvc.exe, and place it in desktop/src-tauri/binaries/</code></pre>
+          </li>
+          <li>Build the shell:
+<pre><code>cd wavr/desktop
+npm install
+npm run icon      # generates src-tauri/icons/* from ../frontend/icon.svg, once
+npm run dev       # dev build, live-reloads
+# or: npm run build   # produces the installer under src-tauri/target/release/bundle/</code></pre>
+          </li>
+        </ol>
+        <p>Skip step 2 to run against a plain Python install instead: the shell falls back
+          to <code>python -m wavr.serve</code> when no bundled Core is present, the same as
+          before this existed. More detail (some of it predates the bundled Core):
+          <code>desktop/BUILD.md</code> in the repository.</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Setting up a sensor?</h2>
+    <p class="section-lede">Adding a physical radar or motion sensor is a separate step from
+      installing Wavr itself. See <a href="nodes.html">Nodes</a> for what's built today and
+      what's still firmware without a hardware test behind it.</p>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="docs.html">Docs</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/wavr.js"></script>
+</body>
+</html>

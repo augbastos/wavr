@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is permitted for LOOPBACK AND NOTHING ELSE.
+
+  Why it is needed at all: `wavr.serve` runs plain HTTP on 127.0.0.1 in its
+  default mode and only switches to HTTPS when the operator turns on LAN mode
+  (ADR-0006 §6). Since API 28 Android blocks cleartext everywhere by default,
+  including loopback, so the panel could not reach its own embedded Core.
+
+  Why this is not a weakening: `localhost` / `127.0.0.1` traffic never leaves the
+  device. There is no network segment to sniff and no peer to impersonate. The
+  base config keeps cleartext OFF for every other destination, so LAN mode is
+  still HTTPS-only and no `<trust-anchors>` / user-CA / debug-override block
+  exists here — this file cannot be used to trust anything.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

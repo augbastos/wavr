@@ -7,19 +7,22 @@ breakout board; ~15–20 minutes end to end including toolchain setup.
 
 ## Status — read this first
 
-What's actually built and tested vs. what's still pending, so you don't chase
-a feature that isn't wired yet:
+What's actually built and tested vs. what still needs real hardware, so you
+don't chase a feature that isn't there:
 
 | Piece | State |
 |---|---|
 | Backend (`NodeStore`, `NodeEnroller`, the 3 `/api/nodes/*` routers) | Built and covered by the suite |
 | Firmware (`firmware/wavr_node/`, PlatformIO project) | Written, **not compiled** — no ESP toolchain in the dev environment. Run `pio run -e esp32dev` once before your first real flash; see `firmware/README.md`'s *Compile status* section for the two spots most likely to need a first-pass fix. |
-| `app.py` mounting the routers + `config.py`'s `WAVR_NODES_ENABLED` flag + `fusion.py`'s `pir`/`node` weights | **Not yet applied.** Specified verbatim in the *WIRING SPEC* of `docs/superpowers/specs/2026-07-11-wavr-sensor-node-onboarding-design.md` for the lead to apply. Until it lands, a running Wavr instance does not expose `/api/nodes/*`. |
-| Frontend *Nodes* panel (Add a node / list / Disable / Remove) | **Not yet built** — same wiring spec, §D. |
+| `app.py` mounting the routers + `config.py`'s `WAVR_NODES_ENABLED` flag + `fusion.py`'s `pir`/`node` weights | **Shipped.** `app.py` mounts the node routers behind `cfg.nodes_enabled`; `config.py` reads `WAVR_NODES_ENABLED` (requires `WAVR_MULTIDEVICE=1` too, same rationale as peer pairing — a node is a LAN device); `fusion.py` carries `pir: 0.6` and `node: 0.5` weights, both attributed at room level. A running Wavr instance with both flags set exposes `/api/nodes/*` today. |
+| Frontend *Nodes* panel (Add a node / list / Disable / Remove) | **Shipped** — the Nodes tile in `frontend/index.html` (Add a node, live list, Disable, Remove) is live/central-only, and hides itself when `GET /api/nodes` isn't reachable (feature off, or not authorized). |
+| Node-initiated join (`POST /api/nodes/request`/`/approve`/`/claim`, §7) | **Backend built and covered by the suite.** `firmware/wavr_node` does **not** speak it — only the code-redeem flow (§§2–6) is in the reference sketch. The Nodes panel has no pending-request form either: the Discoveries tab notices a request and routes you to Settings → Devices, but approving/denying is an admin-API call today, not a click — see §7. |
 
-This guide documents the intended, already-tested flow so it's ready to
-follow the moment the wiring above lands and hardware arrives. Where the UI
-doesn't exist yet, the equivalent raw API call is given instead.
+This guide documents the actual, already-tested flow. Everything on the
+software side is live the moment you set both env flags; the pieces still
+pending are hardware-only — you have not yet compiled the firmware, and this
+project has not run the enrollment ceremony against a physical ESP32 on this
+machine (see the firmware row above and §4/§6 below).
 
 ## 1. Shopping list
 
@@ -118,19 +121,18 @@ This is the actual pairing ceremony, inverted from Mobile/Peer pairing
 because the node is headless: **the operator declares identity, the node
 only redeems a code.**
 
-1. In Wavr → *Nodes → Add a node* (once the panel lands — see *Status*):
-   pick a name, a **room** (use the same room name/id your floor plan
-   editor already has, since this is what fusion attributes the reading
-   to), and a sensor type (`ld2450` for this build). The node itself never
-   gets to choose these — a compromised node can't relocate itself or
-   change what it claims to be.
+1. In Wavr → *Nodes → Add a node*: pick a name, a **room** (use the same room
+   name/id your floor plan editor already has, since this is what fusion
+   attributes the reading to), and a sensor type (`ld2450` for this build).
+   The node itself never gets to choose these — a compromised node can't
+   relocate itself or change what it claims to be.
 2. Wavr shows a one-time code (5-minute TTL, per-source-IP rate-limited to
    10 attempts / 60s).
 3. Type that code into the node's captive portal (step 5.3 above).
 
-**Before the panel lands**, the equivalent is the admin API directly (run
-from the Wavr host itself — loopback + an authenticated root session, the
-same one other admin actions like device pairing already require):
+Equivalently, the admin API directly (run from the Wavr host itself —
+loopback + an authenticated root session, the same one other admin actions
+like device pairing already require):
 
 ```
 curl -k -X POST https://127.0.0.1:8000/api/nodes/enroll-code \
@@ -139,9 +141,9 @@ curl -k -X POST https://127.0.0.1:8000/api/nodes/enroll-code \
 # -> {"code": "48210573"}
 ```
 
-Once redeemed, the node shows up in `GET /api/nodes` (and, once wired, the
-Nodes list) as `state: "active"`; its room lights up in fusion within
-seconds of its first telemetry post.
+Once redeemed, the node shows up in `GET /api/nodes` (and in the Nodes panel)
+as `state: "active"`; its room lights up in fusion within seconds of its
+first telemetry post.
 
 ### TLS trust — client-side TOFU (what the firmware actually does)
 
@@ -172,7 +174,86 @@ hold the kill-switch ≥3s to factory-reset (wipes the pin + creds) and provisio
 again. See the "TLS trust (TOFU)" sections in `firmware/NODE_PROTOCOL.md` and
 `firmware/README.md` for the wire-level detail.
 
-## 7. Kill-switch (physical + remote-OFF-never-ON)
+## 7. Node-initiated enrollment — the other way in (no code)
+
+Everything in §§2–6 above is the **code flow**: the operator declares a
+node's identity FIRST, on the trusted loopback screen, and mints a one-time
+code the node redeems. There is a second way in, built on the backend today
+but not yet reachable from either the reference firmware or the Nodes panel
+UI.
+
+### Which one to use
+
+- **Code flow (§§2–6): the strongest anti-spoof, and the only one with a
+  finished UI today.** The operator commits to what the node is — name, room,
+  sensor type, transport — before any node exists to redeem it. This is what
+  `firmware/wavr_node`'s reference sketch speaks, and what the Nodes panel's
+  "Add a node" form drives end to end. Use this if you're flashing the ESP32
+  build in this repo, or any time you're already at the Core anyway.
+- **Request flow (below): convenience, backend-only today, weaker anti-spoof
+  by design.** A board that already has network reach — a custom node you're
+  building yourself, an MQTT-interop sensor, or just testing with `curl` —
+  asks to join first; a human approves it afterward from whatever it has (an
+  IP, a cert fingerprint, and whatever it claims about itself). This
+  deliberately gives up the code flow's strongest guarantee — the operator
+  commits to an identity *before* the device exists at all — for the
+  convenience of reviewing a board that's already plugged in, from an inbox,
+  instead of round-tripping a code through it first.
+
+### How it works today (admin API — no UI yet)
+
+**Honest gap, stated up front:** the Discoveries tab *notices* a pending
+request and offers an Approve/Deny card, but clicking either one today only
+marks that discovery decided and (on Approve) routes you to Settings →
+Devices — it does **not** call the node API itself. The Nodes panel there has
+"Add a node" (the code flow) and the enrolled-nodes list, but no
+pending-request form yet. Until that ships, approving or denying a request
+means calling the admin API directly — the same loopback + authenticated-root
+session every other node admin action already requires.
+
+1. **The node asks.** `POST /api/nodes/request` — unauthenticated, in-subnet,
+   rate-limited to 5 requests per source IP per 5 minutes:
+   ```
+   curl -k -X POST https://127.0.0.1:8000/api/nodes/request \
+     -H "Content-Type: application/json" \
+     -d '{"name_hint":"hallway thing","sensor_hint":"ld2450"}'
+   # -> {"node_id": "...", "request_id": "...", "status": "pending", "poll_after_ms": 5000}
+   ```
+   `name_hint`/`sensor_hint` are CLAIMS the node makes about itself — Wavr
+   stores them apart from the fields fusion trusts and shows them to the
+   operator only as a suggestion, never as fact. **Save `request_id`** — it
+   is returned exactly once and is the node's only way to collect its token
+   later.
+2. **The operator approves or denies**, supplying the real, load-bearing
+   fields — the node's own hints never populate these on their own:
+   ```
+   curl -k -X POST https://127.0.0.1:8000/api/nodes/<node_id>/approve \
+     -H "Content-Type: application/json" \
+     -d '{"name":"Hallway radar","sensor_type":"ld2450","room":"hallway","transport":"native"}'
+   # or, to refuse instead:
+   curl -k -X POST https://127.0.0.1:8000/api/nodes/<node_id>/deny
+   ```
+3. **The node collects its token** by polling `POST /api/nodes/claim` with
+   the `request_id` it saved in step 1:
+   ```
+   curl -k -X POST https://127.0.0.1:8000/api/nodes/claim \
+     -H "Content-Type: application/json" \
+     -d '{"request_id":"<request_id from step 1>"}'
+   # pending  -> {"status": "pending", "poll_after_ms": 5000}
+   # approved -> {"status": "approved", "node_id": "...", "token": "<returned exactly once>"}
+   ```
+   The token exists in memory only, for 10 minutes after approval
+   (`CLAIM_PICKUP_SECONDS`). If nothing claims it in that window — the Core
+   restarted, the node was slow — the node quietly returns to PENDING instead
+   of getting stuck; approve it again and the next claim hands out a fresh
+   token.
+
+None of this changes the anti-spoof invariant §6 already states: the node's
+own `name_hint`/`sensor_hint` are never what lands in the trusted `name`/
+`sensor_type`/`room`/`transport` columns — only what the operator types at
+step 2 does.
+
+## 8. Kill-switch (physical + remote-OFF-never-ON)
 
 This is an invariant, not a convenience: **Wavr can turn a node off remotely,
 never on.** Turning it back on always requires someone physically at the
@@ -209,14 +290,13 @@ device.
   quietly retrying with a dead token until you physically factory-reset it
   (long hold) or re-flash it. Don't expect it to reset itself.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 **Node not appearing in Wavr**
 - Confirm `WAVR_MULTIDEVICE=1` and `WAVR_NODES_ENABLED=1` are set and Wavr
   was restarted (nodes need the LAN bind + local TLS multidevice already
-  provides; the app is meant to fail fast at startup otherwise). If
-  `WAVR_NODES_ENABLED` doesn't do anything yet, the wiring spec hasn't
-  landed — check with whoever's applying it (see *Status*).
+  provides; the app refuses to start if `WAVR_NODES_ENABLED` is on without
+  `WAVR_MULTIDEVICE`).
 - Enrollment code expired (5-min TTL). Mint a fresh one and re-submit via
   the node's portal. If the node already failed and dropped back to SoftAP,
   just reconnect to `wavr-node-XXXX` and try again with the new code.
@@ -251,7 +331,7 @@ device.
   /api/nodes/{id}`) so it stops being trusted server-side, then physically
   factory-reset it (hold the kill-switch ≥3s) or re-flash it, and mint a
   fresh code to re-enroll. Remember revoke alone won't make the board reset
-  itself (§7).
+  itself (§8).
 - **Moving a node to a different room:** there's no "edit room" call — room
   is fixed at enrollment to keep the anti-spoof guarantee that a node can't
   self-relocate. Revoke, factory-reset the physical node, and re-enroll with
@@ -263,6 +343,7 @@ device.
 
 - Wire contract (source of truth for firmware ↔ backend): `firmware/NODE_PROTOCOL.md`
 - Firmware layout, build envs, OTA, LED legend: `firmware/README.md`
-- Design record, fusion weights, anti-spoof rationale, and the WIRING SPEC
-  for `app.py`/`fusion.py`/frontend:
-  `docs/superpowers/specs/2026-07-11-wavr-sensor-node-onboarding-design.md`
+- Interoperability contract (roles, TOFU pinning, anti-spoof invariants) at
+  the protocol level: `docs/WAVR-PROTOCOL.md` §7
+- Design rationale (fusion weights, kill-switch invariant, anti-spoof choices):
+  the module docstrings in `backend/wavr/nodes.py` and `backend/wavr/api_nodes.py`

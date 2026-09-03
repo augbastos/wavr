@@ -96,6 +96,11 @@ class Device:
     # only. Only guest invites set it. Persisted (not an in-memory timer), so a Core
     # restart re-reads it and an expired guest stays inert immediately.
     expires_at: str | None = None
+    # The human this credential belongs to (`space_store.people.person_id`), or
+    # None for every pre-existing device, every agent, and every device paired
+    # without naming a person. `auth` uses it to NARROW -- never widen -- this
+    # device's effective role to what that person's role grants today.
+    person_id: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -112,6 +117,7 @@ class Device:
             # None for every non-guest device; a guest invite's deadline otherwise,
             # so the device-list UI can show "Guest -- expires HH:MM".
             "expires_at": self.expires_at,
+            "person_id": self.person_id,
         }
 
 
@@ -179,6 +185,7 @@ class DeviceStore:
         self._migrate_tool_scopes_column()
         self._migrate_consent_column()
         self._migrate_expires_at_column()
+        self._migrate_person_id_column()
 
     def _migrate_scopes_column(self) -> None:
         """Wavr Pass (Phase 1), additive: add the nullable `scopes` column to an
@@ -227,6 +234,35 @@ class DeviceStore:
         if "expires_at" not in cols:
             self._conn.execute("ALTER TABLE devices ADD COLUMN expires_at TEXT")
             self._conn.commit()
+
+    def _migrate_person_id_column(self) -> None:
+        """Person association, additive: the nullable `person_id` linking a
+        credential to a human in `space_store.people`. Same idempotent,
+        PRAGMA-guarded, no-backfill pattern as the four migrations above.
+
+        Every existing row reads back `person_id=None`, which means "not
+        associated with anyone" and is treated EXACTLY as before this column
+        existed -- the person-role narrowing in `auth.py` simply does not apply.
+        Nothing is guessed: we do not know whose a pre-existing device is, and
+        inventing an owner for it would be the one mistake this whole model is
+        meant to prevent."""
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(devices)")}
+        if "person_id" not in cols:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN person_id TEXT")
+            self._conn.commit()
+
+    def set_person(self, device_id: str, person_id: str | None) -> bool:
+        """Associate (or clear) the human this credential belongs to.
+
+        Purely additive to the credential: it never changes `role`, `scopes` or
+        `revoked`. What it changes is what `auth` will NARROW the role to on the
+        next request."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE devices SET person_id = ? WHERE device_id = ?",
+                (person_id, device_id))
+            self._conn.commit()
+        return cur.rowcount > 0
 
     def add(self, name: str, role: str, scopes: frozenset[str] | None = None,
             tool_scopes: frozenset[str] | None = None,
@@ -278,7 +314,7 @@ class DeviceStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT device_id, name, role, created_ts, revoked, scopes, tool_scopes,"
-                " consent, expires_at FROM devices WHERE token_hash = ?",
+                " consent, expires_at, person_id FROM devices WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()
             if row is None or row["revoked"] or _is_expired(row["expires_at"]):
@@ -294,6 +330,7 @@ class DeviceStore:
             scopes=_parse_scopes(row["scopes"]),
             tool_scopes=_parse_scopes(row["tool_scopes"]),
             consent=row["consent"], expires_at=row["expires_at"],
+            person_id=row["person_id"],
         )
 
     def list(self) -> list[Device]:
@@ -302,7 +339,8 @@ class DeviceStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes,"
-                " tool_scopes, consent, expires_at FROM devices ORDER BY created_ts, device_id"
+                " tool_scopes, consent, expires_at, person_id"
+                " FROM devices ORDER BY created_ts, device_id"
             ).fetchall()
         return [self._to_device(r) for r in rows]
 
@@ -310,7 +348,7 @@ class DeviceStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT device_id, name, role, created_ts, last_seen_ts, revoked, scopes,"
-                " tool_scopes, consent, expires_at FROM devices WHERE device_id = ?",
+                " tool_scopes, consent, expires_at, person_id FROM devices WHERE device_id = ?",
                 (device_id,),
             ).fetchone()
         return self._to_device(row) if row else None
@@ -370,6 +408,7 @@ class DeviceStore:
             revoked=bool(r["revoked"]), scopes=_parse_scopes(r["scopes"]),
             tool_scopes=_parse_scopes(r["tool_scopes"]),
             consent=r["consent"], expires_at=r["expires_at"],
+            person_id=r["person_id"],
         )
 
     def close(self) -> None:

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Docs — Wavr</title>
+<meta name="description" content="An index into Wavr's documentation on GitHub: architecture decisions, deployment guides, the Node onboarding guide, and network fix guides.">
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="install.html" class="nav-install">Install</a>
+      <a href="compatibility.html">Compatibility</a>
+      <a href="nodes.html">Nodes</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="docs.html" aria-current="page">Docs</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>Docs</h1>
+    <p class="lede">This site doesn't duplicate the documentation, it points at it. Everything
+      below lives in the GitHub repository and is kept current there, not copy-pasted here.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>Start here</h2>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <h3>README</h3>
+        <p>What Wavr is, what ships today, and the quickstart.</p>
+        <p><a href="https://github.com/augbastos/wavr#readme">Read on GitHub</a></p>
+      </div>
+      <div class="tile">
+        <h3>PRODUCT.md</h3>
+        <p>Product definition, brand personality, and the design principles this whole site
+          follows too.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/PRODUCT.md">Read on GitHub</a></p>
+      </div>
+      <div class="tile">
+        <h3>Node onboarding guide</h3>
+        <p>Flash a sensor board and enroll it, end to end. See also <a href="nodes.html">the
+          plain-language version</a> on this site.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/docs/NODE-ONBOARDING.md">Read on GitHub</a></p>
+      </div>
+      <div class="tile">
+        <h3>INSTALL.md</h3>
+        <p>All four install routes in full, including exactly how each one was verified
+          (or wasn't yet). See also <a href="install.html">the install page</a> on this
+          site.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/docs/INSTALL.md">Read on GitHub</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Deployment</h2>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <h3>Multi-device (LAN companions)</h3>
+        <p>Turning a Wavr install into a central other devices can pair to.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/docs/deploy/multi-device.md">Read on GitHub</a></p>
+      </div>
+      <div class="tile">
+        <h3>Bring-up &amp; expansion</h3>
+        <p>Hardening a laptop install, containerizing it, and migrating to a dedicated
+          appliance without rewriting anything.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/docs/deploy/bring-up-and-expansion.md">Read on GitHub</a></p>
+      </div>
+      <div class="tile">
+        <h3>Camera bring-up (Tapo)</h3>
+        <p>Wiring an RTSP camera into the camera source.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/docs/deploy/tapo-camera-bringup.md">Read on GitHub</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Architecture decisions (ADRs)</h2>
+    <p class="section-lede">Why Wavr is built the way it is, recorded at the time each
+      decision was made.</p>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>ADR</th><th>Decision</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0001-ruview-audit-mmwave-over-fork.md">0001</a></td><td>mmWave over forking the ruview project</td></tr>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0002-privacy-boundaries-ram-only.md">0002</a></td><td>Privacy boundaries: RAM-only camera frames</td></tr>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0003-not-a-medical-device.md">0003</a></td><td>Not a medical device</td></tr>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0004-defensive-only-reject-offensive.md">0004</a></td><td>Defensive-only network features</td></tr>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0005-mcp-control-boundary.md">0005</a></td><td>MCP control boundary</td></tr>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0006-authenticated-lan-access.md">0006</a></td><td>Authenticated LAN access</td></tr>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0007-desktop-shell.md">0007</a></td><td>Desktop shell (Tauri)</td></tr>
+          <tr><td><a href="https://github.com/augbastos/wavr/blob/master/docs/adr/0008-mcp-http-transport.md">0008</a></td><td>MCP over HTTP transport</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Networking &amp; hardware reference</h2>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <h3>Network fix guides</h3>
+        <p>Nine guides for diagnosing and fixing common home-network problems Wavr's net
+          doctor can surface.</p>
+        <p><a href="https://github.com/augbastos/wavr/tree/master/docs/network-fixes">Browse on GitHub</a></p>
+      </div>
+      <div class="tile">
+        <h3>Firmware</h3>
+        <p>The ESP32 Node reference firmware and wire protocol.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/firmware/README.md">README</a>
+          &middot; <a href="https://github.com/augbastos/wavr/blob/master/firmware/NODE_PROTOCOL.md">Wire protocol</a></p>
+      </div>
+      <div class="tile">
+        <h3>Desktop build</h3>
+        <p>Building the native Tauri shell from source.</p>
+        <p><a href="https://github.com/augbastos/wavr/blob/master/desktop/BUILD.md">Read on GitHub</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>License</h2>
+    <p class="section-lede"><a href="https://github.com/augbastos/wavr/blob/master/LICENSE">AGPL-3.0-or-later</a>.
+      Free and open source for personal, self-hosted and non-commercial use. A commercial
+      license (without the AGPL's network-copyleft terms) is available from the author on
+      request; open an issue on GitHub to ask.</p>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="docs.html">Docs</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/wavr.js"></script>
+</body>
+</html>

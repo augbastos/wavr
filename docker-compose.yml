@@ -11,6 +11,13 @@ services:
       - .env            # WAVR_* + GEMINI_API_KEY; never baked into the image
     volumes:
       - wavr-data:/data # SQLite persists across restarts (derived RoomState only)
+      # A DEV CONVENIENCE, not a fix: backend/Dockerfile now bakes frontend/ into
+      # the image (it has to -- wavr.app resolves the dashboard as
+      # parents[2]/"frontend"/"index.html", so an image without it serves the API
+      # and 404s on `GET /`). This read-only mount shadows the baked copy so
+      # editing frontend/index.html on the host takes effect without a rebuild.
+      # Safe to delete; the image works without it.
+      - ./frontend:/app/frontend:ro
     restart: unless-stopped
 
     # --- GPU/camera variant (opt-in): uncomment when using a torch+cv2 image (see docs).

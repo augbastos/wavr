@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Wavr — local, explainable home sensing</title>
+<meta name="description" content="Wavr fuses network, Bluetooth, camera and radar signals into one explainable per-room presence state, running entirely on hardware you own. AGPL-3.0, no cloud, no account.">
+<!-- Fully self-contained: no CDN, no web fonts, no analytics, no external requests. -->
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="install.html" class="nav-install">Install</a>
+      <a href="compatibility.html">Compatibility</a>
+      <a href="nodes.html">Nodes</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>Connect Wavr to your space and it starts understanding what is there.</h1>
+    <p class="lede">Wavr fuses network scanning, Bluetooth, camera and radar signals into one
+      explainable presence state per room: occupied or not, a confidence score, and the
+      per-modality <em>why</em> behind it. It runs entirely on hardware you already own,
+      whether that's a laptop, a mini PC, or a Raspberry Pi. Nothing leaves the box unless
+      you turn on an optional, clearly-labelled egress.</p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="install.html">Install Wavr</a>
+      <a class="btn" href="https://github.com/augbastos/wavr">View source on GitHub</a>
+    </div>
+    <p class="hero-note">There is no hosted demo. Wavr is local-only by design; read the
+      source, or run it yourself against simulated data with
+      <code>python -m wavr.serve</code>, which needs no hardware at all.</p>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <h2>Local-first, on purpose</h2>
+      <p class="section-lede">Home sensing usually means sending your camera feed and network
+        traffic to someone else's cloud. Wavr takes the opposite position: the same sensing
+        techniques, run on a machine you control, with the data staying on it.</p>
+      <div class="grid" style="margin-top:24px">
+        <div class="tile">
+          <div class="tile-eyebrow">Loopback by default</div>
+          <p>The base install never opens a LAN socket. Every path off the box (LAN
+            multi-device, MQTT to Home Assistant, the MCP control tool, the AI narrator) is
+            opt-in and starts OFF.</p>
+        </div>
+        <div class="tile">
+          <div class="tile-eyebrow">Cameras boot off</div>
+          <p>Frames live in RAM only, are never written to disk, and never leave the box. Only
+            derived state (occupancy, confidence, a timestamp) is ever stored or shared.</p>
+        </div>
+        <div class="tile">
+          <div class="tile-eyebrow">No account, no telemetry</div>
+          <p>No sign-up, no analytics SDK, no phone-home. The dashboard makes zero external
+            requests, and this website doesn't either. See <a href="privacy.html">Privacy</a>.</p>
+        </div>
+        <div class="tile">
+          <div class="tile-eyebrow">AGPL-3.0-or-later</div>
+          <p>Free and open source for personal, self-hosted and non-commercial use. Run a
+            modified version as a network service and the AGPL asks you to publish your
+            changes. A commercial license is available from the author on request.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <h2>Explainable by construction</h2>
+      <p class="section-lede">Fused confidence equals the best present evidence: trust weight
+        × the source's own confidence × freshness decay, so a single weak source never fakes
+        certainty. Every source's own reading is surfaced, never silently arbitrated.</p>
+      <div class="table-wrap" style="margin-top:20px">
+        <table>
+          <thead>
+            <tr><th>Signal</th><th>What it needs</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Network scan</td><td>Nothing extra</td><td><span class="tag tag-ready">Works today</span></td></tr>
+            <tr><td>Bluetooth presence</td><td>A host Bluetooth adapter</td><td><span class="tag tag-ready">Works today</span></td></tr>
+            <tr><td>Camera (person detection)</td><td>An RTSP camera or webcam, boots OFF</td><td><span class="tag tag-ready">Works today</span></td></tr>
+            <tr><td>mmWave radar (HLK-LD2450)</td><td>A ~€15 sensor over USB-serial</td><td><span class="tag tag-ready">Works today</span></td></tr>
+            <tr><td>WiFi CSI (ruview)</td><td>A channel-state-info source</td><td><span class="tag tag-planned">Source seam only</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fine-print" style="margin-top:12px">A room is always shown in one of three
+        honest states: confirmed-empty, offline (a sensor stopped reporting), or no coverage.
+        They're never blended into a false "clear."</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <h2>One brain, every screen</h2>
+      <p class="section-lede">Wavr is a small family of surfaces around one local fusion
+        engine. Add the ones you need, over the same authenticated, local-only channel.</p>
+      <div class="grid" style="margin-top:24px">
+        <div class="tile">
+          <h3>Desktop</h3>
+          <p>The full dashboard as a native shell, or straight from source in a browser. The
+            machine that runs it is the "Core".</p>
+        </div>
+        <div class="tile">
+          <h3>MCP for agents</h3>
+          <p>A read-only Model Context Protocol server exposes room state and the house map
+            so your own agents can query presence, with an opt-in, gated Home Assistant
+            control tool.</p>
+        </div>
+        <div class="tile">
+          <h3>Mobile companion</h3>
+          <p>No app-store app needed. Pair a phone or tablet browser to a Core over local
+            HTTPS and add it to your home screen.</p>
+        </div>
+        <div class="tile">
+          <h3>Sensor Nodes</h3>
+          <p>A small radar or PIR board that joins Wavr over Wi-Fi with a one-time code. See
+            <a href="nodes.html">Nodes</a> for what's built and what's still firmware-only.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <h2>Ready when you are</h2>
+      <p class="section-lede">Zero hardware to try the idea, and a real path to an always-on
+        household hub when you want one.</p>
+      <div class="hero-ctas" style="margin-top:20px">
+        <a class="btn btn-primary" href="install.html">Install Wavr</a>
+        <a class="btn" href="compatibility.html">Check compatibility</a>
+        <a class="btn" href="docs.html">Read the docs</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="docs.html">Docs</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/wavr.js"></script>
+</body>
+</html>

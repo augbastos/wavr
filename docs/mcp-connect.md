@@ -101,9 +101,8 @@ outright, so the same-box token can never be sent off-box.
 
 ## Transport 2 — HTTP (LAN-paired, read-only)
 
-> **Availability:** the in-app `/mcp` HTTP mount (ADR-0008 Slice 1) currently lives on the
-> `feat/mcp-http-transport` branch — it is **not on `master` yet**. The steps below work once
-> that branch is running; the stdio path above works against `master` today.
+> **Availability:** the in-app `/mcp` HTTP mount (ADR-0008 Slice 1) is on `master`. The
+> steps below work against `master` today, same as the stdio path above.
 
 The HTTP transport mounts a read-only MCP endpoint at `/mcp` **inside** the main Wavr app (same
 uvicorn, same self-signed TLS, same auth middleware). It is **default-OFF** and only serves when
@@ -177,7 +176,33 @@ rate-limiting. Over HTTP you get the **4 read tools only**; `call_ha_service` is
 | `get_room_context` | read | ✓ | ✓ | Full state for one room incl. explainable `sources` + `explanation`. **Strips `vitals`, `targets`, `identities`** — no per-person biometric/positional data. |
 | `get_house_map` | read | ✓ | ✓ | The house map / floor plan (room geometry only). |
 | `get_ha_entities` | read | ✓ | ✓ | Home Assistant's own entities (`entity_id`/`state`/`friendly_name`/`domain`). `[]` when HA is unconfigured. **Note:** HA entity names may name people/devices (e.g. `person.*`, `device_tracker.*`). |
+| `get_space_context` | read | ✓† | ✓ | What this Space is and how it's doing right now: its name, every room's occupancy + confidence, and Core health. The one call to start with. **Default agent grant.** |
+| `explain_room_state` | read | ✓ | ✓ | Why Wavr believes what it believes about one room — same field allowlist as `get_room_context`, reshaped around the evidence. **Default agent grant.** |
+| `get_sensor_coverage` | read | ✓ | ✓ | Which rooms have a sensor reporting on them and which have none — a room with no coverage is not an empty room. **Default agent grant.** |
+| `get_core_health` | read | ✓† | ✓ | Which Core is authoritative for this Space and whether it's answering. **Default agent grant.** |
+| `get_device_context` | read | ✓† | ✓ | What job each paired device does for this Space and what it can sense — no device name, no person, no address. **Not** in the default agent grant (same tier as the LAN inventory/alerts/occupancy-history/HA-entity tools above): needs an explicit `Device.tool_scopes` grant. |
 | `call_ha_service` | control | ✓ (gated, DEFAULT-OFF) | ✗ (never registered) | Ask HA to run one service on one entity. |
+
+**† Registered on stdio, but not fully wired there yet.** The stdio bridge
+(`wavr-mcp` / `backend/wavr/mcp_serve.py`) does not currently pass these three
+tools a Space data source. `get_core_health` and `get_device_context` degrade
+*honestly* — `{"available": false}` — same as any other not-wired optional
+tool. `get_space_context` does **not** degrade as cleanly: with no Space
+source wired, it reports `"This Core has not been set up yet — it has no
+Space"` even on an instance that has a real, configured Space — a known gap
+in the stdio bridge specifically, not a "this is intentionally disabled"
+shape. All three are fully wired over the HTTP transport (`/mcp`), which does
+receive the Space model's data sources. Use HTTP (or the app's own `GET
+/api/space/*` routes) for these three until the stdio bridge is updated.
+
+**"Default agent grant"** refers to a second, independent scoping axis (Wavr
+Pass, `auth.effective_tool_scopes`) that applies ONLY to the `agent` role —
+root/central/user get every tool the transport exposes regardless. An `agent`
+device gets `list_rooms`/`get_room_context`/`get_house_status` plus the four
+Space tools marked above by default; `get_device_context` (like
+`get_network_inventory`/`get_alerts`/`query_occupancy_history`/
+`get_ha_entities`) needs an operator to explicitly widen that device's
+`Device.tool_scopes` first.
 
 ## Guarantees
 

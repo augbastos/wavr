@@ -1,0 +1,12 @@
+# wavr-site — the public "install Wavr" website. Cloudflare PAGES project (project-scoped
+# URL, no account subdomain, same pattern as infra/wavr-diag-worker/wrangler.toml).
+#
+# NOT DEPLOYED. This project has never been created on Cloudflare and this site has never
+# gone live anywhere. See site/README.md before running the deploy command below.
+#
+#   Preview locally:  cd public && python -m http.server 8080
+#   Deploy (needs Augusto's explicit go-ahead first — see README.md):
+#     npx wrangler pages deploy public --project-name wavr-site
+name = "wavr-site"
+pages_build_output_dir = "public"
+compatibility_date = "2026-09-03"

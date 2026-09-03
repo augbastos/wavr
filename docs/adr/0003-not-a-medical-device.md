@@ -48,8 +48,7 @@ boundary:
   and product maturity, not a lack of ambition.
 - **Trade-off:** Wavr cannot be marketed or deployed as a safety or care product
   in its current form. Crossing that line is not a copy change; it is a different
-  project with a company, a QMS, clinical validation, and certification behind it
-  (see ROADMAP "Needs a company + regulatory work").
+  project with a company, a QMS, clinical validation, and certification behind it.
 - **Enforcement:** Copy and API fields that describe vitals or falls must carry
   the experimental / non-diagnostic framing. A PR that introduces clinical or
   life-safety phrasing contradicts this ADR and should be rejected or must

@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -43,6 +44,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -75,7 +77,11 @@ import org.json.JSONObject
 class MainActivity : FragmentActivity() {
 
     private companion object {
-        const val CORE_URL = "https://localhost:8000/?core"
+        /**
+         * How the panel addresses its Core. NOT a constant any more, because the
+         * scheme now depends on how the Core is being run (see [coreUrl]).
+         */
+        const val CORE_PATH = "/?core"
         const val RETRY_DELAY_MS = 3000L
         val BG_COLOR = Color.parseColor("#0B0F14")
         val MUTED_COLOR = Color.parseColor("#8A97A5")
@@ -129,11 +135,32 @@ class MainActivity : FragmentActivity() {
      */
     @Volatile private var currentHost: String? = null
 
-    /** On-device camera -> loopback MJPEG source. Off by default. */
+    /** Operator settings: roles, port, LAN mode. Read, never guessed at. */
+    private lateinit var prefs: CorePrefs
+
+    /**
+     * The panel's own camera source, used ONLY when this device is not running
+     * an embedded Core. When [CoreService] is up it owns the camera instead, so
+     * that sensing survives the screen going off — and so that two streamers can
+     * never fight over the camera device or over loopback port 8081.
+     */
     private lateinit var cameraStreamer: CameraMjpegStreamer
+
+    /** Set while a CAMERA grant is being requested on the panel's behalf. */
+    @Volatile private var pendingCameraOn = false
 
     /** Runtime CAMERA-permission dialog result -> forwarded to the streamer. */
     private lateinit var cameraPermLauncher: ActivityResultLauncher<String>
+
+    /**
+     * POST_NOTIFICATIONS (API 33+). Asked for ONLY when this device becomes a
+     * Core, because that is the only time there is anything to notify about.
+     * Denying it does not stop the Core -- Android keeps running a foreground
+     * service either way -- it only hides the notice from the shade, which
+     * costs the operator their one-tap Stop. So it is asked once, at the
+     * moment it starts to mean something, and never again.
+     */
+    private lateinit var notifPermLauncher: ActivityResultLauncher<String>
 
     // --- LAN discovery advertisement state --------------------------------
     /** System DNS-SD registrar; null if the platform service is unavailable. */
@@ -159,6 +186,8 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        prefs = CorePrefs(this)
+
         // Screen-awake policy is CONFIGURABLE (see screenPolicy()), not a hardcoded
         // wall-panel assumption: an unconditional keep-awake is the dominant battery drain
         // (a permanent SCREEN_BRIGHT hold flattened the G9 in a day off-charger). Default
@@ -177,10 +206,26 @@ class MainActivity : FragmentActivity() {
         // WavrNative.setCamera(true).
         cameraPermLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission()
-        ) { granted -> cameraStreamer.onPermissionResult(granted) }
-        cameraStreamer = CameraMjpegStreamer(this) {
-            cameraPermLauncher.launch(android.Manifest.permission.CAMERA)
+        ) { granted ->
+            // The panel is the only surface that can legally show a permission
+            // dialog, so it acquires the grant on behalf of whichever streamer is
+            // actually running -- the service's, when this device is a Core.
+            val wanted = pendingCameraOn
+            pendingCameraOn = false
+            cameraStreamer.onPermissionResult(granted)
+            if (granted && wanted) activeStreamer().setEnabled(true)
         }
+        notifPermLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { /* granted or not, the Core runs; only the notice differs */ }
+
+        cameraStreamer = CameraMjpegStreamer(
+            context = this,
+            lifecycleOwner = this,
+            requestCameraPermission = {
+                cameraPermLauncher.launch(android.Manifest.permission.CAMERA)
+            },
+        )
 
         val root = FrameLayout(this).apply {
             setBackgroundColor(BG_COLOR)
@@ -203,6 +248,16 @@ class MainActivity : FragmentActivity() {
 
         applyImmersive()
         loadCore()
+
+        // If -- and only if -- the operator has made this device a Core and not
+        // pressed Stop, bring the runtime up. An unconfigured install never gets
+        // here, which is what keeps today's kiosk (and the G9's proot Core on the
+        // same port) untouched by this app being installed.
+        if (prefs.shouldRunCore) {
+            ensureNotificationPermission()
+            CoreWatchdogJob.schedule(this)
+            CoreService.start(this)
+        }
 
         // Announce this Core on the LAN (mDNS / DNS-SD) so Wavr Mobile companions
         // can auto-discover it without the user typing an IP. Best-effort: a
@@ -305,8 +360,38 @@ class MainActivity : FragmentActivity() {
     private fun loadCore() {
         pageHadError = false
         showPlaceholder()
-        webView.loadUrl(CORE_URL)
+        webView.loadUrl(coreUrl())
     }
+
+    /**
+     * The URL of the Core this panel renders.
+     *
+     * The scheme is not cosmetic. `wavr.serve` runs plain HTTP on loopback in its
+     * default mode and only switches to HTTPS when `WAVR_MULTIDEVICE` is on
+     * (ADR-0006 §6), so the panel has to follow:
+     *
+     *  - **unconfigured** -> `https://localhost:8000` exactly as before. This is
+     *    the case the field device is in: its Core lives in a Termux proot
+     *    started with `WAVR_MULTIDEVICE=1` and TLS on. Changing this would break
+     *    a running installation, so it does not change.
+     *  - **embedded Core, loopback only** -> `http`, because that is what the
+     *    Core is actually serving. Cleartext is permitted for `localhost` and
+     *    `127.0.0.1` and for nothing else (`res/xml/network_security_config.xml`).
+     *  - **embedded Core, LAN mode** -> `https`, with the self-signed cert the
+     *    Core generates, trusted only on loopback by [WebViewClient].
+     */
+    private fun coreUrl(): String {
+        if (!prefs.configured) return "https://localhost:8000$CORE_PATH"
+        val scheme = if (prefs.lanMode || !prefs.isCore) "https" else "http"
+        return "$scheme://localhost:${prefs.port}$CORE_PATH"
+    }
+
+    /**
+     * Whichever streamer is real right now. The service's when it is up, so that
+     * the camera outlives the panel; the panel's own otherwise.
+     */
+    private fun activeStreamer(): CameraMjpegStreamer =
+        CoreService.streamerIfUp() ?: cameraStreamer
 
     private fun onMainFrameFailure() {
         pageHadError = true
@@ -666,7 +751,16 @@ class MainActivity : FragmentActivity() {
         fun setCamera(on: Boolean) {
             if (!onTrustedOrigin()) return
             try {
-                cameraStreamer.setEnabled(on)
+                if (on && !hasCameraGrant()) {
+                    // Acquire the grant here (the only surface with a UI), then
+                    // enable whichever streamer is actually running.
+                    pendingCameraOn = true
+                    runOnUiThread {
+                        cameraPermLauncher.launch(android.Manifest.permission.CAMERA)
+                    }
+                    return
+                }
+                activeStreamer().setEnabled(on)
             } catch (t: Throwable) {
                 // swallow — state() reflects the real outcome
             }
@@ -677,7 +771,7 @@ class MainActivity : FragmentActivity() {
         fun getCameraState(): String = try {
             if (!onTrustedOrigin())
                 "{\"on\":false,\"lens\":\"back\",\"port\":8081,\"reason\":\"error\"}"
-            else cameraStreamer.state()
+            else activeStreamer().state()
         } catch (t: Throwable) {
             "{\"on\":false,\"lens\":\"back\",\"port\":8081,\"reason\":\"error\"}"
         }
@@ -687,7 +781,7 @@ class MainActivity : FragmentActivity() {
         fun setCameraLens(lens: String) {
             if (!onTrustedOrigin()) return
             try {
-                cameraStreamer.setLens(lens)
+                activeStreamer().setLens(lens)
             } catch (t: Throwable) {
                 // swallow — state() reflects the real lens
             }
@@ -719,7 +813,287 @@ class MainActivity : FragmentActivity() {
                 "{\"advertising\":false,\"serviceName\":\"$NSD_SERVICE_NAME\",\"type\":\"$NSD_TYPE_LABEL\"}"
             }
         }
+
+        // -----------------------------------------------------------------
+        // Core runtime: roles, supervisor, power, capabilities (ADR-0010)
+        //
+        // Every method here is origin-gated exactly like the ones above, and
+        // every one either reads state or applies a decision the OPERATOR made
+        // in the panel. None of them decides anything: the recommendation comes
+        // from the Core's own `capabilities.recommend()`, and the runtime's
+        // health comes from the runtime.
+        // -----------------------------------------------------------------
+
+        /**
+         * `{"service":..,"runtime":{"kind":..,"bundled":..,"running":..,
+         *   "serving":..},"thermal":..,"shed":..,"port":..,"lan":..}`
+         */
+        @JavascriptInterface
+        fun getCoreStatus(): String =
+            if (!onTrustedOrigin()) "{\"service\":false}"
+            else CoreService.statusJson(this@MainActivity)
+
+        /**
+         * `{"configured":..,"functions":[..],"autostart":..,"lan":..,"port":..,
+         *   "runtimeBundled":..,"mainsAnswered":..,"mains":..}`
+         *
+         * `configured:false` is the honest "this is still only a panel" state,
+         * and the UI must render it as a question, never as a Core that happens
+         * to be switched off.
+         */
+        @JavascriptInterface
+        fun getRoleState(): String = try {
+            if (!onTrustedOrigin()) "{\"configured\":false}"
+            else JSONObject().apply {
+                put("configured", prefs.configured)
+                put("functions", JSONArray(prefs.functions.toList()))
+                put("autostart", prefs.autostart)
+                put("lan", prefs.lanMode)
+                put("port", prefs.port)
+                put("runtimeBundled", PythonRuntime.resolve().bundled())
+                put("runtimeKind", PythonRuntime.resolve().kind)
+                put("mainsAnswered", prefs.mainsAnswered)
+                put("mains", prefs.declaredMainsPowered)
+            }.toString()
+        } catch (t: Throwable) {
+            "{\"configured\":false}"
+        }
+
+        /**
+         * Apply the operator's chosen combination, e.g. `["core","node","client"]`.
+         *
+         * Choosing Core starts the runtime; dropping it stops it. Unknown names
+         * are dropped rather than rejected, the same posture WAVR-PROTOCOL 5.2
+         * takes toward anything arriving off the wire. Returns [getRoleState].
+         */
+        @JavascriptInterface
+        fun setRoles(functionsJson: String): String = try {
+            if (!onTrustedOrigin()) "{\"configured\":false}"
+            else {
+                val arr = JSONArray(functionsJson)
+                val wanted = ArrayList<String>()
+                for (i in 0 until arr.length()) {
+                    val v = arr.optString(i, "")
+                    if (v.isNotEmpty()) wanted.add(v)
+                }
+                val wasCore = prefs.isCore
+                prefs.setFunctions(wanted)
+                val isCore = prefs.isCore
+                if (isCore && !wasCore) {
+                    prefs.desiredRunning = true
+                    runOnUiThread { ensureNotificationPermission() }
+                    CoreWatchdogJob.schedule(this@MainActivity)
+                    CoreService.start(this@MainActivity)
+                } else if (!isCore && wasCore) {
+                    CoreWatchdogJob.cancel(this@MainActivity)
+                    CoreService.stop(this@MainActivity)
+                }
+                runOnUiThread { loadCore() }   // the URL may have changed scheme/port
+                getRoleState()
+            }
+        } catch (t: Throwable) {
+            "{\"configured\":false,\"error\":\"bad_request\"}"
+        }
+
+        /**
+         * Start the embedded Core now. No-op unless this device holds `core`.
+         *
+         * If this process has already run and stopped a Core, "start" cannot
+         * mean a method call (see [CoreService.requestRestart]) — it has to mean
+         * a process restart, and doing anything else would leave the operator
+         * looking at a running service in front of a dead Core.
+         */
+        @JavascriptInterface
+        fun startCore(): String {
+            if (!onTrustedOrigin() || !prefs.isCore) return getCoreStatus()
+            prefs.desiredRunning = true
+            CoreWatchdogJob.schedule(this@MainActivity)
+            val needsProcessRestart = try {
+                JSONObject(PythonRuntime.resolve().status())
+                    .optBoolean("restartRequired", false)
+            } catch (t: Throwable) {
+                false
+            }
+            if (needsProcessRestart) {
+                runOnUiThread { CoreService.requestRestart(this@MainActivity) }
+                return getCoreStatus()
+            }
+            CoreService.start(this@MainActivity)
+            return getCoreStatus()
+        }
+
+        /** Stop it, and mean it: nothing restarts it until [startCore]. */
+        @JavascriptInterface
+        fun stopCore(): String {
+            if (!onTrustedOrigin()) return getCoreStatus()
+            CoreWatchdogJob.cancel(this@MainActivity)
+            CoreService.stop(this@MainActivity)
+            return getCoreStatus()
+        }
+
+        /**
+         * ADR-0006's opt-in, as one switch. OFF is ADR-0002's loopback default.
+         *
+         * The setting is saved immediately, but a running Core does NOT adopt
+         * it: a bind address cannot change under a live socket, and the embedded
+         * interpreter cannot restart in place (see [CoreService.requestRestart]).
+         * So this reports `restartRequired` and leaves the decision with the
+         * operator instead of silently stopping their Core, or -- worse --
+         * claiming the change took effect when it did not.
+         */
+        @JavascriptInterface
+        fun setLanMode(on: Boolean): String = try {
+            if (!onTrustedOrigin()) getCoreStatus()
+            else {
+                val changed = prefs.lanMode != on
+                prefs.lanMode = on
+                val needsRestart = changed && CoreService.isUp()
+                if (!needsRestart) runOnUiThread { loadCore() }
+                JSONObject(getCoreStatus()).apply {
+                    put("restartRequired", needsRestart || optBoolean("restartRequired"))
+                    put("lan", on)
+                }.toString()
+            }
+        } catch (t: Throwable) {
+            getCoreStatus()
+        }
+
+        /**
+         * Apply a pending change by restarting the app process. Destructive by
+         * design and never called on its own initiative -- the panel offers it
+         * only after `restartRequired` has been reported and the operator has
+         * agreed.
+         */
+        @JavascriptInterface
+        fun restartCore(): Boolean {
+            if (!onTrustedOrigin() || !prefs.isCore) return false
+            runOnUiThread { CoreService.requestRestart(this@MainActivity) }
+            return true
+        }
+
+        @JavascriptInterface
+        fun setAutostart(on: Boolean): Boolean {
+            if (!onTrustedOrigin()) return false
+            prefs.autostart = on
+            if (on && prefs.shouldRunCore) CoreWatchdogJob.schedule(this@MainActivity)
+            return prefs.autostart
+        }
+
+        /**
+         * The operator telling us this device lives on a charger. Android cannot
+         * know that, so `permanent_power` stays UNKNOWN in the capability
+         * manifest until this is answered (WAVR-PROTOCOL 5.1).
+         */
+        @JavascriptInterface
+        fun setMainsPowered(on: Boolean): Boolean {
+            if (!onTrustedOrigin()) return false
+            prefs.declaredMainsPowered = on
+            return prefs.declaredMainsPowered
+        }
+
+        /**
+         * This device's Capability Manifest (WAVR-PROTOCOL 5.2), built from real
+         * Android APIs. Hardware facts only: the Python scan inside the Core
+         * fills in everything a process can determine about itself.
+         */
+        @JavascriptInterface
+        fun getCapabilityManifest(): String =
+            if (!onTrustedOrigin()) "{}"
+            else AndroidCapabilities.manifestJson(
+                this@MainActivity,
+                PythonRuntime.resolve().bundled(),
+            )
+
+        /**
+         * What this device should become, and WHY.
+         *
+         * The answer comes from the Core's own `capabilities.recommend()` (the
+         * same function a laptop uses) through the bootstrap module. It is NOT
+         * computed here. With no runtime bundled, the honest answer is that we
+         * cannot recommend, not a guess.
+         */
+        @JavascriptInterface
+        fun getRoleRecommendation(): String = try {
+            if (!onTrustedOrigin()) "{}"
+            else if (!PythonRuntime.resolve().bundled()) {
+                "{\"ok\":false,\"error\":\"no_runtime\",\"detail\":" +
+                    "\"This build has no Wavr Core runtime, so this device can only " +
+                    "be a Client. Pair it with a Core on your network.\"}"
+            } else {
+                CoreService.recommendJson(this@MainActivity)
+            }
+        } catch (t: Throwable) {
+            "{\"ok\":false,\"error\":\"recommend_failed\"}"
+        }
+
+        /** `{"exempt":..,"restricted":..,"idle":..,"powerSave":..,"advice":..}` */
+        @JavascriptInterface
+        fun getPowerState(): String =
+            if (!onTrustedOrigin()) "{\"advice\":\"unknown\"}"
+            else PowerPolicy.state(this@MainActivity)
+
+        /** The text the panel MUST show before calling [requestBatteryExemption]. */
+        @JavascriptInterface
+        fun getPowerRationale(): String =
+            if (!onTrustedOrigin()) "" else PowerPolicy.RATIONALE
+
+        /**
+         * Open Android's battery-optimisation UI. `direct=false` (what the panel
+         * should use by default) opens the settings list and needs no permission;
+         * `direct=true` fires the one-tap system dialog, and is only legitimate
+         * from a button the operator pressed after reading [getPowerRationale].
+         */
+        @JavascriptInterface
+        fun requestBatteryExemption(direct: Boolean): Boolean = try {
+            if (!onTrustedOrigin()) false
+            else {
+                val intent = if (direct) {
+                    PowerPolicy.directRequestIntent(this@MainActivity)
+                } else {
+                    PowerPolicy.settingsIntent()
+                }
+                runOnUiThread { startActivity(intent) }
+                true
+            }
+        } catch (t: Throwable) {
+            false
+        }
+
+        /**
+         * `{"hasBle":..,"adapterOn":..,"scanReady":..,"scannerImplemented":false,..}`
+         * See [BlePermissions] for why `scannerImplemented` is false and why
+         * `neverForLocation` is deliberately not claimed.
+         */
+        @JavascriptInterface
+        fun getBleState(): String =
+            if (!onTrustedOrigin()) "{\"scannerImplemented\":false}"
+            else BlePermissions.state(this@MainActivity)
     }
+
+    /**
+     * Request POST_NOTIFICATIONS if this Android needs it and we do not have it.
+     * Silent no-op below API 33 and when already granted -- never a repeated
+     * prompt.
+     */
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val perm = android.Manifest.permission.POST_NOTIFICATIONS
+        if (ContextCompat.checkSelfPermission(this, perm) ==
+            PackageManager.PERMISSION_GRANTED
+        ) return
+        try {
+            notifPermLauncher.launch(perm)
+        } catch (t: Throwable) {
+            // Launcher not registered yet (impossible after onCreate) or the
+            // system refused. The Core still runs; the notice is just hidden.
+        }
+    }
+
+    /** CAMERA grant check, used by the bridge before it asks a streamer to bind. */
+    private fun hasCameraGrant(): Boolean =
+        ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
 
     // ---------------------------------------------------------------------
     // System status

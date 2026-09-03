@@ -36,9 +36,15 @@ INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                    "clientInfo": {"name": "t", "version": "0"}}}
 
+# Every tool the HTTP transport exposes. `call_ha_service` is deliberately
+# ABSENT (expose_control=False) -- read-only by construction over the network.
+# The five Space tools joined in 2026-09; keeping this pinned is the point, so a
+# tool appearing on the network surface can never be accidental.
 _READ_TOOLS = {"list_rooms", "get_room_context", "get_house_map", "get_ha_entities",
               "get_network_inventory", "get_alerts", "query_occupancy_history",
-              "get_house_status"}
+              "get_house_status",
+              "get_space_context", "explain_room_state", "get_sensor_coverage",
+              "get_core_health", "get_device_context"}
 
 
 class _FakeProvider:

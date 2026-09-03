@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Compatibility — Wavr</title>
+<meta name="description" content="What Wavr needs at each tier: a plain laptop for network presence, extra hardware for cameras and radar, and a dedicated box for an always-on Core.">
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="install.html" class="nav-install">Install</a>
+      <a href="compatibility.html" aria-current="page">Compatibility</a>
+      <a href="nodes.html">Nodes</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>Compatibility</h1>
+    <p class="lede">Honestly tiered: what Wavr does with hardware you probably already have,
+      and what each extra piece of hardware buys you. Nothing here is required to start.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>Tier 1 &mdash; runs today, no extra hardware</h2>
+    <p class="section-lede">Any Windows, macOS or Linux machine. Windows needs nothing else
+      installed; macOS and Linux need Python 3.11 or newer.</p>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>Platform</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Windows 10/11</td><td><span class="tag tag-ready">Supported</span></td><td>Real installer, no Python needed (unsigned; SmartScreen will warn). <span class="tag tag-note">Not published yet</span>; see <a href="install.html">Install</a>.</td></tr>
+          <tr><td>macOS</td><td><span class="tag tag-ready">Supported</span></td><td>Run from source with <code>python3</code>; no packaged installer yet.</td></tr>
+          <tr><td>Linux (desktop, laptop, or Raspberry Pi)</td><td><span class="tag tag-ready">Supported</span></td><td>One-command install script (<span class="tag tag-note">not yet run on real hardware</span>); Docker also works.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">At this tier, network scanning and Bluetooth presence work
+      with nothing plugged in beyond what the machine already has. This is the fusion
+      engine's floor, not a stripped-down mode: it's the same <code>FusionEngine</code> every
+      other tier uses, just fed fewer sources.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>Tier 2 &mdash; more sensing, a bit more hardware</h2>
+    <p class="section-lede">Each source is an independent add-on. Turn on the ones you have;
+      skip the rest.</p>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>Source</th><th>Hardware needed</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Bluetooth presence</td><td>A host Bluetooth adapter (most laptops have one)</td><td><span class="tag tag-ready">Works today</span></td></tr>
+          <tr><td>Camera person-detection</td><td>An RTSP camera or a webcam, plus a CPU/GPU able to run a small YOLO model</td><td><span class="tag tag-ready">Works today</span> (boots OFF)</td></tr>
+          <tr><td>mmWave radar</td><td>An HLK-LD2450 (~€15) over USB-serial, direct to the machine</td><td><span class="tag tag-ready">Works today</span></td></tr>
+          <tr><td>Remote radar/PIR sensor node</td><td>An ESP32 + sensor, over Wi-Fi</td><td><span class="tag tag-note">Backend built; firmware not yet run on real hardware</span>, see <a href="nodes.html">Nodes</a></td></tr>
+          <tr><td>WiFi CSI (ruview)</td><td>A channel-state-info source</td><td><span class="tag tag-planned">Source seam only</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Tier 3 &mdash; a dedicated, always-on Core</h2>
+    <p class="section-lede">The same code, running on a small box that stays on so the
+      dashboard is a bookmark instead of something you start by hand.</p>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <h3>Raspberry Pi / mini PC</h3>
+        <p>Recommended: the Linux install script (<code>install.sh</code>), which can offer
+          a <code>systemd</code> autostart unit so the dashboard survives a reboot. Already
+          run everything in Docker, or managing a NAS? <code>./scripts/wavr-docker.sh up</code>
+          works too (<code>network_mode: host</code>, access from other devices over an SSH
+          tunnel). See <a href="install.html">Install</a>.</p>
+      </div>
+      <div class="tile">
+        <h3>A GPU-equipped box</h3>
+        <p>For camera detection at scale, a machine with a GPU runs the YOLO model far more
+          comfortably than a Pi's CPU. The base Docker image is lean (no camera/GPU
+          dependencies); the GPU variant is a documented follow-up, not shipped as a
+          ready image yet.</p>
+      </div>
+      <div class="tile">
+        <h3>Windows Docker Desktop</h3>
+        <p><span class="tag tag-note">Not the appliance path</span> Docker Desktop's network
+          model doesn't support <code>network_mode: host</code> the way Linux does. On
+          Windows, use the <a href="install.html">Windows installer</a> instead and save
+          Docker for a real Linux box.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Phones and tablets</h2>
+    <p class="section-lede">Usually a phone is a view that pairs to a Core. It can also be
+      the Core itself &mdash; see the last card.</p>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <h3>Android</h3>
+        <p><span class="tag tag-ready">Works today</span> Pair a browser to a Core over
+          local HTTPS; no Play Store app required. See <a href="install.html">Install</a>.</p>
+      </div>
+      <div class="tile">
+        <h3>iOS / iPadOS</h3>
+        <p><span class="tag tag-ready">Works today</span> Same route via Safari, "Add to
+          Home Screen" for a full-screen view.</p>
+      </div>
+      <div class="tile">
+        <h3>Android kiosk launcher</h3>
+        <p><span class="tag tag-planned">Source only, unsigned, experimental</span> An
+          always-on ambient panel launcher exists in the repo as a Gradle project. It hasn't
+          been signed for general use; treat it as a reference for now.</p>
+      </div>
+      <div class="tile">
+        <h3>Android as a Core</h3>
+        <p><span class="tag tag-planned">Source only, unsigned</span> The same Gradle
+          project builds a second app that embeds CPython and runs the real Core on the
+          phone &mdash; not a reduced copy, the same code the desktop runs. It builds and
+          the Core answers, but <strong>it has never been run on a physical handset</strong>:
+          battery behaviour, surviving Doze overnight and restarting after a reboot are all
+          unmeasured. No Play Store release.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Native desktop shell</h2>
+    <p class="section-lede">A Tauri window with a tray icon, wrapping the same backend.</p>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>Mode</th><th>Windows</th><th>macOS / Linux</th></tr></thead>
+        <tbody>
+          <tr><td>Loopback (default)</td><td><span class="tag tag-ready">Works</span></td><td><span class="tag tag-ready">Works</span></td></tr>
+          <tr><td>Bundled Core (self-contained installer, no Python needed)</td><td><span class="tag tag-ready">Built</span> (unsigned; not published yet)</td><td><span class="tag tag-planned">Not built yet</span> &mdash; runs from source, see <a href="install.html">Install</a></td></tr>
+          <tr><td>LAN multi-device (HTTPS pinning in the shell's own webview)</td><td><span class="tag tag-ready">Implemented</span></td><td><span class="tag tag-planned">Not implemented yet</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">This only affects the native desktop shell's own certificate
+      trust for LAN mode. Every other multi-device path (a browser companion pairing to a
+      Core, the mobile companion view) is unaffected and works the same on every platform.</p>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="docs.html">Docs</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/wavr.js"></script>
+</body>
+</html>

@@ -75,10 +75,20 @@ COUNTING_SENSORS: frozenset[str] = frozenset({"ld2450", "mmwave"})
 # transport risk scales the evidence, not the modality's trust.
 TRANSPORT_CAP: dict[str, float] = {"native": 1.0, "mqtt": 0.7}
 
-# Kill-switch states.
+# Node lifecycle states.
+STATE_PENDING = "pending"     # asked to join; NO token yet, awaiting an operator
 STATE_ACTIVE = "active"       # enrolled + enabled: telemetry accepted -> fusion
 STATE_DISABLED = "disabled"   # remote-OFF: telemetry REJECTED, node told to sleep
 STATE_REVOKED = "revoked"     # terminal: token dead, must re-flash + re-enroll
+
+# How long an unanswered join request lives. Generous enough that an operator can
+# notice it at their leisure, short enough that a board plugged in once and
+# forgotten does not sit in the inbox forever.
+PENDING_TTL_SECONDS = 7 * 24 * 3600
+# A hostile or broken LAN must not be able to grow the pending list without
+# bound. At the cap, the OLDEST pending request is dropped: on a noisy network
+# the recent ones are the actionable ones.
+MAX_PENDING_NODES = 50
 
 # Enrollment-code defenses (mirror pairing.PairingManager).
 CODE_TTL_SECONDS = 300        # a headless node may take a minute to join Wi-Fi
@@ -92,8 +102,21 @@ ATTEMPT_WINDOW_SECONDS = 60
 # node_id can call reactivate() in a window, so a compromised/buggy node spamming
 # the route can't hammer the store. `revoke()` is the operator's real terminal
 # recourse for a node they no longer trust -- no press_count can undo it.
+# Node-initiated join requests, per source IP. Low: a board asks once and then
+# polls a DIFFERENT route (`/api/nodes/claim`), so a legitimate node needs a
+# handful at most.
+JOIN_REQUEST_MAX = 5
+JOIN_REQUEST_WINDOW_SECONDS = 300
+
 REACTIVATE_MAX_ATTEMPTS = 20
 REACTIVATE_WINDOW_SECONDS = 60
+
+# How long an approved node has to collect its token. The token lives ONLY in
+# memory for this window (never on disk -- see `approve`), so this is also how
+# long a Core restart can lose it. A node polls every few seconds, so this is
+# generous; if it does lapse, `claim` puts the node back in the queue rather
+# than stranding it.
+CLAIM_PICKUP_SECONDS = 600
 
 
 def _utcnow() -> datetime:
@@ -134,7 +157,17 @@ CREATE TABLE IF NOT EXISTS nodes (
     press_count      INTEGER NOT NULL DEFAULT 0,
     last_seq         INTEGER NOT NULL DEFAULT 0,
     last_seen_ts     TEXT,
-    created_ts       TEXT    NOT NULL
+    created_ts       TEXT    NOT NULL,
+    -- What the node CLAIMS about itself when it asks to join. Kept strictly
+    -- apart from the trusted `name`/`sensor_type` columns above, which only an
+    -- operator ever writes. Rendered to the operator as a claim, never used by
+    -- fusion -- a node must not be able to decide it is the kitchen radar.
+    name_hint        TEXT    NOT NULL DEFAULT '',
+    sensor_hint      TEXT    NOT NULL DEFAULT '',
+    -- The node's capability to poll for the outcome of its own join request.
+    -- 192-bit, returned exactly once. NULL for every node enrolled the
+    -- operator-minted-code way, which is unchanged.
+    request_id       TEXT
 );
 """
 
@@ -156,6 +189,10 @@ class Node:
     last_seq: int
     last_seen_ts: str | None
     created_ts: str
+    # What the node said about itself when it asked to join. Rendered to the
+    # operator as an unverified claim; never used by fusion.
+    name_hint: str = ""
+    sensor_hint: str = ""
 
     def to_dict(self) -> dict:
         # Never includes token material. Safe for the loopback Nodes panel.
@@ -166,6 +203,9 @@ class Node:
             "cert_fingerprint": self.cert_fingerprint,
             "confidence_cap": self.confidence_cap, "state": self.state,
             "last_seen_ts": self.last_seen_ts, "created_ts": self.created_ts,
+            # Labelled `*_hint` all the way to the UI so nobody mistakes a
+            # node's self-description for something Wavr verified.
+            "name_hint": self.name_hint, "sensor_hint": self.sensor_hint,
         }
 
 
@@ -181,7 +221,22 @@ class NodeStore:
         self._lock = threading.Lock()
         self._now = now_fn
         self._conn.executescript(_SCHEMA)
+        self._migrate_pending_columns()
         self._conn.commit()
+        # request_id -> (token, expires_at) for nodes approved but not yet
+        # collected. IN MEMORY on purpose: `devices.py` establishes that a
+        # plaintext credential never touches disk, and a persisted pickup token
+        # would be exactly that. Bounded by CLAIM_PICKUP_SECONDS and by the
+        # pending cap; `claim` prunes on read.
+        #
+        # ⚠️ DEPENDS ON WAVR BEING A SINGLE PROCESS. It is today -- `serve.py`,
+        # the Dockerfile CMD and every install script run one uvicorn worker,
+        # none passes `workers=`. Under multiple workers an approve handled by
+        # one and a claim handled by another would take `claim`'s "token gone"
+        # branch and bounce a freshly-approved node back to PENDING, with no
+        # error anywhere. If workers are ever introduced, this map has to move
+        # to a shared store that still keeps the plaintext off disk.
+        self._issued: dict = {}
         # In-memory-only abuse brake for reactivate() (see NodeReactivateRateLimited
         # and REACTIVATE_MAX_ATTEMPTS above). Bounded growth: one bucket per
         # node_id that has EVER called reactivate, and a node_id here always
@@ -215,6 +270,179 @@ class NodeStore:
         return node_id, token
 
     # -- node-token auth ---------------------------------------------------
+    def _migrate_pending_columns(self) -> None:
+        """Additive, PRAGMA-guarded, idempotent -- the same pattern every other
+        store here uses. A node table written before the pending lifecycle gains
+        three nullable columns; every existing row reads back empty hints and a
+        NULL request_id, which is exactly right: those nodes were enrolled the
+        operator-minted-code way and never asked for anything."""
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(nodes)")}
+        for col, decl in (("name_hint", "TEXT NOT NULL DEFAULT ''"),
+                          ("sensor_hint", "TEXT NOT NULL DEFAULT ''"),
+                          ("request_id", "TEXT")):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {decl}")
+        self._conn.commit()
+
+    def request_join(self, name_hint: str, sensor_hint: str,
+                     cert_fingerprint: str = "") -> tuple[str, str]:
+        """A node asks to join. Returns `(node_id, request_id)`.
+
+        Creates a PENDING row with **no token**. Everything the node says about
+        itself is a HINT: `name_hint` and `sensor_hint` are stored separately
+        from the trusted `name`/`sensor_type` fields and are shown to the
+        operator as claims. `room`, `modality` and `transport` stay empty until
+        an operator fills them in at `approve()` -- a node still cannot choose
+        its own room or modality, which is the property the whole node design
+        rests on.
+
+        `request_id` is a 192-bit secret returned exactly once. It is the node's
+        capability to poll for its token later, the same construction
+        `pair_requests.py` uses."""
+        name_hint = " ".join(str(name_hint or "").split())[:64] or "Unnamed sensor"
+        sensor_hint = "".join(
+            c for c in str(sensor_hint or "")[:32] if c.isalnum() or c in "_-")
+        cert_fingerprint = "".join(
+            c for c in str(cert_fingerprint or "")[:128] if c.isalnum() or c == ":")
+        node_id = secrets.token_hex(16)
+        request_id = secrets.token_urlsafe(24)
+        ts = self._now()
+        with self._lock:
+            self._prune_pending_locked()
+            self._conn.execute(
+                "INSERT INTO nodes (node_id, name, sensor_type, modality, room,"
+                " transport, token_hash, cert_fingerprint, confidence_cap, state,"
+                " press_count, last_seq, last_seen_ts, created_ts,"
+                " name_hint, sensor_hint, request_id)"
+                " VALUES (?, ?, '', '', '', '', NULL, ?, 1.0, ?, 0, 0, NULL, ?,"
+                " ?, ?, ?)",
+                (node_id, name_hint, cert_fingerprint, STATE_PENDING, ts,
+                 name_hint, sensor_hint, request_id))
+            self._conn.commit()
+        return node_id, request_id
+
+    def _prune_pending_locked(self) -> None:
+        """Caller holds the lock. Age out stale requests, then cap the rest."""
+        cutoff = (_utcnow() - timedelta(seconds=PENDING_TTL_SECONDS)).isoformat()
+        self._conn.execute(
+            "DELETE FROM nodes WHERE state = ? AND created_ts < ?",
+            (STATE_PENDING, cutoff))
+        n = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM nodes WHERE state = ?",
+            (STATE_PENDING,)).fetchone()["n"]
+        if n >= MAX_PENDING_NODES:
+            self._conn.execute(
+                "DELETE FROM nodes WHERE node_id IN ("
+                "  SELECT node_id FROM nodes WHERE state = ?"
+                "  ORDER BY created_ts ASC LIMIT ?)",
+                (STATE_PENDING, n - MAX_PENDING_NODES + 1))
+
+    def list_pending(self) -> list[Node]:
+        """Join requests awaiting a decision. Never includes `request_id` -- that
+        is the node's own polling secret and belongs to nobody else."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM nodes WHERE state = ? ORDER BY created_ts ASC",
+                (STATE_PENDING,)).fetchall()
+        return [self._to_node(r) for r in rows]
+
+    def approve(self, node_id: str, name: str, sensor_type: str,
+                room: str, transport: str = "native") -> str | None:
+        """Approve a pending join and mint its token. Returns the token once, or
+        None if the node is unknown or not pending.
+
+        The operator supplies name/sensor_type/room/transport. The node's own
+        hints are NOT used here even as defaults at this layer -- the API may
+        pre-fill a form with them, but what lands in the trusted columns is what
+        a human submitted."""
+        modality = SENSOR_MODALITY.get(sensor_type, "")
+        cap = TRANSPORT_CAP.get(transport, 0.7)
+        token = secrets.token_urlsafe(32)
+        name = " ".join(str(name or "").split())[:64]
+        room = " ".join(str(room or "").split())[:64]
+        if not name or not room:
+            raise ValueError("name and room are required to approve a node")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT state FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+            if row is None or row["state"] != STATE_PENDING:
+                return None
+            self._conn.execute(
+                "UPDATE nodes SET name = ?, sensor_type = ?, modality = ?, room = ?,"
+                " transport = ?, token_hash = ?, confidence_cap = ?, state = ?"
+                " WHERE node_id = ?",
+                (name, sensor_type, modality, room, transport, _hash_token(token),
+                 cap, STATE_ACTIVE, node_id))
+            rid = self._conn.execute(
+                "SELECT request_id FROM nodes WHERE node_id = ?",
+                (node_id,)).fetchone()["request_id"]
+            self._conn.commit()
+            # IN MEMORY, never on disk. `devices.py` establishes that a plaintext
+            # token never touches storage, so a leaked db cannot be replayed;
+            # a persisted pickup token would break exactly that. The cost is that
+            # a Core restart before the node collects loses the token -- handled
+            # in `claim()` by returning the node to PENDING so the operator can
+            # simply approve again.
+            if rid:
+                self._issued[rid] = (token, _utcnow() + timedelta(
+                    seconds=CLAIM_PICKUP_SECONDS))
+        return token
+
+    def deny(self, node_id: str) -> bool:
+        """Refuse a pending join. The row is removed outright rather than kept as
+        a tombstone: a denied board that is later plugged in again should be able
+        to ask afresh, and an operator who denied by accident should not have to
+        hunt for an un-deny button."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM nodes WHERE node_id = ? AND state = ?",
+                (node_id, STATE_PENDING))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def claim(self, request_id: str) -> tuple[str, str, str] | None:
+        """A node polls for the outcome of its join request.
+
+        Returns `(status, node_id, token)`. `token` is non-empty exactly once --
+        it is cleared from the row on the first successful claim, so a replayed
+        request_id cannot re-read it. Returns None for an unknown request, which
+        the API surfaces the same way as a denial: a node whose request was
+        removed should factory-reset and start over, not retry forever."""
+        if not request_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT node_id, state FROM nodes WHERE request_id = ?",
+                (request_id,)).fetchone()
+            if row is None:
+                return None
+            if row["state"] == STATE_PENDING:
+                return ("pending", row["node_id"], "")
+
+            held = self._issued.pop(request_id, None)
+            if held is not None and held[1] > _utcnow():
+                # Single-use: drop the polling capability now that it has done
+                # its job. A replay then finds no row at all and is answered
+                # identically to an unknown request -- which is what stops the
+                # branch below from mistaking "already collected" for "token
+                # lost" and putting a live node back in the approval queue.
+                self._conn.execute(
+                    "UPDATE nodes SET request_id = NULL WHERE request_id = ?",
+                    (request_id,))
+                self._conn.commit()
+                return ("approved", row["node_id"], held[0])
+
+            # Approved, but the token is gone: the Core restarted, or the pickup
+            # window lapsed. Rather than leaving the node permanently unable to
+            # collect a credential that exists only as a hash, put it back in the
+            # queue. The operator sees it again and approves again -- self-healing,
+            # and it never requires storing the plaintext.
+            self._conn.execute(
+                "UPDATE nodes SET state = ?, token_hash = NULL WHERE request_id = ?",
+                (STATE_PENDING, request_id))
+            self._conn.commit()
+            return ("pending", row["node_id"], "")
+
     def get_by_token(self, token: str) -> Node | None:
         """Resolve the node presenting `token` (updating last_seen), or None if the
         token is unknown or the node is REVOKED. A DISABLED node still resolves --
@@ -347,11 +575,15 @@ class NodeStore:
 
     @staticmethod
     def _to_node(r: sqlite3.Row, last_seen: str | None = None) -> Node:
+        # NOTE: never reads `request_id` -- that is the node's own polling
+        # secret, and `Node` is the shape the admin UI renders.
         return Node(
             node_id=r["node_id"], name=r["name"], sensor_type=r["sensor_type"],
             modality=r["modality"], room=r["room"], transport=r["transport"],
             cert_fingerprint=r["cert_fingerprint"],
             confidence_cap=float(r["confidence_cap"]), state=r["state"],
+            name_hint=(r["name_hint"] if "name_hint" in r.keys() else ""),
+            sensor_hint=(r["sensor_hint"] if "sensor_hint" in r.keys() else ""),
             press_count=int(r["press_count"]), last_seq=int(r["last_seq"]),
             last_seen_ts=last_seen if last_seen is not None else r["last_seen_ts"],
             created_ts=r["created_ts"],
@@ -388,6 +620,10 @@ class NodeEnroller:
         self._attempt_window = attempt_window
         self._codes: dict[str, _PendingNode] = {}
         self._failed: dict[str, list[datetime]] = {}   # source_ip -> failed stamps
+        # source_ip -> ALL join-request stamps (see allow_request). Pruned on
+        # every check, so it stays bounded under an IP-rotating flood the same
+        # way `_failed` does.
+        self._requests: dict[str, list[datetime]] = {}
 
     def mint_code(self, name: str, sensor_type: str, room: str,
                   transport: str = "native") -> str:
@@ -407,6 +643,32 @@ class NodeEnroller:
             name.strip() or sensor_type, sensor_type, room.strip(), transport,
             self._now() + timedelta(seconds=self._code_ttl))
         return code
+
+    def allow_request(self, source_ip: str | None) -> bool:
+        """Per-IP brake on node-initiated join requests.
+
+        `/api/nodes/request` is unauthenticated by necessity -- a board that has
+        never been enrolled holds no credential -- so the only things bounding it
+        are the middleware's in-subnet check, the pending-list cap in NodeStore,
+        and this. Keyed per source IP so one noisy or hostile board throttles
+        itself and not the household, exactly as `redeem`'s limiter does.
+
+        Deliberately counts EVERY request, not just failures: unlike a redeem
+        (where only wrong guesses are suspicious), a flood of well-formed join
+        requests is the abuse."""
+        now = self._now()
+        key = source_ip or ""
+        self._purge_requests(now)
+        stamps = self._requests.setdefault(key, [])
+        if len(stamps) >= JOIN_REQUEST_MAX:
+            return False
+        stamps.append(now)
+        return True
+
+    def _purge_requests(self, now: datetime) -> None:
+        cutoff = now - timedelta(seconds=JOIN_REQUEST_WINDOW_SECONDS)
+        self._requests = {ip: keep for ip, stamps in self._requests.items()
+                          if (keep := [s for s in stamps if s > cutoff])}
 
     def redeem(self, code: str, cert_fingerprint: str = "",
                source_ip: str | None = None) -> tuple[str, str] | None:

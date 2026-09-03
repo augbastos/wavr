@@ -83,7 +83,17 @@ class LocalApiStateProvider:
     def _urllib_get(self, path: str) -> bytes:
         # Loopback GET to the same-box app. The optional local-API token (A5.1) is sent
         # as X-Wavr-Token -- the same header the app's middleware checks (app.py:485).
-        headers = {"X-Wavr-Token": self._token} if self._token else {}
+        #
+        # X-Wavr-Local is the CSRF marker: it says "a local process the operator
+        # started made this call", as opposed to a cross-origin page's drive-by
+        # fetch. This bridge IS such a process -- it is spawned by the operator's
+        # MCP host and refuses any non-loopback target outright -- so sending it
+        # is the same claim the dashboard makes. Without it the Space routes
+        # (require_local) 403, and `get_space_context` would report a configured
+        # house as un-set-up.
+        headers = {"X-Wavr-Local": "1"}
+        if self._token:
+            headers["X-Wavr-Token"] = self._token
         req = urllib.request.Request(self._base + path, headers=headers, method="GET")
         with urllib.request.urlopen(req, timeout=self._timeout) as r:  # noqa: S310 (loopback)
             return r.read()
@@ -147,6 +157,44 @@ class LocalApiStateProvider:
             path, default={"unusual": None, "baseline_probability": None,
                           "samples": 0, "hour": None})
 
+    def space(self) -> dict | None:
+        """The Space this Core serves, or None when it genuinely has none.
+
+        `GET /api/setup/status` is loopback-root-only, which this bridge is by
+        construction (it refuses a non-loopback target outright, see
+        `_is_loopback_target`).
+
+        NOT `_json_safe`: a failure here RAISES on purpose. Swallowing it into
+        None made "I could not reach the Core" indistinguishable from "this Core
+        has no Space", and `get_space_context` then told the agent a configured
+        house had never been set up. `_json_safe` is right for a feature switch
+        the app is authoritative about; it is wrong for a question whose false
+        answer is a statement about the operator's home."""
+        body = self._json("/api/setup/status")
+        if not isinstance(body, dict):
+            raise RuntimeError("setup status was not an object")
+        return body.get("space")
+
+    def topology(self) -> dict | None:
+        """Core topology, or None if it cannot be read. None makes
+        `get_core_health` answer `available: false` -- honest, not invented."""
+        body = self._json_safe("/api/space/cores", default=None)
+        return body if isinstance(body, dict) else None
+
+    def people_count(self) -> int | None:
+        body = self._json_safe("/api/space/people", default=None)
+        if not isinstance(body, dict):
+            return None
+        people = body.get("people")
+        return len(people) if isinstance(people, list) else None
+
+    def space_devices(self) -> list[dict] | None:
+        body = self._json_safe("/api/space/devices", default=None)
+        if not isinstance(body, dict):
+            return None
+        rows = body.get("devices")
+        return rows if isinstance(rows, list) else None
+
     def house_status(self, window_minutes: float = 60.0) -> dict:
         path = "/api/house-status" + _query({"window_minutes": window_minutes})
         return self._json_safe(
@@ -187,7 +235,14 @@ def make_server(cfg=None):
         provider, name="wavr", ha_client=ha,
         control_enabled=cfg.mcp_control, allowed_services=cfg.ha_allowed_services,
         network_inventory_fn=provider.inventory, alerts_fn=provider.alerts,
-        occupancy_provider=provider, house_status_fn=provider.house_status)
+        occupancy_provider=provider, house_status_fn=provider.house_status,
+        # The Space tools. Without these the stdio bridge answered
+        # `get_space_context` with "this Core has not been set up yet" on a fully
+        # configured house -- a confident wrong answer, which is worse than the
+        # honest `available: false` its siblings give.
+        space_fn=provider.space, cores_fn=provider.topology,
+        people_count_fn=provider.people_count,
+        space_devices_fn=provider.space_devices)
 
 
 def main() -> None:

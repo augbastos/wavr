@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Privacy — Wavr</title>
+<meta name="description" content="What Wavr does and doesn't do with your data, in plain language, plus exactly what this website itself does (and doesn't) read from your browser.">
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="install.html" class="nav-install">Install</a>
+      <a href="compatibility.html">Compatibility</a>
+      <a href="nodes.html">Nodes</a>
+      <a href="privacy.html" aria-current="page">Privacy</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>Privacy</h1>
+    <p class="lede">Plain language, not legalese. Two separate things to explain: what the
+      Wavr product does with the data it senses, and what this website does with your visit.
+      Short version: the product keeps your data on your own hardware, and the website
+      collects nothing at all.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>The product: your home stays yours</h2>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <div class="tile-eyebrow">Runs where you put it</div>
+        <p>Wavr runs on hardware you own: a laptop, a mini PC, or a Raspberry Pi. There is no
+          Wavr cloud service; nothing is uploaded anywhere by default.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Loopback by default</div>
+        <p>Out of the box, Wavr only answers requests from the same machine it's running on.
+          It doesn't even open a network port other devices could reach until you
+          deliberately turn that on.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Cameras boot off</div>
+        <p>If you connect a camera, it starts disabled. When you turn it on, video frames are
+          processed in memory to detect a person's presence and are never written to disk and
+          never sent anywhere. Only "someone is in this room" is kept, never the picture.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Only the conclusion is stored</div>
+        <p>What's saved is occupancy, a confidence score, and a timestamp, per room. Not
+          frames, not raw sensor coordinates, not your credentials.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Every door out is a switch you flip</div>
+        <p>Letting a second device see your dashboard, publishing state to Home Assistant,
+          letting an AI agent read presence over MCP, having a narrator summarize your day:
+          each is its own opt-in toggle, and each starts OFF.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Even the AI summary can stay local</div>
+        <p>If you turn on the natural-language narrator, you can point it at a local model
+          running on your own machine, and that step never leaves your network either. Cloud
+          providers are opt-in, not the default.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>The website: nothing collected, nothing sent</h2>
+    <p class="section-lede">This site is static files. No account, no cookies, no analytics,
+      no third-party embeds, no fonts or scripts loaded from anywhere but this same site.</p>
+    <p>The one page that reads anything from your browser is
+      <a href="install.html">Install</a>, to guess which platform to show you first. Here is
+      the complete list of what it reads and what it does with it:</p>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>What it reads</th><th>Why</th><th>Where it goes</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>navigator.userAgentData</code> (if your browser exposes it), including
+              a high-entropy read of platform, architecture and mobile flags</td>
+            <td>To guess Windows, macOS, Linux, Android or iOS, and whether you're on a
+              phone</td>
+            <td>Nowhere. Read and used to pick which text to show, then discarded.</td>
+          </tr>
+          <tr>
+            <td><code>navigator.userAgent</code> (fallback when the above isn't available)</td>
+            <td>Same guess, for browsers without the newer API</td>
+            <td>Nowhere. Never leaves your device.</td>
+          </tr>
+          <tr>
+            <td>A same-origin fetch of <code>assets/releases.json</code>, a file this site
+              ships</td>
+            <td>To check whether a download link exists for your platform yet</td>
+            <td>Stays entirely within this site; it's a request to itself, not a third
+              party.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">That's the entire list. No canvas fingerprinting, no font
+      enumeration, no battery/sensor APIs, no cookies or local-storage writes, no request to
+      any analytics, advertising, or tracking service. Nothing about your visit is recorded
+      by this site, because there is no server-side code here to record it: it's files, served
+      as-is.</p>
+    <p>The guess is also explicitly labelled as a guess on the Install page itself: an iPad in
+      desktop mode, for instance, can look identical to a Mac to any website. That's a known
+      limitation of browser-based detection everywhere, not something specific to Wavr, and
+      it's why the page never blocks you from picking a different platform yourself.</p>
+  </section>
+
+  <section class="section wrap">
+    <h2>Questions</h2>
+    <p class="section-lede">If something here needs a closer look, or a change to the fixed
+      wording the product itself shows around cameras and data leaving your network, open an
+      issue on <a href="https://github.com/augbastos/wavr">GitHub</a>.</p>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="docs.html">Docs</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/wavr.js"></script>
+</body>
+</html>

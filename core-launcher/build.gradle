@@ -5,10 +5,27 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+        // Chaquopy publishes to the Gradle Plugin Portal; only consulted when
+        // the Core build is requested (see the conditional classpath below).
+        gradlePluginPortal()
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.0'
+
+        // Embedded CPython for the Wavr Core (ADR-0010). Added to the classpath
+        // ONLY for `-PwavrPython=true`, so the kiosk build resolves exactly the
+        // two coordinates it always did and keeps working offline for anyone
+        // who has never fetched Chaquopy.
+        //
+        // 17.0.0 is the version verified against this toolchain: it supports AGP
+        // 7.3–9.2 (we are on 8.13.0) and Python 3.10–3.14. MIT-licensed, so it
+        // composes into this repo's AGPL-3.0 without friction; there is no
+        // licence key and no runtime phone-home.
+        if (project.hasProperty('wavrPython') &&
+                project.property('wavrPython').toString().toBoolean()) {
+            classpath 'com.chaquo.python:gradle:17.0.0'
+        }
     }
 }
 

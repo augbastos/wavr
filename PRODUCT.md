@@ -9,6 +9,44 @@ product
 - **Augusto (owner-operator):** monitors his own home on a local machine (localhost dashboard). Context: glances at room occupancy/vitals while doing other work; toggles sources on/off at will. Job: "is someone home / in that room, and why does the system think so?"
 - **Portfolio viewers (recruiters, engineers):** judge the engineering quality of a multi-modal sensor-fusion system in under a minute — from the public repo + README, or by cloning and running the offline demo (`python -m wavr.serve`, simulated data, zero hardware). There is **no hosted online demo** (local-only by design).
 
+## What Wavr is
+
+**Wavr is the spatial layer for the local network.** It takes a network that
+today only carries traffic, plus whatever sensing hardware is already in the
+building, and turns them into a live, explainable model of the physical space:
+which rooms are occupied, how sure we are, and on what evidence.
+
+The local network is the *foundation*, not one sensor among several. Every
+device that joins it is already telling you something — that it is here, when it
+arrived, when it left. Cameras, Bluetooth, radar and CSI refine that into
+room-level and eventually position-level answers. They do not replace it.
+
+## What Wavr is not
+
+Naming these matters more than it looks: the gravitational pull on any
+smart-home project is to keep adding device integrations until it is a worse
+version of something that already exists.
+
+- **Not a Home Assistant replacement.** HA is the device-integration and
+  automation layer and is very good at it. Wavr is the perception layer. Where
+  Wavr needs the state of, or control over, a generic smart-home entity, it goes
+  through HA rather than rebuilding the ecosystem.
+- **Not a Matter/MQTT/IoT-control platform.** Wavr speaks to those standards; it
+  does not compete with them.
+- **Not a vendor-integration project.** Wavr writes native integrations only
+  where they directly improve *sensing, spatial context, discovery or Nodes*. A
+  hundred adapters for lights and thermostats is somebody else's job, already
+  done.
+- **Not an AI product.** Wavr must be fully useful with no LLM configured
+  anywhere. The MCP server is how an external AI *reads* Wavr; it is not a
+  dependency, and no model is embedded.
+- **Not a claim to have invented Wi-Fi sensing.** The techniques are published
+  research. What Wavr contributes is operationalising them: installable on
+  hardware people already own, local-first, fused honestly, and legible.
+
+Wavr must work with none of the above present. When Home Assistant *is* on the
+network, Wavr should find it and be richer for it — never require it.
+
 ## Product Purpose
 
 Wavr fuses multiple sensing modalities (WiFi CSI, network scan, camera CV, simulator) into one explainable `RoomState` per room — occupancy + confidence 0..1 + per-modality "why". Success: the dashboard makes the fusion legible at a glance (confidence, modality breakdown, timeline), runs light, and never leaks real data off the LAN.

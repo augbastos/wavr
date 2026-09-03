@@ -420,7 +420,22 @@ def test_effective_tool_scopes_agent_null_resolves_to_coarse_default():
     assert resolved == AGENT_DEFAULT_TOOL_SCOPE
     assert resolved == DEFAULT_AGENT_TOOL_SCOPES["agent"]
     assert resolved == frozenset({
-        "list_rooms", "get_room_context", "get_house_status"})
+        "list_rooms", "get_room_context", "get_house_status",
+        # The Space tools (2026-09-03). All four are current, room-level state,
+        # which is the same line this set has always drawn -- not a widening of
+        # the CLASS of data a default agent can reach:
+        #   get_space_context   current occupancy + Core health
+        #   explain_room_state  the SAME _ROOM_CONTEXT_FIELDS allowlist as
+        #                       get_room_context, reshaped around the evidence
+        #   get_sensor_coverage which rooms are sensed -- mostly a negative, and
+        #                       withholding it is worse: an agent that cannot
+        #                       tell "unsensed" from "empty" reports an empty
+        #                       house with confidence
+        #   get_core_health     operational status, minus base_url/cert pins
+        # get_device_context is deliberately NOT here: a per-device census is
+        # the same class as get_network_inventory. Asserted below.
+        "get_space_context", "explain_room_state", "get_sensor_coverage",
+        "get_core_health"})
     assert "call_ha_service" not in resolved       # actuation opt-in, never default
     # The household PII/tracking crown jewels are opt-in ONLY -- excluded from
     # the default even though get_network_inventory/get_alerts/
@@ -429,8 +444,12 @@ def test_effective_tool_scopes_agent_null_resolves_to_coarse_default():
     # Phase-2B re-threat FIX 1 (MEDIUM): get_house_map joins that excluded set
     # too -- its room `id` encodes the room name and it ships polygon geometry
     # (the floor plan itself), which a coarse cloud/default agent doesn't need.
+    # get_device_context (2026-09-03) joins them: even stripped of device names,
+    # people and addresses, "what every device is for and what it can sense" is a
+    # household census.
     for excluded in ("get_alerts", "get_network_inventory",
-                     "query_occupancy_history", "get_ha_entities", "get_house_map"):
+                     "query_occupancy_history", "get_ha_entities", "get_house_map",
+                     "get_device_context"):
         assert excluded not in resolved
 
 

@@ -469,7 +469,9 @@ def build_mcp_http_mount(provider, *, is_enabled, local_ip: str, name: str = "wa
                          ha_client=None, rate_capacity: int | None = None,
                          rate_refill: float | None = None,
                          network_inventory_fn=None, alerts_fn=None,
-                         occupancy_provider=None, house_status_fn=None):
+                         occupancy_provider=None, house_status_fn=None,
+                         space_fn=None, cores_fn=None, people_count_fn=None,
+                         space_devices_fn=None, coverage_fn=None):
     """Build the READ-ONLY, stateless MCP-over-streamable-HTTP mount.
 
     Returns ``(route, session_manager)``:
@@ -509,6 +511,12 @@ def build_mcp_http_mount(provider, *, is_enabled, local_ip: str, name: str = "wa
             enable_dns_rebinding_protection=False),
         network_inventory_fn=network_inventory_fn, alerts_fn=alerts_fn,
         occupancy_provider=occupancy_provider, house_status_fn=house_status_fn,
+        # The Space tools. Same read-only contract as everything above: each is
+        # a zero-arg reader over state Wavr already holds, and none of them
+        # scans, probes, or reaches off the box.
+        space_fn=space_fn, cores_fn=cores_fn, people_count_fn=people_count_fn,
+        space_devices_fn=space_devices_fn,
+        coverage_fn=coverage_fn,
     )
     # Lazily create the session manager (SDK does this on first streamable_http_app()).
     server.streamable_http_app()

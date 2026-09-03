@@ -314,9 +314,45 @@ fn python() -> String {
     std::env::var("WAVR_PYTHON").unwrap_or_else(|_| "python".to_string())
 }
 
+/// The bundled Core executable, when this is an installed build.
+///
+/// ADR-0007 chose "spawn-not-bundle" and named a self-contained sidecar as the
+/// follow-up. This is it. Without one, installing Wavr starts with "install
+/// Python 3.11 or newer and tick Add to PATH" -- precisely the developer
+/// knowledge the install experience is meant to remove.
+///
+/// Looked for next to our own executable, which is where Tauri's bundler places
+/// `externalBin` output. Returns `None` from a `cargo run`/dev tree, so the
+/// developer path below is untouched.
+fn bundled_core() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = if cfg!(windows) { "wavr-core.exe" } else { "wavr-core" };
+    for candidate in [dir.join(name), dir.join("wavr-core").join(name)] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn spawn_backend() -> std::io::Result<Child> {
-    let mut cmd = Command::new(python());
-    cmd.args(["-m", "wavr.serve"]);
+    // Resolution order, and why: an explicit WAVR_PYTHON always wins (a
+    // developer pointing at a venv); then the bundled sidecar (the installed
+    // case, no Python on the machine); then `python -m wavr.serve` (a checkout,
+    // exactly as before this existed).
+    let explicit_python = std::env::var("WAVR_PYTHON").is_ok();
+    let mut cmd = match bundled_core() {
+        Some(core) if !explicit_python => {
+            log_issue(&format!("spawning bundled Core: {}", core.display()));
+            Command::new(core)
+        }
+        _ => {
+            let mut c = Command::new(python());
+            c.args(["-m", "wavr.serve"]);
+            c
+        }
+    };
     // Run from the backend/repo dir if given, so the backend's load_dotenv() finds ./.env.
     // The shell deliberately does NOT set WAVR_MULTIDEVICE / WAVR_BIND / WAVR_TLS_*: the
     // backend owns that decision via its .env. We only pin the port so both sides agree.

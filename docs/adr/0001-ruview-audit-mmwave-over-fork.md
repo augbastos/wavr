@@ -47,8 +47,8 @@ Instead:
 2. For **real per-person x/y position**, we adopt an **mmWave radar (HLK-LD2450,
    ~€15, USB serial)** as the honest, cheap path. It reports tracked targets with
    coordinates directly, no model to train or serve, and fits the existing
-   `SensorSource` seam. (Parser + source are already written and mock-tested;
-   see ROADMAP.)
+   `SensorSource` seam. (Parser + source are already written and mock-tested
+   — see `backend/wavr/sources/mmwave.py`.)
 
 ## Consequences
 

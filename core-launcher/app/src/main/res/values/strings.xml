@@ -4,4 +4,28 @@
     <string name="starting">Wavr Core starting…</string>
     <string name="auth_title">Unlock Wavr</string>
     <string name="auth_cancel">Cancel</string>
+
+    <!-- Core runtime notification (ADR-0010). This is the app's honesty
+         surface: a process that runs permanently on someone's phone owes them
+         what it is doing, why, and a one-tap way out. Written for the person
+         holding the phone, not for a developer reading logcat. -->
+    <string name="core_channel_name">Wavr Core</string>
+    <string name="core_channel_desc">Shows that your Wavr Core is running on this device, and lets you stop it.</string>
+
+    <string name="core_notification_title">Wavr Core is running</string>
+    <string name="core_notification_stop">Stop</string>
+    <string name="core_notification_title_restart">Wavr Core needs a restart</string>
+    <string name="core_restart_pending">A setting was changed that Wavr cannot apply while it is running. Open Wavr and choose Restart to apply it. Until then, the Core on this device is not sensing.</string>
+
+    <!-- %1$s is one of the two scope strings below. -->
+    <string name="core_notification_body">This phone is the brain of your Wavr setup. It keeps sensing and answering your other devices while the screen is off, which is why it stays in this list.\n\n%1$s\n\nNothing is sent to the internet. Tap Stop to shut the Core down — it will stay off until you start it again.</string>
+
+    <string name="core_scope_loopback">Reachable only on this device (port %1$d). Nothing on your network can connect to it.</string>
+    <string name="core_scope_lan">Reachable on your Wi-Fi over HTTPS (port %1$d), by paired devices only.</string>
+
+    <string name="core_shed_camera">The phone is running hot, so Wavr has switched its camera off for now. Everything else keeps working, and the camera comes back when it cools down.</string>
+    <string name="core_shed_framerate">The phone is warm, so Wavr has slowed its camera down to use less power. Everything else is unaffected.</string>
+
+    <!-- Shown before Android's notification permission prompt on API 33+. -->
+    <string name="core_notif_rationale">Wavr shows one permanent notice while the Core is running, so you always know it is on and can stop it in one tap. Without notification permission it keeps running, but that notice is hidden.</string>
 </resources>

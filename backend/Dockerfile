@@ -11,6 +11,14 @@ COPY backend/pyproject.toml /app/backend/pyproject.toml
 COPY backend/wavr /app/backend/wavr
 RUN pip install --no-cache-dir -e /app/backend
 
+# The dashboard. NOT optional, and NOT merely a nicety: wavr.app resolves it as
+# `Path(__file__).resolve().parents[2] / "frontend" / "index.html"`, which from
+# /app/backend/wavr/app.py is /app/frontend/index.html. Without this COPY the
+# container serves the API and 404s on `GET /` -- the image builds, starts,
+# passes /healthz, and has no user interface. Copied AFTER the pip layer so
+# editing the frontend does not invalidate the dependency cache.
+COPY frontend /app/frontend
+
 # Data dir for the SQLite DB (mounted as a volume at runtime).
 RUN mkdir -p /data && chown -R wavr:wavr /data /app
 USER wavr
