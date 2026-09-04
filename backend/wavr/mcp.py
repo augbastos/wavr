@@ -625,6 +625,57 @@ def get_sensor_coverage(provider: StateProvider, coverage_fn=None) -> dict:
     return out
 
 
+# What each `precision_next` key means, said the way somebody would act on it.
+# The keys come from `fusion._NEXT_BY_RANK`; an agent should not have to learn
+# Wavr's internal vocabulary to answer "what would help here".
+_NEXT_IN_WORDS = {
+    "add_room_sensor": ("Nothing in this room can tell WHICH room somebody is "
+                        "in — only that they are in the building. A Bluetooth "
+                        "or motion sensor here would give room-level answers."),
+    "add_counting_sensor": ("Wavr can tell somebody is here but not how many. "
+                            "A camera or a radar could count."),
+    "calibrate_camera_position": ("A camera here can count people but not place "
+                                  "them. A short guided calibration walk would "
+                                  "let it report positions."),
+}
+
+
+def _disagreement(sources: list) -> dict:
+    """Where fresh sensors in one room contradict each other.
+
+    Only FRESH ones are compared: a stale sensor is not disagreeing, it is
+    absent, and reporting it as dissent would manufacture a contradiction out of
+    something being unplugged.
+
+    A source that reports absence is not treated as an equal vote — Wavr's own
+    fusion gives absence no mass, because a camera failing to see a still person
+    is weaker evidence than one seeing somebody. The report says both what the
+    disagreement is and how Wavr weighed it, so an agent does not have to guess
+    which side won.
+    """
+    fresh = [s for s in (sources or []) if s.get("health") == "fresh"]
+    saying_present = [s for s in fresh if s.get("presence")]
+    saying_empty = [s for s in fresh if not s.get("presence")]
+    if not (saying_present and saying_empty):
+        return {"disagree": False, "sensors": []}
+
+    def label(s):
+        return {"sensor_id": s.get("sensor_id", ""),
+                "modality": s.get("modality", ""),
+                "says": "occupied" if s.get("presence") else "empty"}
+
+    counts = {s.get("count") for s in fresh if s.get("count") is not None}
+    return {
+        "disagree": True,
+        "sensors": [label(s) for s in fresh],
+        "counts_disagree": len(counts) > 1,
+        "note": ("These sensors contradict each other. Wavr gives a report of "
+                 "absence no weight in the merge — a sensor that fails to see a "
+                 "still person is weaker evidence than one that sees somebody — "
+                 "so the room reads as occupied while the disagreement stands."),
+    }
+
+
 def explain_room_state(provider: StateProvider, room: str) -> dict | None:
     """Why Wavr believes what it believes about one room.
 
@@ -646,7 +697,12 @@ def explain_room_state(provider: StateProvider, room: str) -> dict | None:
         "precision": {
             "level": base.get("precision_level", "none"),
             "next": base.get("precision_next"),
+            # The same key, in words an agent can act on without knowing Wavr's
+            # internal vocabulary. Absent when the room is already at the top
+            # rung — an empty suggestion is worse than none.
+            "how_to_improve": _NEXT_IN_WORDS.get(base.get("precision_next")),
         },
+        "disagreement": _disagreement(base.get("sources", [])),
         "as_of": base.get("ts"),
         "note": ("`confidence` is how sure Wavr is that someone is present. "
                  "`precision.level` is how detailed an answer the evidence "
