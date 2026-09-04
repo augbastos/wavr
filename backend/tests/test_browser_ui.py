@@ -62,6 +62,11 @@ def core(tmp_path_factory):
     env = {
         **os.environ,
         "WAVR_DB": str(db),
+        # Pinned for the reason in `test_config_export`: the default is
+        # CWD-relative, this subprocess runs with cwd=backend/, and a test that
+        # restores a floor plan would otherwise rewrite the map every other test
+        # reads.
+        "WAVR_HOUSE_MAP": str(db.parent / "house.json"),
         "WAVR_DEVELOPER_MODE": "1",
         # No token: these tests drive the dashboard the way the Core's own
         # screen does, over loopback.
@@ -132,12 +137,29 @@ def page(browser):
     ctx.close()
 
 
-def open_settings(page, base):
+def open_settings(page, base, *, wait_for="#developerBody"):
+    """Open the settings overlay and wait for a panel to actually have content.
+
+    This used to end in `wait_for_timeout(4000)`, which is a promise about
+    somebody else's machine. Every panel here renders from its own async
+    request, so under load — the full suite runs several Cores and a browser at
+    once — four seconds is sometimes not enough, and the test fails on a page
+    that was about to be correct. That is worse than a slow test: it teaches
+    whoever sees it that this file is flaky, and the next real failure gets
+    re-run instead of read.
+
+    `wait_for` names the panel the caller is about to assert on. Waiting for
+    THAT rather than for a duration also means the failure message points at
+    the panel that never rendered.
+    """
     page.goto(f"{base}/?cachebust={time.time()}")
     page.wait_for_selector("#tab-inicio", timeout=30000)
     page.click("#gearNavBtn")
     page.wait_for_selector("#gearOverlay:not([hidden])", timeout=15000)
-    page.wait_for_timeout(4000)
+    page.wait_for_function(
+        "sel => { const el = document.querySelector(sel);"
+        "         return el && el.innerText.trim().length > 40; }",
+        arg=wait_for, timeout=30000)
 
 
 # -- The panels that have gone silently empty before ---------------------------
@@ -145,7 +167,12 @@ def open_settings(page, base):
 def test_the_developer_panel_renders_on_a_desktop(page, core):
     """The width at which the Trust screen once sat permanently empty, because
     the rail that triggers a render is panel-width-only."""
-    open_settings(page, core)
+    open_settings(page, core, wait_for="#developerBody")
+    # The scenario list is the LAST section to render, so wait for the thing
+    # under test rather than for the panel to be merely non-empty.
+    page.wait_for_function(
+        "() => (document.getElementById('developerBody')?.innerText || '')"
+        ".toUpperCase().includes('SIMULATED HOUSE')", timeout=30000)
     text = page.locator("#developerBody").inner_text()
     assert "THIS CORE" in text.upper()
     assert "SIMULATED HOUSE" in text.upper()
@@ -156,7 +183,13 @@ def test_the_privacy_panel_shows_what_applications_can_read(page, core):
     """The half of the privacy picture the provider list does not cover: a
     household that can see where evidence comes FROM but not where it GOES knows
     only half of what it agreed to."""
-    open_settings(page, core)
+    open_settings(page, core, wait_for="#privacyDataBody")
+    # This panel renders in three sections from three requests, and "not empty"
+    # is satisfied by the first of them. Wait for the section under test — the
+    # generic wait was passing on a panel that was two thirds rendered.
+    page.wait_for_function(
+        "() => (document.getElementById('privacyDataBody')?.innerText || '')"
+        ".toUpperCase().includes('WHAT APPLICATIONS CAN READ')", timeout=30000)
     text = page.locator("#privacyDataBody").inner_text().upper()
     assert "WHAT APPLICATIONS CAN READ" in text
     assert "WHAT WAVR KEEPS" in text
@@ -171,7 +204,7 @@ def test_the_privacy_panel_shows_what_applications_can_read(page, core):
 
 def test_the_trust_panel_still_renders(page, core):
     """A regression guard on the fix, not on the feature."""
-    open_settings(page, core)
+    open_settings(page, core, wait_for="#trustBody")
     assert page.locator("#trustBody").inner_text().strip()
 
 
@@ -188,7 +221,8 @@ def test_running_a_scenario_from_the_panel_reaches_the_engine(page, core):
     the handler is an inline closure with a `post` whose failure it renders as
     the word "Failed" rather than as an exception a test would see.
     """
-    open_settings(page, core)
+    open_settings(page, core, wait_for="#developerBody")
+    page.wait_for_selector("#developerBody button:has-text('Run')", timeout=30000)
     run = page.locator("#developerBody button", has_text="Run").first
     run.click()
     # It flips to "Running" on success and "Failed" on any non-2xx. Both are
@@ -211,6 +245,154 @@ def test_running_a_scenario_from_the_panel_reaches_the_engine(page, core):
     with urllib.request.urlopen(req, timeout=20) as r:
         body = json.loads(r.read())
     assert isinstance(body.get("simulated_rooms"), list),         "the panel has no way to say which rooms hold simulated evidence"
+
+
+# -- Runtime presence: NO INVISIBLE SUCCESS ------------------------------------
+
+def test_the_shell_always_shows_whether_wavr_is_working(page, core):
+    """The question nobody thinks to ask until it is too late.
+
+    Every other screen answers something a person went looking for. This one has
+    to be true without being sought, so it lives in the chrome and it is checked
+    the way a person would check it: open the page, look at the top.
+    """
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector("#runtimeChip:not([hidden])", timeout=30000)
+    page.wait_for_timeout(1500)
+
+    chip = page.locator("#runtimeChip")
+    state = chip.get_attribute("data-state")
+    assert state in ("healthy", "starting", "degraded", "attention", "paused",
+                     "updating"), state
+    # The state is carried by WORDS, not only by the colour of a dot. Colour
+    # alone is not a state — for a screen reader it is nothing at all.
+    assert chip.inner_text().strip(), "the chip renders no text"
+    assert (chip.get_attribute("aria-label") or "").strip()
+    assert page.script_errors == [], page.script_errors
+
+
+def test_a_core_that_stops_cannot_go_on_looking_healthy(page, core, tmp_path):
+    """The failure this whole surface exists to prevent, reproduced.
+
+    A second Core is started and then KILLED with the page open. The chip must
+    notice on its own — nobody reloads, nobody clicks. Leaving the last good
+    answer up is the easy mistake here, because it looks like resilience.
+    """
+    port = _free_port()
+    db = tmp_path / "dying.db"
+    env = {**os.environ, "WAVR_DB": str(db), "WAVR_LOCAL_TOKEN": "",
+           # CWD-relative by default; see the module fixture above.
+           "WAVR_HOUSE_MAP": str(db.parent / "house.json")}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "wavr.app:app",
+         "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
+        cwd=str(BACKEND), env=env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.25)
+        else:
+            raise RuntimeError("the second Core did not start")
+
+        page.goto(f"{base}/?cachebust={time.time()}")
+        page.wait_for_selector("#runtimeChip:not([hidden])", timeout=30000)
+        page.wait_for_timeout(1500)
+        alive = page.locator("#runtimeChip").get_attribute("data-state")
+        assert alive != "unavailable", "the chip was already wrong before the kill"
+
+        proc.kill()
+        proc.wait(timeout=10)
+
+        # It polls every 10s. Give it two windows and no help of any kind — no
+        # reload, no click, no navigation.
+        page.wait_for_function(
+            "() => document.getElementById('runtimeChip')"
+            "?.dataset.state === 'unavailable'",
+            timeout=45000)
+        chip = page.locator("#runtimeChip")
+        assert "responding" in chip.inner_text().lower()
+        assert "not responding" in (chip.get_attribute("aria-label") or "").lower()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_things_that_need_a_person_appear_in_one_ranked_list(page, core):
+    """The surface the tray and the header both point at.
+
+    A real pairing request is created over HTTP, so this drives the actual
+    producer rather than a fixture — the field-name bug this module already had
+    (`device_name` for `requester_name`) would render every row as "A device"
+    and no unit test built from an invented shape would have caught it.
+    """
+    import urllib.request
+
+    req = urllib.request.Request(
+        core + "/api/pair-request",
+        data=json.dumps({"requester_name": "Ana's phone"}).encode(),
+        headers={"Content-Type": "application/json", "X-Wavr-Local": "1"},
+        method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=20)
+    except Exception as exc:                     # noqa: BLE001
+        pytest.skip(f"this Core does not accept pair requests: {exc}")
+
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector("#attnChip:not([hidden])", timeout=30000)
+    assert page.locator("#attnCount").inner_text().strip() != "0"
+
+    page.click("#attnChip")
+    page.wait_for_selector("#attnTile:not([hidden])", timeout=15000)
+    text = page.locator("#attnList").inner_text()
+    # The person's own words for the device, not a placeholder.
+    assert "Ana's phone" in text, text
+    # And what it is waiting ON, so the row is actionable rather than a status.
+    assert "approve" in text.lower() or "deny" in text.lower()
+    assert page.locator(".attn-row[data-band='blocking']").count() >= 1
+    assert page.script_errors == [], page.script_errors
+
+
+def test_the_chip_never_disagrees_with_the_list(page, core):
+    """The count in the chrome and the list on the page come from one request,
+    and this asserts they agree — including the case where the answer is zero,
+    in which case BOTH must be absent rather than showing "0".
+
+    Written as one test rather than two because the empty case and the
+    non-empty case cannot both be arranged on one Core in one run: whichever
+    ran first would decide what the second saw. A test that skips itself
+    depending on what another test did earlier is not coverage.
+    """
+    import urllib.request
+
+    req = urllib.request.Request(core + "/api/attention",
+                                 headers={"X-Wavr-Local": "1"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = json.loads(r.read())
+    total = body["total"]
+
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector("#runtimeChip:not([hidden])", timeout=30000)
+    page.wait_for_timeout(2500)
+
+    if not total:
+        # A permanent "0" is furniture, and furniture is what people stop
+        # seeing. The absence is the message.
+        assert page.locator("#attnChip").is_hidden()
+        assert page.locator("#attnTile").is_hidden()
+        return
+
+    assert page.locator("#attnChip").is_visible()
+    assert page.locator("#attnCount").inner_text().strip() == str(total)
+    page.click("#attnChip")
+    page.wait_for_selector("#attnTile:not([hidden])", timeout=15000)
+    assert page.locator(".attn-row").count() == total, (
+        "the list and the badge came from the same request and still disagree")
 
 
 # -- Downloads, which are the one thing a backend test cannot prove ------------
@@ -236,11 +418,106 @@ def test_the_setup_download_produces_a_file_with_no_credentials(page, core):
     assert "rtsp://" not in body and "hunter2" not in body
 
 
+def test_the_updates_tile_says_how_THIS_install_updates(page, core):
+    """Wavr never updates itself, so the useful half is telling somebody the
+    right command for the way they installed it — "docker pull", "re-run the
+    script" and "install the APK over the old one" are different answers, and a
+    wrong one sends them to run something that does nothing.
+
+    The routes existed and nothing called them, which by this project's own rule
+    is not a finished feature.
+    """
+    open_settings(page, core, wait_for="#updateHow")
+    how = page.locator("#updateHow").inner_text()
+    assert how.strip() and how.strip() != "Checking…", how
+    assert page.locator("#updateVersion").inner_text().strip()
+
+    # The one control that reaches outward must not be one click away from
+    # somebody who never switched that connector on.
+    import urllib.request
+    req = urllib.request.Request(core + "/api/updates",
+                                 headers={"X-Wavr-Local": "1"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = json.loads(r.read())
+    if not body["check_enabled"]:
+        assert page.locator("#updateActions").is_hidden(),             "the outward check is offered while its connector is off"
+        assert page.locator("#updateWhy").inner_text().strip(),             "nothing explains why there is no check"
+
+    # `up_to_date` is a tristate and "nobody looked" must not read as "you are
+    # up to date" — the exact class of lie this codebase keeps removing.
+    if body["up_to_date"] is None:
+        assert "latest" not in page.locator("#updateFb").inner_text().lower()
+    assert page.script_errors == [], page.script_errors
+
+
 def test_the_diagnostic_bundle_downloads(page, core):
     open_settings(page, core)
     with page.expect_download(timeout=30000) as dl:
         page.locator("#exportBundleBtn").click()
     assert dl.value.suggested_filename.endswith(".json")
+
+
+def test_restoring_a_setup_previews_before_it_writes(page, core):
+    """The other half of the backup feature, driven the way a person drives it.
+
+    A backend test proves the route replaces a floor plan. This proves the
+    button exists, that the file picker reaches the preview, and — the part that
+    matters — that the destructive consequence is stated in words BEFORE
+    anything is written. "It replaced my rooms" is the complaint this flow
+    exists to prevent, and a preview nobody sees prevents nothing.
+    """
+    import urllib.request
+
+    # A real export from this Core, which is the only file anybody will import.
+    req = urllib.request.Request(core + "/api/config/export",
+                                 headers={"X-Wavr-Local": "1"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        exported = json.loads(r.read())
+    # One anchor in a room the FILE actually carries, and one pointing at a room
+    # it does not. Read from the export rather than assumed: a Space's rooms and
+    # its drawn floor plan are different things, and assuming they match is how
+    # the first version of this test passed on a technicality.
+    rooms = [r["name"] for f in (exported.get("house") or {}).get("floors", [])
+             for r in f.get("rooms", []) if r.get("name")]
+    if not rooms:
+        pytest.skip("this Core has no drawn floor plan to restore")
+    exported["anchors"] = [{"name": "counter", "room": rooms[0],
+                            "kind": "logical"},
+                           {"name": "orphan", "room": "nowhere",
+                            "kind": "logical"}]
+
+    open_settings(page, core)
+    page.set_input_files("#importConfigFile",
+                         files=[{"name": "wavr-setup.json",
+                                 "mimeType": "application/json",
+                                 "buffer": json.dumps(exported).encode()}])
+    page.wait_for_selector("#importPreview:not([hidden])", timeout=20000)
+    shown = page.locator("#importPreview").inner_text()
+    assert "room" in shown.lower()
+    assert page.locator("#importGoBtn").count() == 1, "no way to confirm"
+    assert page.locator("#importCancelBtn").count() == 1, "no way to back out"
+
+    # Nothing has been written: the Core still has no anchor called `counter`.
+    req = urllib.request.Request(core + "/api/anchors",
+                                 headers={"X-Wavr-Local": "1"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        before = [a["name"] for a in json.loads(r.read())["anchors"]]
+    assert "counter" not in before, "the preview wrote something"
+
+    page.click("#importGoBtn")
+    page.wait_for_timeout(3000)
+    after_text = page.locator("#importPreview").inner_text()
+    assert "Restored" in after_text or "restored" in after_text, after_text
+    assert "1 anchor" in after_text, ("nothing was written, and the report did "
+                                      "not say why: " + after_text)
+    # And what did NOT happen is on screen, not left to be discovered later.
+    assert "orphan" in after_text
+
+    with urllib.request.urlopen(req, timeout=20) as r:
+        after = [a["name"] for a in json.loads(r.read())["anchors"]]
+    assert "counter" in after
+    assert "orphan" not in after
+    assert page.script_errors == [], page.script_errors
 
 
 # -- The reference experiences, actually opened --------------------------------
@@ -264,7 +541,12 @@ def test_a_reference_experience_loads_and_runs_its_sdk(page, core, name):
     which is the difference between a page that works and one that throws on
     line one, or one the Core will not serve to a browser at all."""
     page.goto(f"{core}/experiences/{name}/")
-    page.wait_for_timeout(4000)
+    # The heading is server-rendered, so it is there as soon as the page is —
+    # and waiting for it rather than for four seconds means a page that never
+    # loads fails with "the heading never appeared" instead of an assertion
+    # about text that happens to be empty.
+    page.wait_for_selector("h1", timeout=30000)
+    page.wait_for_timeout(1500)          # let the SDK's first fetch settle
     assert page.script_errors == [], page.script_errors
     assert page.locator("h1").inner_text().strip() == PAGE_HEADINGS[name]
     body = page.locator("body").inner_text()
@@ -277,7 +559,10 @@ def test_a_reference_experience_loads_and_runs_its_sdk(page, core, name):
 
 def test_the_spatial_web_experience_lists_the_rooms(page, core):
     page.goto(f"{core}/experiences/spatial-web/")
-    page.wait_for_timeout(4000)
+    # Wait for the thing under test. A fixed sleep here fails under load on a
+    # page that was about to be correct, which teaches whoever sees it that
+    # this file is flaky — and the next real failure gets re-run, not read.
+    page.wait_for_selector(".room", timeout=30000)
     assert page.locator(".room").count() > 0, "no room cards rendered"
 
 
@@ -286,7 +571,7 @@ def test_the_capability_page_evaluates_a_manifest(page, core):
     room. A verdict of UNSUPPORTED is the correct answer on a Core with no
     sensors — what matters is that one appeared."""
     page.goto(f"{core}/experiences/capability-aware/")
-    page.wait_for_timeout(4000)
+    page.wait_for_selector(".verdict", timeout=30000)
     assert page.locator(".verdict").count() > 0, "no verdicts rendered"
 
 
@@ -339,7 +624,9 @@ def unconfigured_core(tmp_path_factory):
     """
     port = _free_port()
     db = tmp_path_factory.mktemp("firstrun") / "wavr.db"
-    env = {**os.environ, "WAVR_DB": str(db), "WAVR_LOCAL_TOKEN": ""}
+    env = {**os.environ, "WAVR_DB": str(db), "WAVR_LOCAL_TOKEN": "",
+           # CWD-relative by default; see the module fixture above.
+           "WAVR_HOUSE_MAP": str(db.parent / "house.json")}
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "wavr.app:app",
          "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],

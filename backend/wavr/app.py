@@ -25,8 +25,11 @@ from starlette.responses import JSONResponse
 
 from wavr import __version__
 from wavr.config import load_config
+from wavr.runtime_status import assess as assess_runtime
+from wavr.attention import collect as collect_attention, summarise as summarise_attention
 from wavr.contracts import version as contract_version
-from wavr.housemap import load_house_map, room_names, room_polygon, save_house_map, upsert_room, HouseMapError
+from wavr.housemap import (load_house_map, room_names, room_polygon, save_house_map,
+                           upsert_room, validate_house_map, HouseMapError)
 from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine, house_person_count
@@ -108,6 +111,7 @@ from wavr.devices import DeviceStore, VALID_CONSENT, _is_expired
 from wavr.space_store import SpaceStore
 from wavr.core_registry import CoreRegistry, VERDICT_CONTESTED, VERDICT_YIELD
 from wavr.discovery_inbox import KIND_PEER_CORE
+from wavr.discovery_inbox import KIND_CAMERA_FOUND as _KIND_CAMERA_FOUND
 from wavr import peer_client
 
 # The Wavr Protocol version this Core speaks (docs/WAVR-PROTOCOL.md). Advertised
@@ -378,6 +382,7 @@ _STATIC_SHELL_PATHS = frozenset({
     "/", "/index.html", "/measure.html", "/manifest.webmanifest",
     "/sw.js", "/icon.svg",
     "/js/wizard.js", "/js/discoveries.js", "/js/trust.js", "/js/developer.js",
+    "/js/runtime.js",
     "/sdk/javascript/wavr.js",
 })
 _STATIC_SHELL_PREFIXES = ("/vendor/", "/experiences/")
@@ -742,6 +747,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # hub would mean every application subscribing to occupancy also received
     # the geometry, which is the shape of over-sharing that no amount of
     # client-side filtering makes safe.
+    # When this Core came up. Used only to tell "has not finished starting"
+    # from "has stopped working" — a thirty-second-old Core with no reading yet
+    # is not broken, and reporting it as broken is how people learn to ignore an
+    # indicator.
+    _started_at = datetime.now(timezone.utc)
+
     _events_hub = Hub()
 
     def _remember_event(ev: dict) -> None:
@@ -3241,10 +3252,192 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             "platform": sys.platform,
         }
 
+    def _runtime_status():
+        """What a tray, a menu bar or a browser tab renders. One answer.
+
+        Assembled here and decided in `runtime_status.assess`, which is pure:
+        the tray must not reach a different conclusion from the dashboard, and
+        two implementations of "is it healthy" eventually disagree in front of
+        somebody who has no way to tell which is right.
+
+        Everything is read inside `suppress`, and every failure leaves the
+        argument absent rather than substituting a cheerful default —
+        `assess` treats absence as "cannot tell", never as "fine".
+        """
+        last_ts = None
+        with suppress(Exception):
+            stamps = [rs.ts for r in _fusion.rooms()
+                      if (rs := _fusion.state(r)) is not None and rs.ts]
+            last_ts = max(stamps) if stamps else None
+
+        coverage = source_states = nodes = egress = ()
+        with suppress(Exception):
+            coverage = [c.to_dict() for c in _sensor_coverage()]
+        with suppress(Exception):
+            source_states = {row.get("name"): row.get("state")
+                             for row in manager.status().get("health", [])
+                             if row.get("name")}
+        with suppress(Exception):
+            nodes = _node_store.list() if _node_store else ()
+        with suppress(Exception):
+            # Only the ones actually switched ON, and only the ones that leave
+            # this machine. A person must be able to see that something reaches
+            # the internet; not being able to find out is the problem.
+            egress = [c.get("connector_id") or c.get("id")
+                      for c in _connectors.list()
+                      if c.get("enabled") and str(c.get("reach", "")) not in
+                      ("local", "lan", "")]
+
+        space_name = ""
+        with suppress(Exception):
+            sp = _space_store.get_space()
+            space_name = (sp.to_dict().get("name") or "") if sp else ""
+        role = ""
+        with suppress(Exception):
+            role = str((_core_registry.self_status() or {}).get("status") or "")
+
+        db_ok = True
+        with suppress(Exception):
+            db_ok = bool(_space_store.healthy()) if hasattr(_space_store, "healthy")                 else True
+
+        return assess_runtime(
+            uptime_s=(datetime.now(timezone.utc) - _started_at).total_seconds(),
+            last_state_at=last_ts, space_name=space_name, role=role,
+            coverage_rows=coverage, source_states=source_states, nodes=nodes,
+            egress_connectors=egress, db_ok=db_ok)
+
+    def _attention_items():
+        """Everything waiting for a person, from the stores that already know.
+
+        Every source is read inside `suppress` and a failure leaves that source
+        OUT rather than empty — the difference matters, because an empty list
+        prints "nothing needs your attention" over three waiting requests. The
+        route says which sources it could not read.
+        """
+        got, missed = {}, []
+
+        def take(name, fn):
+            try:
+                got[name] = fn()
+            except Exception:                     # noqa: BLE001
+                missed.append(name)
+
+        take("discoveries",
+             lambda: [d.to_dict() for d in _discovery_inbox.list_items()])
+        take("coverage_rows", lambda: [c.to_dict() for c in _sensor_coverage()])
+        take("pending_pairings",
+             lambda: _pair_approvals.list_pending() if _pair_approvals else [])
+        take("alerts", lambda: merge_alerts(
+            _inventory, dhcp_monitor=_dhcp_monitor,
+            gateway_monitor=_gateway_monitor))
+        return collect_attention(**got), missed
+
+    @app.get("/api/attention")
+    async def attention(_=Depends(require_scope("presence:read"))):
+        """The one list of things that need a person.
+
+        Ranked blocking-first and oldest-first within a band: sorting by newest
+        buries the request that has been waiting three days under the one from a
+        minute ago.
+        """
+        items, missed = _attention_items()
+        body = summarise_attention(items)
+        if missed:
+            # Never silently. "Nothing needs your attention" over a source that
+            # failed to read is the exact lie this surface exists to prevent.
+            body["could_not_check"] = missed
+            body["headline"] = (
+                body["headline"] + " — but Wavr could not check everything")
+        return body
+
+    @app.get("/api/runtime")
+    async def runtime(_=Depends(require_scope("presence:read"))):
+        """Is Wavr running, and is it actually doing anything.
+
+        Deliberately cheap and deliberately not gated on `require_local`: a tray
+        polls it every few seconds, and a phone across the room needs the same
+        answer. The costly, developer-facing report lives at
+        `/api/health/doctor`; this one is a conclusion.
+        """
+        return _runtime_status().to_dict()
+
+    def _apply_config(plan: dict) -> dict:
+        """Write a checked import plan, and report exactly what happened.
+
+        Every decision was made by `plan_import`, which is a pure function and
+        testable without an app. This does the writing and nothing else — the
+        two are separated because an import is the one operation here that
+        destroys work an operator did by hand, and the part that decides should
+        be readable without a running Core.
+
+        Order matters. The floor plan lands FIRST, because an anchor validates
+        against the room it names: writing anchors before their rooms exist
+        would reject every one of them for the wrong reason.
+
+        Not transactional, and the report says so rather than implying it. The
+        floor plan is one file write and the anchors are individual rows, so a
+        failure part-way leaves the plan applied and some anchors missing. The
+        response lists what was written, so a second attempt is informed rather
+        than blind.
+        """
+        written = {"rooms": 0, "anchors": 0}
+        problems: list[str] = []
+
+        house = plan.get("house") or {}
+        if house.get("floors"):
+            try:
+                save_house_map(cfg.house_map, house)
+                _house.clear()
+                _house.update(house)
+                written["rooms"] = len(room_names(_house))
+            except HouseMapError as exc:
+                # Refused whole. A half-written floor plan is worse than none,
+                # and the anchors below would then land against rooms that do
+                # not exist.
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"the floor plan in this file was rejected: {exc}")
+
+        for a in plan.get("anchors", {}).get("write", []):
+            try:
+                _anchors.create(a["name"], a["room"],
+                                room_polygon=lambda r, lv=0: room_polygon(
+                                    _house, r, level=lv))
+                written["anchors"] += 1
+            except Exception as exc:            # noqa: BLE001
+                problems.append(f"anchor {a['name']!r}: {exc}")
+
+        # A restored camera has to be re-added with its address, and until now
+        # that list appeared once in this response and was gone. Somebody
+        # restoring on a Sunday and finishing on a Tuesday had no record of it.
+        # Raised as Discoveries so it lands in the one place people are asked to
+        # look, with the action that fixes it.
+        cameras = plan.get("cameras", [])
+        for cam in cameras:
+            with suppress(Exception):
+                _discovery_inbox.observe(
+                    _KIND_CAMERA_FOUND, f"restored:{cam.get('name')}",
+                    f"{cam.get('name')} needs its stream address",
+                    detail={"room": cam.get("room", ""), "restored": True})
+
+        skipped = plan.get("anchors", {}).get("skipped_no_such_room", [])
+        return {
+            "written": written,
+            "anchors_skipped": skipped,
+            "cameras_to_re_add": plan.get("cameras", []),
+            "secrets_needed": plan.get("secrets_needed", []),
+            "problems": problems,
+            "note": ("Your floor plan and anchors are back. Cameras are listed "
+                     "rather than created: a stream address carries a password "
+                     "and never travels in an export, so each one has to be "
+                     "added again with its URL."),
+        }
+
     app.include_router(build_config_export_router(
         gather_config=_gather_config, gather_bundle=_gather_bundle,
         existing_rooms_fn=lambda: room_names(_house),
         existing_anchors_fn=lambda: _anchors.list(),
+        apply_fn=_apply_config, validate_house=validate_house_map,
         require_local=require_local, require_scope=require_scope))
     app.include_router(build_updates_router(
         running_version=__version__, connectors=_connectors,
@@ -5696,6 +5889,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # "developer mode is off" — and gating the file itself would make the service
     # worker's precache fail as a unit (Cache.addAll is all-or-nothing), taking
     # the whole offline shell down with it.
+    @app.get("/js/runtime.js")
+    async def js_runtime():
+        """The runtime-presence chip. Same class as the other shell scripts.
+
+        Served without the CSRF header for the same reason as the rest of the
+        shell: a browser navigating to the page cannot send one, and the chip is
+        the one part of the chrome whose absence is itself a silent failure.
+        """
+        return FileResponse(_FRONTEND / "js" / "runtime.js",
+                            media_type="application/javascript")
+
     @app.get("/js/developer.js")
     async def js_developer():
         return FileResponse(_FRONTEND / "js" / "developer.js",

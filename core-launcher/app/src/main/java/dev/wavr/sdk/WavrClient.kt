@@ -128,6 +128,23 @@ class WavrClient(
     fun coverage(): JSONObject = getJson("/api/coverage")
 
     /**
+     * Whether the Core is working, in its own words.
+     *
+     * The one place any surface should ask. A client that computes health of its
+     * own eventually disagrees with the tray and the dashboard, in front of
+     * somebody who has no way to tell which is right.
+     *
+     * Throws when the Core cannot be reached — and the caller must render THAT
+     * rather than the last answer it received. Keeping a stale "healthy" on
+     * screen over a Core that stopped is the failure this endpoint exists to
+     * make impossible.
+     */
+    fun runtime(): JSONObject = getJson("/api/runtime")
+
+    /** Things waiting for a person, ranked. See `wavr/attention.py`. */
+    fun attention(): JSONObject = getJson("/api/attention")
+
+    /**
      * Whether this Space can support an experience.
      *
      * Not permission — a person grants that. This says what a room can produce.

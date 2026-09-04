@@ -6,6 +6,8 @@ is not in the file. That repetition is the point — these two documents are the
 ones a person emails to a stranger, and the allowlists are only as good as the
 last person who added a field.
 """
+import json
+
 import pytest
 
 from wavr.config_export import (
@@ -235,6 +237,12 @@ def _client(monkeypatch, tmp_path):
     from wavr.storage import Storage
     monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
     monkeypatch.setenv("WAVR_DB", str(tmp_path / "w.db"))
+    # WAVR_HOUSE_MAP defaults to a CWD-RELATIVE "house.json". Any test that
+    # writes a floor plan without pinning this drops one in `backend/`, where
+    # it becomes the default map for every other test in the run — which is
+    # exactly what happened: three developer-mode tests started failing with
+    # "kitchen is not a room in the default map", nowhere near the cause.
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
     app = create_app(sources=[], storage=Storage(":memory:"), hub=Hub(),
                      fusion=FusionEngine(), camera_store=CameraStore(":memory:"),
                      health_resolvers={}, health_check=lambda: True)
@@ -358,3 +366,123 @@ def test_the_secret_name_list_has_not_silently_started_matching_real_settings():
         assert key not in doc["settings"], (
             f"{key} is now a real setting AND named as a secret, and its value "
             f"is being exported")
+
+
+# -- The round trip: export, preview, import -----------------------------------
+
+def test_a_plan_refuses_an_anchor_whose_room_the_import_does_not_bring():
+    """An export from a Space that has since been re-drawn carries anchors in
+    rooms the incoming floor plan no longer has. Writing one creates an anchor
+    pointing at nothing; dropping it silently loses something a person made."""
+    from wavr.config_export import export_config, plan_import
+
+    doc = export_config(
+        space={"name": "Home", "kind": "home"},
+        house={"floors": [{"rooms": [{"name": "kitchen"}]}]},
+        anchors=[{"name": "counter", "room": "kitchen"},
+                 {"name": "desk", "room": "study"}])
+    plan = plan_import(doc)
+    assert [a["name"] for a in plan["anchors"]["write"]] == ["counter"]
+    assert plan["anchors"]["skipped_no_such_room"] == [
+        {"name": "desk", "room": "study"}]
+
+
+def test_a_camera_comes_back_named_and_not_working():
+    """The URL carries a password and never travels. The camera is REPORTED as
+    needing one rather than created half-working, so "why is this camera dark"
+    is answered before it is asked."""
+    from wavr.config_export import export_config, plan_import
+
+    doc = export_config(
+        house={"floors": [{"rooms": [{"name": "hall"}]}]},
+        cameras=[{"name": "hall-cam", "room": "hall",
+                  "rtsp_url": "rtsp://admin:hunter2@10.0.0.9/s"}])
+    plan = plan_import(doc)
+    assert plan["cameras"] == [{"name": "hall-cam", "room": "hall",
+                                "needs_url": True}]
+    assert "hunter2" not in json.dumps(plan)
+
+
+def test_the_digest_changes_with_the_file_and_not_with_the_call():
+    from wavr.config_export import config_digest, export_config
+
+    a = export_config(space={"name": "Home", "kind": "home"})
+    b = export_config(space={"name": "Other", "kind": "home"})
+    assert config_digest(a) == config_digest(a), "not stable across calls"
+    assert config_digest(a) != config_digest(b)
+
+
+def test_importing_without_the_digest_is_refused(monkeypatch, tmp_path):
+    """Preview and apply are two requests. Without a confirmation an operator
+    can be shown the consequences of one file and apply another — by accident,
+    with two tabs, or because a script rebuilt the file in between."""
+    c = _client(monkeypatch, tmp_path)
+    doc = c.get("/api/config/export").json()
+
+    bare = c.post("/api/config/import", json={"config": doc})
+    assert bare.status_code == 400
+    assert "preview" in bare.json()["detail"].lower()
+
+    wrong = c.post("/api/config/import",
+                   json={"config": doc, "confirm_digest": "0" * 32},
+                   )
+    assert wrong.status_code == 409
+    assert "not the file you previewed" in wrong.json()["detail"]
+
+
+def test_a_previewed_file_imports_and_says_what_it_did(monkeypatch, tmp_path):
+    """The half that did not exist. Export, preview and validate all worked;
+    nothing applied anything, so the feature whose purpose is "the Pi died and
+    I want my Space back" stopped one step short of giving it back.
+
+    Built from a REAL export rather than a hand-written document, because a
+    hand-written one proves the importer accepts what I typed and this proves it
+    accepts what Wavr produces — which is the only version anybody will use.
+    """
+    c = _client(monkeypatch, tmp_path)
+    put = c.put("/api/house", json={
+        "version": 2, "units": "m",
+        "floors": [{"level": 0, "id": "ground", "name": "Ground",
+                    "rooms": [{"id": "r1", "name": "kitchen",
+                               "polygon": [[0, 0], [4, 0], [4, 3], [0, 3]]}]}]})
+    assert put.status_code == 200, put.text
+
+    doc = c.get("/api/config/export").json()
+    assert any(r["name"] == "kitchen"
+               for f in doc["house"]["floors"] for r in f["rooms"])
+
+    # Two anchors, one of which names a room this file does not carry.
+    doc["anchors"] = [{"name": "counter", "room": "kitchen", "kind": "logical"},
+                      {"name": "orphan", "room": "nowhere", "kind": "logical"}]
+
+    seen = c.post("/api/config/preview", json={"config": doc})
+    assert seen.status_code == 200, seen.text
+    digest = seen.json()["digest"]
+
+    done = c.post("/api/config/import",
+                  json={"config": doc, "confirm_digest": digest})
+    assert done.status_code == 200, done.text
+    body = done.json()
+    assert body["written"]["rooms"] >= 1
+    assert body["written"]["anchors"] == 1
+    assert body["anchors_skipped"] == [{"name": "orphan", "room": "nowhere"}]
+
+    # And it is really in the Space, not just in the response.
+    anchors = c.get("/api/anchors").json()["anchors"]
+    assert [a["name"] for a in anchors] == ["counter"]
+
+
+def test_a_floor_plan_the_importer_would_reject_is_caught_in_the_preview(
+        monkeypatch, tmp_path):
+    """The preview says "nothing has been written". If the apply then fails on
+    the floor plan, an operator has seen a green preview and a red apply for the
+    same file, which teaches them the preview means nothing."""
+    c = _client(monkeypatch, tmp_path)
+    doc = c.get("/api/config/export").json()
+    doc["house"] = {"floors": [{"rooms": [{"name": "kitchen"}]}]}   # no version
+
+    seen = c.post("/api/config/preview", json={"config": doc})
+    assert seen.status_code == 400, (
+        "the preview accepted a floor plan the import would reject: "
+        + seen.text[:200])
+    assert "floor plan" in seen.json()["detail"].lower()

@@ -20,12 +20,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from wavr.config_export import (
     TransferError, audit, check_import, diagnostic_bundle, export_config,
-    preview_import,
+    plan_import, preview_import,
 )
 
 
 def build_router(*, gather_config, gather_bundle, existing_rooms_fn,
-                 existing_anchors_fn, require_local, require_scope) -> APIRouter:
+                 existing_anchors_fn, require_local, require_scope,
+                 apply_fn=None, validate_house=None) -> APIRouter:
     router = APIRouter()
 
     def _checked(document: dict, what: str) -> dict:
@@ -74,7 +75,8 @@ def build_router(*, gather_config, gather_bundle, existing_rooms_fn,
         """
         try:
             return preview_import(config, existing_rooms=existing_rooms_fn(),
-                                  existing_anchors=existing_anchors_fn())
+                                  existing_anchors=existing_anchors_fn(),
+                                  validate_house=validate_house)
         except TransferError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
@@ -96,5 +98,46 @@ def build_router(*, gather_config, gather_bundle, existing_rooms_fn,
                 "format_version": body.get("wavr_config_version"),
                 "exported_at": body.get("exported_at", ""),
                 "secrets_needed": body.get("secrets_you_must_supply_again", [])}
+
+    @router.post("/api/config/import")
+    async def apply(config: dict = Body(..., embed=True),
+                    confirm_digest: str = Body("", embed=True),
+                    _=Depends(require_local),
+                    __=Depends(require_scope("admin"))):
+        """Actually write it. The other half of an export that had only halves.
+
+        Export, preview and validate all existed; nothing applied anything, so
+        the feature whose whole purpose is "the Pi died and I want my Space
+        back" stopped one step short of giving it back. An API with no workflow
+        is not a feature.
+
+        **`confirm_digest` is required and must match the preview.** An import
+        replaces a floor plan that took somebody an evening to draw, and preview
+        and apply are two requests: without this an operator can be shown the
+        consequences of one file and apply another. The error names the mismatch
+        rather than applying anything.
+        """
+        if apply_fn is None:
+            raise HTTPException(
+                status_code=501,
+                detail="This Core was built without an import writer.")
+        try:
+            plan = plan_import(config, existing_rooms=existing_rooms_fn(),
+                               existing_anchors=existing_anchors_fn(),
+                               validate_house=validate_house)
+        except TransferError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        if not confirm_digest:
+            raise HTTPException(
+                status_code=400,
+                detail=("Preview this file first and send back its `digest` as "
+                        "`confirm_digest`. Importing replaces your floor plan."))
+        if confirm_digest != plan["digest"]:
+            raise HTTPException(
+                status_code=409,
+                detail=("This is not the file you previewed. Preview it again "
+                        "and confirm with the digest that preview returns."))
+        return apply_fn(plan)
 
     return router

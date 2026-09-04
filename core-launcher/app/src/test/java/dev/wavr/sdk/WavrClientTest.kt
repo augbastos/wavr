@@ -304,4 +304,54 @@ class WavrClientTest {
         w.closeSession("ses_1")
         assertEquals("DELETE", log[0].method)
     }
+
+    // -- Runtime presence ---------------------------------------------------
+    //
+    // The same rule the tray and the web shell follow: a Core that will not
+    // answer must not be renderable as a healthy one. Here that means the
+    // client THROWS rather than returning an empty object a caller could mistake
+    // for "nothing wrong".
+
+    @Test
+    fun `runtime returns the Core's own conclusion, not the client's`() {
+        val c = client(mapOf("/api/runtime" to """
+            {"state":"degraded","headline":"Wavr — degraded · My Home",
+             "space":"My Home","last_state_age_s":42,
+             "findings":[{"key":"sensors","state":"degraded",
+                          "text":"1 of 3 sensors are not reporting."}]}
+        """.trimIndent()))
+        val body = c.runtime()
+        assertEquals("degraded", body.getString("state"))
+        assertEquals("My Home", body.getString("space"))
+        // The words come from the Core. A client that writes its own sentence
+        // here is a second implementation of health, and two eventually
+        // disagree in front of somebody with no way to tell which is right.
+        assertTrue(body.getString("headline").contains("degraded"))
+    }
+
+    @Test
+    fun `an unreachable Core throws rather than returning something empty`() {
+        val c = client(mapOf<String, Any>(
+            "/api/runtime" to WavrException.Unreachable("connection refused")))
+        try {
+            c.runtime()
+            fail("an unreachable Core returned normally")
+        } catch (e: WavrException) {
+            // Correct: the caller has to decide what to render, and the only
+            // honest thing to render is "not answering".
+        }
+    }
+
+    @Test
+    fun `attention carries the count a badge renders`() {
+        val c = client(mapOf("/api/attention" to """
+            {"total":2,"blocking":1,"degraded":1,"info":0,
+             "headline":"2 things need your attention",
+             "items":[{"key":"pairing:r1","band":"blocking",
+                       "title":"Ana's phone wants to join"}]}
+        """.trimIndent()))
+        val body = c.attention()
+        assertEquals(2, body.getInt("total"))
+        assertEquals(1, body.getInt("blocking"))
+    }
 }

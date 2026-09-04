@@ -39,4 +39,9 @@
 
     <!-- Shown before Android's notification permission prompt on API 33+. -->
     <string name="core_notif_rationale">Wavr shows one permanent notice while the Core is running, so you always know it is on and can stop it in one tap. Without notification permission it keeps running, but that notice is hidden.</string>
+    <!-- The Core is inside this very process, so a Core that will not answer
+         is a real problem rather than a network hiccup. Said plainly: a
+         persistent notification that looks fine over a wedged Core is worse
+         than no notification at all. -->
+    <string name="core_runtime_unreachable">Wavr is not answering on this device</string>
 </resources>

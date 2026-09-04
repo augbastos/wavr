@@ -352,6 +352,208 @@
     };
   }
 
+  // -- Restore: the other half of an export ------------------------------------
+  //
+  // Two steps on purpose. An import replaces a floor plan that took somebody an
+  // evening to draw, so it is shown before it is applied, and the apply carries
+  // the digest the preview returned — a person cannot be shown the consequences
+  // of one file and apply another.
+
+  async function postDetailed(path, body) {
+    // `post` above collapses every failure to a status code. Here the DETAIL is
+    // the message: "this is not the file you previewed" and "preview it first"
+    // are different problems with different next actions.
+    try {
+      var r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+        body: JSON.stringify(body || {}),
+      });
+      var data = null;
+      try { data = await r.json(); } catch (e) { data = null; }
+      return { ok: r.ok, status: r.status, data: data };
+    } catch (e) {
+      return { ok: false, status: 0, data: null };
+    }
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;",
+               '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function wireImport() {
+    var input = el("importConfigFile");
+    var host = el("importPreview");
+    var fb = el("backupFb");
+    if (!input || !host) return;
+
+    function say(kind, text) {
+      if (!fb) return;
+      fb.className = kind === "err" ? "action-fb err" : "action-fb";
+      fb.textContent = text;
+    }
+
+    input.onchange = async function () {
+      var file = input.files && input.files[0];
+      input.value = "";                      // so the same file can be re-picked
+      if (!file) return;
+      host.hidden = true;
+      say("", "Reading " + file.name + "…");
+
+      var config;
+      try {
+        config = JSON.parse(await file.text());
+      } catch (e) {
+        say("err", "That file is not readable JSON. Pick the file Wavr "
+                 + "downloaded, not a screenshot or a zip of it.");
+        return;
+      }
+
+      var seen = await postDetailed("/api/config/preview", { config: config });
+      if (!seen.ok) {
+        say("err", (seen.data && seen.data.detail)
+                   || "Wavr could not read that file.");
+        return;
+      }
+      var p = seen.data;
+      var rows = [];
+      rows.push("<b>" + esc((p.space && p.space.name) || "This file")
+                + "</b> — " + p.rooms_incoming.length + " room"
+                + (p.rooms_incoming.length === 1 ? "" : "s") + ", "
+                + p.anchors_incoming + " anchor"
+                + (p.anchors_incoming === 1 ? "" : "s") + ", "
+                + p.cameras_incoming + " camera"
+                + (p.cameras_incoming === 1 ? "" : "s") + ".");
+      // The destructive part, first and in a person's words.
+      if (p.rooms_lost.length) {
+        rows.push('<span class="sw-warn">These rooms exist here and NOT in the '
+                  + "file, and importing removes them: <b>"
+                  + esc(p.rooms_lost.join(", ")) + "</b>.</span>");
+      }
+      if (p.rooms_replaced.length) {
+        rows.push("Replaced: " + esc(p.rooms_replaced.join(", ")) + ".");
+      }
+      if (p.secrets_needed && p.secrets_needed.length) {
+        rows.push("You will have to enter again: "
+                  + esc(p.secrets_needed.join(", ")) + ".");
+      }
+      rows.push('<div class="controls-row" style="margin-top:10px">'
+                + '<button type="button" class="ctl small primary" id="importGoBtn">'
+                + "Replace my setup with this file</button>"
+                + '<button type="button" class="ctl small" id="importCancelBtn">'
+                + "Cancel</button></div>");
+      host.innerHTML = rows.map(function (r) { return "<p>" + r + "</p>"; }).join("");
+      host.hidden = false;
+      say("", "Nothing has been written yet.");
+
+      el("importCancelBtn").onclick = function () {
+        host.hidden = true;
+        say("", "Cancelled. Nothing was changed.");
+      };
+      el("importGoBtn").onclick = async function () {
+        el("importGoBtn").disabled = true;
+        var done = await postDetailed("/api/config/import",
+                                      { config: config, confirm_digest: p.digest });
+        if (!done.ok) {
+          say("err", (done.data && done.data.detail) || "The import failed.");
+          el("importGoBtn").disabled = false;
+          return;
+        }
+        var r = done.data;
+        var lines = ["Restored " + r.written.rooms + " room"
+                     + (r.written.rooms === 1 ? "" : "s") + " and "
+                     + r.written.anchors + " anchor"
+                     + (r.written.anchors === 1 ? "" : "s") + "."];
+        // Everything that did NOT happen is said here rather than discovered
+        // later. A silent skip is how somebody finds out in a month.
+        if (r.anchors_skipped && r.anchors_skipped.length) {
+          lines.push("Skipped, because this file has no such room: "
+                     + esc(r.anchors_skipped.map(function (a) {
+                         return a.name + " (" + a.room + ")"; }).join(", ")) + ".");
+        }
+        if (r.cameras_to_re_add && r.cameras_to_re_add.length) {
+          lines.push("Add these cameras again with their stream address: "
+                     + esc(r.cameras_to_re_add.map(function (c) {
+                         return c.name; }).join(", ")) + ".");
+        }
+        if (r.problems && r.problems.length) {
+          lines.push('<span class="sw-warn">' + esc(r.problems.join("; "))
+                     + "</span>");
+        }
+        host.innerHTML = lines.map(function (l) { return "<p>" + l + "</p>"; }).join("");
+        say("", "Done. Reload to see your floor plan.");
+      };
+    };
+  }
+
+  wireImport();
+
+  // -- Updates -----------------------------------------------------------------
+  //
+  // The tile renders `GET /api/updates`, which makes no network request of its
+  // own. The one thing that DOES reach outward is behind the button, and the
+  // button only appears when the operator has already switched that connector
+  // on — an outward action must not be one click away from somebody who never
+  // agreed to it.
+
+  async function renderUpdates() {
+    var how = el("updateHow");
+    if (!how) return;
+    var body = await get("/api/updates");
+    if (!body || body.__status) {
+      how.textContent = "Wavr could not read its own update settings.";
+      return;
+    }
+    el("updateVersion").textContent =
+      "running " + (body.running || "?") + " · " + (body.channel || "unknown");
+
+    // The instruction for THIS install, which is the actually useful half.
+    how.textContent = body.how_to_update || "";
+
+    var why = el("updateWhy");
+    if (body.why_no_check) {
+      why.hidden = false;
+      why.textContent = body.why_no_check;
+    } else {
+      why.hidden = true;
+    }
+    // `up_to_date` is a TRISTATE. `null` means nobody has looked, which is not
+    // the same as "you are up to date" — rendering the two the same way is the
+    // exact class of lie this codebase keeps having to remove.
+    var fb = el("updateFb");
+    if (fb) {
+      fb.className = "action-fb";
+      fb.textContent = body.up_to_date === null
+        ? (body.check_enabled ? "Not checked yet." : "")
+        : body.up_to_date
+          ? "You are on the latest release."
+          : "A newer release exists. Follow the instruction above.";
+    }
+    el("updateActions").hidden = !body.check_enabled;
+  }
+
+  var checkBtn = el("updateCheckBtn");
+  if (checkBtn) {
+    checkBtn.onclick = async function () {
+      checkBtn.disabled = true;
+      el("updateFb").textContent = "Reading the release list…";
+      var out = await post("/api/updates/check", {});
+      checkBtn.disabled = false;
+      if (!out || out.__status) {
+        el("updateFb").className = "action-fb err";
+        el("updateFb").textContent =
+          "Could not reach the release list. Nothing was sent.";
+        return;
+      }
+      renderUpdates();
+    };
+  }
+
+  renderUpdates();
+
   wireDownload("exportConfigBtn", "/api/config/export",
                "wavr-setup-{date}.json",
                "Saved. Camera URLs and tokens are NOT in it — re-enter those "

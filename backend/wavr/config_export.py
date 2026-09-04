@@ -68,6 +68,7 @@ and applied silently — and the operator would have no way to tell.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 
@@ -201,7 +202,8 @@ def check_import(payload) -> dict:
     return payload
 
 
-def preview_import(payload, *, existing_rooms=(), existing_anchors=()) -> dict:
+def preview_import(payload, *, existing_rooms=(), existing_anchors=(),
+                   validate_house=None) -> dict:
     """What importing this file would change, before anything is written.
 
     Shown rather than applied, because an import is destructive in a way an
@@ -209,11 +211,21 @@ def preview_import(payload, *, existing_rooms=(), existing_anchors=()) -> dict:
     replaced my rooms" is the complaint this avoids.
     """
     config = check_import(payload)
-    incoming_rooms = [r.get("name") for f in (config.get("house") or {}).get("floors", [])
+    house = config.get("house") or {}
+    if validate_house is not None and house.get("floors"):
+        try:
+            validate_house(house)
+        except Exception as exc:            # noqa: BLE001
+            raise TransferError(
+                f"the floor plan in this file cannot be read: {exc}") from None
+    incoming_rooms = [r.get("name") for f in house.get("floors", [])
                       for r in f.get("rooms", []) if r.get("name")]
     known = set(existing_rooms or ())
     anchors = config.get("anchors") or []
     return {
+        # Returned so the apply can refuse a different file than the one whose
+        # consequences were shown. See `config_digest`.
+        "digest": config_digest(config),
         "space": config.get("space", {}),
         "rooms_incoming": incoming_rooms,
         "rooms_replaced": sorted(known & set(incoming_rooms)),
@@ -224,6 +236,101 @@ def preview_import(payload, *, existing_rooms=(), existing_anchors=()) -> dict:
         "secrets_needed": config.get("secrets_you_must_supply_again", []),
         "note": ("Nothing has been written. Importing REPLACES the floor plan; "
                  "anything under `rooms_lost` exists here and not in the file."),
+    }
+
+
+def config_digest(payload) -> str:
+    """A stable fingerprint of the configuration a person was shown.
+
+    An import is previewed and then applied, and those are two requests. Without
+    this, an operator can be shown the consequences of file A and apply file B —
+    by accident, with two browser tabs, or because a script rebuilt the file
+    between the two calls. The apply refuses unless the digest matches what the
+    preview returned.
+
+    Not a security control: anybody who can call apply can call preview first.
+    It defends against a mistake, which is the failure that actually happens
+    here, and it costs one hash.
+    """
+    canonical = json.dumps(check_import(payload), sort_keys=True,
+                           separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
+def plan_import(payload, *, existing_rooms=(), existing_anchors=(),
+                validate_house=None) -> dict:
+    """The exact operations an import would perform, decided before any writing.
+
+    Separate from `preview_import`, which answers "what would change" for a
+    person. This answers "what would be done" for the code that does it — the
+    two are different questions and one function trying to be both ends up
+    truthful to neither.
+
+    Nothing here touches a store. The plan is a value: it can be tested, shown,
+    diffed, and refused, and the route that executes it has no decisions left to
+    make. That matters because an import is the one operation in Wavr that
+    destroys work an operator did by hand.
+
+    ## What is refused rather than guessed
+
+    **An anchor whose room does not survive the import.** The file may carry an
+    anchor in "study" while the incoming floor plan has no "study" — because the
+    export came from a Space that has since been re-drawn. Writing it would
+    create an anchor pointing at nothing; skipping it silently would lose
+    something the operator made. It is listed, by name, with the reason.
+
+    **A camera, always, in the sense that matters.** The URL carries a password
+    and is deliberately absent from every export. The camera's name, room and
+    calibration come back; the stream address must be typed again. Imported
+    cameras are reported as needing one rather than created half-working, so
+    "why is this camera dark" is answered before it is asked.
+    """
+    config = check_import(payload)
+    house = config.get("house") or {}
+    # Checked HERE, not at write time. The preview's whole promise is "nothing
+    # has been written"; if the apply then fails on the floor plan, an operator
+    # has seen a green preview and a red apply for the same file, and learns
+    # that the preview means nothing. Injected rather than imported so this
+    # module stays pure and testable without a house map.
+    if validate_house is not None and house.get("floors"):
+        try:
+            validate_house(house)
+        except Exception as exc:            # noqa: BLE001
+            raise TransferError(
+                f"the floor plan in this file cannot be read: {exc}") from None
+    floors = house.get("floors") or []
+    incoming_rooms = [r.get("name") for f in floors
+                      for r in (f.get("rooms") or []) if r.get("name")]
+    incoming = set(incoming_rooms)
+    known = set(existing_rooms or ())
+
+    anchors_ok, anchors_orphaned = [], []
+    for a in config.get("anchors") or []:
+        room = str(a.get("room") or "")
+        (anchors_ok if room in incoming else anchors_orphaned).append(
+            {"name": a.get("name", ""), "room": room})
+
+    return {
+        "digest": config_digest(config),
+        "space": config.get("space", {}),
+        "house": config.get("house") or {},
+        "rooms": {
+            "incoming": incoming_rooms,
+            "replaced": sorted(known & incoming),
+            "lost": sorted(known - incoming),
+        },
+        "anchors": {
+            "write": anchors_ok,
+            # Named, never dropped in silence.
+            "skipped_no_such_room": anchors_orphaned,
+        },
+        "cameras": [{"name": c.get("name", ""), "room": c.get("room", ""),
+                     "needs_url": True} for c in config.get("cameras") or ()],
+        "nodes": list(config.get("nodes") or ()),
+        "ha_mappings": list(config.get("ha_mappings") or ()),
+        "external_providers": list(config.get("external_providers") or ()),
+        "settings": dict(config.get("settings") or {}),
+        "secrets_needed": config.get("secrets_you_must_supply_again", []),
     }
 
 

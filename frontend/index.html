@@ -2018,6 +2018,93 @@
     .core-lock,.core-lock-shake,.core-whatsnew{animation:none;}
     .core-lock-dot,.core-lock-key{transition:none;}
   }
+
+/* ---------------------------------------------------------------------------
+   Runtime presence chip — the always-visible answer to "is Wavr working?".
+
+   Semantic state colours are defined ONCE, here, and reused by every surface
+   that renders a runtime state. The same state must not mean two different
+   colours in two different modules; that is how a person stops trusting the
+   colour at all.
+
+   Green is reserved. It means live and confirmed, never "the page loaded".
+   --------------------------------------------------------------------------- */
+:root{
+  --state-healthy:#3fb950;      /* live, confirmed */
+  --state-starting:#6e7681;     /* not yet an answer */
+  --state-updating:#58a6ff;     /* informational, in progress */
+  --state-paused:#8b949e;       /* deliberate, not a fault */
+  --state-degraded:#d29922;     /* attention: working, but less */
+  --state-attention:#db6d28;    /* attention: something needs a person */
+  --state-unavailable:#f85149;  /* failure */
+}
+.runtime-chip{
+  display:inline-flex;align-items:center;gap:7px;
+  margin-left:14px;padding:4px 10px;
+  background:transparent;border:1px solid var(--line,#30363d);border-radius:999px;
+  color:var(--fg-dim,#8b949e);font-size:.74rem;line-height:1.2;
+  cursor:pointer;white-space:nowrap;
+}
+.runtime-chip:hover{border-color:var(--fg-dim,#8b949e)}
+.runtime-chip:focus-visible{outline:2px solid var(--state-updating);outline-offset:2px}
+.runtime-dot{width:8px;height:8px;border-radius:50%;background:var(--state-starting);flex:0 0 auto}
+.runtime-chip[data-state="healthy"] .runtime-dot{background:var(--state-healthy)}
+.runtime-chip[data-state="starting"] .runtime-dot{background:var(--state-starting)}
+.runtime-chip[data-state="updating"] .runtime-dot{background:var(--state-updating)}
+.runtime-chip[data-state="paused"] .runtime-dot{background:var(--state-paused)}
+.runtime-chip[data-state="degraded"] .runtime-dot{background:var(--state-degraded)}
+.runtime-chip[data-state="attention"] .runtime-dot{background:var(--state-attention)}
+.runtime-chip[data-state="unavailable"] .runtime-dot{background:var(--state-unavailable)}
+/* The two states a person must not be able to miss get the border too, so the
+   chip reads as wrong at a glance and not only on inspection. */
+.runtime-chip[data-state="attention"],
+.runtime-chip[data-state="unavailable"]{border-color:currentColor}
+.runtime-chip[data-state="unavailable"]{color:var(--state-unavailable)}
+.runtime-chip[data-state="attention"]{color:var(--state-attention)}
+/* A slow pulse says "live" without being decoration. It stops entirely when a
+   person has asked for less motion, and it never runs on a dead Core — a
+   pulsing icon over a stopped Core would be the worst possible signal. */
+@media (prefers-reduced-motion: no-preference){
+  .runtime-chip[data-state="healthy"] .runtime-dot{animation:runtime-live 3.2s ease-in-out infinite}
+}
+@keyframes runtime-live{0%,100%{opacity:1}50%{opacity:.45}}
+@media (max-width:820px){.runtime-chip .runtime-text{display:none}
+  .runtime-chip{margin-left:8px;padding:4px 7px}}
+
+/* Action inbox chip. Uses the SAME semantic state colours as the runtime chip:
+   a person must not have to learn that amber means one thing on the left of the
+   header and another on the right. */
+.attn-chip{
+  display:inline-flex;align-items:center;gap:6px;
+  margin-left:10px;padding:4px 10px;
+  background:transparent;border:1px solid currentColor;border-radius:999px;
+  color:var(--state-degraded);font-size:.74rem;line-height:1.2;
+  cursor:pointer;white-space:nowrap;
+}
+/* Something is BLOCKED on a person, which is a stronger claim than degraded. */
+.attn-chip[data-band="blocking"]{color:var(--state-attention)}
+.attn-count{font-weight:600;font-variant-numeric:tabular-nums}
+.attn-chip:focus-visible{outline:2px solid var(--state-updating);outline-offset:2px}
+@media (max-width:820px){.attn-chip .attn-label{display:none}}
+
+/* Needs-attention rows. A list, not a card grid: these are things to work
+   through in order, and a grid says "browse these" while a list says "the top
+   one first". */
+.attn-row{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:12px 2px;border-bottom:1px solid var(--line,#30363d);
+}
+.attn-row:last-child{border-bottom:0}
+/* The band is carried by a bar AND by the text of the row, never by colour
+   alone — the same rule the runtime chip follows. */
+.attn-band{width:3px;align-self:stretch;border-radius:2px;background:var(--state-degraded);flex:0 0 auto}
+.attn-row[data-band="blocking"] .attn-band{background:var(--state-attention)}
+.attn-row[data-band="info"] .attn-band{background:var(--state-starting)}
+.attn-body{flex:1 1 auto;min-width:0}
+.attn-title{font-weight:600;font-size:.92rem}
+.attn-detail{color:var(--fg-dim,#8b949e);font-size:.82rem;margin-top:3px}
+.attn-since{color:var(--fg-dim,#8b949e);font-size:.76rem;margin-top:4px}
+.attn-go{flex:0 0 auto;align-self:center}
 </style>
 </head>
 <body>
@@ -2093,6 +2180,34 @@
            one (filled in by the Space identity block at the end of this file).
            Until then it reads exactly as it always did. -->
       <span class="brand-name">Wavr<small id="brandSpace">Command Center</small></span>
+      <!-- RUNTIME PRESENCE. NO INVISIBLE SUCCESS: the answer to "is Wavr
+           actually working" is on screen at all times, in the chrome, rather
+           than behind a tab somebody has to know to open.
+
+           It renders the Core's own conclusion (`/api/runtime`) and NEVER its
+           own. A failed request shows "not responding" rather than leaving the
+           last good answer up — a header that stays green because the last poll
+           succeeded is the exact failure this exists to prevent.
+
+           `role="status"` so a screen reader announces a change without
+           stealing focus; the state is carried by TEXT as well as colour,
+           because colour alone is not a state. -->
+      <!-- The action inbox. A count here is the ONLY badge in the chrome, and
+           it exists because actionable conditions were previously spread over
+           six screens: a household is not going to visit six screens, so in
+           practice they accumulated silently. Hidden entirely when nothing is
+           waiting — a permanent "0" trains people to ignore the spot. -->
+      <button type="button" class="attn-chip" id="attnChip" hidden
+              data-tip="Things that need you">
+        <span class="attn-count" id="attnCount">0</span>
+        <span class="attn-label">need you</span>
+      </button>
+      <button type="button" class="runtime-chip" id="runtimeChip" hidden
+              role="status" aria-live="polite"
+              data-tip="What Wavr is doing right now. Click for detail.">
+        <span class="runtime-dot" id="runtimeDot" aria-hidden="true"></span>
+        <span class="runtime-text" id="runtimeText">Checking…</span>
+      </button>
     </div>
     <div class="nav-tabs" role="tablist" aria-label="Sections">
       <!-- v2 tooltips: native title -> aria-label + data-tip (one tooltip system, never two;
@@ -3053,6 +3168,25 @@
            loopback-root only, app.py's require_root). See the hook-chained script block near the
            end of the file for the render logic. -->
       <section class="tab-panel" id="panel-novos" data-tab="novos" role="tabpanel" aria-labelledby="tab-novos">
+        <!-- NEEDS ATTENTION, first on the page it opens.
+
+             Everything below this tile is a SOURCE of things that need a
+             person: unrecognised devices, discoveries, pairing requests. Each
+             one used to be findable only by knowing which tab it lived in, so
+             in practice they accumulated silently. This is the one list, ranked
+             by what is actually blocked, and it is deliberately at the top of
+             the surface the tray and the header both point at.
+
+             It renders nothing when nothing is waiting. An empty inbox with a
+             cheerful heading is furniture; the absence IS the message. -->
+        <div id="attnTile" class="tile" aria-labelledby="attn-h" hidden>
+          <div class="tile-head">
+            <h2 id="attn-h">Needs your attention</h2>
+            <span class="hint" id="attnHint"></span>
+          </div>
+          <div id="attnList" class="dev-list" aria-live="polite"></div>
+          <p class="panel-note" id="attnNote" hidden></p>
+        </div>
         <div id="novTile" class="tile" aria-labelledby="nov-h">
           <div class="tile-head"><h2 id="nov-h">New devices</h2><span class="hint">anything on your Wi-Fi you haven't recognized yet</span></div>
           <p id="novLoading" class="empty" aria-live="polite">Loading…</p>
@@ -3686,8 +3820,43 @@
           data-tip="Everything needed to rebuild this Space elsewhere. Re-enter camera URLs and tokens after importing.">Download my setup</button>
         <button type="button" class="ctl small" id="exportBundleBtn"
           data-tip="What Wavr can currently see — sensor health and the event stream. Safe to send to somebody helping you.">Download a diagnostic bundle</button>
+        <!-- The other half. An export nobody can import back is a backup only
+             in the sense that the file exists. -->
+        <label class="ctl small" for="importConfigFile"
+          data-tip="Rebuild this Space from a file you downloaded. Wavr shows you exactly what would change before writing anything.">Restore from a file
+          <input type="file" id="importConfigFile" accept="application/json,.json" hidden>
+        </label>
       </div>
+      <!-- Filled by the preview, then the operator confirms. Hidden until
+           there is something to decide about. -->
+      <div id="importPreview" class="sw-card" hidden style="margin-top:12px"></div>
       <span class="action-fb" id="backupFb" aria-live="polite"></span>
+    </div>
+
+    <!-- Updates. Wavr never updates itself — a Core that changed overnight
+         would change what the sensors do while nobody was watching, on a
+         machine somebody chose specifically because it does not do things
+         behind their back.
+
+         So this tile does the half that IS useful: it says how THIS install
+         updates, detected per channel, because "docker pull", "re-run the
+         script" and "install the APK over the old one" are different answers
+         and a wrong one sends somebody to run a command that does nothing.
+
+         The routes existed and nothing called them, which by this project's own
+         rule is not a finished feature. -->
+    <div class="pair tile" id="updateTile" aria-labelledby="update-h">
+      <div class="tile-head">
+        <h2 id="update-h">Updates</h2>
+        <span class="hint" id="updateVersion"></span>
+      </div>
+      <p id="updateHow" class="empty" aria-live="polite">Checking…</p>
+      <p class="panel-note" id="updateWhy" hidden></p>
+      <div class="controls-row" id="updateActions" hidden>
+        <button type="button" class="ctl small" id="updateCheckBtn"
+          data-tip="Reads a public list of releases. Sends no identifier, no version and no count.">Check now</button>
+      </div>
+      <span class="action-fb" id="updateFb" aria-live="polite"></span>
     </div>
     <p class="panel-note" id="settingsNote" hidden></p>
     </div><!-- /#gearSecSettings -->
@@ -17232,6 +17401,7 @@ try {
 </script>
 <script src="js/trust.js"></script>
 <script src="js/developer.js"></script>
+<script src="js/runtime.js"></script>
 <script src="js/discoveries.js"></script>
 <script>
 // ============================================================================

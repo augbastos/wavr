@@ -10,7 +10,7 @@
 // precaching the same-origin shell, so it adds zero external egress.
 //
 // Bump CACHE to invalidate the old shell on the next activate.
-const CACHE = "wavr-shell-v27";
+const CACHE = "wavr-shell-v32";
 const VENDOR_CACHE = "wavr-vendor-v1";
 // The two blocks lifted out of index.html (the first-run wizard and the Discovery
 // Inbox) are part of the shell: without them a cached offline launch would render

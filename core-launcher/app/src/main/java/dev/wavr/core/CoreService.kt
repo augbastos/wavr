@@ -68,6 +68,18 @@ class CoreService : Service(), LifecycleOwner {
         const val ACTION_STOP = "dev.wavr.core.action.STOP"
 
         private const val CHANNEL_ID = "wavr_core_runtime"
+
+        /**
+         * How long after start a silent Core is "still starting" rather than
+         * "not answering". Generous, because CPython under Chaquopy on a cold
+         * phone is genuinely slow — and because crying wolf in the first
+         * seconds is how a persistent notification becomes something people
+         * swipe away without reading.
+         */
+        private const val STARTUP_GRACE_MS = 60_000L
+
+        /** Blank line between notification paragraphs. */
+        private const val NL2 = "\n\n"
         private const val NOTIFICATION_ID = 0x57415652 // "WAVR"
 
         /** How often the supervisor re-reads the Core's own health. */
@@ -283,6 +295,11 @@ class CoreService : Service(), LifecycleOwner {
      * on the app's own honesty surface would not be.
      */
     @Volatile private var cachedSpatial = ""
+    @Volatile private var cachedRuntime = ""
+
+    /** Elapsed-realtime at start, so "still starting" and "not answering" are
+     *  distinguishable. Monotonic on purpose: wall clock can jump. */
+    @Volatile private var startedAtMs = 0L
 
     private val healthPoll = object : Runnable {
         override fun run() {
@@ -295,6 +312,7 @@ class CoreService : Service(), LifecycleOwner {
                         cachedRestartRequired
                     }
                     cachedSpatial = readSpatialLine()
+                    cachedRuntime = readRuntimeLine()
                     main.post { refreshNotification() }
                 }
             }
@@ -314,6 +332,41 @@ class CoreService : Service(), LifecycleOwner {
      * partial or guessed answer here, because this text lands on the one notice
      * the phone's owner is guaranteed to see.
      */
+    /**
+     * What the Core says about itself, in the SAME words the tray and the web
+     * shell use.
+     *
+     * The Core is inside this process, so "the service is running" is trivially
+     * true and tells the person nothing. What they need is whether it is
+     * producing anything — which is exactly what `/api/runtime` answers, and
+     * the reason this asks rather than inspecting a local flag.
+     *
+     * A failed read is NOT silence. During the first seconds it is honest to
+     * say nothing, because the Core has not finished starting; after that, a
+     * Core inside this very process that will not answer is a real problem and
+     * the notification must say so. That distinction is the whole point: a
+     * persistent notification that looks fine over a wedged Core is worse than
+     * no notification.
+     */
+    private fun readRuntimeLine(): String = try {
+        val body = WavrClient("http://127.0.0.1:${prefs.port}").runtime()
+        val space = body.optString("space", "")
+        val headline = body.optString("headline", "")
+        when {
+            headline.isNotEmpty() -> headline
+            space.isNotEmpty() -> space
+            else -> ""
+        }
+    } catch (t: Throwable) {
+        if (startedAtMs > 0L &&
+            android.os.SystemClock.elapsedRealtime() - startedAtMs > STARTUP_GRACE_MS
+        ) {
+            getString(R.string.core_runtime_unreachable)
+        } else {
+            ""
+        }
+    }
+
     private fun readSpatialLine(): String = try {
         val rooms = WavrClient("http://127.0.0.1:${prefs.port}").contexts()
         val observed = rooms.filter { it.can(Capability.PRESENCE) }
@@ -342,6 +395,7 @@ class CoreService : Service(), LifecycleOwner {
         super.onCreate()
         registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         instance = this
+        startedAtMs = android.os.SystemClock.elapsedRealtime()
         prefs = CorePrefs(this)
         createChannel()
         attachThermalListener()
@@ -732,7 +786,12 @@ class CoreService : Service(), LifecycleOwner {
         // is what the person actually wanted from this thing — the other two are
         // reasons it might not be delivering.
         val spatial = cachedSpatial
-        val body = getString(R.string.core_notification_body, where) +
+        // First line of the expanded notification, because it is the answer
+        // to the question somebody opened the shade to ask. Everything below
+        // it explains or qualifies it.
+        val runtime = cachedRuntime
+        val body = (if (runtime.isNotEmpty()) runtime + NL2 else "") +
+            getString(R.string.core_notification_body, where) +
             (if (spatial.isNotEmpty()) "\n\n$spatial" else "") +
             (if (heat.isNotEmpty()) "\n\n$heat" else "") +
             (if (pendingRestart) "\n\n" + getString(R.string.core_restart_pending) else "")
@@ -742,7 +801,15 @@ class CoreService : Service(), LifecycleOwner {
                 if (pendingRestart) getString(R.string.core_notification_title_restart)
                 else getString(R.string.core_notification_title)
             )
-            .setContentText(if (pendingRestart) getString(R.string.core_restart_pending) else where)
+            .setContentText(
+                when {
+                    pendingRestart -> getString(R.string.core_restart_pending)
+                    // The collapsed line is the one most people ever see, so it
+                    // carries the state rather than the port number.
+                    cachedRuntime.isNotEmpty() -> cachedRuntime
+                    else -> where
+                }
+            )
             .setStyle(Notification.BigTextStyle().bigText(body))
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(open)

@@ -56,6 +56,7 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::CheckMenuItemBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
@@ -73,9 +74,9 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(20);
 /// 0/false/no/off to silence it. Unlike every other `WAVR_*` var here this is a shell-only
 /// setting -- the backend has no notion of it.
 const NOTIFY_ENV: &str = "WAVR_DESKTOP_NOTIFICATIONS";
-/// Opt-in (default OFF) launch-on-login (item 5). Reconciled declaratively every launch,
-/// same "env var is the one source of truth" pattern as `WAVR_MULTIDEVICE` -- no UI/IPC
-/// toggle exists or is added for this.
+/// Opt-in (default OFF) launch-on-login (item 5). The env var supplies the DEFAULT;
+/// once somebody toggles it in the tray that choice is recorded in
+/// `~/.wavr/autostart` and wins on every later launch. See `autostart_enabled`.
 const AUTOSTART_ENV: &str = "WAVR_DESKTOP_AUTOSTART";
 /// CLI arg the autostart plugin appends when IT launches this exe (see `main()`'s
 /// `tauri_plugin_autostart::init` call). Its presence, and only its presence, is what
@@ -158,8 +159,57 @@ fn notifications_enabled() -> bool {
 }
 
 /// Default OFF: no login-item is created unless explicitly turned on.
+/// Whether Wavr should start with the machine.
+///
+/// The env var is the DEFAULT, not the truth. A person who toggles this in the
+/// tray has made a choice, and reconciling that away on the next launch — which
+/// is what a purely declarative env var does — is a UI that silently undoes the
+/// user. So a choice, once made, is recorded and wins.
+///
+/// The file holds "1" or "0" and nothing else. It exists only when somebody has
+/// actually decided; its absence means "nobody has said, use the default",
+/// which is a different fact from "somebody said no".
 fn autostart_enabled() -> bool {
+    if let Some(chosen) = autostart_choice() {
+        return chosen;
+    }
     effective(AUTOSTART_ENV).map(|v| is_truthy(&v)).unwrap_or(false)
+}
+
+fn autostart_choice_path() -> Option<std::path::PathBuf> {
+    home_dir().map(|h| h.join(".wavr").join("autostart"))
+}
+
+fn autostart_choice() -> Option<bool> {
+    let text = std::fs::read_to_string(autostart_choice_path()?).ok()?;
+    match text.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Record the person's choice, and apply it now.
+///
+/// Returns what the state actually IS afterwards, read back from the OS rather
+/// than assumed from what was asked for: a login item that failed to register
+/// and a tick that says it did is precisely the kind of quiet lie this whole
+/// area of the product is being rebuilt to remove.
+fn set_autostart(app: &tauri::AppHandle, on: bool) -> bool {
+    if let Some(path) = autostart_choice_path() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = std::fs::write(&path, if on { "1" } else { "0" }) {
+            log_issue(&format!("Wavr: could not record the autostart choice: {e}"));
+        }
+    }
+    let launcher = app.autolaunch();
+    let result = if on { launcher.enable() } else { launcher.disable() };
+    if let Err(e) = result {
+        log_issue(&format!("Wavr: could not change launch-on-login: {e}"));
+    }
+    launcher.is_enabled().unwrap_or(on)
 }
 
 fn port() -> String {
@@ -617,7 +667,85 @@ fn fetch_alerts(url: &str, https_agent: &mut Option<ureq::Agent>) -> Option<Vec<
     parsed.get("alerts")?.as_array().cloned()
 }
 
+/// Fetch `GET /api/runtime` -- the Core's own conclusion about whether it is working.
+///
+/// Returns `None` for EVERY failure, and the caller must render "not responding" rather
+/// than keeping the last good answer. That is the whole point: a tray that stays green
+/// because the last poll succeeded is exactly the invisible failure this feature exists to
+/// prevent. A Core that died an hour ago must look dead within one poll interval.
+fn fetch_runtime(url: &str, https_agent: &mut Option<ureq::Agent>) -> Option<serde_json::Value> {
+    // Scope-gated like /api/alerts, so it needs X-Wavr-Token when one is configured.
+    let token = resolved_local_token();
+    let text = if scheme() == "https" {
+        if https_agent.is_none() {
+            *https_agent = pinned_cert_der().map(pinned_https_agent);
+        }
+        let mut req = https_agent.as_ref()?.get(url);
+        if !token.is_empty() {
+            req = req.set("X-Wavr-Token", &token);
+        }
+        req.call().ok()?.into_string().ok()?
+    } else {
+        let mut req = ureq::get(url).timeout(Duration::from_secs(5));
+        if !token.is_empty() {
+            req = req.set("X-Wavr-Token", &token);
+        }
+        req.call().ok()?.into_string().ok()?
+    };
+    serde_json::from_str(&text).ok()
+}
+
+/// The tray's own copy of the runtime vocabulary, kept deliberately thin.
+///
+/// The BACKEND decides what state Wavr is in -- `wavr/runtime_status.py` -- and this only
+/// renders it. Two implementations of "is it healthy" eventually disagree in front of
+/// somebody who has no way to tell which is right, and the one on the tray is the one they
+/// will believe, because it is the one they can see without opening anything.
+struct TrayView {
+    tooltip: String,
+    /// One line for the status item in the menu. Never a metric on its own: "8/9" needs a
+    /// person to know whether nine is a lot.
+    summary: String,
+}
+
+fn tray_view(status: Option<&serde_json::Value>) -> TrayView {
+    let Some(body) = status else {
+        // Unreachable. Deliberately NOT the last known state.
+        return TrayView {
+            tooltip: "Wavr — not responding".to_string(),
+            summary: "Wavr is not answering. It may have stopped.".to_string(),
+        };
+    };
+    let headline = body
+        .get("headline")
+        .and_then(|h| h.as_str())
+        .unwrap_or("Wavr");
+    let state = body.get("state").and_then(|s| s.as_str()).unwrap_or("");
+
+    // The summary names the worst thing rather than counting the good ones. A menu line
+    // reading "3 of 4 fine" is read as fine.
+    let worst = body
+        .get("findings")
+        .and_then(|f| f.as_array())
+        .and_then(|rows| {
+            rows.iter()
+                .find(|r| r.get("state").and_then(|s| s.as_str()) == Some(state))
+        })
+        .and_then(|r| r.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+
+    let summary = match state {
+        "healthy" => "Everything looks good".to_string(),
+        "" => "Wavr".to_string(),
+        _ if !worst.is_empty() => worst.to_string(),
+        other => other.to_string(),
+    };
+    TrayView { tooltip: headline.to_string(), summary }
+}
+
 /// Poll GET /api/alerts on a steady interval (never a busy loop) and raise a native OS
+
 /// notification for each NEW high-severity alert. Must only be called once the backend is
 /// already confirmed healthy (see the `wait_healthy()` call site in `setup()`).
 ///
@@ -1209,6 +1337,81 @@ fn hide_window(app: &tauri::AppHandle) {
 /// non-autostart launch) AND, on Windows, resume the WebView2 render loop FIRST so the
 /// dashboard is already live the instant the window becomes visible. ALWAYS use this
 /// (never a bare `window.show()`) so every show path un-suspends the render loop.
+/// Open the dashboard AND put it on the surface that answers the question.
+///
+/// The tray points at the dashboard rather than reimplementing anything. A second place
+/// to read the same state is a second place for it to be wrong, and the one people can see
+/// without opening anything is the one they will believe.
+fn open_at(app: &tauri::AppHandle, fragment: &str) {
+    show_window(app);
+    if let Some(w) = app.get_webview_window("main") {
+        let target = format!("{}/{}", backend_url(), fragment);
+        if let Ok(u) = target.parse::<tauri::Url>() {
+            let _ = w.navigate(u);
+        }
+    }
+}
+
+/// Stop the Core and start it again, without quitting Wavr.
+///
+/// The recovery path for the state the tray exists to make visible: a Core that has
+/// stopped producing. Killing and respawning is the honest implementation — the backend
+/// has no in-process restart, and pretending otherwise would leave a "restarted" message
+/// over an unchanged process.
+///
+/// `spawn_backend_monitor` is already watching the handle in `Backend`, so a restart that
+/// fails is surfaced by the same path a crash is, rather than needing its own.
+fn restart_backend(app: &tauri::AppHandle) {
+    kill_backend(app);
+    match spawn_backend() {
+        Ok(child) => {
+            if let Some(state) = app.try_state::<Backend>() {
+                *state.0.lock().unwrap() = Some(child);
+            }
+            log_issue("Wavr: Core restarted from the tray.");
+        }
+        Err(e) => log_issue(&format!("Wavr: could not restart the Core: {e}")),
+    }
+}
+
+/// Keep the tray telling the truth, on a timer.
+///
+/// Every tick asks the Core what it thinks of itself and renders that. A failed request is
+/// rendered as "not responding" rather than leaving the previous answer in place: a tray
+/// that stays green because the last poll succeeded is precisely the invisible failure
+/// this whole surface exists to prevent.
+///
+/// Deliberately quiet. The tooltip and the menu line change; nothing is notified. A
+/// notification belongs to a transition that needs a person to act, and this ticks every
+/// few seconds forever.
+fn spawn_runtime_presence(
+    app: tauri::AppHandle,
+    tray: tauri::tray::TrayIcon,
+    status_item: tauri::menu::MenuItem<tauri::Wry>,
+) {
+    std::thread::spawn(move || {
+        const POLL_INTERVAL: Duration = Duration::from_secs(10);
+        let url = format!("{}/api/runtime", backend_url());
+        let mut https_agent: Option<ureq::Agent> = None;
+        let mut last_tooltip = String::new();
+
+        loop {
+            let body = fetch_runtime(&url, &mut https_agent);
+            let view = tray_view(body.as_ref());
+
+            // Only touch the OS when something changed: a tray icon rewritten every ten
+            // seconds is a wakeup every ten seconds on a machine that may be a laptop.
+            if view.tooltip != last_tooltip {
+                let _ = tray.set_tooltip(Some(&view.tooltip));
+                let _ = status_item.set_text(&view.summary);
+                last_tooltip = view.tooltip.clone();
+            }
+            let _ = &app;
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    });
+}
+
 fn show_window(app: &tauri::AppHandle) {
     set_webview_suspended(app, false);
     if let Some(w) = app.get_webview_window("main") {
@@ -1278,9 +1481,14 @@ fn main() {
                 show_window(app.handle());
             }
 
-            // 3. reconcile the login-item state from WAVR_DESKTOP_AUTOSTART every launch
-            //    (declarative, same pattern as WAVR_MULTIDEVICE: the env var is the one
-            //    source of truth, no separate persisted on/off flag). Default OFF.
+            // 3. reconcile the login-item state every launch. The env var is the
+            //    DEFAULT; a choice made in the tray is recorded and wins (see
+            //    `autostart_enabled`). It used to be purely declarative from
+            //    WAVR_DESKTOP_AUTOSTART with no UI at all — which meant a person
+            //    had no way to see the setting, let alone change it, and any
+            //    toggle we added would have been undone on the next launch.
+            //    Default is still OFF: Wavr does not add itself to startup
+            //    without being asked.
             let autolaunch = app.autolaunch();
             let want_autostart = autostart_enabled();
             match autolaunch.is_enabled() {
@@ -1299,16 +1507,62 @@ fn main() {
                 Err(e) => log_issue(&format!("Wavr: could not read launch-on-login state: {e}")),
             }
 
-            // 4. tray icon + menu.
+            // 4. tray icon + menu: the RUNTIME PRESENCE surface.
+            //
+            // NO INVISIBLE SUCCESS. If Wavr is watching somebody's home, that person must
+            // be able to tell without Task Manager, a terminal or a log file. The tray is
+            // the only place most people will ever look, so it carries the Core's real
+            // conclusion rather than "the process I spawned has not exited".
+            //
+            // The first item is a disabled status line, not an action. It exists so the
+            // answer is visible the moment the menu opens, before anybody has to know
+            // which item to click.
+            let status = MenuItemBuilder::with_id("status", "Wavr — starting…")
+                .enabled(false)
+                .build(app)?;
             let open = MenuItemBuilder::with_id("open", "Open Wavr").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&open, &quit]).build()?;
-            TrayIconBuilder::new()
+            let attention =
+                MenuItemBuilder::with_id("attention", "Needs attention").build(app)?;
+            let privacy = MenuItemBuilder::with_id("privacy", "Privacy").build(app)?;
+            let restart =
+                MenuItemBuilder::with_id("restart", "Restart Core").build(app)?;
+            // Ticked from the OS's own answer, not from what we asked for. A
+            // login item that failed to register, under a tick that says it
+            // worked, is the same class of lie as a green icon over a dead Core.
+            let starts_with_machine = app
+                .autolaunch()
+                .is_enabled()
+                .unwrap_or_else(|_| autostart_enabled());
+            let autostart = CheckMenuItemBuilder::with_id(
+                "autostart", "Start Wavr when this machine starts")
+                .checked(starts_with_machine)
+                .build(app)?;
+            // Named "Quit Wavr", never bare "Quit". Closing the WINDOW leaves Wavr
+            // sensing; this stops it. Two different outcomes must not share one word.
+            let quit = MenuItemBuilder::with_id("quit", "Quit Wavr").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&status, &open, &attention, &privacy, &autostart,
+                         &restart, &quit])
+                .build()?;
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Wavr Desktop")
+                .tooltip("Wavr — starting…")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => show_window(app),
+                    // Both open the dashboard at the surface that answers the question.
+                    // The tray deliberately does not reimplement either: a second place
+                    // to read the same state is a second place for it to be wrong.
+                    "attention" => open_at(app, "#tab-novos"),
+                    "privacy" => open_at(app, "#gearSecTrust"),
+                    "autostart" => {
+                        // Read the CURRENT state and invert it, rather than
+                        // trusting the tick we last drew — the menu item and
+                        // the OS can disagree, and the OS is right.
+                        let now_on = app.autolaunch().is_enabled().unwrap_or(false);
+                        set_autostart(app, !now_on);
+                    }
+                    "restart" => restart_backend(app),
                     "quit" => {
                         kill_backend(app);
                         app.exit(0);
@@ -1316,6 +1570,10 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Keep the tray honest on a timer. `status_item` is updated in place so the
+            // menu reads correctly whenever it is opened, rather than only after a click.
+            spawn_runtime_presence(app.handle().clone(), tray, status);
 
             // 5. HTTPS mode: install the scoped cert pin BEFORE any navigation happens.
             #[cfg(windows)]
@@ -1428,4 +1686,63 @@ fn main() {
                 kill_backend(app);
             }
         });
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+//
+// Only the pure rendering is tested here. Spawning a Core, driving a tray and
+// clicking a menu need a desktop session and a running backend, and those are
+// covered by the packaged-application checks rather than pretended at here.
+//
+// What IS tested is the rule the whole surface rests on: an unreachable Core
+// must never render as a healthy one. That is a pure function of the response,
+// which makes it exactly the part worth pinning.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::tray_view;
+
+    fn body(json: &str) -> serde_json::Value {
+        serde_json::from_str(json).expect("test fixture is valid json")
+    }
+
+    #[test]
+    fn no_answer_renders_as_not_responding_and_never_as_healthy() {
+        // The failure this surface exists to prevent: the last poll succeeded,
+        // the Core has since died, and the icon is still green.
+        let view = tray_view(None);
+        assert!(view.tooltip.contains("not responding"), "{}", view.tooltip);
+        assert!(!view.tooltip.to_lowercase().contains("healthy"));
+        assert!(view.summary.contains("not answering"), "{}", view.summary);
+    }
+
+    #[test]
+    fn a_healthy_core_says_so_in_a_sentence_not_a_metric() {
+        let view = tray_view(Some(&body(
+            r#"{"state":"healthy","headline":"Wavr — running · My Home · everything reporting","findings":[]}"#,
+        )));
+        assert!(view.tooltip.contains("My Home"));
+        assert_eq!(view.summary, "Everything looks good");
+    }
+
+    #[test]
+    fn a_degraded_core_puts_the_worst_finding_on_the_menu_line() {
+        // "3 of 4 fine" is read as fine. The line must name the problem.
+        let view = tray_view(Some(&body(
+            r#"{"state":"degraded",
+                "headline":"Wavr — degraded · My Home",
+                "findings":[{"state":"healthy","text":"2 sensors reporting."},
+                            {"state":"degraded","text":"Kitchen radar is not reporting."}]}"#,
+        )));
+        assert_eq!(view.summary, "Kitchen radar is not reporting.");
+        assert!(view.tooltip.contains("degraded"));
+    }
+
+    #[test]
+    fn an_unparseable_or_empty_body_does_not_become_good_news() {
+        let view = tray_view(Some(&body("{}")));
+        assert_eq!(view.tooltip, "Wavr");
+        assert_ne!(view.summary, "Everything looks good");
+    }
 }
