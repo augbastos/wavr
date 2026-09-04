@@ -105,6 +105,7 @@ from wavr.discovery_feed import (feed_core_topology, feed_devices,
 from wavr.api_coverage import build_coverage_router
 from wavr.api_privacy import build_privacy_router
 from wavr.provider_catalog import build_registry as build_provider_registry
+from wavr.spatial_events import SpatialEvents
 from wavr.api_topology import build_topology_router
 from wavr.api_trace import build_trace_router
 from wavr.api_validation import build_validation_router
@@ -636,6 +637,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # OFF by default and never persisted. A trace is a minute-by-minute record of
     # where people were; it must never accumulate because a switch was left on.
     _trace_state: dict = {"recorder": None, "last": None}
+    # Semantic events, derived once here rather than by every application
+    # diffing consecutive frames and getting the edge cases slightly differently
+    # wrong. Bounded ring: this is a live stream with a short tail for a client
+    # that reconnects, never a history — the occupancy log is the history.
+    _recent_events: list = []
+    _EVENTS_KEPT = 200
+
+    def _remember_event(ev: dict) -> None:
+        _recent_events.append(ev)
+        if len(_recent_events) > _EVENTS_KEPT:
+            del _recent_events[:len(_recent_events) - _EVENTS_KEPT]
+
+    _spatial_events = SpatialEvents(on_event=_remember_event)
 
     def _reliability_for(sensor_id: str, room: str):
         """(factor, reason) for one sensor in one room.
@@ -1513,6 +1527,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 _notify_all("Wavr: possivel queda em " + str(d["room"]) +
                             " (deteccao experimental, nao e um dispositivo medico -- ADR-0003)",
                             kind="fall_suspected", severity="alert", room=d["room"])
+        # From the FULL internal state, not the projection. The projection is
+        # what a particular viewer is allowed to see; deriving events from it
+        # would let a privacy toggle silently change which events an application
+        # receives — a screen setting rewriting an API. The events carry nothing
+        # a projection would strip: a room, a boolean, a count, a sensor id.
+        with suppress(Exception):
+            _spatial_events.observe(d)
         await _hub.publish(project_state(d, _watch.on, unrecognized))
         return d
 
@@ -2825,6 +2846,26 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # Replay builds a FRESH engine per call: running a recording through the
     # live one would inject the past into the present and make the dashboard
     # report a house that no longer exists.
+    @app.get("/api/events/recent")
+    async def recent_events(since: str = "", limit: int = 50,
+                            _=Depends(require_local),
+                            __=Depends(require_scope("presence:read"))):
+        """The last few semantic events, for a client that just connected.
+
+        A short tail, not a history: `since` filters by the event's own
+        timestamp so a reconnecting application can catch up without replaying
+        the day. Anything older belongs to the occupancy log, which is the
+        thing designed to be queried.
+        """
+        rows = _recent_events
+        if since:
+            rows = [e for e in rows if str(e.get("at", "")) > since]
+        rows = rows[-max(1, min(int(limit), _EVENTS_KEPT)):]
+        return {"events": rows, "kept": _EVENTS_KEPT,
+                "note": ("A live tail, not a history. Events name what Wavr "
+                         "observed about a ROOM — never who, and never that "
+                         "anybody walked.")}
+
     app.include_router(build_trace_router(
         _trace_state,
         engine_factory=lambda now_fn: FusionEngine(
