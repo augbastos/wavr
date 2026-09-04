@@ -22,10 +22,11 @@ intentions is a catalog nobody can trust.
 """
 from __future__ import annotations
 
+from wavr import ha_presence
 from wavr.providers import (
     CONF_PROBABILITY, CONF_QUALITY, CONF_SCORE, KIND_DERIVED, KIND_NETWORK,
-    KIND_SENSOR, KIND_SPATIAL, REACH_CLOUD, REACH_INTERNET, REACH_LAN,
-    REACH_LOCAL, ProviderRegistry, describe,
+    KIND_SENSOR, REACH_CLOUD, REACH_INTERNET, REACH_LAN, REACH_LOCAL,
+    ProviderRegistry, describe,
 )
 
 
@@ -101,13 +102,13 @@ def _builtin() -> list:
 def _integrations() -> list:
     """Providers that exist but need the operator to connect something."""
     return [
-        describe("home_assistant", "Home Assistant", KIND_SPATIAL, REACH_LAN,
-                 observes=("presence", "device_state"),
-                 precision_ceiling="room",
-                 confidence_semantics=CONF_SCORE,
-                 requires=("Home Assistant URL", "long-lived access token"),
-                 notes=("Reads sensors already connected to your Home "
-                        "Assistant. Stays on your network.")),
+        # Imported rather than re-declared here. Two descriptions of one provider
+        # drift, and the one written beside the code is the one that stays true:
+        # this entry used to claim KIND_SPATIAL and CONF_SCORE, and the adapter
+        # turned out to hand over raw binary sensors with no confidence attached
+        # at all — a catalogue entry promising more than the implementation
+        # delivers, which is the exact failure this file's docstring forbids.
+        ha_presence.descriptor(),
 
         describe("mqtt", "MQTT broker", KIND_SENSOR, REACH_LAN,
                  observes=("presence",),

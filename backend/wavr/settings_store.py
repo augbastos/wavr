@@ -143,6 +143,14 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
        "Lets this Core pair with another Wavr Core in the same Space. "
        "Requires 'Let other devices connect'.",
        sensitive=True, local_only=True),
+    _s("developer_mode", "WAVR_DEVELOPER_MODE", "bool", "0",
+       "Developer mode",
+       "Shows the tools for building applications on top of Wavr: the provider "
+       "catalogue, the live event stream, a manifest checker, and scenarios "
+       "that simulate a house so you can develop without owning the sensors. "
+       "Off by default — nobody who is not writing software needs any of it, "
+       "and a normal setup should never make you read the word 'manifest'.",
+       restart_required=False, local_only=True),
 
     # -- Sensing ------------------------------------------------------------
     _s("net_inventory", "WAVR_NET_INVENTORY", "bool", "0",

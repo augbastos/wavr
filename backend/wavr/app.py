@@ -25,6 +25,7 @@ from starlette.responses import JSONResponse
 
 from wavr import __version__
 from wavr.config import load_config
+from wavr.contracts import version as contract_version
 from wavr.housemap import load_house_map, room_names, room_polygon, save_house_map, upsert_room, HouseMapError
 from wavr.storage import Storage
 from wavr.hub import Hub
@@ -60,7 +61,22 @@ from wavr.device_meta import DeviceMeta, normalize_mac, sanitize_name
 from wavr.occupancy_log import OccupancyLog
 from wavr.known_store import KnownStore
 from wavr.netinventory import _same_ip
+from wavr.anchors import AnchorStore, summarize as anchors_summary
+from wavr.api_anchors import build_router as build_anchors_router
+from wavr.api_developer import build_router as build_developer_router
+from wavr.api_provider_ingest import build_router as build_provider_ingest_router
+from wavr.api_config_export import build_router as build_config_export_router
+from wavr.api_updates import build_router as build_updates_router
+from wavr.api_uwb import build_router as build_uwb_router
+from wavr.api_experience import build_router as build_experience_router
+from wavr.api_ha_presence import build_router as build_ha_presence_router
 from wavr.ha_client import client_from_config
+from wavr.ha_presence import HAPresenceStore, HomeAssistantSource
+from wavr.experience_grants import GrantStore
+from wavr.experience_session import SessionStore
+from wavr.uwb_broker import UwbBroker
+from wavr.provider_ingest import ExternalProviderStore
+from wavr.timebase import TimeBase
 from wavr.ha_import import fetch_registry, import_devices
 from wavr.ha_import_store import HAImportStore
 from wavr.internet_monitor import InternetMonitor, guess_gateway, make_checker
@@ -96,8 +112,10 @@ from wavr import peer_client
 
 # The Wavr Protocol version this Core speaks (docs/WAVR-PROTOCOL.md). Advertised
 # over mDNS and returned to paired peers, so a future version can be detected
-# rather than misread.
-WAVR_PROTOCOL_VERSION = 1
+# rather than misread. From `contracts`, which owns every published shape's
+# version in one place -- eight of them used to define their own next to their
+# producer, and two shapes carried none at all.
+WAVR_PROTOCOL_VERSION = contract_version("node_protocol")
 from wavr.settings_store import SettingsStore, apply_stored_settings
 from wavr.discovery_inbox import DiscoveryInbox
 from wavr.discovery_feed import (feed_core_topology, feed_devices,
@@ -173,6 +191,12 @@ def _find_frontend() -> Path:
 
 
 _INDEX = _find_frontend() / "index.html"
+# The reference experiences and the JavaScript SDK, served only in developer
+# mode. Sibling directories of `frontend/`, so they resolve from a checkout and
+# from any layout `_find_frontend` handles. A packaged install may not ship
+# them; the routes then 404 and `/api/dev/status` says so rather than pretending.
+_EXPERIENCES_DIR = _INDEX.parent.parent / "experiences"
+_SDK_DIR = _INDEX.parent.parent / "sdk"
 _VENDOR_DIR = _INDEX.parent / "vendor"
 _CATALOG_PATH = _VENDOR_DIR / "device-catalog.json"
 
@@ -312,6 +336,56 @@ _TOKEN_EXEMPT_PATHS = frozenset({
 
 def _is_token_exempt(path: str) -> bool:
     return path in _TOKEN_EXEMPT_PATHS or path.startswith("/vendor/")
+
+
+# Everything reachable WITHOUT a credential, in one place.
+#
+# These were literals inside `create_app`, ~2,400 lines below the constant above
+# -- so the answer to "what can an unpaired device on this network reach?" was
+# split across three places, two of them invisible from any index. That is the
+# question an operator, an auditor and a threat model all ask first, and it
+# should be answerable by reading one screen.
+#
+# Both sets are additionally bounded by `in_subnet`: off-subnet gets 403 whatever
+# is listed here. Neither grants a role -- `request.state.role` stays None, so
+# every scope gate downstream still denies.
+
+# Onboarding. A caller reaching these has no credential BY DEFINITION, which is
+# what it is asking for. Each is bounded by something other than a token: a
+# one-time rate-limited pairing code, a 192-bit capability the requester was
+# handed, or a handler that verifies a node bearer itself. The matching ADMIN
+# routes (listing, approving, disabling) are deliberately absent and stay
+# loopback-root-only. /api/peers/link-back is authenticated and is NOT here.
+_UNAUTH_ONBOARDING_PATHS = frozenset({
+    "/api/pair", "/api/peers/redeem",
+    "/api/nodes/enroll", "/api/nodes/telemetry",
+    "/api/nodes/heartbeat", "/api/nodes/reactivate",
+    "/api/nodes/request", "/api/nodes/claim",
+    "/api/pair-request", "/api/pair-request/status",
+})
+
+# The static shell: markup and scripts, no data, no action. A companion must be
+# able to LOAD the page in order to pair, and the page shows only the pairing
+# screen until a token is entered. Every DATA endpoint it then calls is gated
+# normally.
+#
+# "/js/*" are blocks lifted out of index.html -- the same shell split across
+# files. "/experiences/*" and the SDK they import are the same class again, and
+# they MUST be here rather than behind the `X-Wavr-Local` CSRF header: a browser
+# navigating to a URL cannot send a custom header, so gating them on one made
+# them impossible to open, which is the single thing they exist for.
+_STATIC_SHELL_PATHS = frozenset({
+    "/", "/index.html", "/measure.html", "/manifest.webmanifest",
+    "/sw.js", "/icon.svg",
+    "/js/wizard.js", "/js/discoveries.js", "/js/trust.js", "/js/developer.js",
+    "/sdk/javascript/wavr.js",
+})
+_STATIC_SHELL_PREFIXES = ("/vendor/", "/experiences/")
+
+
+def _is_static_shell(path: str) -> bool:
+    return (path in _STATIC_SHELL_PATHS
+            or any(path.startswith(pre) for pre in _STATIC_SHELL_PREFIXES))
 
 
 def _default_sources(cfg, ble_provider=None, net_provider=None, net_detail_provider=None):
@@ -661,10 +735,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _recent_events: list = []
     _EVENTS_KEPT = 200
 
+    # Live fan-out for the semantic stream, separate from `_hub`. Two streams
+    # because they are two products: `_hub` carries every fused room state
+    # several times a second WITH per-person geometry and vitals, and this
+    # carries "the kitchen became occupied" and nothing about anybody. A single
+    # hub would mean every application subscribing to occupancy also received
+    # the geometry, which is the shape of over-sharing that no amount of
+    # client-side filtering makes safe.
+    _events_hub = Hub()
+
     def _remember_event(ev: dict) -> None:
         _recent_events.append(ev)
         if len(_recent_events) > _EVENTS_KEPT:
             del _recent_events[:len(_recent_events) - _EVENTS_KEPT]
+        # Synchronous: this callback runs inside `SpatialEvents.observe`, which
+        # is a plain function. Scheduling a task here would let two events from
+        # the same frame arrive out of order.
+        _events_hub.publish_nowait(ev)
 
     _spatial_events = SpatialEvents(on_event=_remember_event)
 
@@ -1290,6 +1377,36 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _settings_store = settings_store or SettingsStore(cfg.db_path)
     _discovery_inbox = discovery_inbox or DiscoveryInbox(cfg.db_path)
 
+    def _bundled_experiences() -> list[dict]:
+        """The reference pages this Core can actually serve.
+
+        Checked on disk, not listed from a constant. A packaged build may not
+        ship them, and a list of links that 404 is worse than an honest empty
+        one — it makes a developer think the feature is broken rather than
+        absent.
+        """
+        out = []
+        for name in ("spatial-web", "capability-aware", "anchor-demo"):
+            if (_EXPERIENCES_DIR / name / "index.html").is_file():
+                out.append({"name": name, "url": f"/experiences/{name}/"})
+        return out
+
+    def _developer_mode_on() -> bool:
+        """Whether the developer surface is switched on, read LIVE.
+
+        From the store rather than from `cfg`, because `cfg` was resolved at
+        boot: an operator who ticks the box expects the tools to appear, and a
+        setting marked `restart_required=False` that silently needs a restart is
+        worse than one that says it does. Falls back to the boot value if the
+        store cannot be read — the environment still wins either way, which is
+        `effective()`'s own rule.
+        """
+        try:
+            return (_settings_store.effective("developer_mode")["value"] or "")\
+                .strip().lower() in ("1", "true", "yes", "on")
+        except Exception:      # noqa: BLE001 -- a settings read must not be able
+            return bool(cfg.developer_mode)   # to decide the answer by failing
+
     # code -> person_id for codes minted against a named person. In-memory and
     # short-lived by construction: a pairing code lives ~2 minutes
     # (pairing.CODE_TTL_SECONDS) and is consumed on first use. Bounded so a burst
@@ -1841,6 +1958,74 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                   _identity_store.detailed_net_addresses)):
         manager.register(name, factory, enabled,
                          heartbeat_s=SOURCE_HEARTBEATS.get(name))
+
+    # Home Assistant as a source of presence EVIDENCE, not just a device
+    # registry. Always constructed (like CameraStore), inert until an operator
+    # maps an entity to a room: with no mappings the source is never registered
+    # and Wavr makes no requests to HA at all, which is what keeps "Wavr works
+    # fully with every external provider off" true by construction.
+    _ha_presence = HAPresenceStore(cfg.db_path)
+    # Named places inside the Space — the vocabulary applications point at.
+    # Always built and empty out of the box; an anchor is configuration, so an
+    # install with none costs nothing and an install with a hundred costs one
+    # table.
+    _anchors = AnchorStore(cfg.db_path)
+    # External positioning systems an operator has declared. Empty out of the
+    # box; nothing may post until somebody has said how far it reaches and what
+    # it is allowed to claim.
+    _external_providers = ExternalProviderStore(cfg.db_path)
+    # Live experience sessions. In memory and NOT persisted: a session belongs
+    # to a running application, and rows describing applications that stopped
+    # months ago would be worse than nothing. Session events join the same
+    # stream as the spatial ones — one socket for an application to hold open.
+    _sessions = SessionStore(on_event=_remember_event)
+    # Brokers the out-of-band exchange Android's UWB API leaves to the
+    # application: channel, addresses and a session key. In memory only — a
+    # brokered session is a live arrangement, and persisting one would mean a
+    # key survived a restart neither device knows about.
+    _uwb = UwbBroker()
+    # Which experience, on which device, may read what. Empty out of the
+    # box: an ungranted caller gets presence and nothing else, which is the
+    # narrowest answer that is not simply a refusal.
+    _grants = GrantStore(cfg.db_path)
+
+    # HA's clock is its own. Fusion's freshness decay is pure subtraction, so a
+    # slow HA would have every reading look stale on arrival (evidence silently
+    # discarded) and a fast one would have last night's reading vote forever.
+    _timebase = TimeBase()
+
+    def _ha_presence_wanted() -> bool:
+        try:
+            return bool(client_from_config(cfg)) and bool(
+                _ha_presence.list(enabled_only=True))
+        except sqlite3.Error:
+            # A store read that fails is a Wavr problem. Narrow on purpose: a
+            # wrong method name here should surface, not read as "no mappings".
+            logging.warning("ha presence: mapping read failed", exc_info=True)
+            return False
+
+    def _register_ha_presence_source() -> None:
+        manager.register("home_assistant", lambda: HomeAssistantSource(
+            _ha_presence, client_from_config(cfg),
+            interval=cfg.ha_presence_interval, timebase=_timebase), True)
+
+    async def _sync_ha_presence_source() -> None:
+        """Register or drop the HA source to match the current mappings.
+
+        Awaited after every mapping change, so an operator who maps their first
+        sensor sees it working without restarting Wavr — and one who unmaps the
+        last sensor stops the polling immediately, rather than leaving a source
+        quietly talking to a Home Assistant nobody is using any more.
+        """
+        present = "home_assistant" in {s["name"] for s in manager.status()["sources"]}
+        wanted = _ha_presence_wanted()
+        if wanted and not present:
+            _register_ha_presence_source()
+        elif present and not wanted:
+            await manager.unregister("home_assistant")
+
+    if _ha_presence_wanted():
+        _register_ha_presence_source()
 
     def _ensure_ble_source() -> None:
         # Live bring-up: register the BLE source the moment the first BLE device is
@@ -2536,7 +2721,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             build_ws_ticket_router(_devices, _pairing),
             dependencies=[Depends(require_scope("presence:read"))])
         app.include_router(
-            build_devices_router(_devices, delete_deps=[Depends(require_csrf_root)]),
+            build_devices_router(_devices,
+                                 delete_deps=[Depends(require_csrf_root)],
+                                 on_revoke=_grants.forget_device),
             dependencies=[Depends(require_central), Depends(require_scope("admin"))])
 
     # PRIVACY: the load-bearing access control. Default (WAVR_MULTIDEVICE off) is strict
@@ -2610,18 +2797,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # in the body, never here in the URL. The admin surface (list/approve/deny at
         # /api/pending-pairings) is deliberately NOT in this tuple -- it stays
         # loopback-root-only via admin_deps below, same as the node/peer admin routes.
-        if request.url.path in (
-            "/api/pair", "/api/peers/redeem",
-            "/api/nodes/enroll", "/api/nodes/telemetry",
-            "/api/nodes/heartbeat", "/api/nodes/reactivate",
-            # Node-INITIATED enrollment. Same in-subnet-bounded exemption and
-            # same reasoning as /api/nodes/enroll: a board that has never been
-            # approved holds no credential, so it cannot authenticate to ask for
-            # one. `request` mints nothing and is per-IP rate limited; `claim`
-            # is bounded by a 192-bit capability the requester was handed.
-            "/api/nodes/request", "/api/nodes/claim",
-            "/api/pair-request", "/api/pair-request/status",
-        ):
+        if request.url.path in _UNAUTH_ONBOARDING_PATHS:
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 request.state.scopes = None
@@ -2640,10 +2816,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # and the Discovery Inbox). They are the same shell, split across files,
         # so they carry the same exemption -- otherwise a companion loads a
         # dashboard whose setup screen and Discoveries tab quietly do nothing.
-        if _p in ("/", "/index.html", "/measure.html", "/manifest.webmanifest",
-                  "/sw.js", "/icon.svg", "/js/wizard.js", "/js/discoveries.js",
-                  "/js/trust.js") \
-                or _p.startswith("/vendor/"):
+        # "/experiences/*" and the SDK they import are the same class: static
+        # shell, no data. They MUST be here rather than behind the CSRF header,
+        # because a browser navigating to a URL cannot send a custom one — so
+        # gating them on `X-Wavr-Local` made them impossible to open, which is
+        # the single thing they exist for. A browser test caught it; nothing
+        # else could have. The Space stays behind the API those pages then call,
+        # which does send the header and is scope-redacted per experience.
+        if _is_static_shell(_p):
             if in_subnet(host, _local_ip):
                 request.state.role = None
                 request.state.scopes = None
@@ -2943,6 +3123,160 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(build_topology_router(
         house_fn=lambda: _house, store=_topology_store,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
+    def _experience_devices() -> list[dict]:
+        """Devices an experience may be offered, described by what they can do.
+
+        Joined here rather than in `experience.py` because the join is this
+        app's business: `space_store` holds which room a device is in, and its
+        Capability Manifest holds whether it has a screen. Neither knows about
+        the other, and the module that builds a context should not have to.
+
+        Tristate all the way through: a device that never sent a manifest
+        reports `display: None`, not False. "Did not say" and "has no screen"
+        send an application to different places.
+        """
+        out = []
+        with suppress(Exception):
+            for fn in _space_store.list_functions():
+                man = None
+                with suppress(Exception):
+                    man = _space_store.get_manifest(fn.device_id)
+                out.append({
+                    "device_id": fn.device_id,
+                    "name": fn.device_id,
+                    "room": fn.room,
+                    "functions": sorted(fn.functions),
+                    "display": man.capability("display") if man else None,
+                    # A microphone is what Wavr can actually observe; a speaker
+                    # is not in the manifest vocabulary, so `audio` means "can
+                    # capture", never "can play". Claiming playback from a
+                    # microphone probe would be inventing a capability.
+                    "audio": man.capability("microphone") if man else None,
+                    "uwb": man.capability("uwb") if man else None,
+                })
+        return out
+
+    app.include_router(build_experience_router(
+        space_fn=lambda: (_space_store.get_space().to_dict()
+                          if _space_store.get_space() else {}),
+        rooms_fn=lambda: room_names(_house),
+        room_state_fn=lambda room: latest.get(room),
+        coverage_fn=lambda: [c.to_dict() for c in _sensor_coverage()],
+        anchors_fn=lambda: [a.to_dict() for a in _anchors.list()],
+        # The reliability read behind `uncertainty`. Passed rather than reached
+        # for, so `spatial_uncertainty` holds no opinion about where a
+        # measurement comes from and can be tested without a store.
+        profile_fn=lambda sensor_id, capability, room: _reliability.profile(
+            sensor_id, capability, room=room),
+        devices_fn=_experience_devices,
+        sessions=_sessions, grants=_grants, devices=_devices,
+        require_local=require_local, require_scope=require_scope))
+    app.include_router(build_anchors_router(
+        store=_anchors, house_fn=lambda: _house,
+        room_polygon_fn=lambda room: room_polygon(_house, room),
+        require_local=require_local, require_scope=require_scope))
+    app.include_router(build_ha_presence_router(
+        store=_ha_presence,
+        ha_client_fn=lambda: client_from_config(cfg),
+        rooms_fn=lambda: room_names(_house),
+        require_local=require_local, require_scope=require_scope,
+        on_change=_sync_ha_presence_source))
+    def _device_has_uwb(device_id: str):
+        """Tristate, carried all the way to the broker.
+
+        `None` means the device never sent a manifest, or sent one that did not
+        mention UWB. The broker refuses on `None` rather than assuming — handing
+        a session key to a device with no radio wastes a key, and assuming a
+        capability is how a tristate quietly becomes a boolean.
+        """
+        try:
+            manifest = _space_store.get_manifest(device_id)
+        except Exception:      # noqa: BLE001 -- a store read must not be able to
+            return None        # answer a capability question by failing
+        return manifest.capability("uwb") if manifest else None
+
+    def _gather_config() -> dict:
+        """Everything the exporter needs, read live.
+
+        Assembled here rather than inside `config_export` so that module stays
+        pure and its redaction is testable without an app — the same reason
+        `collect_coverage` takes stores instead of reaching for globals.
+        """
+        space = None
+        with suppress(Exception):
+            got = _space_store.get_space()
+            space = got.to_dict() if got else None
+        cameras = nodes = anchors = ha_maps = providers = settings = ()
+        with suppress(Exception):
+            cameras = _cameras.list()
+        with suppress(Exception):
+            nodes = [n.to_dict() for n in _node_store.list()] if _node_store else ()
+        with suppress(Exception):
+            anchors = [a.to_dict() for a in _anchors.list()]
+        with suppress(Exception):
+            ha_maps = [m.to_dict() for m in _ha_presence.list()]
+        with suppress(Exception):
+            providers = [p.to_dict() for p in _external_providers.list()]
+        with suppress(Exception):
+            settings = _settings_store.describe()
+        return {"space": space, "house": _house, "cameras": cameras,
+                "nodes": nodes, "anchors": anchors, "ha_mappings": ha_maps,
+                "providers": providers, "settings": settings,
+                "topology": _topology_store.to_dict()
+                            if hasattr(_topology_store, "to_dict") else {}}
+
+    def _gather_bundle() -> dict:
+        health = clocks = ()
+        with suppress(Exception):
+            health = manager.status().get("health", [])
+        with suppress(Exception):
+            clocks = _timebase.to_dict()
+        return {
+            "coverage": [c.to_dict() for c in _sensor_coverage()],
+            "providers": _providers.catalog(),
+            "source_health": health,
+            "clocks": clocks or {},
+            "recent_events": list(_recent_events),
+            "version": __version__,
+            "platform": sys.platform,
+        }
+
+    app.include_router(build_config_export_router(
+        gather_config=_gather_config, gather_bundle=_gather_bundle,
+        existing_rooms_fn=lambda: room_names(_house),
+        existing_anchors_fn=lambda: _anchors.list(),
+        require_local=require_local, require_scope=require_scope))
+    app.include_router(build_updates_router(
+        running_version=__version__, connectors=_connectors,
+        require_local=require_local, require_scope=require_scope))
+    app.include_router(build_uwb_router(
+        broker=_uwb, devices=_devices, capable_fn=_device_has_uwb,
+        require_local=require_local, require_scope=require_scope))
+    app.include_router(build_provider_ingest_router(
+        store=_external_providers, devices=_devices,
+        rooms_fn=lambda: room_names(_house),
+        ingest_fn=_ingest,
+        # Through the timebase, like every other foreign clock: an enterprise
+        # positioning system keeps its own time, and feeding that straight into
+        # fusion's freshness arithmetic silently discards a slow one's evidence.
+        at_fn=lambda stated: (
+            _timebase.normalize(stated, source_id="external").at.isoformat()
+            if stated else datetime.now(timezone.utc).isoformat()),
+        require_local=require_local, require_scope=require_scope))
+    app.include_router(build_developer_router(
+        # Read live, not captured at build time: the switch is an ordinary
+        # setting, and a router that decided at startup would need a restart to
+        # obey it — which is the one thing a developer toggling it will not do.
+        enabled_fn=lambda: _developer_mode_on(),
+        providers_fn=lambda: _providers.catalog(),
+        source_health_fn=lambda: manager.status().get("health", []),
+        anchors_fn=lambda: anchors_summary(_anchors.list(), room_names(_house)),
+        rooms_fn=lambda: room_names(_house),
+        fusion_rooms_fn=lambda: list(_fusion.rooms()),
+        room_state_fn=lambda room: latest.get(room),
+        ingest_fn=_ingest,
+        experiences_fn=_bundled_experiences,
+        require_local=require_local, require_scope=require_scope))
     app.include_router(build_coverage_router(
         coverage_fn=_sensor_coverage,
         rooms_fn=lambda: list(_fusion.rooms()),
@@ -5113,40 +5447,41 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _pair_approvals, _live_cert_fp,
             admin_deps=[Depends(require_local), Depends(require_root)]))
 
-    @app.websocket("/ws/live")
-    async def live(ws: WebSocket):
+    async def _ws_authorize(ws: WebSocket, scope: str = "presence:read"):
+        """Shared WebSocket gate. Returns the device id, or False to refuse.
+
+        Extracted because there are now two live streams, and two copies of a
+        security gate drift -- which on a WS gate means one stream quietly
+        keeping a door open that the other one closed. Behaviour is unchanged
+        from the single /ws/live version this came from; the only parameter is
+        WHICH scope the socket requires.
+
+        `False` means refused (the caller closes); `None` means loopback root,
+        which has no device row; a string is an authenticated LAN device.
+        """
         host = ws.client.host if ws.client else None
         origin = ws.headers.get("origin")
-        did = None   # authenticated device id for a LAN companion (None for loopback root)
         if cfg.multidevice and not _is_loopback(host):
             # LAN companion: WS isn't covered by the http middleware, so re-check the
             # subnet here (M2); a Bearer token can't ride a WS handshake, so require a
             # valid single-use ticket; and re-check the device wasn't revoked between
             # ticket mint and now (M1).
             if not in_subnet(host, _local_ip):
-                await ws.close(code=1008)
-                return
+                return False
             ticket = ws.query_params.get("ticket")
             did = _pairing.redeem_ticket(ticket) if ticket else None
             if did is None:
-                await ws.close(code=1008)
-                return
+                return False
             dev = _devices.get(did)
             if dev is None or dev.revoked or _is_expired(dev.expires_at):
-                await ws.close(code=1008)   # dead/expired credential never opens the stream
-                return
-            # A WS carries no scope through the http middleware, so gate it here for
-            # the SAME reason ws-ticket is gated at include-time: the stream is the
-            # per-person geometry + vitals class, and an 'agent' (scopes = {mcp})
-            # must never reach it even if it somehow obtained a ticket. Belt AND
-            # braces -- the ticket mint is already scope-gated, but the socket must
-            # not depend on that being the only door. (2026-07-16)
-            # A WS carries no scope through the http middleware, so gate it here for
-            # the SAME reason ws-ticket is gated at include-time: the stream is the
-            # per-person geometry + vitals class, and an 'agent' (scopes = {mcp})
-            # must never reach it even if it somehow obtained a ticket. Belt AND
-            # braces -- the ticket mint is already scope-gated, but the socket must
-            # not depend on that being the only door. (2026-07-16)
+                return False       # dead/expired credential never opens a stream
+            # A WS carries no scope through the http middleware, so gate it here
+            # for the SAME reason ws-ticket is gated at include-time: /ws/live is
+            # the per-person geometry + vitals class, and an 'agent'
+            # (scopes = {mcp}) must never reach it even if it somehow obtained a
+            # ticket. Belt AND braces -- the ticket mint is already scope-gated,
+            # but the socket must not depend on that being the only door.
+            # (2026-07-16)
             #
             # Through `scopes_for_device`, NOT `effective_scopes(dev.role, ...)`:
             # the latter reads the role the credential was ISSUED with and skips
@@ -5154,17 +5489,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # still open this socket. Same function the HTTP middleware uses, so
             # the two cannot drift again.
             _ws_scopes = scopes_for_device(dev, _person_role)
-            if _ws_scopes is None or not has_scope(_ws_scopes, "presence:read"):
-                await ws.close(code=1008)
-                return
+            if _ws_scopes is None or not has_scope(_ws_scopes, scope):
+                return False
+            return did
         else:
-            # Loopback (or multidevice off): loopback peer + Origin allowlist, unchanged.
+            # Loopback (or multidevice off): loopback peer + Origin allowlist.
             if not _is_loopback(host):
-                await ws.close(code=1008)  # WS isn't covered by the http middleware
-                return
+                return False   # WS isn't covered by the http middleware
             if origin is not None and not _ORIGIN_RE.match(origin):
-                await ws.close(code=1008)  # cross-site WS: block drive-by reads
-                return
+                return False   # cross-site WS: block drive-by reads
             # A5.1 audit fix (P1): loopback_or_authed (the @app.middleware("http") above)
             # NEVER RUNS for a websocket scope -- Starlette only invokes HTTP middleware
             # for http scopes -- so this route was completely unaffected by
@@ -5185,9 +5518,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _local_token:
                 supplied = (ws.headers.get("x-wavr-token")
                             or parse_bearer(ws.headers.get("authorization")) or "")
-                if not hmac.compare_digest(supplied.encode("utf-8"), _local_token.encode("utf-8")):
-                    await ws.close(code=1008)
-                    return
+                if not hmac.compare_digest(supplied.encode("utf-8"),
+                                           _local_token.encode("utf-8")):
+                    return False
+            return None      # loopback root: authorised, no device row
+
+    @app.websocket("/ws/live")
+    async def live(ws: WebSocket):
+        did = await _ws_authorize(ws)
+        if did is False:
+            await ws.close(code=1008)
+            return
         await ws.accept()
         q = _hub.subscribe()
         # M1 (revoke latency): the stream loop re-checks the revoked flag on a wall-clock
@@ -5201,6 +5542,105 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             pass
         finally:
             _hub.unsubscribe(q)
+
+    @app.websocket("/ws/events")
+    async def events_stream(ws: WebSocket):
+        """The semantic event stream — what an application subscribes to.
+
+        Separate from `/ws/live` because they are different products. `/ws/live`
+        broadcasts every fused room state several times a second per room: the
+        right shape for a dashboard redrawing itself, and it carries per-person
+        geometry and vitals. This carries `room.occupancy_changed` and nothing
+        about anybody — a room name, a boolean, a count, a sensor id.
+
+        Same gate all the same. Not because the payload is dangerous, but
+        because "somebody is in the bedroom" is a fact about this house, and a
+        stream of those is worth exactly as much to somebody outside it.
+
+        A short tail is replayed on connect so an application that reconnects
+        after a dropped Wi-Fi link does not miss the change that happened while
+        it was away. `since` bounds that: a client that knows where it got to
+        asks for only what came after.
+        """
+        did = await _ws_authorize(ws)
+        if did is False:
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+        q = _events_hub.subscribe()
+        try:
+            since = ws.query_params.get("since") or ""
+            backlog = [e for e in _recent_events
+                       if not since or str(e.get("at", "")) > since]
+            for ev in backlog[-_EVENTS_KEPT:]:
+                await ws.send_json(ev)
+            get_device = _devices.get if _devices is not None else None
+            await _stream_live(ws, q, did, get_device, _WS_REVOKE_RECHECK_S,
+                               person_role_fn=_person_role)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            _events_hub.unsubscribe(q)
+
+    # -- Reference experiences, developer mode only -------------------------
+    #
+    # Served from the Core so they are one click away from the machine that has
+    # the data, rather than something a developer has to host themselves and
+    # then fight CORS over. Gated on the switch AND on `require_local` +
+    # `admin`: these pages read the Space, and a page served to anybody who can
+    # reach the port is a page that reads the Space for anybody.
+
+    _EXPERIENCE_PAGES = ("spatial-web", "capability-aware", "anchor-demo")
+
+    def _developer_file(path):
+        """A file under the developer directories, or a 404 that says which.
+
+        `resolve()` and a containment check rather than trusting the name: these
+        segments come from a URL, and `..` in one of them would otherwise read
+        any file the process can. The names are also matched against a fixed
+        tuple above, which alone would be enough — this is the second lock,
+        because a future route that forgets the tuple should still be safe.
+        """
+        if not _developer_mode_on():
+            raise HTTPException(status_code=403,
+                                detail="Developer mode is off. Turn it on in Settings.")
+        try:
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise HTTPException(status_code=404, detail="not bundled in this build")
+        root = _INDEX.parent.parent.resolve()
+        if root not in resolved.parents:
+            raise HTTPException(status_code=404, detail="not found")
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail="not bundled in this build")
+        return FileResponse(resolved)
+
+    @app.get("/experiences/{name}/")
+    async def experience_page(name: str):
+        """A reference page, served like the dashboard shell.
+
+        No `require_local` and no scope, and that is not a relaxation — it is a
+        correction. A top-level browser navigation cannot send a custom header,
+        so requiring one made these pages impossible to open, which is the
+        single thing they exist for. They are static HTML carrying no data,
+        exactly as "/" is, and the Space stays behind the API they then call.
+
+        Still gated on developer mode, still restricted to a fixed set of names,
+        and still containment-checked before anything is read from disk.
+        """
+        if name not in _EXPERIENCE_PAGES:
+            raise HTTPException(status_code=404, detail=f"no experience {name!r}")
+        return _developer_file(_EXPERIENCES_DIR / name / "index.html")
+
+    @app.get("/sdk/javascript/wavr.js")
+    async def sdk_javascript():
+        """The SDK the reference pages import.
+
+        The real file, not a copy. A served copy would drift from the one in the
+        repository, and the drift would be discovered by whoever trusted the
+        page they were reading.
+        """
+        return _developer_file(_SDK_DIR / "javascript" / "wavr.js")
 
     @app.get("/")
     async def dashboard():
@@ -5249,6 +5689,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     @app.get("/js/trust.js")
     async def js_trust():
         return FileResponse(_FRONTEND / "js" / "trust.js",
+                            media_type="text/javascript")
+
+    # Served unconditionally, unlike the developer ROUTES it calls. The script is
+    # inert on a normal install — its first request comes back 403 and it renders
+    # "developer mode is off" — and gating the file itself would make the service
+    # worker's precache fail as a unit (Cache.addAll is all-or-nothing), taking
+    # the whole offline shell down with it.
+    @app.get("/js/developer.js")
+    async def js_developer():
+        return FileResponse(_FRONTEND / "js" / "developer.js",
                             media_type="text/javascript")
 
     # F2 phone-capture shell (WebXR "medir com o celular"). Static, carries nothing

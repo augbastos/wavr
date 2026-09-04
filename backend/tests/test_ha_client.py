@@ -55,14 +55,20 @@ def test_get_entities_parses_id_state_name_domain():
                       fetch=_fake_fetch(json.dumps(CANNED_STATES), spy=spy))
     out = client.get_entities()
 
+    # `device_class` joined this shape when HA became a source of presence
+    # EVIDENCE rather than only a device registry: it is the one field that can
+    # tell a motion sensor from a door contact, and without it `ha_presence`
+    # would have to guess presence sensors from their names.
     assert out == [
         {"entity_id": "light.kitchen", "state": "on",
-         "friendly_name": "Kitchen Light", "domain": "light"},
+         "friendly_name": "Kitchen Light", "domain": "light", "device_class": ""},
         {"entity_id": "sensor.living_temp", "state": "21.5",
-         "friendly_name": "Living Room Temp", "domain": "sensor"},
+         "friendly_name": "Living Room Temp", "domain": "sensor",
+         "device_class": ""},
         # no friendly_name in attributes -> falls back to entity_id
         {"entity_id": "binary_sensor.front_door", "state": "off",
-         "friendly_name": "binary_sensor.front_door", "domain": "binary_sensor"},
+         "friendly_name": "binary_sensor.front_door", "domain": "binary_sensor",
+         "device_class": ""},
     ]
     # transport was called with the joined URL (trailing slash trimmed) + Bearer token
     assert spy["url"] == "http://ha.local:8123/api/states"

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from wavr.contracts import version as contract_version
 from wavr.fusion import RESOLUTION_SCOPE, _SCOPE_RANK
 
 # What kind of thing this is. The distinction that matters for fusion is whether
@@ -99,7 +100,14 @@ class ProviderDescriptor:
     confidence_semantics: str = CONF_NONE
     coordinate_frame: str = ""      # "" = reports no coordinates at all
     version: str = ""
-    protocol_version: int = 1
+    # The DESCRIPTOR's shape, from `contracts` — not the provider's own
+    # software version, which is the `version` field above.
+    # `contract_version`, not `version`: this dataclass HAS a field called
+    # `version`, and inside a class body that name is already bound to the
+    # field's default by the time this line runs — so a bare `version(...)`
+    # would call the string "". The same shadowing has bitten this codebase
+    # twice before.
+    protocol_version: int = contract_version("provider_descriptor")
     # Credentials the operator must supply before this can work. Named so the UI
     # can say "needs an API key" instead of failing silently at first use.
     requires: tuple[str, ...] = ()

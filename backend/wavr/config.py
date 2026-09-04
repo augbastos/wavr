@@ -144,6 +144,20 @@ class Config:
     # (mcp read/control) WITHOUT the registry-import path. Import is never
     # automatic/timed regardless -- this only gates the manual endpoint.
     ha_import: bool
+    # Developer mode: the tools for building ON Wavr — provider catalogue, live
+    # event stream, manifest checker, simulated-house scenarios. Default OFF, and
+    # the routes behind it are local+admin regardless. A normal household should
+    # never encounter the word "manifest", which is a product requirement rather
+    # than a matter of taste: platform complexity leaking into the ordinary setup
+    # flow is how a spatial product becomes a developer tool nobody else installs.
+    developer_mode: bool
+    # How often the HA presence source re-reads each MAPPED entity (seconds).
+    # Per-entity rather than a whole-state sweep, so the cost tracks what the
+    # operator actually mapped: two sensors is two small requests, and no
+    # mappings is no requests at all. Three seconds sits well inside fusion's
+    # 30s freshness window, so the poll interval can never be the reason a
+    # reading looks stale.
+    ha_presence_interval: float
     # Diagnostics endpoint (net_doctor shareable report). Empty => the diagnostics
     # connector is unavailable and NOTHING can be sent. Even when set, every send is
     # gated: manual = an explicit loopback-admin button tap; automatic = the
@@ -433,6 +447,13 @@ def load_config() -> Config:
         # configured + require_local passes). Set WAVR_HA_IMPORT=0 to disable.
         ha_import=os.getenv("WAVR_HA_IMPORT", "1").strip().lower()
             in ("1", "true", "yes", "on"),
+        developer_mode=os.getenv("WAVR_DEVELOPER_MODE", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+        # Floored at 1s: a tighter loop would hammer somebody else's Raspberry
+        # Pi for a sensor that physically cannot change that fast, and the
+        # freshness window makes the extra reads worth nothing.
+        ha_presence_interval=max(
+            1.0, float(os.getenv("WAVR_HA_PRESENCE_INTERVAL", "3.0"))),
         # Diagnostics endpoint: empty (default) => diagnostics sending unavailable.
         diag_endpoint=os.getenv("WAVR_DIAG_ENDPOINT", "").strip(),
         # HA control-side (ADR-0005): default OFF -> control tool inert, read-only as

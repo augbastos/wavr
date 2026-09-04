@@ -133,6 +133,7 @@ jobs:
           curl -sf http://127.0.0.1:8000/js/wizard.js      >/dev/null || { echo "sidecar is missing js/wizard.js"; kill $CORE; exit 1; }
           curl -sf http://127.0.0.1:8000/js/discoveries.js >/dev/null || { echo "sidecar is missing js/discoveries.js"; kill $CORE; exit 1; }
           curl -sf http://127.0.0.1:8000/js/trust.js       >/dev/null || { echo "sidecar is missing js/trust.js"; kill $CORE; exit 1; }
+          curl -sf http://127.0.0.1:8000/js/developer.js   >/dev/null || { echo "sidecar is missing js/developer.js"; kill $CORE; exit 1; }
           echo "sidecar OK: health + dashboard + shell scripts"
           kill $CORE || true
         env:

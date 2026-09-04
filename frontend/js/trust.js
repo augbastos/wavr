@@ -443,6 +443,52 @@
     }
   }
 
+  /* Which applications can read what about this house.
+   *
+   * The half of the privacy picture the provider list does not cover. A
+   * provider says where evidence COMES FROM; this says where it GOES — and a
+   * household that can see the first without the second knows only half of
+   * what it agreed to.
+   *
+   * A device with no grant is shown too, as "presence only". Listing only the
+   * granted ones would make the default invisible, and the default is the
+   * answer for almost every device. */
+  var SCOPE_WORDS = {
+    "room.presence": "whether anybody is in a room",
+    "room.count": "how many people",
+    "room.position": "whereabouts within a room",
+    "anchors.read": "the named places you created",
+    "devices.read": "which screens and speakers are where",
+    "events.subscribe": "live changes as they happen",
+  };
+
+  async function renderExperienceAccess(into) {
+    var body;
+    try { body = await api("/api/experience/grants"); } catch (e) { return; }
+    var grants = (body && body.grants) || [];
+    if (!grants.length) {
+      row(into, "No application has been granted anything", "",
+          "Every paired device can tell whether a room is occupied, and "
+          + "nothing more. Wavr never tells an application who anybody is.");
+      return;
+    }
+    grants.forEach(function (g) {
+      var words = (g.scopes || []).map(function (s) {
+        return SCOPE_WORDS[s] || s;
+      });
+      row(into, g.experience_id,
+          "on " + g.device_id,
+          words.length ? "Can read: " + words.join(", ") + "."
+                       : "Presence only.");
+    });
+    if (body && body.note) {
+      var n = document.createElement("p");
+      n.className = "panel-note";
+      n.textContent = body.note;
+      into.appendChild(n);
+    }
+  }
+
   async function renderPrivacyData() {
     if (MODE !== "live") return;
     var host = el("privacyDataBody");
@@ -467,6 +513,13 @@
                          "capabilities, not what is switched on"));
     host.appendChild(can);
     await renderProviders(can);
+
+    var apps = document.createElement("div");
+    apps.className = "tile";
+    apps.appendChild(head("What applications can read",
+                          "and what they can never read"));
+    host.appendChild(apps);
+    await renderExperienceAccess(apps);
   }
 
   // Rendered when the section is opened rather than on load: it makes four

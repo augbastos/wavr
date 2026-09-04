@@ -3158,6 +3158,7 @@
       <button type="button" class="gear-rail-item" data-section="gearSecSettings" aria-pressed="false">Core settings</button>
       <button type="button" class="gear-rail-item" data-section="gearSecTrust" aria-pressed="false">Trust</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPrivacy" aria-pressed="false">Privacy</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecDeveloper" aria-pressed="false">Developer</button>
       <button type="button" class="gear-rail-item" data-section="gearSecPanelLock" aria-pressed="false">Panel lock</button>
       <button type="button" class="gear-rail-item" data-section="gearSecAbout" aria-pressed="false">About</button>
     </nav>
@@ -3671,6 +3672,23 @@
         <div id="settingsAdvancedList"></div>
       </details>
     </div>
+
+    <!-- Backup and diagnostics. Neither file contains a password, a token, a
+         camera URL or anybody's name — the exporter builds from an allowlist,
+         and the Core refuses to serve a file that fails its own audit rather
+         than logging a warning nobody reads. A Space is hours of work: a floor
+         plan drawn by hand, rooms named, sensors mapped. Losing it to a failed
+         SD card is the difference between an appliance and a project. -->
+    <div class="pair tile" id="backupTile">
+      <div class="tile-head"><h2 id="backup-h">Backup &amp; diagnostics</h2><span class="hint">no passwords, no camera URLs, nobody's name</span></div>
+      <div class="controls-row">
+        <button type="button" class="ctl small" id="exportConfigBtn"
+          data-tip="Everything needed to rebuild this Space elsewhere. Re-enter camera URLs and tokens after importing.">Download my setup</button>
+        <button type="button" class="ctl small" id="exportBundleBtn"
+          data-tip="What Wavr can currently see — sensor health and the event stream. Safe to send to somebody helping you.">Download a diagnostic bundle</button>
+      </div>
+      <span class="action-fb" id="backupFb" aria-live="polite"></span>
+    </div>
     <p class="panel-note" id="settingsNote" hidden></p>
     </div><!-- /#gearSecSettings -->
     <!-- Trust Check: a COMPOSITION of coverage, reliability, guided validation
@@ -3684,6 +3702,18 @@
       than claimed. Everything here comes from checks you can run yourself.</p>
     <div id="trustBody" aria-live="polite"></div>
     </div><!-- /#gearSecTrust -->
+
+    <!-- Developer mode: the tools for building ON Wavr. Empty and inert unless
+         the setting is on — the section renders "developer mode is off" rather
+         than hiding itself, because a rail item that vanishes reads as a
+         missing feature and one that explains itself reads as a switch. -->
+    <div class="settings-section" id="gearSecDeveloper" aria-labelledby="gearSecDeveloper-h">
+    <h3 id="gearSecDeveloper-h" class="settings-section-h">Developer</h3>
+    <p class="panel-note">Building an application on top of Wavr. Nothing here
+      is needed to use it — turn the switch on in Core settings if you are
+      writing software against this Space.</p>
+    <div id="developerBody" aria-live="polite"></div>
+    </div><!-- /#gearSecDeveloper -->
 
     <div class="settings-section" id="gearSecPrivacy" aria-labelledby="gearSecPrivacy-h">
     <h3 id="gearSecPrivacy-h" class="settings-section-h">Privacy</h3>
@@ -12588,6 +12618,7 @@ try {
     // when opened rather than on load. `js/trust.js` publishes the hook.
     if(id === "gearSecTrust" && window.__wavrRenderTrust) window.__wavrRenderTrust();
     if(id === "gearSecPrivacy" && window.__wavrRenderPrivacyData) window.__wavrRenderPrivacyData();
+    if(id === "gearSecDeveloper" && window.__wavrRenderDeveloper) window.__wavrRenderDeveloper();
   }
   gearRailItems.forEach(function(btn){
     btn.addEventListener("click", function(){ showGearSection(btn.getAttribute("data-section")); });
@@ -12638,6 +12669,7 @@ try {
     // are both safe.
     if(window.__wavrRenderTrust) window.__wavrRenderTrust();
     if(window.__wavrRenderPrivacyData) window.__wavrRenderPrivacyData();
+    if(window.__wavrRenderDeveloper) window.__wavrRenderDeveloper();
     // Live/central only: bring the map tile (the house editor's drawing surface) into the
     // overlay so drawing/zone editing works here; it returns to Home on close. The node
     // itself moves, so every id still exists exactly once (same move-a-panel technique
@@ -17199,6 +17231,7 @@ try {
 })();
 </script>
 <script src="js/trust.js"></script>
+<script src="js/developer.js"></script>
 <script src="js/discoveries.js"></script>
 <script>
 // ============================================================================

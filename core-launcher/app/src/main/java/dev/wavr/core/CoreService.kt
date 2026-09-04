@@ -19,6 +19,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import dev.wavr.sdk.Capability
+import dev.wavr.sdk.WavrClient
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
@@ -270,6 +272,18 @@ class CoreService : Service(), LifecycleOwner {
      */
     @Volatile private var cachedRestartRequired = false
 
+    /**
+     * One line describing what the Core can currently see, or "" when it cannot
+     * be read.
+     *
+     * Cached for the same reason as [cachedRestartRequired]: reading it costs an
+     * HTTP call, and the notification is built on the main thread. Empty on any
+     * failure — a Core still starting, a token this app was not given, an older
+     * Core with no Spatial API. A missing line is honest; a stale or guessed one
+     * on the app's own honesty surface would not be.
+     */
+    @Volatile private var cachedSpatial = ""
+
     private val healthPoll = object : Runnable {
         override fun run() {
             // Python on the worker, notification on main. Never the other way.
@@ -280,11 +294,44 @@ class CoreService : Service(), LifecycleOwner {
                     } catch (t: Throwable) {
                         cachedRestartRequired
                     }
+                    cachedSpatial = readSpatialLine()
                     main.post { refreshNotification() }
                 }
             }
             main.postDelayed(this, HEALTH_POLL_MS)
         }
+    }
+
+    /**
+     * Ask the Core, through the Spatial SDK, what it can see.
+     *
+     * The SDK's first real consumer in this repository — deliberately, because
+     * an SDK nothing calls is a proposal rather than a component, and its API
+     * drifts away from the Core's between the two releases where nobody notices.
+     *
+     * Over loopback to the Core running in this very process, so this is a local
+     * socket and not a network call. Every failure resolves to "": there is no
+     * partial or guessed answer here, because this text lands on the one notice
+     * the phone's owner is guaranteed to see.
+     */
+    private fun readSpatialLine(): String = try {
+        val rooms = WavrClient("http://127.0.0.1:${prefs.port}").contexts()
+        val observed = rooms.filter { it.can(Capability.PRESENCE) }
+        val occupied = rooms.filter { it.occupied == true }.map { it.room }
+        when {
+            rooms.isEmpty() -> ""
+            observed.isEmpty() -> getString(R.string.core_spatial_none)
+            occupied.isNotEmpty() ->
+                getString(R.string.core_spatial_rooms, observed.size) + " " +
+                    getString(R.string.core_spatial_occupied, occupied.joinToString(", "))
+            else ->
+                getString(R.string.core_spatial_rooms, observed.size) + " " +
+                    getString(R.string.core_spatial_empty)
+        }
+    } catch (t: Throwable) {
+        // Includes the ordinary cases: the Core is still starting, this app was
+        // not handed the local token, or the route does not exist yet.
+        ""
     }
 
     // =====================================================================
@@ -681,7 +728,12 @@ class CoreService : Service(), LifecycleOwner {
         // conflating them in the one place the operator looks would be the exact
         // dishonesty this notification exists to avoid.
         val pendingRestart = runtimeSaysRestartRequired()
+        // What the Core can see, above the thermal and restart lines because it
+        // is what the person actually wanted from this thing — the other two are
+        // reasons it might not be delivering.
+        val spatial = cachedSpatial
         val body = getString(R.string.core_notification_body, where) +
+            (if (spatial.isNotEmpty()) "\n\n$spatial" else "") +
             (if (heat.isNotEmpty()) "\n\n$heat" else "") +
             (if (pendingRestart) "\n\n" + getString(R.string.core_restart_pending) else "")
 

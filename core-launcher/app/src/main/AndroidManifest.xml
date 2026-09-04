@@ -108,6 +108,23 @@
             </intent-filter>
         </activity>
 
+        <!-- Reference experience #5: an Android application reading Wavr through
+             the Spatial SDK (dev.wavr.sdk).
+
+             NOT exported and deliberately absent from the launcher. The product
+             on this phone is the Core and its kiosk panel; a second icon in a
+             household's app drawer would be platform complexity leaking into the
+             ordinary setup, which is exactly what Developer Mode exists to keep
+             out of the way. On a debuggable build:
+
+               adb shell am start -n dev.wavr.core/dev.wavr.sdk.SpatialDemoActivity
+        -->
+        <activity
+            android:name="dev.wavr.sdk.SpatialDemoActivity"
+            android:exported="false"
+            android:label="Wavr Spatial Demo"
+            android:theme="@style/Theme.WavrCore" />
+
         <!-- The embedded Core. Not exported: nothing outside this app may start,
              stop, or bind it. The declared type UNION is what the platform
              permits; CoreService.foregroundServiceType() asserts only the subset

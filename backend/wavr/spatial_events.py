@@ -34,6 +34,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from wavr.contracts import version
+
+# The shape of an event. Stamped on every one rather than published only at a
+# discovery endpoint: an event arrives on a socket a consumer may have opened
+# before the endpoint existed, and a version it has to fetch separately is a
+# version half of them will not fetch.
+EVENTS_VERSION = version("spatial_events")
+
 # Occupancy flipped. The workhorse: it is what most applications actually want,
 # and it is a claim about a ROOM, which is a claim Wavr can support.
 EV_OCCUPANCY = "room.occupancy_changed"
@@ -113,7 +121,8 @@ class SpatialEvents:
         events: list[dict] = []
 
         def emit(kind: str, **payload):
-            events.append({"event": kind, "room": room, "at": ts, **payload})
+            events.append({"event": kind, "v": EVENTS_VERSION,
+                           "room": room, "at": ts, **payload})
 
         if bool(prev.get("occupied")) != bool(state.get("occupied")):
             emit(EV_OCCUPANCY,

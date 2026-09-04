@@ -34,6 +34,11 @@ from typing import Callable
 # NOTE: matched with re.fullmatch (not .match + trailing `$`) -- `$` matches just before a
 # trailing '\n', which would let a smuggled newline slip past a `.match()` check.
 _HA_NAME_RE = re.compile(r"^[a-z0-9_]+$")
+# An entity id is `<domain>.<object_id>`, both of them lowercase word-chars. Same
+# reasoning as `_HA_NAME_RE` and matched the same way (fullmatch, so a trailing
+# newline cannot slip past): this value is interpolated into a URL PATH, where a
+# `..` or a slash would address a different HA endpoint than the one intended.
+_HA_ENTITY_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -162,8 +167,58 @@ class HAClient:
                 "state": item.get("state"),
                 "friendly_name": attrs.get("friendly_name") or entity_id,
                 "domain": entity_id.split(".", 1)[0],
+                # What KIND of thing this measures — the only field that can tell
+                # a motion sensor from a door contact. Without it,
+                # `ha_presence.suggest` would have to guess presence sensors from
+                # their names, and "Front Door" would put a person in the hall
+                # every time the wind moved.
+                "device_class": attrs.get("device_class") or "",
             })
         return entities
+
+    def get_state(self, entity_id: str) -> dict:
+        """`GET {base_url}/api/states/{entity_id}` -> one entity's current state.
+
+        Separate from `get_entities` because the presence path polls a handful of
+        MAPPED entities every few seconds, and asking a large HA install for its
+        whole state table at that cadence would be rude to somebody else's
+        Raspberry Pi. An install with no mappings makes no requests at all.
+
+        `last_changed` is stamped by HA's clock, not this one — see
+        `wavr.timebase` for why that is treated as foreign rather than trusted.
+        """
+        eid = str(entity_id or "")
+        # Validated before interpolation, the same defence-in-depth as
+        # `call_service`'s domain/service check: this value reaches a URL path,
+        # and `..` in it would reach a different HA endpoint entirely.
+        if not _HA_ENTITY_RE.fullmatch(eid):
+            raise WavrHAError(f"invalid entity_id: {entity_id!r}")
+        url = f"{self._base_url}/api/states/{eid}"
+        try:
+            raw = self._fetch(url, self._headers())
+        except WavrHAError:
+            raise
+        except Exception as exc:  # any transport can fail differently — normalize it
+            raise WavrHAError(
+                f"Home Assistant unreachable at {self._base_url}: {exc}") from exc
+        if raw is None:
+            raise WavrHAError(f"no state for {eid}")
+        text = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError) as exc:
+            raise WavrHAError(f"Invalid JSON from Home Assistant: {exc}") from exc
+        if not isinstance(data, dict):
+            raise WavrHAError("Unexpected /api/states/<entity_id> response")
+        attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+        return {
+            "entity_id": data.get("entity_id") or eid,
+            "state": data.get("state"),
+            "last_changed": data.get("last_changed"),
+            "last_updated": data.get("last_updated"),
+            "device_class": attrs.get("device_class") or "",
+            "friendly_name": attrs.get("friendly_name") or eid,
+        }
 
     def call_service(self, domain: str, service: str, data: dict | None = None) -> object:
         """`POST {base_url}/api/services/{domain}/{service}` with the Bearer token and a

@@ -10,15 +10,17 @@
 // precaching the same-origin shell, so it adds zero external egress.
 //
 // Bump CACHE to invalidate the old shell on the next activate.
-const CACHE = "wavr-shell-v26";
+const CACHE = "wavr-shell-v27";
 const VENDOR_CACHE = "wavr-vendor-v1";
 // The two blocks lifted out of index.html (the first-run wizard and the Discovery
 // Inbox) are part of the shell: without them a cached offline launch would render
 // a dashboard whose setup screen and Discoveries tab silently do nothing.
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg",
-               "./js/wizard.js", "./js/discoveries.js", "./js/trust.js"];
+               "./js/wizard.js", "./js/discoveries.js", "./js/trust.js",
+               "./js/developer.js"];
 const SHELL_PATHS = new Set(["/", "/index.html", "/manifest.webmanifest", "/icon.svg",
-                             "/js/wizard.js", "/js/discoveries.js", "/js/trust.js"]);
+                             "/js/wizard.js", "/js/discoveries.js", "/js/trust.js",
+                             "/js/developer.js"]);
 
 self.addEventListener("install", (event) => {
   // Keep the precache light: only the tiny app shell, NOT the ~750KB three.js bundle —

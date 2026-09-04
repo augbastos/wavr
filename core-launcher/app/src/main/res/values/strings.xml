@@ -26,6 +26,17 @@
     <string name="core_shed_camera">The phone is running hot, so Wavr has switched its camera off for now. Everything else keeps working, and the camera comes back when it cools down.</string>
     <string name="core_shed_framerate">The phone is warm, so Wavr has slowed its camera down to use less power. Everything else is unaffected.</string>
 
+    <!-- What the Core can currently see, read from its own Spatial API through
+         the Wavr SDK (dev.wavr.sdk). The point of putting it HERE, in the one
+         permanent notice, is that a person who lets a process run forever on
+         their phone should be able to see what it is producing without opening
+         anything. %1$d is a room count. -->
+    <string name="core_spatial_rooms">Watching %1$d rooms.</string>
+    <string name="core_spatial_none">No room is being observed yet — nothing here has a sensor covering it.</string>
+    <!-- %1$s is a comma-separated list of room names. -->
+    <string name="core_spatial_occupied">Someone is in %1$s.</string>
+    <string name="core_spatial_empty">No room is showing anybody right now.</string>
+
     <!-- Shown before Android's notification permission prompt on API 33+. -->
     <string name="core_notif_rationale">Wavr shows one permanent notice while the Core is running, so you always know it is on and can stop it in one tap. Without notification permission it keeps running, but that notice is hidden.</string>
 </resources>

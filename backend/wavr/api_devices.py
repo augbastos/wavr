@@ -92,7 +92,7 @@ def build_ws_ticket_router(store, pairing) -> APIRouter:
     return router
 
 
-def build_devices_router(store, delete_deps=None) -> APIRouter:
+def build_devices_router(store, delete_deps=None, on_revoke=None) -> APIRouter:
     """GET /api/devices -> list (no token material); DELETE /api/devices/{id} ->
     revoke. Revocation takes effect on the device's next request.
 
@@ -110,7 +110,17 @@ def build_devices_router(store, delete_deps=None) -> APIRouter:
     async def revoke(device_id: str):
         if not store.revoke(device_id):
             raise HTTPException(status_code=404, detail=f"unknown device: {device_id}")
-        return {"revoked": device_id}
+        # Its spatial grants go with it. Without this, pairing a replacement
+        # under the same id would inherit the revoked device's experience
+        # scopes -- the kind of inheritance nobody remembers granting.
+        # Guarded: an unpair must not fail because a grant store is unreadable.
+        dropped = 0
+        if on_revoke is not None:
+            try:
+                dropped = int(on_revoke(device_id) or 0)
+            except Exception:      # noqa: BLE001
+                dropped = 0
+        return {"revoked": device_id, "grants_dropped": dropped}
 
     @router.post("/api/devices/{device_id}/role", dependencies=ddeps)
     async def set_role(device_id: str, role: str = Body(..., embed=True)):

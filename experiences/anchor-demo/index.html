@@ -1,0 +1,194 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wavr — Spatial Anchor Demo</title>
+<!--
+  Reference experience #3: create an anchor, persist it, read it back, and react
+  to it — with no AR headset anywhere in the loop.
+
+  This is the demonstration that matters most for anchors, because the obvious
+  assumption about a "spatial anchor" is that it needs a headset. It does not. An
+  anchor is a NAME for a place, and "the kitchen counter" is a complete, useful
+  anchor with no coordinates attached. This page creates one, binds a pretend
+  external runtime's id to it, resolves it back, and shows the experience
+  reacting when that anchor's room becomes occupied.
+
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e6e8ec; --dim: #9aa1ad; --line: #262b34;
+    --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24; --err: #f87171;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #fbfcfd; --fg: #1a1d23; --dim: #5b6472; --line: #e2e6ec; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 24px 40px; background: var(--bg); color: var(--fg);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 28px; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: var(--dim); margin: 0 0 28px; max-width: 64ch; }
+  form { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; align-items: end; }
+  .field { display: grid; gap: 6px; }
+  label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); }
+  input, select, button {
+    font: inherit; background: transparent; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  }
+  button { cursor: pointer; border-color: var(--accent); color: var(--accent); }
+  button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  li {
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  }
+  li.live { background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  .name { font-size: 18px; line-height: 1.25; }
+  .detail { font-size: 11.5px; color: var(--dim); margin-top: 4px; }
+  .detail.here { color: var(--ok); }
+  .orphan { color: var(--warn); }
+  .msg { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+         margin-bottom: 16px; font-size: 14px; }
+  .msg.bad { border-color: var(--err); color: var(--err); }
+  .empty { color: var(--dim); }
+</style>
+
+<h1>Spatial Anchor Demo</h1>
+<p class="sub">An anchor is a name for a place. It does not need coordinates, and
+it certainly does not need a headset — <em>the kitchen counter</em> is complete
+as it stands. Create one below; it persists in the Space and any application can
+resolve it. When a room with an anchor becomes occupied, this page reacts.</p>
+
+<div id="msg"></div>
+
+<form id="new">
+  <div class="field">
+    <label for="name">Anchor name</label>
+    <input id="name" placeholder="Kitchen counter" required>
+  </div>
+  <div class="field">
+    <label for="room">Room</label>
+    <select id="room"></select>
+  </div>
+  <button type="submit">Create</button>
+</form>
+
+<ul id="list"><li class="empty">Loading…</li></ul>
+
+<script type="module">
+import { WavrClient } from "../../sdk/javascript/wavr.js";
+
+const wavr = new WavrClient();
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+let occupiedByRoom = {};   // room -> true | false | null (never a count)
+
+function say(text, bad = false) {
+  $("msg").innerHTML = text ? `<div class="msg ${bad ? "bad" : ""}">${esc(text)}</div>` : "";
+}
+
+async function refresh() {
+  const [anchors, contexts] = await Promise.all([wavr.anchors(), wavr.context()]);
+  occupiedByRoom = Object.fromEntries(contexts.map((c) => [c.room, c.occupied]));
+
+  if (!anchors.length) {
+    $("list").innerHTML = `<li class="empty">No anchors yet. Create one above.</li>`;
+    return;
+  }
+
+  $("list").innerHTML = anchors.map((a) => {
+    const here = occupiedByRoom[a.room] === true;
+    // Three states, not two. `null` means nothing is watching that room, and
+    // rendering it the same as "empty" would be the exact lie the platform is
+    // built to avoid — so it gets its own words.
+    const state = occupiedByRoom[a.room] === null || occupiedByRoom[a.room] === undefined
+      ? "nothing is watching this room"
+      : here ? "someone is here now" : "room is empty";
+    const place = a.positioned
+      ? `${a.x?.toFixed(2)} × ${a.y?.toFixed(2)} m from the room corner`
+      : "logical anchor — no coordinates, and none needed";
+    const bound = (a.mappings || []).length
+      ? ` · bound to ${a.mappings.map((m) => esc(m.provider_id)).join(", ")}`
+      : "";
+    return `
+      <li class="${here ? "live" : ""}">
+        <div>
+          <div class="name">${esc(a.name)}</div>
+          <div class="detail ${here ? "here" : ""}">${esc(a.room)} — ${esc(state)}</div>
+          <div class="detail">${esc(place)}${bound}
+            ${a.orphaned ? `<span class="orphan">· its room no longer exists</span>` : ""}</div>
+        </div>
+        <button data-bind="${esc(a.anchor_id)}">Bind an external id</button>
+      </li>`;
+  }).join("");
+
+  for (const btn of $("list").querySelectorAll("[data-bind]")) {
+    btn.onclick = () => bind(btn.dataset.bind);
+  }
+}
+
+/**
+ * Bind a pretend external runtime's anchor id, then resolve it back.
+ *
+ * The round trip is the point: Wavr stores the IDENTITY link and nothing else.
+ * ARKit's world origin is wherever that session started, so importing its
+ * transform as room metres would put the counter somewhere arbitrary. Notice
+ * that after binding, the anchor's coordinates are exactly as they were.
+ */
+async function bind(anchorId) {
+  const externalId = `demo-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    const res = await fetch(`/api/anchors/${encodeURIComponent(anchorId)}/bind`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+      body: JSON.stringify({ provider_id: "demo-runtime", external_id: externalId }),
+    });
+    if (!res.ok) throw new Error(`the Core refused the binding (${res.status})`);
+    const found = await wavr.resolveAnchor("demo-runtime", externalId);
+    say(`Bound ${externalId} — resolving it returns `
+      + `${found.length} anchor${found.length === 1 ? "" : "s"}: `
+      + `${found.map((a) => a.name).join(", ")}. No pose was stored.`);
+    await refresh();
+  } catch (e) {
+    say(e.message, true);
+  }
+}
+
+$("new").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try {
+    const res = await fetch("/api/anchors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
+      body: JSON.stringify({ name: $("name").value, room: $("room").value }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `the Core refused it (${res.status})`);
+    }
+    $("name").value = "";
+    say("");
+    await refresh();
+  } catch (e) {
+    say(e.message, true);
+  }
+});
+
+(async () => {
+  try {
+    await wavr.connect();
+    const rooms = await wavr.rooms();
+    $("room").innerHTML = rooms.map((r) => `<option>${esc(r)}</option>`).join("");
+    await refresh();
+    // React to the house, not just to our own writes.
+    wavr.subscribe(() => refresh());
+  } catch (e) {
+    say(`${e.message} — is the Core running, and is this page served by it?`, true);
+    $("list").innerHTML = "";
+  }
+})();
+</script>

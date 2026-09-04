@@ -25,3 +25,76 @@ jobs:
         run: pip install -e "backend[dev]"
       - name: Run suite
         run: python -m pytest backend/tests -q
+
+  # The dashboard and the reference pages, in a real browser against a real Core.
+  # Its own job because it needs a downloaded browser, and because the failure it
+  # exists to catch is invisible to the suite above: a panel that renders empty,
+  # or a page the Core refuses to serve to a browser at all. Both have happened.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install -e "backend[dev]"
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      # `-p no:randomly` is not needed and `--no-header` keeps the log short.
+      # The suite SKIPS itself when chromium is missing, so a green here with a
+      # skip count means this step failed to install a browser — check the count,
+      # not just the colour.
+      - name: Run the browser suite
+        run: python -m pytest backend/tests/test_browser_ui.py -q -rs
+
+  # The SDKs are separate jobs rather than steps of the one above, because they
+  # are separate artefacts. The Python SDK deliberately does NOT depend on the
+  # server package, and running it in a job that has just installed the Core
+  # would hide the day it started importing something from it.
+  sdk-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pytest ONLY — the SDK itself must need nothing
+        run: pip install pytest
+      - name: Run SDK suite
+        run: python -m pytest sdk/python/tests -q
+
+  sdk-javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # No `npm install`: the SDK has no dependencies and its tests use
+      # `node:test`, which ships with Node. If this step ever needs a package
+      # manager, the SDK has acquired a dependency and that is the thing to look
+      # at rather than the missing step.
+      - name: Run SDK tests
+        run: node --test sdk/javascript/test.mjs
+
+  sdk-kotlin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # JVM unit tests only — no emulator, no device. The Spatial SDK is plain
+      # Kotlin over HttpURLConnection and org.json, so its contract is testable
+      # anywhere the repo builds. What genuinely needs hardware (CameraX with
+      # the screen off, Doze survival, thermal shedding) is not in this job and
+      # is tracked as owner-blocked instead of being faked here.
+      #
+      # No local.properties: the runner exports ANDROID_HOME, which the Android
+      # Gradle plugin reads when that file is absent.
+      - name: Run the Android unit tests
+        working-directory: core-launcher
+        run: ./gradlew --no-daemon :app:testDebugUnitTest

@@ -29,7 +29,15 @@ class Hub:
         `ws_clients` self-report (no egress, no new state)."""
         return len(self._subscribers)
 
-    async def publish(self, item: dict) -> None:
+    def publish_nowait(self, item: dict) -> None:
+        """Fan out without awaiting anything.
+
+        The real implementation -- `publish` never awaited a consumer in the
+        first place. A synchronous entry point matters because the semantic-event
+        callback feeding the events hub is called from a plain function, and
+        wrapping that in `create_task` would put delivery at the mercy of the
+        scheduler and could reorder two events emitted from the same frame.
+        """
         # Non-blocking: never await a slow consumer. On a full queue, drop the oldest
         # frame to make room for the newest (bounded memory, backpressure-free).
         for q in list(self._subscribers):
@@ -40,3 +48,6 @@ class Hub:
                     q.get_nowait()
                 with suppress(asyncio.QueueFull):
                     q.put_nowait(item)
+
+    async def publish(self, item: dict) -> None:
+        self.publish_nowait(item)

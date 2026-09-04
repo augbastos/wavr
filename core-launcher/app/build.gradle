@@ -180,6 +180,19 @@ if (wavrPython) {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:2.2.0"
 
+    // JVM unit tests for the Spatial SDK (dev.wavr.sdk). These run on the build
+    // machine with no device and no emulator, which is the point: the SDK is
+    // pure Kotlin over HttpURLConnection + org.json, so its contract can be
+    // tested everywhere the repo builds rather than only where a phone is
+    // plugged in.
+    //
+    // `org.json:json` is NOT redundant with the one Android ships. The android.jar
+    // on a unit-test classpath is a STUB whose every method throws, so a test
+    // touching JSONObject fails with a misleading UnsupportedOperationException
+    // unless a real implementation is on the test classpath ahead of it.
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.json:json:20231013"
+
     // FragmentActivity host required by BiometricPrompt. Pinned to the cached
     // modern versions so the framework NoActionBar theme keeps working (a plain
     // FragmentActivity imposes no Theme.AppCompat requirement) and biometric's

@@ -40,12 +40,14 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from wavr.contracts import version
 from wavr.events import Identity, SensingEvent, Target
 
 # Bumped when the recorded shape changes in a way an older reader would
 # misinterpret. A trace that cannot say what it is becomes unreadable the first
-# time the event shape moves.
-TRACE_VERSION = 1
+# time the event shape moves. Owned by `contracts` with every other published
+# shape, so no two of them can disagree about what "version 1" means.
+TRACE_VERSION = version("trace")
 
 # Everything a sanitised trace guarantees is gone. Named so a recipient can
 # check the promise rather than trust it.

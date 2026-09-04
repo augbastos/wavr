@@ -1,0 +1,193 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wavr — Spatial Web Experience</title>
+<!--
+  Reference experience #1: the whole SDK surface, in one page.
+
+  Uses the real `sdk/javascript/wavr.js` against a real Core. Nothing here is
+  mocked, and nothing here is a screenshot: if the Core cannot answer, this page
+  says so rather than showing a plausible house.
+
+  What it is for: somebody who has just installed Wavr and wants to see what an
+  application can actually know. Read the source of `render()` — it is the whole
+  contract in about forty lines.
+
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e6e8ec; --dim: #9aa1ad; --line: #262b34;
+    --ok: #4ade80; --warn: #fbbf24; --off: #6b7280; --accent: #60a5fa;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #fbfcfd; --fg: #1a1d23; --dim: #5b6472; --line: #e2e6ec; }
+  }
+  /* Four sizes, and only four: 28 / 18 / 14 / 11.5. A room's NAME is the thing
+     you scan for, so it gets the second step all to itself and everything
+     supporting it drops a full rung. An earlier version used seven sizes
+     between 11 and 20, which reads as one undifferentiated block. */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 24px 40px; background: var(--bg); color: var(--fg);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 28px; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: var(--dim); margin: 0 0 28px; font-size: 14px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .room {
+    border: 1px solid var(--line); border-radius: 12px; padding: 18px;
+    background: color-mix(in srgb, var(--fg) 3%, transparent);
+  }
+  .room h2 {
+    font-size: 18px; line-height: 1.25; margin: 0 0 6px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  }
+  .state { font-size: 14px; color: var(--dim); }
+  h2 .state { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .state.occupied { color: var(--ok); }
+  .caps { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
+  .cap {
+    font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .cap.on { border-color: var(--accent); color: var(--accent); }
+  .limits { margin: 14px 0 0; padding: 0; list-style: none; }
+  .limits li {
+    font-size: 11.5px; line-height: 1.5; color: var(--warn);
+    padding-left: 16px; position: relative; margin-top: 6px;
+  }
+  .limits li::before { content: "!"; position: absolute; left: 3px; font-weight: 700; }
+  .meta { font-size: 11.5px; color: var(--dim); margin-top: 12px; }
+  #log {
+    margin-top: 32px; border-top: 1px solid var(--line); padding-top: 16px;
+    font: 11.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
+    max-height: 220px; overflow: auto;
+  }
+  #log b { color: var(--fg); font-weight: 600; }
+  .banner {
+    border: 1px solid var(--warn); color: var(--warn); border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 20px; font-size: 14px;
+  }
+  .banner.err { border-color: #f87171; color: #f87171; }
+</style>
+
+<h1>Spatial Web Experience</h1>
+<p class="sub" id="sub">Connecting…</p>
+<div id="banner"></div>
+<div class="grid" id="rooms"></div>
+<div id="log"></div>
+
+<script type="module">
+import { WavrClient, WavrError, ERROR_AUTH } from "../../sdk/javascript/wavr.js";
+
+const CAPS = ["presence", "count", "position", "anchors", "display", "audio"];
+const wavr = new WavrClient();          // same origin: this page is served by the Core
+const $ = (id) => document.getElementById(id);
+
+function banner(text, kind = "") {
+  $("banner").innerHTML = text ? `<div class="banner ${kind}">${text}</div>` : "";
+}
+
+/**
+ * The whole contract, rendered.
+ *
+ * Note what this does NOT do: it never prints a 0 for an unknown headcount, and
+ * it never hides a limitation to make the card look tidier. Those two omissions
+ * are the entire difference between an honest spatial UI and a confident one.
+ */
+function render(rooms) {
+  $("rooms").innerHTML = "";
+  for (const ctx of rooms) {
+    const el = document.createElement("div");
+    el.className = "room";
+
+    const occupied = ctx.occupied === true;
+    const state = ctx.occupied === null
+      ? "not observed"
+      : occupied ? "someone is here" : "empty";
+
+    // The count line, and the reason this page exists. `occupancyKnown` false is
+    // NOT zero people — it is nobody counting, and saying "0" would be inventing
+    // a fact about somebody's home.
+    const count = ctx.occupancyKnown
+      ? `${ctx.occupancy} ${ctx.occupancy === 1 ? "person" : "people"}`
+      : "no headcount available here";
+
+    el.innerHTML = `
+      <h2>${esc(ctx.room)}
+        <span class="state ${occupied ? "occupied" : ""}">${state}</span></h2>
+      <div class="state">${esc(count)}</div>
+      <div class="caps">${CAPS.map((c) =>
+        `<span class="cap ${ctx.can(c) ? "on" : ""}">${c}</span>`).join("")}</div>
+      ${ctx.limitations.length
+        ? `<ul class="limits">${ctx.limitations.map((l) =>
+            `<li>${esc(l)}</li>`).join("")}</ul>`
+        : ""}
+      <div class="meta">
+        precision ${esc(ctx.precision)} ·
+        confidence ${Math.round(ctx.confidence * 100)}% ·
+        ${ctx.anchors.length} anchor${ctx.anchors.length === 1 ? "" : "s"} ·
+        ${ctx.displays().length} screen${ctx.displays().length === 1 ? "" : "s"}
+      </div>`;
+    $("rooms").appendChild(el);
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+function log(line) {
+  const el = document.createElement("div");
+  el.innerHTML = line;
+  $("log").prepend(el);
+  while ($("log").children.length > 60) $("log").lastChild.remove();
+}
+
+async function refresh() {
+  try {
+    render(await wavr.context());
+  } catch (err) {
+    banner(`Could not read the Space: ${esc(err.message)}`, "err");
+  }
+}
+
+(async () => {
+  try {
+    await wavr.connect();
+  } catch (err) {
+    const hint = err instanceof WavrError && err.kind === ERROR_AUTH
+      ? "This page needs to be opened from the Core itself, or with a paired credential."
+      : "Is the Core running?";
+    banner(`${esc(err.message)} — ${hint}`, "err");
+    $("sub").textContent = "Not connected.";
+    return;
+  }
+
+  $("sub").textContent =
+    `${wavr.space?.name || "this Space"} · protocol v${wavr.protocolVersion}`;
+  if (wavr.protocolAhead) {
+    // Surfaced, not fatal. See the SDK's module docstring: refusing would break
+    // every application the day somebody updates their Core.
+    banner("This Core speaks a newer contract than this page was written "
+         + "against. Everything below is still read from known fields.");
+  }
+
+  await refresh();
+
+  // Live. Every event refreshes the affected room — and note that a reconnect
+  // resumes from the last event seen, so a dropped link costs latency and not
+  // a missed change.
+  wavr.subscribe((ev) => {
+    log(`<b>${esc(ev.event)}</b> ${esc(ev.room)} `
+      + `<span>${esc(ev.at.slice(11, 19))}</span>`);
+    refresh();
+  }, {
+    onError: (e) => log(`<b>stream</b> ${esc(e.message)}`),
+  });
+
+  log("<b>connected</b> — waiting for something to change");
+})();
+</script>

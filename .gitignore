@@ -72,3 +72,4 @@ backend/build/
 desktop/src-tauri/binaries/
 desktop/sidecar/dist/
 desktop/sidecar/build/
+*.guarantee-backup

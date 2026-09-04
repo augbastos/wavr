@@ -1,0 +1,187 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wavr — Capability-aware Experience</title>
+<!--
+  Reference experience #2: an application that CHANGES BEHAVIOUR based on what
+  the Space can support.
+
+  This is the pattern the platform exists for. The same experience runs in three
+  modes depending on the room, and the mode is decided by Wavr's evaluator rather
+  than by the app guessing from missing fields:
+
+      FULLY_SUPPORTED     show the headcount and put it on the nearest screen
+      PARTIALLY_SUPPORTED show "someone is here" — the fallback Wavr names
+      UNSUPPORTED         say why, and offer nothing rather than something wrong
+
+  The manifest is editable on the page so you can watch a verdict change while
+  you type. Everything is read from a real Core; nothing is mocked.
+
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e6e8ec; --dim: #9aa1ad; --line: #262b34;
+    --full: #4ade80; --partial: #fbbf24; --none: #f87171; --accent: #60a5fa;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #fbfcfd; --fg: #1a1d23; --dim: #5b6472; --line: #e2e6ec; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 24px 40px; background: var(--bg); color: var(--fg);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 28px; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: var(--dim); margin: 0 0 28px; max-width: 62ch; }
+  .cols { display: grid; gap: 24px; grid-template-columns: minmax(280px, 360px) 1fr; align-items: start; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 11.5px; text-transform: uppercase;
+          letter-spacing: 0.06em; color: var(--dim); margin-bottom: 8px; }
+  textarea {
+    width: 100%; min-height: 260px; background: transparent; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    font: 11.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .rooms { display: grid; gap: 12px; }
+  /* The status is carried by the tag's colour and a faint ground tint, not by a
+     stripe down one edge: a thick coloured left border is loud out of proportion
+     to what it says, and the tag is already the thing the eye lands on. */
+  .verdict { border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .verdict.FULLY_SUPPORTED { background: color-mix(in srgb, var(--full) 6%, transparent); }
+  .verdict.PARTIALLY_SUPPORTED { background: color-mix(in srgb, var(--partial) 6%, transparent); }
+  .verdict.UNSUPPORTED { background: color-mix(in srgb, var(--none) 6%, transparent); }
+  .verdict h2 { font-size: 18px; line-height: 1.25; margin: 0 0 4px;
+                display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+  .tag { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .FULLY_SUPPORTED .tag { color: var(--full); }
+  .PARTIALLY_SUPPORTED .tag { color: var(--partial); }
+  .UNSUPPORTED .tag { color: var(--none); }
+  .render { font-size: 14px; margin: 8px 0 0; }
+  .why { font-size: 11.5px; line-height: 1.5; color: var(--dim); margin: 10px 0 0; padding-left: 16px; }
+  .why li { margin-top: 4px; }
+  .err { border: 1px solid var(--none); color: var(--none); border-radius: 8px;
+         padding: 12px 14px; margin-bottom: 16px; }
+</style>
+
+<h1>Capability-aware Experience</h1>
+<p class="sub">One application, three behaviours. The manifest on the left is
+sent to the Core, which answers per room — and the right column renders what
+this experience would actually do in each. Edit the manifest and watch the
+verdicts move.</p>
+
+<div id="err"></div>
+<div class="cols">
+  <div>
+    <label for="manifest">Experience manifest</label>
+    <textarea id="manifest" spellcheck="false"></textarea>
+  </div>
+  <div class="rooms" id="rooms"></div>
+</div>
+
+<script type="module">
+import { WavrClient } from "../../sdk/javascript/wavr.js";
+
+const DEFAULT_MANIFEST = {
+  id: "occupancy-display",
+  name: "Occupancy Display",
+  requires: ["presence"],
+  optional: ["count", "display"],
+  scopes: ["room.presence", "room.count", "devices.read"],
+};
+
+const wavr = new WavrClient();
+const $ = (id) => document.getElementById(id);
+$("manifest").value = JSON.stringify(DEFAULT_MANIFEST, null, 2);
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+/**
+ * What this experience DOES in a room, given the verdict and the context.
+ *
+ * The whole point of the file. Note that the fallback text is not invented
+ * here — `verdict.fallbacks` is Wavr's own, so the application and the platform
+ * cannot end up describing the same degradation two different ways.
+ */
+function behaviour(verdict, ctx) {
+  if (verdict.status === "UNSUPPORTED") {
+    return `<p class="render">Nothing shown here.</p>`;
+  }
+  if (verdict.satisfied.includes("count") && ctx?.occupancyKnown) {
+    const n = ctx.occupancy;
+    const where = ctx.displays()[0];
+    return `<p class="render"><strong>${n} ${n === 1 ? "person" : "people"}</strong>`
+      + (where ? ` — on ${esc(where.name)}` : " — no screen here, so on your phone")
+      + `</p>`;
+  }
+  // Partial: presence without a count. The fallback Wavr named.
+  const occupied = ctx?.occupied === true;
+  return `<p class="render"><strong>${occupied ? "Someone is here" : "Nobody detected"}</strong></p>`;
+}
+
+async function evaluate() {
+  let manifest;
+  try {
+    manifest = JSON.parse($("manifest").value);
+  } catch (e) {
+    $("err").innerHTML = `<div class="err">That is not valid JSON: ${esc(e.message)}</div>`;
+    return;
+  }
+
+  let result, contexts;
+  try {
+    [result, contexts] = await Promise.all([
+      wavr.compatibility(manifest),
+      wavr.context(),
+    ]);
+  } catch (e) {
+    $("err").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    return;
+  }
+
+  if (result.warnings?.length) {
+    // Warnings are about the DOCUMENT, not the house — a scope the manifest
+    // forgot will produce a 403 in the field even though every verdict looks
+    // fine, so they are shown even when nothing else is wrong.
+    $("err").innerHTML = `<div class="err">${result.warnings.map(esc).join("<br>")}</div>`;
+  } else if (result.error) {
+    $("err").innerHTML = `<div class="err">${esc(result.error)}</div>`;
+    return;
+  } else {
+    $("err").innerHTML = "";
+  }
+
+  const byRoom = Object.fromEntries(contexts.map((c) => [c.room, c]));
+  $("rooms").innerHTML = (result.verdicts || []).map((v) => `
+    <div class="verdict ${esc(v.status)}">
+      <h2>${esc(v.room)} <span class="tag">${esc(v.status.replace(/_/g, " "))}</span></h2>
+      ${behaviour(v, byRoom[v.room])}
+      ${(v.reasons?.length || v.fallbacks?.length)
+        ? `<ul class="why">${[...(v.reasons || []), ...(v.fallbacks || [])]
+            .map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`
+        : ""}
+    </div>`).join("");
+}
+
+let pending;
+$("manifest").addEventListener("input", () => {
+  clearTimeout(pending);
+  pending = setTimeout(evaluate, 400);
+});
+
+(async () => {
+  try {
+    await wavr.connect();
+  } catch (e) {
+    $("err").innerHTML = `<div class="err">${esc(e.message)} — is the Core running?</div>`;
+    return;
+  }
+  await evaluate();
+  // Re-evaluate on every change: a verdict is a fact about the room RIGHT NOW,
+  // and an application that reads capabilities once at startup will be wrong
+  // for the rest of the day.
+  wavr.subscribe(() => evaluate());
+})();
+</script>
