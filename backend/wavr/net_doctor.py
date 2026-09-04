@@ -258,15 +258,28 @@ def diagnose(*, health: dict,
     _check("rogue_dhcp", _rogue_dhcp)
 
     # 5. capture_stalled:<name> -- a source the operator has ENABLED but that
-    # isn't actively running. Never inspects an enabled=False source, so a
+    # isn't actually working. Never inspects an enabled=False source, so a
     # deliberately-off camera/source can never be surfaced (let alone fixed).
+    #
+    # Reads `healthy` in preference to `active`. Since SourceManager became
+    # supervised, `active` only says a task object exists -- and a source that
+    # crashes and restarts every second has a task object at nearly every
+    # instant, so the old reading would call a permanently broken source fine.
+    # `healthy` is the supervisor's verdict; `active` stays as the fallback for a
+    # status dict that comes from somewhere with no supervisor behind it.
+    #
+    # Restarting a source the supervisor is ALREADY retrying is still worth
+    # doing: it clears the backoff, so a source five minutes from its next cold
+    # probe gets tried right now instead.
     def _capture_stalled() -> None:
         for s in (source_status or {}).get("sources", []):
-            if s.get("enabled") and not s.get("active"):
+            working = s.get("healthy") if "healthy" in s else s.get("active")
+            if s.get("enabled") and not working:
                 name = s["name"]
                 cid = f"capture_stalled:{name}"
+                why = s.get("state") or "not active"
                 checks.append(DoctorCheck(id=cid, ok=False, severity=SEVERITY_DEGRADED,
-                                           detail=f"source '{name}' is enabled but not active"))
+                                           detail=f"source '{name}' is enabled but {why}"))
                 fixable_by_target.setdefault(name, FixCandidate(
                     id=cid, kind="restart_source", target=name,
                     explain=f"cycle enabled source '{name}' off/on"))

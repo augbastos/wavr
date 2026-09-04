@@ -349,6 +349,23 @@ def _default_sources(cfg, ble_provider=None, net_provider=None, net_detail_provi
     return sources
 
 
+# How long a source may go quiet before silence is itself evidence of a fault.
+#
+# Almost every source is missing from this table on purpose. Silence is only
+# informative for a source that streams by nature, and Wavr's are mostly the
+# other kind: a PIR node is quiet in an empty room, a BLE scan is quiet when
+# nothing known is near, and a camera is quiet for as long as its lens is
+# covered — `CameraPrivacySignal` exists precisely so that a covered camera is
+# never reported as broken, and a heartbeat here would undo that.
+#
+# `mmwave` is the case that genuinely needs it. An LD2450 pushes frames
+# continuously whether or not anybody is in the room, and the source's own loop
+# swallows exceptions and reconnects — so a USB serial read that STALLS without
+# erroring produces no event, no exception and no reconnect. Nothing else in the
+# system can see that; the source looks alive forever. Thirty seconds is far
+# beyond any legitimate gap at ~10 Hz, so it cannot fire on a healthy radar.
+SOURCE_HEARTBEATS: dict[str, float] = {"mmwave": 30.0}
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # ONVIF PTZ preset tokens (A4.3): the token is XML-escaped in the SOAP body anyway,
 # but reject obviously-junk tokens early so a hostile id can't reach a log/traceback.
@@ -1822,7 +1839,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             sources if sources is not None
             else _default_sources(cfg, _ble_known_provider, _net_known_provider,
                                   _identity_store.detailed_net_addresses)):
-        manager.register(name, factory, enabled)
+        manager.register(name, factory, enabled,
+                         heartbeat_s=SOURCE_HEARTBEATS.get(name))
 
     def _ensure_ble_source() -> None:
         # Live bring-up: register the BLE source the moment the first BLE device is
@@ -2139,11 +2157,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         The per-camera enable state comes from the source manager, not from a
         single process-wide flag: Wavr genuinely runs one camera on and another
         off, and a camera that is merely switched off is a settings click away
-        from working."""
+        from working.
+
+        Health comes from the SUPERVISOR, not from that enable flag. Until it
+        did, a camera whose source task had crashed still reported
+        `observing: true` and `precision_level: position` here — Wavr's
+        strongest claim about what it can see, made on behalf of a camera that
+        had not produced a frame since the router rebooted."""
         enabled = set()
+        health = None
         with suppress(Exception):
             st = manager.status()
             enabled = {s["name"] for s in st.get("sources", []) if s.get("enabled")}
+            health = {s["name"]: s.get("state") for s in st.get("sources", [])}
         # A radar cabled straight into this machine has no store row; it exists
         # because the config names a serial port for it.
         serial_rooms = (cfg.mmwave_room,) if cfg.mmwave_port else ()
@@ -2153,6 +2179,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                   if _node_store is not None else None,
             calib=_calib,
             cameras_enabled=enabled,
+            source_health=health,
             ble=bool(cfg.ble_known), ble_room=cfg.ble_room,
             network=bool(cfg.net_inventory),
             serial_rooms=serial_rooms)
@@ -4200,12 +4227,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # low-level capability. See wavr.net_doctor's module docstring for the
     # SAFE-AUTO allowlist enforced in code.
     async def _doctor_restart_source(name: str) -> None:
-        # Only ever CYCLES a source SourceManager already reports enabled=True
+        # Only ever restarts a source SourceManager already reports enabled=True
         # (net_doctor.diagnose only proposes this for such sources) -- never
-        # flips a disabled/privacy-off camera on. Mirrors POST
-        # /api/sources/{name}/toggle called twice.
-        await manager.set_enabled(name, False)
-        await manager.set_enabled(name, True)
+        # flips a disabled/privacy-off camera on. `restart` rather than the old
+        # set_enabled(False)/set_enabled(True) pair, because that pair briefly
+        # published enabled=False: any status read landing in that window saw a
+        # camera the operator had switched off, and a coverage snapshot taken
+        # there would have recorded a deliberate choice that nobody made.
+        await manager.restart(name)
 
     async def _doctor_reprobe_inventory() -> None:
         if cfg.net_inventory:
@@ -4408,6 +4437,27 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                             _=Depends(require_local), __=Depends(require_scope("control"))):
         try:
             await manager.set_enabled(name, enabled)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown source: {name}")
+        return manager.status()
+
+    @app.post("/api/sources/{name}/restart")
+    async def source_restart(name: str, _=Depends(require_local),
+                             __=Depends(require_scope("control"))):
+        """Try a failed source again now, instead of at its next scheduled probe.
+
+        The supervisor already retries on its own, but a source that has been
+        down a while is up to five minutes from its next cold probe — and the
+        person who just plugged the camera back in is standing there watching.
+        Without this they would restart Wavr, which is the outcome supervision
+        exists to make unnecessary.
+
+        Does NOT enable a disabled source: a camera the operator switched off
+        stays off, and the ONE action here is "try the thing you already asked
+        for again".
+        """
+        try:
+            await manager.restart(name)
         except KeyError:
             raise HTTPException(status_code=404, detail=f"unknown source: {name}")
         return manager.status()

@@ -97,7 +97,10 @@ def test_doctor_autofix_revives_a_stalled_enabled_source(monkeypatch):
         time.sleep(0.1)   # let the first (self-terminating) events() call complete
         pre = c.get("/api/system").json()
         flaky_pre = next(s for s in pre["sources"] if s["name"] == "flaky")
-        assert flaky_pre["enabled"] is True and flaky_pre["active"] is False
+        # `active` no longer answers this: the supervisor has already scheduled a
+        # restart, so a task object exists. `healthy` is the reading that means
+        # "producing", and it is the one the doctor now consults.
+        assert flaky_pre["enabled"] is True and flaky_pre["healthy"] is False
 
         body = c.get("/api/health/doctor?auto_fix=true").json()
         assert any(c_["id"] == "capture_stalled:flaky" for c_ in body["checks"])
@@ -105,9 +108,13 @@ def test_doctor_autofix_revives_a_stalled_enabled_source(monkeypatch):
                    for a in body["auto_fixed"])
         assert any(a["target"] == "flaky" for a in body["recent_auto_fixes"])
 
+        # The fix is still worth performing under supervision: it clears the
+        # backoff, so the retry happens now rather than at the next scheduled
+        # probe — which for a source that has been down a while is minutes away.
+        time.sleep(0.1)
         post = c.get("/api/system").json()
         flaky_post = next(s for s in post["sources"] if s["name"] == "flaky")
-        assert flaky_post["active"] is True
+        assert flaky_post["healthy"] is True
 
 
 def test_doctor_autofix_off_only_suggests_for_a_stalled_source(monkeypatch):
@@ -123,10 +130,11 @@ def test_doctor_autofix_off_only_suggests_for_a_stalled_source(monkeypatch):
         body = c.get("/api/health/doctor?auto_fix=true").json()
         assert body["auto_fixed"] == []
         assert any(s["id"] == "capture_stalled:flaky" for s in body["suggestions"])
-
-        post = c.get("/api/system").json()
-        flaky_post = next(s for s in post["sources"] if s["name"] == "flaky")
-        assert flaky_post["active"] is False   # never touched
+        # "Never touched" stated as a fact about fixes rather than about the
+        # source's state: the supervisor is entitled to restart it on its own
+        # schedule, and asserting on that state would make this test a race
+        # against the backoff rather than a test of the auto-fix gate.
+        assert body["recent_auto_fixes"] == []
 
 
 # ---- discovery_reach (CL-02, PR1): endpoint wires the structured verdict ------

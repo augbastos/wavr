@@ -59,7 +59,16 @@ async def test_register_enabled_while_running_spawns_task_immediately():
     await m.stop()
 
 
-async def test_self_terminated_source_reports_inactive():
+async def test_self_terminated_source_reports_unhealthy_and_is_retried():
+    """A source whose generator ends is no longer dead for good.
+
+    It used to be: `_run` let the task finish and `active` went False forever, so
+    a camera cut off by a router reboot stayed down until somebody restarted
+    Wavr. The supervisor brings it back now — which means `active` alone can no
+    longer answer "is this working", because a source restarting on a loop has a
+    task object at almost every instant. `healthy` is the reading that still
+    means something, and this test pins that distinction instead of the old one.
+    """
     got = []
     async def on_event(ev):
         got.append(ev)
@@ -71,9 +80,11 @@ async def test_self_terminated_source_reports_inactive():
     mgr = SourceManager(on_event)
     mgr.register("finite", lambda: _Finite(), True)
     await mgr.start()
-    await asyncio.sleep(0.02)   # let it emit and complete
-    status = {s["name"]: s["active"] for s in mgr.status()["sources"]}
-    assert status["finite"] is False   # completed task must not report active
+    await asyncio.sleep(0.05)   # let it emit, complete, and be re-scheduled
+    row = [s for s in mgr.status()["sources"] if s["name"] == "finite"][0]
+    assert row["healthy"] is False, "a source that stopped producing is not fine"
+    assert row["state"] == "completed", "and it stopped WITHOUT an error"
+    assert mgr.healthy_sources() == set()
     assert "x" in got
     await mgr.stop()
 

@@ -4661,30 +4661,46 @@ async function renderControls(){
     s.sources.forEach(src=>{
       const label = MODALITY_LABEL[src.name] || src.name;
       const row = document.createElement("div"); row.className = "src-toggle-row";
-      const stuck = s.running && src.enabled && !src.active;
+      // `healthy` when the Core supplies it (supervised SourceManager), `active`
+      // as the fallback for an older Core. The distinction is load-bearing now:
+      // sources restart themselves, so a permanently broken one has a live task
+      // at nearly every instant — reading `!active` would have made this chip
+      // quietly stop appearing at exactly the moment it became most useful.
+      const working = ("healthy" in src) ? src.healthy : src.active;
+      const stuck = s.running && src.enabled && !working;
       const streak = stuck ? (unavailStreak[src.name] || 0) + 1 : 0;
       unavailStreak[src.name] = streak;
       const unavailable = stuck && streak >= 2;
       if(unavailable){
-        // Fix #4: enabled-but-not-running is NOT necessarily a privilege issue — a
-        // crashed source (task self-terminated, e.g. a camera feed dying or a serial
-        // device unplugged) looks identical from {enabled,active} alone, so the copy
-        // stays cause-neutral rather than asserting a specific cause. This is a REAL
-        // button, not a dead status chip: it keeps the recovery affordance a plain
-        // toggle used to provide (an off/on cycle re-spawns the task via
-        // SourceManager.set_enabled -> _spawn).
+        // Fix #4: enabled-but-not-working is NOT necessarily a privilege issue — a
+        // crashed source (a camera feed dying, a serial device unplugged) looked
+        // identical from {enabled,active} alone, so the copy stayed cause-neutral.
+        // The supervisor now names the state, so the copy can say which of those
+        // it is — with one exception kept deliberately vague: `retrying` may still
+        // be a privileged-bind failure on a proot Android Core, and asserting a
+        // cause we do not have would send somebody down the wrong path.
+        const SRC_STATE_COPY = {
+          retrying: "Not running — Wavr is retrying (may need privileged mode on this device)",
+          failed:   "Not running after several attempts — check the device, then tap to try again now",
+          silent:   "Connected but sending nothing — the feed has stalled",
+          completed:"Stopped on its own without an error — tap to start it again",
+        };
+        const why = SRC_STATE_COPY[src.state]
+          || "Enabled but not running — tap to restart (may need privileged mode on this device)";
         const b = document.createElement("button"); b.type = "button";
         b.className = "ctl small src-unavail"; b.style.cursor = "pointer";
         b.textContent = label + ": restart";
-        b.setAttribute("data-tip", "Enabled but not running — tap to restart (may need privileged mode on this device)");
+        b.setAttribute("data-tip", why);
         const note = document.createElement("span"); note.className = "src-unavail-note";
-        note.textContent = "Enabled but not running — tap to restart (may need privileged mode on this device)";
+        note.textContent = why;
         const fb = document.createElement("span"); fb.className = "action-fb"; fb.setAttribute("aria-live", "polite");
         if(srcError[src.name]){ fb.className = "action-fb err"; fb.textContent = srcError[src.name]; }
         b.onclick = async ()=>{
           b.disabled = true;
-          await post(`/api/sources/${src.name}/toggle`, {enabled: false});
-          const r = await post(`/api/sources/${src.name}/toggle`, {enabled: true});
+          // One call, not an off/on pair: the pair briefly published
+          // enabled=false, and a coverage snapshot landing in that window
+          // recorded a deliberate choice nobody made.
+          const r = await post(`/api/sources/${src.name}/restart`, {});
           if(r && r.ok){ delete srcError[src.name]; refresh(); }
           else {
             b.disabled = false;

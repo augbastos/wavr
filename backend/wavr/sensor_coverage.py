@@ -45,6 +45,14 @@ job; the second is a shopping list.
 
 4. **A room with no sensor is stated, never implied.** `rooms_without_coverage`
    exists so a caller cannot forget to ask.
+
+5. **Health is what the supervisor observed, never what the switch says.** A
+   camera switched ON whose task has crashed is OFFLINE here, not OK. This rule
+   had to be written down because the module broke it: health was derived from
+   the operator's enable flag, so a dead camera reported `observing: true` and
+   `precision_level: position` — Wavr's strongest claim, about a sensor that had
+   not produced a frame since the router rebooted. See `health_from_source_state`
+   and `wavr.provider_runtime`.
 """
 from __future__ import annotations
 
@@ -55,6 +63,7 @@ from wavr.fusion import RESOLUTION_SCOPE
 from wavr.nodes import (
     STATE_ACTIVE, STATE_DISABLED, STATE_PENDING, STATE_REVOKED,
 )
+from wavr.provider_runtime import STATE_RUNNING, STATE_STOPPED
 
 # The same window fusion uses to stop trusting a source that went quiet. Shared
 # rather than re-read from the environment here, so "stale" means one thing.
@@ -77,6 +86,36 @@ KIND_CAMERA = "camera"
 KIND_NODE = "node"
 KIND_WIRED = "wired"          # a sensor cabled directly to this Core
 KIND_HOST = "host"            # a capability of the machine itself (its BLE radio)
+
+
+def health_from_source_state(state: str | None, *, enabled: bool) -> str:
+    """A source's supervised state, in this module's health vocabulary.
+
+    The two directions that matter:
+
+      * **Off is not broken.** A camera the operator switched off is `disabled` —
+        one settings click from working, and nothing to worry about.
+      * **Broken is not off.** Anything the supervisor is retrying, has given up
+        fast-retrying on, or considers silent past its declared cadence is
+        `offline`: a fault, and a different sentence on the screen.
+
+    `state is None` means the caller could not observe health at all — a store
+    read without a running SourceManager behind it — so the reading falls back to
+    the enable flag. That fallback is the OLD behaviour and it is a lie whenever
+    a source has actually crashed, which is exactly why the single production
+    caller passes real health. It survives only for callers with nothing better
+    to offer, and `unknown` is not used because a coverage row that renders as
+    "unknown" for a perfectly healthy camera would be its own kind of noise.
+    """
+    if not enabled:
+        return HEALTH_DISABLED
+    if state is None:
+        return HEALTH_OK
+    if state == STATE_RUNNING:
+        return HEALTH_OK
+    if state == STATE_STOPPED:
+        return HEALTH_DISABLED
+    return HEALTH_OFFLINE
 
 
 @dataclass(frozen=True)
@@ -142,7 +181,8 @@ class SensorCoverage:
         return out
 
 
-def _camera_rows(cameras, calib, enabled_names) -> list[SensorCoverage]:
+def _camera_rows(cameras, calib, enabled_names,
+                 source_health=None) -> list[SensorCoverage]:
     """Cameras, from the store the dashboard reads.
 
     `enabled_names` is the set of camera source names currently switched ON.
@@ -154,9 +194,15 @@ def _camera_rows(cameras, calib, enabled_names) -> list[SensorCoverage]:
     `offline` -- one is a choice and the other is a fault, and telling them apart
     is the difference between a settings click and a ladder. Cameras boot OFF by
     design (ADR-0002), so `disabled` is the NORMAL state of a new one.
+
+    `source_health` closes the third case, which used to be reported as the
+    first: a camera switched ON whose source task has crashed. That is neither a
+    choice nor a working camera, and it is the state a router reboot leaves
+    behind.
     """
     rows: list[SensorCoverage] = []
     on = set(enabled_names or ())
+    health_of = dict(source_health or {})
     for cam in _safe_list(cameras):
         name = str(cam.get("name") or "")
         if not name:
@@ -173,7 +219,9 @@ def _camera_rows(cameras, calib, enabled_names) -> list[SensorCoverage]:
         rows.append(SensorCoverage(
             sensor_id=name, kind=KIND_CAMERA, modality="camera",
             room=str(cam.get("room") or ""),
-            health=HEALTH_OK if name in on else HEALTH_DISABLED,
+            health=health_from_source_state(
+                health_of.get(name) if source_health is not None else None,
+                enabled=name in on),
             calibrated=calibrated,
         ))
     return rows
@@ -250,7 +298,8 @@ def _node_rows(nodes, *, stale_s: float, now: datetime | None = None) -> list[Se
 
 
 def _host_rows(*, ble: bool = False, ble_room: str = "", network: bool = False,
-               serial_rooms: tuple[str, ...] = ()) -> list[SensorCoverage]:
+               serial_rooms: tuple[str, ...] = (),
+               source_health=None) -> list[SensorCoverage]:
     """Sensors that are part of the machine, plus anything cabled to it.
 
     The network scan gets NO room: one antenna localizes to the HOUSE, and fusion
@@ -262,19 +311,40 @@ def _host_rows(*, ble: bool = False, ble_room: str = "", network: bool = False,
     with one room (`WAVR_BLE_ROOM`) and emits into it, and fusion scopes `ble` to
     `room` accordingly. Reporting it as roomless here would contradict where its
     readings actually land.
+
+    These three used to be hard-coded `ok`, which made a claim from CONFIGURATION
+    rather than from observation: an unplugged USB radar reported as watching its
+    room forever, because the config still named a serial port. Health now comes
+    from the source behind each row -- `ble`, `network` and `mmwave` are the names
+    those sources are registered under, and that coupling is deliberate: a row
+    whose source is missing from the manager entirely reads `unknown`, never
+    green, so a renamed source shows up as a gap instead of false reassurance.
     """
     rows: list[SensorCoverage] = []
+    seen = source_health is not None
+    health_of = dict(source_health or {})
+
+    def _health(source_name: str) -> str:
+        if not seen:
+            return HEALTH_OK          # legacy caller; see health_from_source_state
+        if source_name not in health_of:
+            # The config says this sensor exists and the manager has no source
+            # behind it. Something is mis-wired, and a mis-wired sensor is
+            # certainly not observing anything.
+            return HEALTH_UNKNOWN
+        return health_from_source_state(health_of[source_name], enabled=True)
+
     if ble:
         rows.append(SensorCoverage(sensor_id="host-bluetooth", kind=KIND_HOST,
                                    modality="ble", room=str(ble_room or ""),
-                                   health=HEALTH_OK))
+                                   health=_health("ble")))
     if network:
         rows.append(SensorCoverage(sensor_id="host-network", kind=KIND_HOST,
-                                   modality="network", health=HEALTH_OK))
+                                   modality="network", health=_health("network")))
     for room in serial_rooms:
         rows.append(SensorCoverage(
             sensor_id=f"wired-radar-{room or 'unassigned'}", kind=KIND_WIRED,
-            modality="mmwave", room=str(room or ""), health=HEALTH_OK))
+            modality="mmwave", room=str(room or ""), health=_health("mmwave")))
     return rows
 
 
@@ -297,6 +367,7 @@ def collect_coverage(*, cameras=None, nodes=None, calib=None,
                      cameras_enabled=(), ble: bool = False, ble_room: str = "",
                      network: bool = False,
                      serial_rooms: tuple[str, ...] = (),
+                     source_health=None,
                      stale_s: float = DEFAULT_STALE_S,
                      now: datetime | None = None) -> list[SensorCoverage]:
     """Every sensor this Core knows it has, whether or not it is talking.
@@ -306,11 +377,16 @@ def collect_coverage(*, cameras=None, nodes=None, calib=None,
     dashboard without three slightly different versions appearing. `now` is
     injectable for the same reason: a coverage test that depends on the wall
     clock is a test that fails at midnight.
+
+    `source_health` maps a SourceManager source name to its supervised state
+    (`wavr.provider_runtime`). Without it every enabled sensor reads as working,
+    which is what this module used to do and is wrong the moment anything
+    actually breaks -- see honesty rule 5.
     """
-    return (_camera_rows(cameras, calib, cameras_enabled)
+    return (_camera_rows(cameras, calib, cameras_enabled, source_health)
             + _node_rows(nodes, stale_s=stale_s, now=now)
             + _host_rows(ble=ble, ble_room=ble_room, network=network,
-                         serial_rooms=serial_rooms))
+                         serial_rooms=serial_rooms, source_health=source_health))
 
 
 def by_room(coverage: list[SensorCoverage]) -> dict[str, list[SensorCoverage]]:
