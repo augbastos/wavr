@@ -334,18 +334,58 @@ def plan_import(payload, *, existing_rooms=(), existing_anchors=(),
     }
 
 
+def _config_shape(config: dict) -> dict:
+    """How much of what, with none of the operator's own words.
+
+    Counts and kinds. A supporter needs to know there are four cameras and nine
+    rooms; they do not need to know a room is called "Ana's bedroom", and the
+    person emailing the file has no way to notice that it was in there.
+    """
+    floors = (config.get("house") or {}).get("floors") or []
+    rooms = [r for f in floors for r in (f.get("rooms") or [])]
+    return {
+        "space_kind": (config.get("space") or {}).get("kind", ""),
+        "floors": len(floors),
+        "rooms": len(rooms),
+        "rooms_with_geometry": sum(1 for r in rooms if r.get("polygon")),
+        "cameras": len(config.get("cameras") or ()),
+        "nodes": len(config.get("nodes") or ()),
+        "anchors": len(config.get("anchors") or ()),
+        "anchors_positioned": sum(
+            1 for a in config.get("anchors") or () if a.get("x") is not None),
+        "ha_mappings": len(config.get("ha_mappings") or ()),
+        "external_providers": len(config.get("external_providers") or ()),
+        "settings_changed": len(config.get("settings") or {}),
+    }
+
+
 def diagnostic_bundle(*, config=None, coverage=(), providers=None,
                       source_health=(), clocks=None, recent_events=(),
                       version="", platform="", now=None) -> dict:
     """What Wavr can see, packaged for somebody trying to help.
 
-    Contains the configuration (already redacted above), the health of every
-    sensor and provider, and the recent SEMANTIC events — which carry a room, a
-    boolean and a sensor id, and never a person or a coordinate.
+    The health of every sensor and provider, and the recent SEMANTIC events —
+    which carry a room, a boolean and a sensor id, and never a person or a
+    coordinate.
 
     Deliberately not the room state history. "The kitchen was occupied at 23:40"
     is a fact about somebody's evening, and a support bundle is a file that ends
     up in a ticket system.
+
+    ## Why the configuration is SHAPE, not content
+
+    This used to embed the whole export. Its own note promised "no coordinates,
+    nobody's name" and the file carried anchor x/y/z, anchor names, and every
+    room polygon — with `data_inventory` marking anchors sensitive on the exact
+    grounds that "a name can carry a person's name if you put one there".
+
+    `audit()` did not catch it and could not: it looks for credential SHAPES,
+    and a person's name in an anchor label is not a credential.
+
+    What a supporter actually needs from the configuration is its shape — how
+    many cameras, how many rooms, which providers — not the household's floor
+    plan. So the shape travels and the content does not, and the note is now
+    true of the file it is printed inside.
     """
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     rows = list(recent_events or ())[-MAX_BUNDLE_ROWS:]
@@ -354,7 +394,10 @@ def diagnostic_bundle(*, config=None, coverage=(), providers=None,
         "generated_at": stamp,
         "wavr_version": version,
         "platform": platform,
-        "config": config or {},
+        # Shape, never content. See the docstring: the promise on this file is
+        # "no coordinates, nobody's name", and it has to be true of the file
+        # rather than true of an intention.
+        "config_shape": _config_shape(config or {}),
         "coverage": [dict(c) for c in coverage or ()],
         "providers": providers or {},
         "source_health": [dict(h) for h in source_health or ()],

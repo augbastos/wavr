@@ -42,7 +42,8 @@ newest — the default everywhere — would bury it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+
+from wavr.alert_severity import SEVERITY_ALERT, SEVERITY_CRITICAL
 
 # Bands, worst first. The number is the sort key and the API contract; the name
 # is what a person is shown.
@@ -51,6 +52,11 @@ DEGRADED = "degraded"       # it works, less well, and a person can fix it
 INFO = "info"               # worth knowing, nothing is broken
 
 BANDS = (BLOCKING, DEGRADED, INFO)
+
+# Read from the one alert ladder rather than spelled out here, so this cannot
+# drift from the producers again. Everything at `alert` or above is something a
+# person is expected to do something about; `watch` and below is ambient.
+ACTIONABLE_SEVERITIES = frozenset({SEVERITY_ALERT, SEVERITY_CRITICAL})
 
 
 @dataclass(frozen=True)
@@ -135,7 +141,12 @@ def collect(*, discoveries=(), pending_pairings=(), node_requests=(),
             title=f"{_sensor_name(r)}{where_txt} is not reporting",
             detail=_what_it_costs(r),
             where="coverage", action="Fix",
-            since=str(r.get("last_seen") or "")))
+            # `SensorCoverage.to_dict()` emits no timestamp at all — this read
+            # `last_seen`, which that producer has never had, so every sensor
+            # item sorted as undated and a three-day outage ranked level with a
+            # one-minute one. The `detail` dict is where a row carries anything
+            # extra, so that is where a `since` would come from if one existed.
+            since=str((r.get("detail") or {}).get("since") or "")))
 
     for c in cameras_needing_url or ():
         name = str(c.get("name") or "A camera")
@@ -165,18 +176,30 @@ def collect(*, discoveries=(), pending_pairings=(), node_requests=(),
     # An alert that fires every thirty seconds is ONE thing wrong, not eighty
     # things to read. Grouped by kind, with the count, and only the severities a
     # person is expected to do something about.
+    # The ladder is info < note < watch < alert < critical (`alert_severity`).
+    # This filtered on "high", which is not a tier and which no producer emits —
+    # so a rogue DHCP server, a gateway-identity change and every fall or
+    # intrusion alert (all "alert") were dropped, and only a SUSTAINED gateway
+    # change ever reached the list. The tray had it right, which is how the two
+    # surfaces disagreed about the same event.
     grouped: dict[str, list] = {}
     for a in alerts or ():
-        if str(a.get("severity") or "").lower() not in ("high", "critical"):
+        if str(a.get("severity") or "").lower() not in ACTIONABLE_SEVERITIES:
             continue
         grouped.setdefault(str(a.get("kind") or "alert"), []).append(a)
     for kind, group in grouped.items():
         first = group[0]
+        # The producers emit `kind`, `severity` and their own facts — none of
+        # them carries `title` or `detail`, so reading those gave a generated
+        # "Rogue dhcp" with nothing under it. The sentence belongs here, where
+        # the audience is a person, rather than in a monitor that is also read
+        # by MQTT and the alert log.
+        title, detail = _alert_words(kind, first)
         items.append(Item(
             key=f"alert:{kind}",
             band=DEGRADED,
-            title=str(first.get("title") or kind.replace("_", " ").capitalize()),
-            detail=str(first.get("detail") or first.get("message") or ""),
+            title=title,
+            detail=detail,
             where="alerts", action="View",
             since=str(min((str(a.get("ts") or "") for a in group), default="")),
             count=len(group)))
@@ -192,6 +215,44 @@ def collect(*, discoveries=(), pending_pairings=(), node_requests=(),
             where="system", action="How"))
 
     return _oldest_first(items)
+
+
+# What each alert kind means, for somebody who is not an engineer. Keyed on the
+# `kind` the producers actually emit; anything unknown falls back to a readable
+# form of the kind itself rather than to an empty row.
+_ALERT_WORDS = {
+    "rogue_dhcp": (
+        "Another device is handing out network addresses",
+        "That is normally only your router. It can be a second router somebody "
+        "plugged in — or something pretending to be one."),
+    "gateway_identity": (
+        "Your router's hardware address changed",
+        "Either the router was replaced, or something on the network is "
+        "answering in its place."),
+    "rogue_device": (
+        "A device Wavr does not recognise joined the network",
+        "New to this network. Worth a look if you were not expecting it."),
+    "intrusion": (
+        "Somebody Wavr does not recognise is in the house",
+        "Presence was detected that does not match anybody you have added."),
+    "fall_suspected": (
+        "A possible fall was detected",
+        "Movement stopped abruptly and did not resume. Wavr is not a medical "
+        "device and can be wrong."),
+}
+
+
+def _alert_words(kind: str, alert: dict) -> tuple[str, str]:
+    title, detail = _ALERT_WORDS.get(
+        kind, (kind.replace("_", " ").capitalize(), ""))
+    # The producer's own specifics, appended rather than replacing the sentence:
+    # "10.0.0.9" alone is not an errand, and the sentence alone is not evidence.
+    for field in ("extra_server", "observed_mac", "ip", "mac"):
+        value = alert.get(field)
+        if value:
+            detail = f"{detail} ({field.replace('_', ' ')}: {value})".strip()
+            break
+    return title, detail
 
 
 def _sensor_name(row) -> str:

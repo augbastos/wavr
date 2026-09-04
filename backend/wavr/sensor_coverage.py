@@ -215,7 +215,14 @@ def _camera_rows(cameras, calib, enabled_names,
                 c = None           # decide whether a camera EXISTS
             # A mount pose alone does not place anyone: the homography is what
             # turns a pixel into a floor coordinate. Anything less is `count`.
-            calibrated = bool(c and c.get("h"))
+            # `homography`, which is what `CalibrationStore.get` actually
+            # returns. This read `c.get("h")` — a key that store has never
+            # emitted — so `calibrated` was False for every camera ever
+            # calibrated, and the "position rung is EARNED" rule three lines up
+            # meant no camera could ever earn it. Silent: a fully calibrated
+            # camera simply reported count-only, to the API, the MCP tool and
+            # the dashboard alike.
+            calibrated = bool(c and c.get("homography"))
         rows.append(SensorCoverage(
             sensor_id=name, kind=KIND_CAMERA, modality="camera",
             room=str(cam.get("room") or ""),

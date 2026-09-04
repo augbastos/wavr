@@ -859,3 +859,107 @@ def test_a_space_name_with_an_ampersand_is_not_double_encoded(page,
     assert "&AMP;" not in rendered.upper() and "&#39;" not in rendered
     assert "&amp;" not in page.title() and "&#39;" not in page.title()
     assert "Mum & Dad's" in page.title()
+
+
+# -- Human tasks, not element existence ----------------------------------------
+#
+# The design standard for this product is task success, not "the element is in
+# the DOM". Each test below is one question a real person arrives with, answered
+# the way they would answer it: open the page, look, click.
+#
+# They are deliberately tolerant about WHERE the answer is and strict about
+# whether it is there at all. A test that pins a selector fails when the layout
+# improves; a test that pins the ANSWER fails when the product stops answering.
+
+def test_task_can_a_person_tell_whether_wavr_is_running(page, core):
+    """Persona A, the non-technical household member: "is everything okay?"
+
+    They must not need Task Manager, a terminal, a log file or a port.
+    """
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector("#runtimeChip:not([hidden])", timeout=30000)
+    page.wait_for_timeout(1500)
+    said = page.locator("#runtimeChip").inner_text().strip()
+    assert said, "the chrome says nothing about whether Wavr is working"
+    # In words a person uses, not a state machine's vocabulary.
+    assert any(w in said.lower() for w in
+               ("live", "starting", "issue", "paused", "responding", "updating")), said
+
+
+def test_task_can_a_person_find_which_room_is_occupied(page, core):
+    """"Where is somebody detected?" — the product's core claim, on the landing
+    surface, without opening anything."""
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector(".card[data-room]", timeout=30000)
+    page.wait_for_timeout(2000)
+    card = page.locator(".card[data-room]").first
+    text = card.inner_text().lower()
+    # Occupied or empty — but never silent, and never a bare number with no word
+    # attached to it.
+    assert any(w in text for w in ("occupied", "empty", "vacant", "unknown",
+                                   "nobody", "someone")), text
+
+
+def test_task_can_a_person_understand_WHY_wavr_believes_it(page, core):
+    """Persona B, the power user: "why is the Office uncertain?"
+
+    The evidence must be reachable from the room itself, not from a separate
+    developer screen — the explanation belongs beside the claim.
+    """
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector(".card[data-room]", timeout=30000)
+    page.wait_for_timeout(2000)
+    why = page.locator(".card[data-room] details.why").first
+    assert why.count() >= 1, "a room states a conclusion with no way to ask why"
+    why.locator("summary").click()
+    page.wait_for_timeout(800)
+    opened = why.inner_text().strip()
+    assert len(opened) > 20, f"the explanation opened and said nothing: {opened!r}"
+
+
+def test_task_can_a_person_see_whether_anything_leaves_the_home(page, core):
+    """Persona E, the privacy-conscious user: "what leaves my network?"
+
+    This is the question the whole product is built to be able to answer, so it
+    must be answerable without reading a config file.
+    """
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector("#tab-inicio", timeout=30000)
+    page.click("#gearNavBtn")
+    page.wait_for_selector("#gearOverlay:not([hidden])", timeout=15000)
+    rail = page.locator('[data-sec="trust"]')
+    if rail.count():
+        rail.first.click()
+    page.wait_for_function(
+        "() => (document.getElementById('privacyDataBody')?.innerText || '')"
+        ".length > 60", timeout=30000)
+    said = page.locator("#privacyDataBody").inner_text().upper()
+    # Both halves: what is kept HERE, and what reaches OUTSIDE. Either alone is
+    # half an answer and reads as the whole one.
+    assert "WHAT WAVR KEEPS" in said
+    assert "WHAT APPLICATIONS CAN READ" in said
+    assert page.script_errors == [], page.script_errors
+
+
+def test_task_can_an_admin_find_which_capability_a_room_is_missing(page, core):
+    """Persona C, the admin: "which capability did I lose, and where?"
+
+    Answerable by looking at one table rather than by reading each room.
+    """
+    open_settings(page, core, wait_for="#developerBody")
+    rail = page.locator('[data-sec="space"]')
+    if rail.count():
+        rail.first.click()
+    try:
+        page.wait_for_selector("#spaceCapMatrix tbody tr", timeout=20000)
+    except Exception:                            # noqa: BLE001
+        pytest.skip("this Core enumerated no rooms")
+    body = page.locator("#spaceCapMatrix").inner_text().lower()
+    assert "presence" in body and "count" in body and "position" in body
+    # Every row answers for every capability — a blank cell is an unanswered
+    # question, which is the thing a capability table exists to remove.
+    rows = page.locator("#spaceCapMatrix tbody tr")
+    for i in range(rows.count()):
+        cells = rows.nth(i).locator("td")
+        for j in range(cells.count()):
+            assert cells.nth(j).inner_text().strip(),                 f"row {i} cell {j} is blank; the table leaves a question unanswered"

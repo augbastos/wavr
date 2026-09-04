@@ -87,7 +87,7 @@ def test_a_noisy_alert_appears_once_with_its_count_and_not_eighty_times():
     occurrence turns the list into a log, which is the failure this module is
     written to avoid."""
     items = collect(alerts=[
-        {"kind": "rogue_dhcp", "severity": "high", "title": "Rogue DHCP server",
+        {"kind": "rogue_dhcp", "severity": "alert", "title": "Rogue DHCP server",
          "ts": f"2026-09-04T10:{m:02d}:00+00:00"} for m in range(40)])
     assert len(items) == 1
     assert items[0].count == 40
@@ -160,3 +160,55 @@ def test_a_caller_that_passes_nothing_gets_nothing_rather_than_reassurance():
     caller must then say it could not check, rather than letting this print
     "nothing needs you" over three waiting requests."""
     assert summarise(collect())["total"] == 0
+
+
+# -- Severity: the ladder, not a word somebody remembered ----------------------
+
+def test_every_severity_a_producer_emits_is_classified_by_this_module():
+    """The filter used to keep `("high", "critical")`. "high" is not a tier and
+    no producer emits it, so the entire `alert` band was discarded — a rogue
+    DHCP server, a gateway-identity change, every fall and every intrusion.
+
+    The tray had the same concept right, which is how two surfaces came to
+    disagree about the same event: one raised a notification while the other
+    said "nothing needs your attention".
+
+    This compares against the LADDER rather than a list retyped here, so the
+    two cannot drift apart again.
+    """
+    from wavr.alert_severity import SEVERITY_LADDER
+    from wavr.attention import ACTIONABLE_SEVERITIES
+
+    assert ACTIONABLE_SEVERITIES <= set(SEVERITY_LADDER), (
+        f"these are not tiers: {sorted(ACTIONABLE_SEVERITIES - set(SEVERITY_LADDER))}")
+    # And it is the top of the ladder, not an arbitrary subset.
+    top = set(SEVERITY_LADDER[-len(ACTIONABLE_SEVERITIES):])
+    assert ACTIONABLE_SEVERITIES == top
+
+
+def test_a_rogue_dhcp_alert_reaches_the_list():
+    """Built from the REAL producer's dict, not a fixture that agrees with the
+    consumer — that agreement is what hid this for as long as it existed."""
+    from wavr.dhcp_monitor import DhcpRogueAlert
+
+    alert = DhcpRogueAlert(ts="2026-09-04T10:00:00+00:00",
+                           extra_server="10.0.0.9",
+                           known_servers=("10.0.0.1",),
+                           observed_servers=("10.0.0.1", "10.0.0.9")).to_dict()
+    items = collect(alerts=[alert])
+    assert len(items) == 1, f"the real producer's alert was dropped: {alert}"
+    assert items[0].band == DEGRADED
+
+    # And it reads as an errand, not as a kind name. The producer carries no
+    # `title` or `detail` at all — reading those gave "Rogue dhcp" with nothing
+    # under it, which tells a household nothing about what to do.
+    assert "network addresses" in items[0].title.lower()
+    assert "10.0.0.9" in items[0].detail, "the producer's own evidence was lost"
+
+
+def test_a_watch_level_alert_stays_ambient():
+    """Everything below `alert` is information, not an errand. Promoting it
+    turns the list into a feed, and a feed is not read."""
+    assert collect(alerts=[{"kind": "rogue_device", "severity": "note",
+                            "title": "A new device"}]) == []
+    assert collect(alerts=[{"kind": "x", "severity": "watch", "title": "y"}]) == []

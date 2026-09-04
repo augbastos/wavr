@@ -197,10 +197,18 @@ def assess(*, uptime_s=None, last_state_at=None, space_name="", role="",
     # -- Sensors, counted from what OBSERVES them, never from a switch --------
     rows = list(coverage_rows or ())
     if rows:
+        # `sensor_coverage` emits ok / offline / disabled / UNKNOWN, and its own
+        # docstring says a row whose source is missing from the manager "reads
+        # `unknown`, never green, so a renamed source shows up as a gap instead
+        # of false reassurance". Subtracting only offline and disabled swept
+        # `unknown` into the live count, so the coverage screen said "NOT being
+        # watched" while the tray said "everything reporting" about the same
+        # sensor.
         offline = [r for r in rows if str(r.get("health")) in ("offline", "silent",
                                                                "failed")]
         disabled = [r for r in rows if str(r.get("health")) == "disabled"]
-        live = len(rows) - len(offline) - len(disabled)
+        unknown = [r for r in rows if str(r.get("health")) == "unknown"]
+        live = len(rows) - len(offline) - len(disabled) - len(unknown)
         if offline and live == 0:
             findings.append(Finding(
                 "sensors", ATTENTION,
@@ -211,6 +219,14 @@ def assess(*, uptime_s=None, last_state_at=None, space_name="", role="",
                 "sensors", DEGRADED,
                 f"{len(offline)} of {len(rows)} sensors are not reporting.",
                 ", ".join(str(r.get("sensor_id") or "?") for r in offline)))
+        elif unknown:
+            # Not a fault and not health. Wavr cannot tell, and saying so is the
+            # whole rule this module is built on.
+            findings.append(Finding(
+                "sensors", DEGRADED,
+                f"Wavr cannot tell whether {len(unknown)} of {len(rows)} "
+                f"sensors are working.",
+                ", ".join(str(r.get("sensor_id") or "?") for r in unknown)))
         else:
             findings.append(Finding(
                 "sensors", HEALTHY,

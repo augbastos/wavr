@@ -160,11 +160,22 @@
     var list = el("attnList");
     if (!tile || !list) return;
     var items = (body && body.items) || [];
-    if (!items.length) {
+    var blind = (body && body.could_not_check) || [];
+    if (!items.length && !blind.length) {
       // Nothing waiting means nothing rendered. An empty inbox with a cheerful
       // heading is furniture, and furniture is what people stop seeing.
       tile.hidden = true;
       return;
+    }
+    if (!items.length) {
+      // Nothing came back AND a source failed to read. This used to return
+      // above, hiding the tile and the chip — so three pairing requests sitting
+      // in an unreadable inbox looked exactly like a calm house. The one case
+      // the "could not check" note was written for was the one case it could
+      // not reach.
+      tile.hidden = false;
+      el("attnHint").textContent = (body && body.headline) || "";
+      list.innerHTML = "";
     }
     tile.hidden = false;
     el("attnHint").textContent = body.headline || "";
@@ -191,16 +202,32 @@
     // Each row goes to the screen that can actually resolve it. The list never
     // resolves anything itself: a second place to approve a pairing request is
     // a second place for that logic to be wrong.
+    // Each target checked against the tab that actually holds the thing.
+    // `discoveries` pointed at `tab-novos` — a DIFFERENT tab, listing Wi-Fi
+    // devices from /api/inventory — so "Review" on a discovered camera opened a
+    // screen that does not contain it. `coverage` pointed at the System tab,
+    // where the coverage list does not live either: it is inside the settings
+    // overlay's Space section.
     var WHERE = {
-      devices: "tab-dispositivos",
-      coverage: "tab-sistema",
-      discoveries: "tab-novos",
-      alerts: "tab-inicio",
-      system: "tab-sistema",
+      devices: { tab: "tab-dispositivos" },
+      discoveries: { tab: "tab-discoveries" },
+      alerts: { tab: "tab-inicio" },
+      system: { tab: "tab-sistema" },
+      // Not a tab at all. The coverage list lives in the gear overlay.
+      coverage: { gear: "gearSecSpace" },
     };
     list.querySelectorAll("[data-where]").forEach(function (b) {
       b.addEventListener("click", function () {
-        var tab = el(WHERE[b.dataset.where] || "tab-inicio");
+        var target = WHERE[b.dataset.where] || WHERE.alerts;
+        if (target.gear) {
+          var gear = el("gearNavBtn");
+          if (gear) gear.click();
+          var rail = document.querySelector(
+            '[data-section="' + target.gear + '"]');
+          if (rail) rail.click();
+          return;
+        }
+        var tab = el(target.tab);
         if (tab) tab.click();
       });
     });
@@ -229,7 +256,12 @@
       // rendering of the same summary in a popover.
       var gear = el("gearNavBtn");
       if (gear) gear.click();
-      var rail = document.querySelector('[data-sec="trust"]');
+      // `data-section`, which is what the gear rail actually uses. This was
+      // `[data-sec="trust"]` — an attribute that appears nowhere in the
+      // dashboard — so the selector matched nothing, only the gear opened, and
+      // the overlay landed on whatever section was last active. The chip's
+      // whole justification is that a summary must be openable.
+      var rail = document.querySelector('[data-section="gearSecTrust"]');
       if (rail) rail.click();
     });
     var attn = el("attnChip");

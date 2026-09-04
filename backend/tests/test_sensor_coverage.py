@@ -32,14 +32,24 @@ def node(node_id, *, modality="mmwave", room="cozinha", state="active",
 
 
 class _Calib:
-    """Stands in for CalibrationStore. `h` present == a solved homography."""
+    """Stands in for CalibrationStore.
+
+    The key is `homography`, because that is what the real store returns.
+
+    This fake used to emit `h` — and so did the consumer, so both agreed and
+    both were wrong: `calibrated` was False for every camera in production while
+    every test here passed. A fake that invents the producer's shape tests
+    nothing but its own invention, which is why
+    `test_the_fake_matches_the_real_calibration_store` exists below.
+    """
 
     def __init__(self, solved=(), mounted=()):
         self._solved, self._mounted = set(solved), set(mounted)
 
     def get(self, name):
         if name in self._solved:
-            return {"h": [1, 0, 0, 0, 1, 0, 0, 0, 1], "img_w": 640, "img_h": 480}
+            return {"homography": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                    "img_w": 640, "img_h": 480}
         if name in self._mounted:
             return {"mount": {"height_m": 2.4}}      # pose only, no homography
         return None
@@ -277,3 +287,36 @@ def test_rows_without_an_id_are_skipped_not_rendered_blank():
     rows = collect_coverage(cameras=[{"room": "sala"}],
                             nodes=[{"state": "active"}], cameras_enabled=["c", "hall-cam"])
     assert rows == []
+
+
+def test_the_fake_matches_the_real_calibration_store():
+    """The fake above and `CalibrationStore` must agree about their key names.
+
+    They did not, for as long as this file has existed. `sensor_coverage` read
+    `h`, the fake emitted `h`, every test passed — and the real store has only
+    ever emitted `homography`, so no camera in production was ever reported as
+    calibrated and the `position` rung was unreachable for all of them.
+
+    Comparing the fake against the REAL producer is the only version of this
+    test that can catch that, so it does exactly that and nothing else.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from wavr.calib_store import CalibrationStore
+
+    store = CalibrationStore(str(Path(tempfile.mkdtemp()) / "calib.db"))
+    store.set_homography("hall-cam", [1, 0, 0, 0, 1, 0, 0, 0, 1], 640, 480,
+                         quality=0.9)
+    real = store.get("hall-cam")
+    fake = _Calib(solved=["hall-cam"]).get("hall-cam")
+
+    assert set(fake) <= set(real), (
+        f"the fake emits keys the real store does not: {sorted(set(fake) - set(real))}")
+
+    # And the consumer reads a key BOTH of them actually have.
+    rows = collect_coverage(cameras=[cam("hall-cam")], calib=store,
+                            cameras_enabled=["hall-cam"])
+    assert rows[0].calibrated is True, (
+        "a camera calibrated through the real store still reports uncalibrated")
+    assert rows[0].precision_level == "position"

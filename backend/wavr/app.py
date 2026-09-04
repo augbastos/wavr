@@ -3319,7 +3319,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             space_name = (sp.to_dict().get("name") or "") if sp else ""
         role = ""
         with suppress(Exception):
-            role = str((_core_registry.self_status() or {}).get("status") or "")
+            # `self_core()`, which exists and returns a frozen `Core`.
+            # `self_status()` does not exist at all — the AttributeError was
+            # swallowed by this very `suppress`, so the field was permanently
+            # empty and `wavr status` never printed the Role line on a
+            # multi-Core Space. A suppress that hides a typo is a suppress that
+            # hides a feature.
+            core = _core_registry.self_core()
+            role = str(getattr(core, "status", "") or "") if core else ""
 
         db_ok = True
         with suppress(Exception):

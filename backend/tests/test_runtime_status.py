@@ -175,3 +175,37 @@ def test_every_state_the_tray_can_show_is_reachable():
     }
     assert seen == {STARTING, HEALTHY, UPDATING, PAUSED, DEGRADED, ATTENTION,
                     UNAVAILABLE}
+
+
+def test_a_sensor_wavr_cannot_read_is_not_counted_as_working():
+    """`sensor_coverage` emits ok / offline / disabled / UNKNOWN, and says in
+    its own docstring that a row whose source is missing from the manager
+    "reads `unknown`, never green, so a renamed source shows up as a gap
+    instead of false reassurance".
+
+    This module subtracted only offline and disabled, so `unknown` was swept
+    into the live count — and the coverage screen said "NOT being watched"
+    while the tray said "everything reporting" about the same sensor.
+    """
+    s = assess(uptime_s=86400, last_state_at=ago(30),
+               coverage_rows=[cov("a"), cov("ble-host", health="unknown")],
+               now=NOW)
+    assert s.state == DEGRADED
+    said = " ".join(f.text for f in s.findings)
+    assert "cannot tell" in said, said
+    assert "reporting." not in said or "1 sensor reporting" not in said
+
+
+def test_every_health_the_coverage_module_can_emit_is_handled_here():
+    """The two modules must agree about the vocabulary. This one used to know
+    three of the four values, and the fourth defaulted to healthy."""
+    from wavr import sensor_coverage as sc
+
+    emitted = {sc.HEALTH_OK, sc.HEALTH_OFFLINE, sc.HEALTH_DISABLED,
+               sc.HEALTH_UNKNOWN}
+    for health in emitted:
+        s = assess(uptime_s=86400, last_state_at=ago(30),
+                   coverage_rows=[cov("x", health=health)], now=NOW)
+        finding = next((f for f in s.findings if f.key == "sensors"), None)
+        assert finding is not None, f"health {health!r} produced no sensor finding"
+        assert finding.text.strip(), f"health {health!r} produced an empty sentence"
