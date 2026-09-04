@@ -412,6 +412,37 @@
     });
   }
 
+  // What Wavr COULD talk to, and where each one reaches. A different question
+  // from "what is switched on" — somebody deciding whether to enable something
+  // needs to know before they enable it, not after.
+  var REACH_WORDS = {
+    local: "stays on this machine",
+    lan: "stays on your network",
+    internet: "contacts a server, tells it nothing about your home",
+    cloud: "a third party receives something about your home"
+  };
+
+  async function renderProviders(into) {
+    var body;
+    try { body = await api("/api/privacy/providers"); } catch (e) { return; }
+    var groups = (body && body.by_reach) || {};
+    ["local", "lan", "internet", "cloud"].forEach(function (reach) {
+      (groups[reach] || []).forEach(function (p) {
+        var bits = [REACH_WORDS[reach] || reach];
+        if (p.requires && p.requires.length) {
+          bits.push("needs " + p.requires.join(" and "));
+        }
+        row(into, p.label, bits.join(" · "), p.notes || "");
+      });
+    });
+    if (body && body.note) {
+      var n = document.createElement("p");
+      n.className = "panel-note";
+      n.textContent = body.note;
+      into.appendChild(n);
+    }
+  }
+
   async function renderPrivacyData() {
     if (MODE !== "live") return;
     var host = el("privacyDataBody");
@@ -429,6 +460,13 @@
     keeps.appendChild(head("What Wavr keeps", "including what it never keeps"));
     host.appendChild(keeps);
     await renderStored(keeps);
+
+    var can = document.createElement("div");
+    can.className = "tile";
+    can.appendChild(head("What Wavr can connect to",
+                         "capabilities, not what is switched on"));
+    host.appendChild(can);
+    await renderProviders(can);
   }
 
   // Rendered when the section is opened rather than on load: it makes four

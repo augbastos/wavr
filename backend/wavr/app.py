@@ -104,6 +104,7 @@ from wavr.discovery_feed import (feed_core_topology, feed_devices,
                                  feed_pending_nodes)
 from wavr.api_coverage import build_coverage_router
 from wavr.api_privacy import build_privacy_router
+from wavr.provider_catalog import build_registry as build_provider_registry
 from wavr.api_topology import build_topology_router
 from wavr.api_trace import build_trace_router
 from wavr.api_validation import build_validation_router
@@ -2863,8 +2864,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                              f"{connectors_on} enabled.")),
         }
 
+    # Rebuilt at start rather than persisted: a provider is a property of what
+    # THIS build can talk to, and a stored catalog would list a camera removed
+    # months ago.
+    _providers = build_provider_registry()
+    app.state.providers = _providers
     app.include_router(build_privacy_router(
-        db_path=cfg.db_path, posture_fn=_privacy_posture,
+        db_path=cfg.db_path, posture_fn=_privacy_posture, registry=_providers,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
     app.include_router(build_topology_router(
         house_fn=lambda: _house, store=_topology_store,

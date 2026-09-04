@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from wavr.data_inventory import inventory
+from wavr.provider_catalog import build_registry
 
 
 async def _deps_not_wired():
@@ -19,11 +20,18 @@ async def _deps_not_wired():
                         detail="privacy routes have no auth gate wired")
 
 
-def build_privacy_router(db_path: str = "", posture_fn=None,
+def build_privacy_router(db_path: str = "", posture_fn=None, registry=None,
                          deps=None) -> APIRouter:
     """`posture_fn() -> dict` reports the live switches (LAN access, cameras,
-    external connectors). Injected so this module reads no config."""
+    external connectors). Injected so this module reads no config.
+
+    `registry` is the provider catalog — what this Wavr COULD talk to, which is
+    a different question from what is switched on and belongs on a privacy
+    screen for a different reason: somebody deciding whether to enable something
+    needs to know where it reaches before they enable it, not after.
+    """
     router = APIRouter(dependencies=deps if deps is not None else [Depends(_deps_not_wired)])
+    _registry = registry if registry is not None else build_registry()
 
     @router.get("/api/privacy/data")
     async def stored_data():
@@ -54,5 +62,16 @@ def build_privacy_router(db_path: str = "", posture_fn=None,
                     "note": "Wavr could not read its own settings just now. "
                             "This is not a statement that nothing is enabled."}
         return {**body, "available": True}
+
+    @router.get("/api/privacy/providers")
+    async def providers():
+        """Everything Wavr can take spatial evidence from, grouped by how far
+        each one reaches.
+
+        Grouped by reach rather than by kind because that is the axis somebody
+        worried about privacy actually sorts on. Capabilities, never state — a
+        provider appearing here says nothing about whether it is enabled.
+        """
+        return _registry.catalog()
 
     return router
