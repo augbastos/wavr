@@ -78,7 +78,14 @@ def test_state_returns_latest_per_room():
                                         "explanation", "ts",
                                         # precision ladder (additive): the resolution axis,
                                         # distinct from confidence — how DETAILED, not how SURE.
-                                        "precision_level", "precision_pct", "precision_next"}
+                                        "precision_level", "precision_pct", "precision_next",
+                                        # Where this room's sensors contradict each other
+                                        # (additive). Derived from `sources`, which Watch
+                                        # already lets through — SUPPRESSED_FIELDS is
+                                        # targets/identities/vitals — so it carries nothing
+                                        # `sources` did not. It exists so the household is
+                                        # told what an MCP agent was already being told.
+                                        "disagreement"}
 
 
 def test_state_exposes_identities_only_when_flag_on():

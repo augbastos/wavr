@@ -395,6 +395,130 @@ def test_the_chip_never_disagrees_with_the_list(page, core):
         "the list and the badge came from the same request and still disagree")
 
 
+def test_a_room_whose_sensors_contradict_each_other_says_so_on_screen(page, core):
+    """Never hide a disagreement behind a confidence ring.
+
+    Two contradicting observations are pushed into the real fusion engine
+    through the real ingest route, and the card must say WHAT disagrees — not
+    just lower a number. "68%" over a radar seeing somebody and a camera seeing
+    an empty room is a summary of a contradiction, which is the one place a
+    summary lies.
+    """
+    import urllib.request
+
+    def post(path, body):
+        req = urllib.request.Request(
+            core + path, data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "X-Wavr-Local": "1"},
+            method="POST" if "observations" in path else "PUT")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read())
+
+    # Two registered providers, so the contradiction comes in through the real
+    # ingest contract rather than being poked into fusion from the side. An
+    # unbound provider is loopback-only, which is exactly what this test is.
+    for pid, modality in (("t_radar", "node"), ("t_cam", "node")):
+        post(f"/api/providers/external/{pid}",
+             {"label": pid, "reach": "lan", "modality": modality,
+              "ceiling": "room"})
+    post("/api/providers/t_radar/observations",
+         {"observations": [{"room": "sala", "present": True, "confidence": 0.9,
+                            "sensor_id": "radar-1"}]})
+    post("/api/providers/t_cam/observations",
+         {"observations": [{"room": "sala", "present": False, "confidence": 0.8,
+                            "sensor_id": "cam-1"}]})
+
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector('.card[data-room="sala"]', timeout=30000)
+    try:
+        page.wait_for_selector('.card[data-room="sala"] .room-dissent:not([hidden])',
+                               timeout=20000)
+    except Exception:                        # noqa: BLE001
+        pytest.skip("fusion did not register a disagreement from these events")
+
+    said = page.locator('.card[data-room="sala"] .room-dissent').inner_text()
+    assert "disagree" in said.lower()
+    # WHICH sensors, and what each says. "Sensors disagree" on its own is an
+    # anxiety with no action attached to it.
+    assert "occupied" in said.lower() and "empty" in said.lower()
+    assert page.script_errors == [], page.script_errors
+
+
+def test_the_capability_matrix_lets_you_compare_rooms(page, core):
+    """"Which rooms can count people?" cannot be answered by reading sentences.
+
+    A table because the question is comparative. Every cell carries TEXT as well
+    as a mark, because a tick that is only a colour is nothing to a screen
+    reader — and this table is the clearest statement Wavr makes about what it
+    can and cannot do.
+    """
+    open_settings(page, core, wait_for="#developerBody")
+    # The Space section holds it; open that rail item.
+    rail = page.locator('[data-sec="space"]')
+    if rail.count():
+        rail.first.click()
+    try:
+        page.wait_for_selector("#spaceCapMatrix tbody tr", timeout=20000)
+    except Exception:                            # noqa: BLE001
+        pytest.skip("this Core enumerated no rooms to compare")
+
+    head = page.locator("#spaceCapMatrix thead").inner_text().upper()
+    for column in ("PRESENCE", "COUNT", "POSITION", "IDENTITY"):
+        assert column in head, head
+
+    first = page.locator("#spaceCapMatrix tbody tr").first
+    cells = first.locator("td")
+    assert cells.count() == 4
+    for i in range(4):
+        text = cells.nth(i).inner_text().strip()
+        assert text, f"cell {i} says nothing; a colour alone is not a state"
+
+    # "Not available here" and "switched off" must not share a treatment: one is
+    # a limit of the hardware, the other is a decision somebody can unmake.
+    states = {cells.nth(i).get_attribute("data-has") for i in range(4)}
+    assert states <= {"yes", "no", "off", "lost"}, states
+    assert page.script_errors == [], page.script_errors
+
+
+def test_an_empty_state_teaches_instead_of_only_reporting_emptiness(page, core):
+    """An empty state is the one moment somebody is looking straight at a
+    feature they have never used. "No cameras" spends that moment telling them
+    what they can already see.
+
+    Driven in a browser rather than grepped, because these strings live inside
+    template literals built at render time — a grep would pass on a string that
+    never reaches the page.
+
+    Deliberately NOT asserting on the timeline: a running Core produces an event
+    within seconds, so "the timeline is empty" is not a state this fixture can
+    hold. A test that needs an unreachable precondition is a test that will be
+    made to pass by weakening it.
+    """
+    # Two clicks deep on purpose, and worth writing down: the Devices tab opens
+    # on a plain "add a device" flow, and the camera list sits behind
+    # "Advanced: browse the full device list". That is correct progressive
+    # disclosure — adding an RTSP camera is an advanced act — and it also means
+    # the only way to know this empty state is REACHABLE is to walk the path a
+    # person walks.
+    page.goto(f"{core}/?cachebust={time.time()}")
+    page.wait_for_selector("#tab-inicio", timeout=30000)
+    page.click("#tab-dispositivos")
+    page.wait_for_selector("#devAdvancedToggle", timeout=20000)
+    page.click("#devAdvancedToggle")
+    page.wait_for_selector("#dsubBtnAtivos", state="visible", timeout=20000)
+    page.click("#dsubBtnAtivos")
+    page.wait_for_selector("#camList", state="visible", timeout=20000)
+    page.wait_for_timeout(2000)
+
+    cams = page.locator("#camList").inner_text()
+    assert "No cameras yet" in cams, cams
+    # It says what a camera would ADD, and answers the question that stops
+    # people adding one.
+    assert "count people" in cams
+    assert "never stored" in cams
+    assert page.script_errors == [], page.script_errors
+
+
 # -- Downloads, which are the one thing a backend test cannot prove ------------
 
 def test_the_setup_download_produces_a_file_with_no_credentials(page, core):

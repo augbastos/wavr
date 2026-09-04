@@ -10,15 +10,22 @@
 // precaching the same-origin shell, so it adds zero external egress.
 //
 // Bump CACHE to invalidate the old shell on the next activate.
-const CACHE = "wavr-shell-v32";
+const CACHE = "wavr-shell-v36";
 const VENDOR_CACHE = "wavr-vendor-v1";
-// The two blocks lifted out of index.html (the first-run wizard and the Discovery
-// Inbox) are part of the shell: without them a cached offline launch would render
-// a dashboard whose setup screen and Discoveries tab silently do nothing.
+// Every block lifted out of index.html is part of the SHELL. Without them a
+// cached offline launch renders a dashboard whose pieces silently do nothing —
+// and `format.js` is worse than that: it is loaded before every inline block and
+// everything calls it, so an offline launch without it is a blank page.
+//
+// Adding a `js/` file to the shell and not to this list is a bug that only
+// appears offline, which is the hardest place to notice one. `test_sw_shell.py`
+// fails when the two lists drift apart.
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg",
+               "./js/format.js", "./js/runtime.js",
                "./js/wizard.js", "./js/discoveries.js", "./js/trust.js",
                "./js/developer.js"];
 const SHELL_PATHS = new Set(["/", "/index.html", "/manifest.webmanifest", "/icon.svg",
+                             "/js/format.js", "/js/runtime.js",
                              "/js/wizard.js", "/js/discoveries.js", "/js/trust.js",
                              "/js/developer.js"]);
 

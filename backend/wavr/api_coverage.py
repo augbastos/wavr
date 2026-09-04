@@ -24,7 +24,8 @@ async def _deps_not_wired():
                         detail="coverage route has no auth gate wired")
 
 
-def build_coverage_router(coverage_fn=None, rooms_fn=None, deps=None) -> APIRouter:
+def build_coverage_router(coverage_fn=None, rooms_fn=None, deps=None,
+                          identity_enabled_fn=None) -> APIRouter:
     """`GET /api/coverage` — what this Core can see, and where it cannot.
 
     `coverage_fn` returns the list of `SensorCoverage`; `rooms_fn` the room names
@@ -33,6 +34,11 @@ def build_coverage_router(coverage_fn=None, rooms_fn=None, deps=None) -> APIRout
     """
     router = APIRouter()
     deps = list(deps) if deps else [Depends(_deps_not_wired)]
+    # Identity is a house-wide SETTING, not a per-room capability. It travels
+    # with coverage so the capability table can say "off by choice" rather than
+    # rendering it as a per-room "no" — which would read as a hardware limit
+    # instead of a decision somebody made and can unmake.
+    _identity = identity_enabled_fn or (lambda: False)
 
     @router.get("/api/coverage", dependencies=deps)
     async def coverage():
@@ -50,6 +56,10 @@ def build_coverage_router(coverage_fn=None, rooms_fn=None, deps=None) -> APIRout
                 rooms = []         # not hide the sensors that ARE readable
         body = summarize(rooms, coverage_fn())
         body["available"] = True
+        try:
+            body["identity_enabled"] = bool(_identity())
+        except Exception:          # noqa: BLE001 — absent beats a cheerful guess
+            pass
         return body
 
     return router

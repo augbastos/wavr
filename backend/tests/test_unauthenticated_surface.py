@@ -46,7 +46,7 @@ EXPECTED_SHELL = {
     "/", "/index.html", "/measure.html", "/manifest.webmanifest",
     "/sw.js", "/icon.svg",
     "/js/wizard.js", "/js/discoveries.js", "/js/trust.js", "/js/developer.js",
-    "/js/runtime.js",
+    "/js/runtime.js", "/js/format.js",
     "/sdk/javascript/wavr.js",
 }
 

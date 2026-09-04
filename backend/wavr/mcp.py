@@ -48,6 +48,9 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
+# One producer, so the dashboard and an agent cannot be told different
+# things about the same contradiction. See `wavr/disagreement.py`.
+from wavr.disagreement import disagreement as _disagreement
 from wavr.house_status import DEFAULT_NETWORK_WINDOW_MINUTES
 
 _log = logging.getLogger("wavr.mcp.control")
@@ -638,42 +641,6 @@ _NEXT_IN_WORDS = {
                                   "them. A short guided calibration walk would "
                                   "let it report positions."),
 }
-
-
-def _disagreement(sources: list) -> dict:
-    """Where fresh sensors in one room contradict each other.
-
-    Only FRESH ones are compared: a stale sensor is not disagreeing, it is
-    absent, and reporting it as dissent would manufacture a contradiction out of
-    something being unplugged.
-
-    A source that reports absence is not treated as an equal vote — Wavr's own
-    fusion gives absence no mass, because a camera failing to see a still person
-    is weaker evidence than one seeing somebody. The report says both what the
-    disagreement is and how Wavr weighed it, so an agent does not have to guess
-    which side won.
-    """
-    fresh = [s for s in (sources or []) if s.get("health") == "fresh"]
-    saying_present = [s for s in fresh if s.get("presence")]
-    saying_empty = [s for s in fresh if not s.get("presence")]
-    if not (saying_present and saying_empty):
-        return {"disagree": False, "sensors": []}
-
-    def label(s):
-        return {"sensor_id": s.get("sensor_id", ""),
-                "modality": s.get("modality", ""),
-                "says": "occupied" if s.get("presence") else "empty"}
-
-    counts = {s.get("count") for s in fresh if s.get("count") is not None}
-    return {
-        "disagree": True,
-        "sensors": [label(s) for s in fresh],
-        "counts_disagree": len(counts) > 1,
-        "note": ("These sensors contradict each other. Wavr gives a report of "
-                 "absence no weight in the merge — a sensor that fails to see a "
-                 "still person is weaker evidence than one that sees somebody — "
-                 "so the room reads as occupied while the disagreement stands."),
-    }
 
 
 def explain_room_state(provider: StateProvider, room: str) -> dict | None:

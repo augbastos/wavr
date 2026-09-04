@@ -18,6 +18,12 @@
 <!-- 3D house view: self-hosted three.js (r185 / npm three@0.185.1), NO CDN. Relative
      paths so this resolves whether served from "/" (live/desktop) or Pages' root (demo).
      Must stay in <head>, parsed before the body script's first import(). -->
+<!-- Dates, times and numbers in the READER's conventions. Loaded before every
+     inline block because the shell calls it while parsing. Nine call sites
+     used to hard-code "en-GB", so somebody in Lisbon or Chicago read British
+     dates with no way to change it: the locale was not a setting, it was nine
+     string literals. -->
+<script src="js/format.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -2105,6 +2111,41 @@
 .attn-detail{color:var(--fg-dim,#8b949e);font-size:.82rem;margin-top:3px}
 .attn-since{color:var(--fg-dim,#8b949e);font-size:.76rem;margin-top:4px}
 .attn-go{flex:0 0 auto;align-self:center}
+
+/* Sensor disagreement. Amber, because it is uncertainty rather than failure —
+   the room still has an answer and Wavr still stands behind it. It is a NOTE,
+   not an alert: a person should not be alarmed, they should be informed. */
+.card .room-dissent{
+  display:flex;flex-direction:column;gap:2px;
+  margin:6px 0 2px;padding:6px 9px;
+  border-left:3px solid var(--state-degraded,#d29922);
+  background:rgba(210,153,34,.07);border-radius:0 6px 6px 0;
+}
+.card .room-dissent-head{font-size:.78rem;font-weight:600;color:var(--state-degraded,#d29922)}
+.card .room-dissent-who{font-size:.75rem;color:var(--fg-dim,#8b949e)}
+
+/* Capability matrix. A table because the question is comparative; cards would
+   make you read five of them to answer "which rooms can count?".
+
+   Every cell carries TEXT as well as a mark — a tick that is only a colour is
+   nothing to a screen reader, and this table is the clearest statement Wavr
+   makes about what it can and cannot do. */
+.cov-matrix-wrap{overflow-x:auto;margin:4px 0 10px}
+.cov-matrix{width:100%;border-collapse:collapse;font-size:.82rem}
+.cov-matrix th,.cov-matrix td{padding:6px 10px;text-align:left;
+  border-bottom:1px solid var(--line,#30363d);white-space:nowrap}
+.cov-matrix thead th{color:var(--fg-dim,#8b949e);font-weight:600;font-size:.76rem;
+  text-transform:uppercase;letter-spacing:.04em}
+.cov-matrix tbody th{font-weight:600}
+.cov-matrix td[data-has="yes"]{color:var(--state-healthy,#3fb950)}
+/* "Not available here" and "switched off" are DIFFERENT facts and must not
+   share a treatment: one is a limit of the hardware, the other is a decision
+   somebody made and can unmake. */
+.cov-matrix td[data-has="no"]{color:var(--fg-dim,#8b949e)}
+.cov-matrix td[data-has="off"]{color:var(--state-paused,#8b949e);font-style:italic}
+.cov-matrix td[data-has="lost"]{color:var(--state-degraded,#d29922)}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap}
 </style>
 </head>
 <body>
@@ -2489,7 +2530,7 @@
         <div class="inicio-grid">
           <div class="tile rooms-col">
             <div class="tile-head"><h2 id="rooms-h">Rooms</h2></div>
-            <div class="rooms" id="rooms" aria-label="Status by room"><div class="empty">waiting for room data…</div></div>
+            <div class="rooms" id="rooms" aria-label="Status by room"><div class="empty">Waiting for the Core's first reading…</div></div>
           </div>
           <div id="mapHome" class="map-home">
             <!-- Core-panel only (shown by the landscape/short media query): the map starts
@@ -2597,7 +2638,7 @@
               <button type="button" class="fchip" data-kind="sistema" aria-pressed="false">system</button>
             </div>
           </div>
-          <div class="timeline" id="timeline" role="log" aria-labelledby="tl-h"><div class="empty">no events yet</div></div>
+          <div class="timeline" id="timeline" role="log" aria-labelledby="tl-h"><div class="empty"><b>Nothing has happened yet</b><br>Rooms becoming occupied or empty, sensors going quiet and devices appearing all land here, newest first.</div></div>
           <div id="tlNone" class="empty" hidden>no events match these filters</div>
           <p class="panel-note tl-note">Local filter over the events already loaded (last 60). Deeper filtering by room/period needs <code>room=</code>/<code>since=</code> backend parameters — not in this version yet.</p>
         </div>
@@ -3224,7 +3265,7 @@
             <span id="discCounts" class="pair-dev-meta" aria-live="polite"></span>
           </div>
           <p id="discLoading" class="empty" aria-live="polite">Loading…</p>
-          <p id="discEmpty" class="empty" aria-live="polite" hidden>Nothing needs your attention.</p>
+          <p id="discEmpty" class="empty" aria-live="polite" hidden><b>Nothing new on your network</b><br>Wavr watches for devices it has not seen before, cameras it recognises, sensor nodes asking to join and other Cores. Anything it finds waits here for you to decide.</p>
           <div id="discList" class="dev-list" aria-live="polite"></div>
           <p class="panel-note" id="discNote" hidden></p>
         </div>
@@ -3247,7 +3288,7 @@
             <p id="transSensing" class="qc-headline" aria-live="polite"></p>
             <p id="transSensingSub" class="qc-sub" aria-live="polite"></p>
             <h4 class="pair-sub" id="transCamH" hidden>Cameras</h4>
-            <p id="transCamNone" class="empty" hidden>No cameras registered.</p>
+            <p id="transCamNone" class="empty" hidden>No cameras yet — add one under Devices, and its stream address stays on this machine.</p>
             <div id="transCameras" class="qc-rooms" aria-live="polite"></div>
             <h4 class="pair-sub">In numbers</h4>
             <p id="transCounts" class="qc-sub" aria-live="polite"></p>
@@ -3397,6 +3438,25 @@
     <div id="spaceCoverageTile" class="pair tile" hidden>
       <div class="tile-head"><h2 id="space-coverage-h">What Wavr can see</h2>
         <span class="hint">per room, and where it is blind</span></div>
+      <!-- A MATRIX, deliberately, and not more cards. The question this
+           answers is comparative — "which rooms can count people, and which
+           only know somebody is there" — and that question cannot be answered
+           by scanning sentences. The list below it stays, because comparing and
+           explaining are different jobs: the table says WHAT, the rows say why
+           and offer the fix. -->
+      <div class="cov-matrix-wrap">
+        <table id="spaceCapMatrix" class="cov-matrix">
+          <caption class="visually-hidden">What each room can perceive</caption>
+          <thead><tr>
+            <th scope="col">Room</th>
+            <th scope="col" title="Is anybody there?">Presence</th>
+            <th scope="col" title="How many?">Count</th>
+            <th scope="col" title="Where in the room?">Position</th>
+            <th scope="col" title="Who? Off unless you turn it on.">Identity</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
       <div id="spaceCoverageList" class="pair-dev-list" aria-live="polite"></div>
       <p class="panel-note">No coverage percentage is shown: Wavr has no floor
         plan to work one out from, and a made-up number is worse than none.</p>
@@ -4571,7 +4631,7 @@ function fmtShortDate(iso){
   if(typeof iso!=="string" || !iso) return null;
   const d = new Date(iso);
   if(isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("en-GB",{day:"2-digit",month:"2-digit",year:"2-digit"});
+  return WavrFmt.date(d);
 }
 function fmtRelative(iso){
   if(typeof iso!=="string" || !iso) return null;
@@ -4587,7 +4647,7 @@ function fmtDateTime(iso){
   if(typeof iso!=="string" || !iso) return null;
   const d = new Date(iso);
   if(isNaN(d.getTime())) return null;
-  return d.toLocaleString("en-GB",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+  return WavrFmt.dateTime(d);
 }
 
 // ---- P4 (progressive disclosure, layer 1): plain-language word for a confidence value.
@@ -5491,7 +5551,16 @@ async function renderCameras(){
     try{ const s = await (await fetch(location.origin+"/api/status")).json();
          ptzFeature = !!(s.features && s.features.ptz); }catch{}
     const list = document.getElementById("camList");
-    list.innerHTML = cams.length ? "" : `<div class="empty">no camera configured</div>`;
+    // Teaches rather than terminates. This is the one moment somebody is
+    // looking straight at a feature they have not used, and "no camera
+    // configured" spends it telling them what they can already see.
+    list.innerHTML = cams.length ? "" : `<div class="empty">
+      <b>No cameras yet</b><br>
+      A camera is what lets Wavr count people in a room rather than only know
+      somebody is there — and, once calibrated, place them within it. Frames are
+      never stored; Wavr asks each one "is there a person in this picture?" and
+      discards it.
+    </div>`;
     cams.forEach(c=>{
       const row = document.createElement("div"); row.className="cam-row";
       const label = document.createElement("span");
@@ -6718,7 +6787,7 @@ async function renderPairing(){
           const dt = new Date(d.expires_at);
           if(!isNaN(dt.getTime())){
             const exp = document.createElement("span"); exp.className = "pair-dev-meta";
-            exp.textContent = "expires " + dt.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+            exp.textContent = "expires " + WavrFmt.time(dt);
             ctl.appendChild(exp);
           }
         }
@@ -6994,7 +7063,7 @@ function renderGuestInvite(){
         if(!isNaN(dt.getTime())){
           expiryNote.hidden = false;
           expiryNote.textContent = "Guest access expires at " +
-            dt.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"}) + ".";
+            WavrFmt.time(dt) + ".";
         } else expiryNote.hidden = true;
       } else expiryNote.hidden = true;
 
@@ -8403,6 +8472,54 @@ async function renderCoverage(){
   var body;
   try{ body = await r.json(); }catch{ return; }
   if(!body || body.available === false) return; // could not enumerate -> say nothing
+
+  // ---- The comparative view -------------------------------------------------
+  //
+  // Derived from the SAME `precision_level` the row below renders, so the table
+  // and the sentence can never disagree. The ladder is Wavr's own
+  // (`fusion.RESOLUTION_SCOPE`): none < house < room < count < position, and a
+  // rung means every rung below it is available too.
+  var LADDER = ["none", "house", "room", "count", "position"];
+  var tbody = document.querySelector("#spaceCapMatrix tbody");
+  if (tbody) {
+    tbody.textContent = "";
+    // Identity is a house-wide SETTING, not a per-room capability, and it is
+    // off unless somebody turned it on. Rendering it as a per-room "no" would
+    // read as a hardware limit rather than a choice.
+    var identityOn = !!(body.identity_enabled);
+    (body.rooms || []).forEach(function (room) {
+      var rung = LADDER.indexOf(String(room.precision_level || "none"));
+      var tr = document.createElement("tr");
+      var th = document.createElement("th");
+      th.scope = "row"; th.textContent = room.room;
+      tr.appendChild(th);
+
+      // A room that HAS the sensors but is not being watched right now is a
+      // third state: it is not a missing capability, it is a lost one, and the
+      // errand is different.
+      var watching = room.observing !== false;
+      [["room", "Presence"], ["count", "Count"], ["position", "Position"]]
+        .forEach(function (pair) {
+          var need = LADDER.indexOf(pair[0]);
+          var td = document.createElement("td");
+          var has = rung >= need && need > 0;
+          if (has && !watching) {
+            td.dataset.has = "lost"; td.textContent = "— not right now";
+          } else if (has) {
+            td.dataset.has = "yes"; td.textContent = "✓ yes";
+          } else {
+            td.dataset.has = "no"; td.textContent = "— no";
+          }
+          tr.appendChild(td);
+        });
+
+      var idt = document.createElement("td");
+      if (identityOn) { idt.dataset.has = "yes"; idt.textContent = "✓ on"; }
+      else { idt.dataset.has = "off"; idt.textContent = "off by choice"; }
+      tr.appendChild(idt);
+      tbody.appendChild(tr);
+    });
+  }
 
   list.textContent = "";
   (body.rooms || []).forEach(function(room){
@@ -12264,6 +12381,15 @@ function upsert(rs){
           </div>
         </div>
       </div>
+      <!-- A contradiction between this room's sensors, said out loud.
+           A confidence ring is a summary, and a summary of a disagreement is
+           the one place a summary lies: "68%" over a radar saying somebody is
+           there and a camera saying the room is empty hides the interesting
+           part. Static markup; every string is set with textContent. -->
+      <div class="room-dissent" hidden role="note">
+        <span class="room-dissent-head"></span>
+        <span class="room-dissent-who"></span>
+      </div>
       <div class="srcs"></div>
       <details class="why"><summary>Why?</summary>
         <div class="drill"></div><div class="vit"></div>
@@ -12366,6 +12492,48 @@ function upsert(rs){
   const present = new Map((rs.sources || []).map(s => [s.modality, s]));
   const absent = [...SEEN_MODS].filter(m => !present.has(m))
     .sort((a, b) => (MODALITY_LABEL[a] || a).localeCompare(MODALITY_LABEL[b] || b));
+  // ---- Disagreement, above the source rows because it changes how they read ----
+  //
+  // The BACKEND decides whether these sensors contradict each other
+  // (`wavr/disagreement.py`), and the same function answers for an AI agent over
+  // MCP. A second implementation here would eventually differ from it, in front
+  // of somebody with no way to tell which is right — and for a while the agent
+  // was told and the household was not, which is the wrong way round.
+  const dis = rs.disagreement;
+  const disEl = c.querySelector(".room-dissent");
+  if (disEl) {
+    if (dis && dis.disagree) {
+      disEl.hidden = false;
+      // Says WHAT disagrees, not just that something does. "Sensors disagree"
+      // alone is an anxiety with no action attached to it.
+      //
+      // Labelled by modality where that is enough to tell them apart — "radar
+      // vs camera" is the sentence a person can act on. When two sensors share
+      // a modality the label collapses to "node: occupied · node: empty", which
+      // is worse than useless, so those fall back to the sensor's own name.
+      // This is the household's own dashboard: their equipment names are the
+      // right thing to show here, unlike the experience layer, which must never
+      // see them.
+      const mods = (dis.sensors || []).map(x => x.modality);
+      const ambiguous = new Set(mods.filter((m, i) => mods.indexOf(m) !== i));
+      const who = (dis.sensors || []).map(x => {
+        const named = ambiguous.has(x.modality)
+          ? (x.sensor_id || x.modality)
+          : (MODALITY_LABEL[x.modality] || x.modality || x.sensor_id);
+        return named + ": " + (x.says === "occupied" ? "occupied" : "empty");
+      });
+      disEl.querySelector(".room-dissent-head").textContent =
+        dis.counts_disagree ? "Sensors disagree, including on how many"
+                            : "Sensors disagree";
+      disEl.querySelector(".room-dissent-who").textContent = who.join(" · ");
+      // The reason the room still has an answer travels with it, or the answer
+      // reads as a mistake somebody should correct.
+      disEl.title = dis.note || "";
+    } else {
+      disEl.hidden = true;
+    }
+  }
+
   const srcs = c.querySelector(".srcs");
   srcs.textContent = "";
   const mkRow = (modality, s) => {
@@ -15929,7 +16097,7 @@ try {
     if(M === "simulated"){
       box.appendChild(diagRow("connection", "demo — local generator, no network", "ok"));
     } else if(wsDown){
-      var since = wsSince ? new Date(wsSince).toLocaleTimeString("en-GB") : "?";
+      var since = wsSince ? WavrFmt.time(wsSince, {hour:"2-digit", minute:"2-digit", second:"2-digit"}) : "?";
       box.appendChild(diagRow("connection", "reconnecting… since " + since + " · " + wsDrops + " drop(s)", "warn"));
     } else {
       box.appendChild(diagRow("connection",
@@ -16083,7 +16251,7 @@ try {
       // this check really only touched the gateway — say so where the result is read.
       box.appendChild(elc("p", "panel-note", "local checks only — public-resolver checks are off on this hub"));
     }
-    box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()
+    box.appendChild(elc("p", "panel-note pres-n", "checked at " + WavrFmt.time(new Date())
       + " — point-in-time snapshot, never refreshes on its own"));
   }
   (function(){
@@ -16525,7 +16693,7 @@ try {
       }
       box.appendChild(rep);
     }
-    box.appendChild(elc("p", "panel-note pres-n", "checked at " + new Date().toLocaleTimeString()
+    box.appendChild(elc("p", "panel-note pres-n", "checked at " + WavrFmt.time(new Date())
       + " — point-in-time snapshot, never refreshes on its own"));
   }
   (function(){
@@ -17533,8 +17701,8 @@ window.__wavrRenderWhatsNewItems = function(ul, entry){
   var dateEl = document.getElementById("coreClockDate");
   function tickClock(){
     var d = new Date();
-    if(timeEl) timeEl.textContent = d.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
-    if(dateEl) dateEl.textContent = d.toLocaleDateString("en-GB", {weekday:"short", day:"2-digit", month:"2-digit"});
+    if(timeEl) timeEl.textContent = WavrFmt.time(d);
+    if(dateEl) dateEl.textContent = WavrFmt.date(d, {weekday:"short", day:"2-digit", month:"2-digit"});
   }
   tickClock();
   setInterval(tickClock, 1000);

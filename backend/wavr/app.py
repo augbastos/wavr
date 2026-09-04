@@ -27,6 +27,7 @@ from wavr import __version__
 from wavr.config import load_config
 from wavr.runtime_status import assess as assess_runtime
 from wavr.attention import collect as collect_attention, summarise as summarise_attention
+from wavr.disagreement import disagreement as room_disagreement
 from wavr.contracts import version as contract_version
 from wavr.housemap import (load_house_map, room_names, room_polygon, save_house_map,
                            upsert_room, validate_house_map, HouseMapError)
@@ -382,7 +383,7 @@ _STATIC_SHELL_PATHS = frozenset({
     "/", "/index.html", "/measure.html", "/manifest.webmanifest",
     "/sw.js", "/icon.svg",
     "/js/wizard.js", "/js/discoveries.js", "/js/trust.js", "/js/developer.js",
-    "/js/runtime.js",
+    "/js/runtime.js", "/js/format.js",
     "/sdk/javascript/wavr.js",
 })
 _STATIC_SHELL_PREFIXES = ("/vendor/", "/experiences/")
@@ -1595,11 +1596,32 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         from wavr.space_store import device_role_for_person
         return device_role_for_person(person.role)
 
+    def _with_disagreement(d: dict) -> dict:
+        """The room dict, plus where its sensors contradict each other.
+
+        Attached in ONE helper because two places need it and they must agree:
+        `_publish`, which stores it in `latest` and ships it to every consumer,
+        and the change-gate below, which compares a freshly built dict against
+        what is already in `latest`.
+
+        Adding it only in `_publish` broke that gate the moment it was written:
+        the comparison saw the field on one side and not the other, decided
+        every frame had changed, and reinstated a database row every few seconds
+        per room forever — precisely the write the gate exists to avoid. Caught
+        by `test_ingest_skips_persist_when_fused_state_is_unchanged`, which is
+        the test earning its keep.
+
+        It is a pure function of `sources`, which is already part of the
+        comparison, so including it changes nothing about what "changed" means.
+        """
+        d["disagreement"] = room_disagreement(d.get("sources") or [])
+        return d
+
     async def _publish(rs, *, persist=True):
         # Shared publish path for both the event-driven ingest and the periodic
         # re-fuse tick. `persist=False` skips the DB write (the tick stores
         # on-change only, to avoid a row every few seconds per room forever).
-        d = rs.to_dict()
+        d = _with_disagreement(rs.to_dict())
         if persist:
             await asyncio.to_thread(_storage.insert_state, rs)  # fsync off the event loop
         # A4 house memory: independently edge-triggered off the room's OWN last-logged
@@ -1711,7 +1733,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # below via `_publish`) is UNCHANGED -- it already applies its own independent
         # on-change gate (`OccupancyLog.append_if_changed`) regardless of `persist`.
         prev = latest.get(event.room)
-        new = rs.to_dict()
+        # Same shape on both sides, or the gate compares a dict that has the
+        # disagreement against one that does not and concludes everything
+        # changed. See `_with_disagreement`.
+        new = _with_disagreement(rs.to_dict())
         changed = prev is None or (
             {k: v for k, v in new.items() if k != "ts"}
             != {k: v for k, v in prev.items() if k != "ts"}
@@ -3473,6 +3498,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(build_coverage_router(
         coverage_fn=_sensor_coverage,
         rooms_fn=lambda: list(_fusion.rooms()),
+        identity_enabled_fn=lambda: cfg.identity_enabled,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
     app.include_router(build_space_router(
         _space_store, _core_registry, devices=_devices,
@@ -5889,6 +5915,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # "developer mode is off" — and gating the file itself would make the service
     # worker's precache fail as a unit (Cache.addAll is all-or-nothing), taking
     # the whole offline shell down with it.
+    @app.get("/js/format.js")
+    async def js_format():
+        """Dates, times and numbers in the reader's conventions.
+
+        Loaded before every inline block in the shell, so it must be served
+        under the same rules as the shell itself.
+        """
+        return FileResponse(_FRONTEND / "js" / "format.js",
+                            media_type="application/javascript")
+
     @app.get("/js/runtime.js")
     async def js_runtime():
         """The runtime-presence chip. Same class as the other shell scripts.
