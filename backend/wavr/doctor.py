@@ -13,9 +13,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import ssl
 import sys
 import urllib.request
+
+from wavr.status import context_for, is_loopback
 
 
 def fetch_doctor(base_url: str, token: str | None = None, timeout: float = 40.0) -> dict:
@@ -23,13 +24,13 @@ def fetch_doctor(base_url: str, token: str | None = None, timeout: float = 40.0)
     req = urllib.request.Request(url, headers={"X-Wavr-Local": "1"})
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    ctx = None
-    if url.startswith("https"):
-        # Loopback to the Core's self-signed LOCAL cert -- verification off is scoped to localhost
-        # only (the whole point of the tool is the machine talking to itself). Not used for egress.
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+    # The comment here used to say the exemption was "scoped to localhost only".
+    # It was not: `--url` accepts anything, so pointing this at a Core across the
+    # LAN turned verification off there too and silently accepted whatever
+    # certificate was offered. A claimed scope that nothing enforces is the
+    # failure this codebase keeps finding; `wavr.status.context_for` enforces it,
+    # so this uses that rather than keeping a second, weaker copy.
+    ctx = context_for(url)
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

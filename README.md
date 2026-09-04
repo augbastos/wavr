@@ -188,6 +188,26 @@ cd backend; pip install -e .[dev]; cd ..
 python -m wavr.serve            # loopback-only HTTP on http://127.0.0.1:8000
 ```
 
+Running it headless — a Pi, a server, anything reached over SSH — means the tray
+and the dashboard are not available to answer the one question that matters:
+
+```console
+$ python -m wavr.status
+
+Wavr
+  Space         My Home
+  Core          ● Healthy
+  Uptime        1d 2h
+  Last reading  4s ago
+  Sensors       3 sensors reporting.
+  Attention     Nothing needs your attention
+```
+
+`--json` for scripts, and the exit code is the answer on its own: `0` healthy,
+`1` something needs a person, `2` the Core is not responding. **"Last reading"
+is the line to look at** — a Core can be running and producing nothing, and that
+is the failure worth catching.
+
 Open it and Wavr asks you to name the place it is watching, scans what the machine can do, and proposes
 what it should become. No `.env` to edit — the settings the wizard writes live in the database, and the
 Settings screen exposes the rest.
