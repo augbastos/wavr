@@ -7,17 +7,28 @@ name: install-matrix
 # combinations; it does not (and cannot) touch real Raspberry Pi hardware -- see the
 # per-job comments below for exactly what still can't be proven here.
 
+# `backend/**` is nearly every push, including test-only changes, and this
+# workflow installs Wavr five times — one of them arm64 under QEMU, which alone
+# is four to five minutes.
+#
+# Narrowed to `backend/wavr/**` plus the packaging metadata. Not narrower: this
+# workflow does not merely install, it STARTS the backend and waits for
+# /healthz on five distributions, so any change to product code can break it and
+# it is the only thing that would notice. What it cannot possibly be affected by
+# is a change under `backend/tests/`, which is what `backend/**` was dragging in.
 on:
   pull_request:
     paths:
       - "scripts/install.sh"
-      - "backend/**"
+      - "backend/wavr/**"
+      - "backend/pyproject.toml"
       - ".github/workflows/install-matrix.yml"
   push:
     branches: [master]
     paths:
       - "scripts/install.sh"
-      - "backend/**"
+      - "backend/wavr/**"
+      - "backend/pyproject.toml"
       - ".github/workflows/install-matrix.yml"
 
 concurrency:

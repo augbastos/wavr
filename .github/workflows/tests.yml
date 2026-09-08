@@ -16,6 +16,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which of the expensive jobs can this commit possibly affect?
+  #
+  # This repository is private, so its runner minutes come out of the account's
+  # monthly allowance rather than being discounted away, and `browser` is the
+  # single most expensive job here at ten to eleven minutes. It drives a real
+  # Chromium against a real Core; nothing it can observe changes when only a
+  # doc, the Android launcher or an unrelated test moves.
+  #
+  # A workflow-level `paths:` filter cannot express that, because `test` lives
+  # in this same file and must run on everything. So the question is answered
+  # once, here, and the job below depends on the answer.
+  #
+  # FAILS OPEN, deliberately. Anything this cannot work out — a first push, a
+  # shallow fetch, a force-push, an event with no usable base — resolves to
+  # "run it". A gate that quietly skips the browser tests when it is confused
+  # would be worse than no gate at all: a skip and a pass are the same colour
+  # in a summary.
+  what-changed:
+    runs-on: ubuntu-latest
+    outputs:
+      browser: ${{ steps.olhar.outputs.browser }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: olhar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before || '' }}" ]; then
+            base="${{ github.event.before }}"
+          fi
+
+          # No base, an all-zero base (a branch's first push), or a base this
+          # clone does not have: run everything.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "cannot determine what changed - running the browser tests"
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mudou=$(git diff --name-only "$base" "${{ github.sha }}" || echo "?")
+          if [ "$mudou" = "?" ]; then
+            echo "git diff failed - running the browser tests"
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "changed files:"
+          printf '%s\n' "$mudou" | sed 's/^/  /'
+
+          # What the browser job can actually see: the served pages, the code
+          # that serves them, its own test modules, and this workflow.
+          if printf '%s\n' "$mudou" | grep -qE \
+               '^(frontend/|experiences/|backend/wavr/|\.github/workflows/tests\.yml$|backend/tests/test_(browser_ui|three_d_view|deep_links|offline_launch)\.py$)'; then
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing the browser job can observe changed"
+            echo "browser=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +126,8 @@ jobs:
   # worker and cuts the network at the browser, which is not a neutral starting
   # point for whatever would run next to it.
   browser:
+    needs: what-changed
+    if: needs.what-changed.outputs.browser == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
