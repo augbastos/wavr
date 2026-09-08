@@ -20,10 +20,8 @@
   "use strict";
   var M = (typeof MODE !== "undefined") ? MODE : "simulated";
   var $ = function(id){ return document.getElementById(id); };
-  // `modalityLabel` lives in radar.js, which loads later in the shell — so this
-  // is resolved when a row is BUILT, not at parse time.
-  var MODLBL = function(n){ return (typeof modalityLabel === "function")
-    ? modalityLabel(n) : String(n || ""); };
+  // `modalityLabel` is defined in format.js, which loads first.
+  var MODLBL = function(n){ return modalityLabel(n); };
   function lbl(n){ return MODLBL(n) || n; }
   function brandLbl(b){ return String(b || "—").replace(/^Gen\u00e9rico/, "Generic"); }
   function elc(tag, cls, text){

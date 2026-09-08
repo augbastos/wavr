@@ -45,10 +45,8 @@
   var ST_CLS = { "addable-now":"st-now", "via-home-assistant":"st-ha", "via-esp":"st-esp", roadmap:"st-road" };
   var ST_ORDER = { "addable-now":0, "via-esp":1, "via-home-assistant":2, roadmap:3 };
   var HEALTH_EN = { fresh:"fresh signal", stale:"aging signal", dead:"no signal" };
-  // `modalityLabel` lives in radar.js, which loads later in the shell — so this
-  // is resolved when a row is BUILT, not at parse time.
-  var MODLBL = function(n){ return (typeof modalityLabel === "function")
-    ? modalityLabel(n) : String(n || ""); };
+  // `modalityLabel` is defined in format.js, which loads first.
+  var MODLBL = function(n){ return modalityLabel(n); };
   function roadmapSentence(){
     return WavrT("There's no automatic setup path for this device yet — " +
       "once Wavr's setup agent exists, it will do this for you.");

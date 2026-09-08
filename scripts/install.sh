@@ -444,7 +444,8 @@ else
 fi
 
 if [ -n "$WAVR_EXTRAS" ]; then
-    pip_target="$BACKEND_DIR[$WAVR_EXTRAS]"
+    # Braces are load-bearing: $VAR[ reads as an array expansion (SC1087).
+    pip_target="${BACKEND_DIR}[${WAVR_EXTRAS}]"
 else
     pip_target="$BACKEND_DIR"
 fi
