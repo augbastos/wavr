@@ -31,7 +31,14 @@
          permanent notice, is that a person who lets a process run forever on
          their phone should be able to see what it is producing without opening
          anything. %1$d is a room count. -->
-    <string name="core_spatial_rooms">Watching %1$d rooms.</string>
+    <!-- A PLURAL, not a string with a number in it: "Watching 1 rooms." is
+         what a one-room install read, in the notification that is one of the
+         few places a person sees the Core's state without opening anything.
+         Portuguese needs its own two arms; a language with more gets them. -->
+    <plurals name="core_spatial_rooms">
+        <item quantity="one">Watching %1$d room.</item>
+        <item quantity="other">Watching %1$d rooms.</item>
+    </plurals>
     <string name="core_spatial_none">No room is being observed yet — nothing here has a sensor covering it.</string>
     <!-- %1$s is a comma-separated list of room names. -->
     <string name="core_spatial_occupied">Someone is in %1$s.</string>

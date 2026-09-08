@@ -98,10 +98,26 @@ class WavrClient(
         return (0 until rooms.length()).map { RoomContext.from(rooms.getJSONObject(it)) }
     }
 
-    /** Room names in this Space. */
+    /**
+     * Room names in this Space — the rooms on its floor plan.
+     *
+     * Can be **empty**: a Core with no floor plan drawn yet has no rooms while
+     * sensing the house perfectly well. That is a setup step, not a fault.
+     *
+     * It also does not cover every room an EVENT can name. Wavr's LAN presence
+     * is house-level and reports under a pseudo-room (`casa`) that belongs to
+     * no floor, so it never appears here and [context] throws
+     * [WavrException.NotFound] for it.
+     */
     fun rooms(): List<String> = contexts().map { it.room }
 
-    /** One room's context. */
+    /**
+     * One room's context.
+     *
+     * Throws [WavrException.NotFound] for any name that is not on the floor
+     * plan — including the house-level pseudo-room an event may carry. See
+     * [rooms].
+     */
     fun context(room: String): RoomContext =
         RoomContext.from(getJson("/api/experience/context/${enc(room)}"))
 
@@ -235,11 +251,26 @@ class WavrClient(
         throw WavrException.Protocol("$path did not return JSON", e)
     }
 
-    private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
+    /**
+     * One URL segment, percent-encoded.
+     *
+     * `URLEncoder` is an HTML **form** encoder, not a URL encoder, and its one
+     * difference from percent-encoding is the one that matters here: it writes
+     * a space as `+`. In a query string that is still a space; in a PATH it is
+     * a literal plus sign. So `context("living room")` asked the Core for
+     * `/api/experience/context/living+room`, which is no room in anybody's
+     * house, and every room with a space in its name — which is most of the
+     * English ones — answered 404. The unit test pinned `living+room` and
+     * agreed with the bug.
+     *
+     * `%20` is valid in a query too, so one function still serves both.
+     */
+    private fun enc(value: String): String =
+        URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
     companion object {
         /** The context and event shape this SDK was written against. */
-        const val PROTOCOL_VERSION = 1
+        const val PROTOCOL_VERSION = 2
     }
 
     /** One HTTP call, as data — which is what makes the transport injectable. */
@@ -337,7 +368,18 @@ data class RoomContext(
 
 data class ContextDevice(
     val deviceId: String,
-    val name: String,
+    /**
+     * What the device can DO and where it is — "living room screen 2".
+     *
+     * Derived by the Core, never the pairing name: that one is typed by
+     * whoever paired the device and is very often a person's, and this is the
+     * list an application renders into "Continue on which?".
+     *
+     * The wire field is `label`. This read `name`, which the Core has never
+     * sent, so every device in every room arrived with an empty string —
+     * silently, because `optString` defaults rather than failing.
+     */
+    val label: String,
     val functions: List<String>,
     /** Tristate. `null` means the device never said — which is NOT "no screen". */
     val display: Boolean?,
@@ -347,7 +389,7 @@ data class ContextDevice(
     companion object {
         fun from(o: JSONObject) = ContextDevice(
             deviceId = o.optString("device_id"),
-            name = o.optString("name"),
+            label = o.optString("label"),
             functions = o.optJSONArray("functions").strings(),
             display = o.tristate("display"),
             audio = o.tristate("audio"),

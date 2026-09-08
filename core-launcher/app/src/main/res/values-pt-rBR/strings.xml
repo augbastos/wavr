@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Brazilian Portuguese (pt-BR) for the Wavr Core launcher.
+
+    Terminology is kept in step with the web catalogue (frontend/js/locale-pt.js)
+    so the phone and the dashboard do not describe the same house in two
+    different vocabularies: "cômodo" (never "divisão"), "tela" (never "ecrã"),
+    "câmera" (never "câmara"), "sensoriamento", "Espaço", "você".
+
+    "Wavr", "Core" and "Wavr Core" are the product's own names and stay in
+    English here for the same reason they do in the web catalogue.
+
+    Every %1$s / %1$d below carries the SAME meaning as in values/strings.xml:
+    the Kotlin caller passes one argument in one order, and swapping a %1$d for
+    a %1$s would crash the foreground service rather than merely read oddly.
+-->
+<resources>
+    <string name="app_name">Wavr Core</string>
+    <string name="starting">Iniciando o Wavr Core…</string>
+    <string name="auth_title">Desbloquear o Wavr</string>
+    <string name="auth_cancel">Cancelar</string>
+
+    <!-- Core runtime notification (ADR-0010). -->
+    <string name="core_channel_name">Wavr Core</string>
+    <string name="core_channel_desc">Mostra que o seu Wavr Core está rodando neste dispositivo e deixa você pará-lo.</string>
+
+    <string name="core_notification_title">O Wavr Core está rodando</string>
+    <string name="core_notification_stop">Parar</string>
+    <string name="core_notification_title_restart">O Wavr Core precisa reiniciar</string>
+    <string name="core_restart_pending">Uma configuração mudou e o Wavr não consegue aplicar ela enquanto está rodando. Abra o Wavr e escolha Reiniciar para aplicar. Até lá, o sensoriamento do Core deste dispositivo está parado.</string>
+
+    <!-- %1$s é uma das duas frases de alcance abaixo. -->
+    <string name="core_notification_body">Este celular é o cérebro da sua instalação do Wavr. Ele continua sensoriando e respondendo aos seus outros dispositivos com a tela desligada, e é por isso que ele fica nesta lista.\n\n%1$s\n\nNada é enviado para a internet. Toque em Parar para desligar o Core — ele fica desligado até você iniciar de novo.</string>
+
+    <string name="core_scope_loopback">Acessível só neste dispositivo (porta %1$d). Nada na sua rede consegue se conectar a ele.</string>
+    <string name="core_scope_lan">Acessível no seu Wi-Fi por HTTPS (porta %1$d), só para dispositivos pareados.</string>
+
+    <string name="core_shed_camera">O celular está esquentando, então o Wavr desligou a câmera por enquanto. Todo o resto continua funcionando, e a câmera volta quando ele esfriar.</string>
+    <string name="core_shed_framerate">O celular está morno, então o Wavr deixou a câmera mais lenta para gastar menos energia. Todo o resto continua igual.</string>
+
+    <!-- %1$d é uma contagem de cômodos. -->
+    <plurals name="core_spatial_rooms">
+        <item quantity="one">Observando %1$d cômodo.</item>
+        <item quantity="other">Observando %1$d cômodos.</item>
+    </plurals>
+    <string name="core_spatial_none">Nenhum cômodo está sendo observado ainda — nada aqui tem um sensor cobrindo.</string>
+    <!-- %1$s é uma lista de nomes de cômodos separados por vírgula. -->
+    <string name="core_spatial_occupied">Tem alguém em %1$s.</string>
+    <string name="core_spatial_empty">Nenhum cômodo está mostrando ninguém agora.</string>
+
+    <!-- Mostrado antes do pedido de permissão de notificação do Android (API 33+). -->
+    <string name="core_notif_rationale">O Wavr mostra um aviso permanente enquanto o Core está rodando, para você sempre saber que ele está ligado e conseguir parar com um toque. Sem a permissão de notificação ele continua rodando, mas esse aviso fica escondido.</string>
+    <string name="core_runtime_unreachable">O Wavr não está respondendo neste dispositivo</string>
+</resources>

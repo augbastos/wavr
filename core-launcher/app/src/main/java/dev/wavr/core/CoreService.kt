@@ -371,15 +371,20 @@ class CoreService : Service(), LifecycleOwner {
         val rooms = WavrClient("http://127.0.0.1:${prefs.port}").contexts()
         val observed = rooms.filter { it.can(Capability.PRESENCE) }
         val occupied = rooms.filter { it.occupied == true }.map { it.room }
+        // `getQuantityString`, not `getString`: the room count is a PLURAL, and
+        // with a plain string a one-room install read "Watching 1 rooms." in
+        // the notification — one of the few places a person sees the Core's
+        // state without opening anything.
+        val watching = resources.getQuantityString(
+            R.plurals.core_spatial_rooms, observed.size, observed.size)
         when {
             rooms.isEmpty() -> ""
             observed.isEmpty() -> getString(R.string.core_spatial_none)
             occupied.isNotEmpty() ->
-                getString(R.string.core_spatial_rooms, observed.size) + " " +
+                watching + " " +
                     getString(R.string.core_spatial_occupied, occupied.joinToString(", "))
             else ->
-                getString(R.string.core_spatial_rooms, observed.size) + " " +
-                    getString(R.string.core_spatial_empty)
+                watching + " " + getString(R.string.core_spatial_empty)
         }
     } catch (t: Throwable) {
         // Includes the ordinary cases: the Core is still starting, this app was

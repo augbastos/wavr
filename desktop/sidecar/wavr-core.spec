@@ -29,6 +29,31 @@ from pathlib import Path
 _here = Path(globals().get("SPECPATH", ".")).resolve()
 REPO = _here.parents[1]        # desktop/sidecar -> repo root
 
+# Refuse to build a Core that cannot be found.
+#
+# `hiddenimports` only tells PyInstaller to LOOK for a module; if the build
+# environment does not have it, the module is simply absent from the result and
+# the build still succeeds. That is how a Core shipped with no mDNS at all: the
+# import is lazy, the extra was not installed, and nothing anywhere said so
+# until a phone spent a minute failing to find a hub that was never
+# advertising.
+#
+# An installer is not the place to discover a missing dependency. This is.
+for _needed, _why in (
+    ("zeroconf", "the phone app's 'Find your Wavr hub' browses _wavr._tcp; "
+                 "without this the Core never advertises and no device can "
+                 "discover it. Install it: pip install -e backend[mdns]"),
+    ("ifaddr", "zeroconf enumerates interfaces through it"),
+):
+    try:
+        __import__(_needed)
+    except ImportError as _exc:      # noqa: PERF203 -- three items, once, at build time
+        raise SystemExit(
+            f"\nwavr-core.spec: refusing to build without {_needed!r}.\n"
+            f"  Why it matters: {_why}\n"
+            f"  ({_exc})\n"
+        )
+
 block_cipher = None
 
 a = Analysis(
@@ -58,6 +83,27 @@ a = Analysis(
         "wavr.app",
         "wavr.sources.simulated",
         "wavr.sources.network",
+        # mDNS. Imported lazily inside a function in `wavr/mdns_peers.py`
+        # (`from zeroconf import ServiceInfo  # lazy: real path only`), so
+        # static analysis never sees it and it was simply absent from the
+        # frozen Core -- `grep zeroconf` over the shipped binary returned zero,
+        # next to 41 hits for bleak and 66 for cryptography.
+        #
+        # It is declared in pyproject as an optional extra, `mdns`, and for the
+        # library that is the right call. For the PRODUCT it is not: the phone
+        # app's first screen after install is "Find your Wavr hub", browsing
+        # `_wavr._tcp` -- the same service `mdns_peers.py` advertises. With the
+        # module missing, the Core never advertises, so that screen can never
+        # succeed for anybody who installs Wavr rather than running it from a
+        # checkout. The first user hit it, tried it with his VPN off to be
+        # sure, and reported "nao achou". The Core had been logging
+        # `ModuleNotFoundError: No module named 'zeroconf'` at every start,
+        # inside a traceback nobody reads.
+        #
+        # `ifaddr` is zeroconf's own way of enumerating interfaces and is
+        # imported the same indirect way.
+        "zeroconf",
+        "ifaddr",
     ],
     hookspath=[],
     hooksconfig={},

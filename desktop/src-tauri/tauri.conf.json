@@ -37,6 +37,14 @@
     "externalBin": [
       "binaries/wavr-core"
     ],
-    "resources": []
+    "resources": [],
+    "licenseFile": "../installer-license.txt",
+    "license": "AGPL-3.0-only",
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

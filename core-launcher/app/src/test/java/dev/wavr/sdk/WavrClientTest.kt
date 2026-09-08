@@ -20,9 +20,14 @@ import org.junit.Test
  */
 class WavrClientTest {
 
+    // `protocol_version` is the version the Core ACTUALLY ships (contracts.py:
+    // experience_context). Pinned to 1 while the Core moved to 2, this fixture
+    // agreed with a stale SDK constant and the pair of them hid the bump — and a
+    // warm Gradle cache hid the failing test on top of that. JSON has no
+    // comments, so this note lives outside the string.
     private val spaceContext = """
         {
-          "protocol_version": 1,
+          "protocol_version": 2,
           "space": {"space_id": "sp_1", "name": "My Home"},
           "rooms": [
             {"room": "kitchen", "precision": "count", "confidence": 0.8,
@@ -72,7 +77,8 @@ class WavrClientTest {
     fun `a newer Core is surfaced, not thrown on`() {
         // Throwing would break every installed application the day somebody
         // updates their Core.
-        val ahead = spaceContext.replace("\"protocol_version\": 1", "\"protocol_version\": 99")
+        val ahead = spaceContext.replace("\"protocol_version\": 2", "\"protocol_version\": 99")
+        check(ahead != spaceContext) { "the fixture no longer says version 2; update both sides" }
         val w = client(mapOf("/api/experience/context" to ahead)).connect()
         assertTrue(w.protocolAhead)
     }
@@ -186,14 +192,53 @@ class WavrClientTest {
     // -- The rest of the surface -------------------------------------------
 
     @Test
-    fun `a room name is url-encoded`() {
+    fun `a space in a room name is percent-encoded, not form-encoded`() {
+        // `URLEncoder` is a FORM encoder: it writes a space as `+`, which in a
+        // URL PATH is a literal plus sign. So this asked the Core for
+        // `/api/experience/context/living+room`, no such room existed, and
+        // every room with a space in its name 404'd. This test pinned the
+        // broken URL and agreed with the bug.
         val log = mutableListOf<WavrClient.Request>()
         val w = client(
-            mapOf("/api/experience/context/living+room" to """{"room": "living room"}"""),
+            mapOf("/api/experience/context/living%20room" to """{"room": "living room"}"""),
             log,
         )
         w.context("living room")
-        assertTrue(log[0].url.endsWith("/api/experience/context/living+room"))
+        assertEquals(
+            "http://core.test:8000/api/experience/context/living%20room",
+            log[0].url,
+        )
+        assertFalse(log[0].url.contains("+"))
+    }
+
+    @Test
+    fun `an anchor room filter is percent-encoded too`() {
+        // `%20` is a space in a query string as well, so one encoder serves
+        // both and no call site has to remember which kind of segment it is in.
+        val log = mutableListOf<WavrClient.Request>()
+        val w = client(mapOf("/api/anchors?room=living%20room" to """{"anchors": []}"""), log)
+        w.anchors("living room")
+        assertTrue(log[0].url.endsWith("/api/anchors?room=living%20room"))
+    }
+
+    @Test
+    fun `a device carries the derived label the Core actually sends`() {
+        // The Core has never sent `name` on a context device -- the field is
+        // `label`, derived from what the device can do and where it is,
+        // precisely so the pairing name (very often a person's) never reaches
+        // an experience. Reading `name` meant every device arrived blank, and
+        // `optString` defaulted rather than failing, so nothing said so.
+        val ctx = RoomContext.from(
+            JSONObject(
+                """
+                {"room": "living room", "devices": [
+                  {"device_id": "tv1", "label": "living room screen 2",
+                   "display": true, "functions": ["cast"]}]}
+                """.trimIndent(),
+            ),
+        )
+        assertEquals("living room screen 2", ctx.devices[0].label)
+        assertEquals("living room screen 2", ctx.displays()[0].label)
     }
 
     @Test

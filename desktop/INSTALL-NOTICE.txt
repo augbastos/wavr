@@ -1,0 +1,69 @@
+WHAT INSTALLING WAVR DOES TO THIS MACHINE
+=========================================
+
+Read this before you agree to it. Everything below is a thing the installer
+changes, and none of it happens silently.
+
+
+IT KEEPS RUNNING AFTER YOU CLOSE THE WINDOW
+
+Wavr watches your home, so closing the dashboard window does not stop it — it
+hides to the system tray and keeps sensing. That is deliberate, and it is also
+the kind of thing software should tell you rather than let you discover.
+
+  * The tray icon is how you know it is running.
+  * Closing the window        -> Wavr keeps working.
+  * Tray -> "Quit Wavr"       -> Wavr stops. Nothing is sensed until you start
+                                 it again.
+
+If the tray icon is not there, Wavr is not running.
+
+
+IT DOES NOT START WITH WINDOWS UNLESS YOU ASK
+
+Launch-on-login is OFF after installing. You can turn it on from the tray menu
+("Start Wavr when this machine starts"), and the tick you see there is read back
+from Windows rather than from what we asked for — so it cannot claim to be on
+when it is not.
+
+
+IT LISTENS ON THIS MACHINE ONLY, BY DEFAULT
+
+Wavr serves its dashboard on 127.0.0.1 — this computer, reachable by nothing
+else. Windows may still ask you to allow it through the firewall; you can say
+no, and everything on this machine keeps working.
+
+Letting other devices connect (your phone, a wall panel) is a separate switch
+inside Wavr, and Wavr explains what it changes before you use it.
+
+
+IT DOES NOT SEND ANYTHING ANYWHERE
+
+No account. No telemetry. No usage statistics, no crash reports, no version
+check — nothing leaves this machine unless you switch on a specific connector,
+and each one says what it sends and where.
+
+Wavr is not a cloud service with a local component. There is no other end.
+
+
+WHERE YOUR DATA LIVES
+
+  * The database, your floor plan and your settings:   C:\Users\<you>\.wavr\
+  * Logs from the desktop shell:                       C:\Users\<you>\.wavr\desktop.log
+
+Camera images are never written anywhere. A frame exists in memory long enough
+to ask "is there a person in this picture?" and is then discarded. Wavr has no
+video storage of any kind.
+
+Uninstalling removes the program. It does not delete the folder above — your
+Space is yours, and an uninstaller that quietly erased hours of work would be
+the wrong default. Delete it yourself if you want it gone.
+
+
+THE LICENCE
+
+Wavr is free software under the GNU Affero General Public License v3. You can
+read it, change it and share it; if you run a modified version as a network
+service, you have to offer that version's source to its users.
+
+The full text follows.

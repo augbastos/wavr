@@ -104,6 +104,7 @@ class MainActivity : FragmentActivity() {
         const val NSD_SERVICE_NAME = "Wavr Core"
         /** The Core's HTTPS/WSS port — what the advertised SRV record points at. */
         const val NSD_SERVICE_PORT = 8000
+
         /** Logcat tag for discovery events (name-only, never sensitive data). */
         const val NSD_TAG = "WavrNsd"
 
@@ -259,10 +260,14 @@ class MainActivity : FragmentActivity() {
             CoreService.start(this)
         }
 
-        // Announce this Core on the LAN (mDNS / DNS-SD) so Wavr Mobile companions
-        // can auto-discover it without the user typing an IP. Best-effort: a
-        // failure here NEVER breaks the kiosk — the Core works fine undiscovered.
-        startAdvertising()
+        // Nothing is announced here. The advertisement follows the kiosk's
+        // own page load — see showContent() and onMainFrameFailure() — because
+        // that is this app's own answer to "is the Core serving", and it is the
+        // same answer the person in the room is looking at.
+        //
+        // This used to call `startAdvertising()` straight out, and the G9 spent
+        // seven weeks telling the whole network that port 8000 was open while
+        // the Core behind it died at import on every boot.
     }
 
     // ---------------------------------------------------------------------
@@ -395,6 +400,11 @@ class MainActivity : FragmentActivity() {
 
     private fun onMainFrameFailure() {
         pageHadError = true
+        // The Core did not serve the page. Whatever the reason, this device
+        // cannot honestly tell the network there is a Core here — the screen
+        // is about to say "starting…" and the advertisement must agree with
+        // the screen.
+        stopAdvertising()
         showPlaceholder()
         handler.removeCallbacks(retryRunnable)
         handler.postDelayed(retryRunnable, RETRY_DELAY_MS)
@@ -403,6 +413,10 @@ class MainActivity : FragmentActivity() {
     private fun showContent() {
         handler.removeCallbacks(retryRunnable)
         placeholder.visibility = View.GONE
+        // The Core just served this device its page, so the advertisement is
+        // now a true statement. Idempotent: startAdvertising() returns early
+        // when it is already up, and this runs on every navigation.
+        startAdvertising()
     }
 
     private fun showPlaceholder() {
@@ -497,7 +511,9 @@ class MainActivity : FragmentActivity() {
     override fun onDestroy() {
         handler.removeCallbacks(retryRunnable)
         try { unregisterReceiver(powerReceiver) } catch (_: Throwable) { /* never registered */ }
-        // Stop announcing on the LAN + drop the multicast lock.
+        // Stop announcing on the LAN and drop the multicast lock. The
+        // advertisement follows the kiosk's page load now, so there is
+        // nothing else to wind down.
         stopAdvertising()
         // Release the camera + close the loopback MJPEG server.
         cameraStreamer.shutdown()
@@ -547,6 +563,8 @@ class MainActivity : FragmentActivity() {
     // LAN discovery advertisement (mDNS / DNS-SD via NsdManager)
     // ---------------------------------------------------------------------
 
+
+
     /**
      * Register a `_wavr._tcp.` service on port [NSD_SERVICE_PORT] so Wavr Mobile
      * companions can find this Core on the local network. TXT is deliberately
@@ -555,6 +573,7 @@ class MainActivity : FragmentActivity() {
      * and swallowed — discovery is a convenience, never a kiosk dependency.
      */
     private fun startAdvertising() {
+        if (advertising) return          // showContent() runs on every load
         try {
             val manager = getSystemService(Context.NSD_SERVICE) as? NsdManager
             if (manager == null) {
@@ -683,6 +702,16 @@ class MainActivity : FragmentActivity() {
      * that touches UI ([requestAuth] -> BiometricPrompt / evaluateJavascript) is
      * hopped onto the UI thread explicitly. No secrets pass through this surface.
      */
+    /**
+     * Has the panel asked for the battery-exemption rationale in this session?
+     *
+     * Gates the one-tap request in [WavrNativeBridge.requestBatteryExemption].
+     * Per-process rather than persisted, deliberately: the question is whether
+     * THIS panel, in this run, put the explanation in front of somebody, and a
+     * flag surviving a restart would answer a different question.
+     */
+    private var rationaleHandedOut = false
+
     private inner class WavrNativeBridge {
 
         /**
@@ -1032,10 +1061,23 @@ class MainActivity : FragmentActivity() {
             if (!onTrustedOrigin()) "{\"advice\":\"unknown\"}"
             else PowerPolicy.state(this@MainActivity)
 
-        /** The text the panel MUST show before calling [requestBatteryExemption]. */
+        /**
+         * The text the panel MUST show before calling [requestBatteryExemption]
+         * with `direct = true`.
+         *
+         * "MUST" used to be a word in this comment and nowhere else. Handing it
+         * out is now what unlocks the one-tap request below, so the rule is the
+         * code rather than a note beside it. Reading it here is not proof the
+         * operator read it on screen -- no bridge can prove that -- but a panel
+         * that never asked for the text certainly did not show it, and that was
+         * the case going straight to the system dialog.
+         */
         @JavascriptInterface
         fun getPowerRationale(): String =
-            if (!onTrustedOrigin()) "" else PowerPolicy.RATIONALE
+            if (!onTrustedOrigin()) "" else {
+                rationaleHandedOut = true
+                PowerPolicy.RATIONALE
+            }
 
         /**
          * Open Android's battery-optimisation UI. `direct=false` (what the panel
@@ -1046,6 +1088,13 @@ class MainActivity : FragmentActivity() {
         @JavascriptInterface
         fun requestBatteryExemption(direct: Boolean): Boolean = try {
             if (!onTrustedOrigin()) false
+            // `direct = true` is the one-tap system dialog, and the sentence
+            // above it says it is only legitimate after the operator has read
+            // the rationale. Refused rather than silently downgraded to the
+            // settings list: a caller that skipped the explanation asked for
+            // something it may not have, and a `false` it can see beats a
+            // different screen it did not ask for.
+            else if (direct && !rationaleHandedOut) false
             else {
                 val intent = if (direct) {
                     PowerPolicy.directRequestIntent(this@MainActivity)

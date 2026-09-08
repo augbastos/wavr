@@ -68,7 +68,21 @@ const DEFAULT_PORT: &str = "8000";
 /// How long `setup()`'s background thread waits for the backend's readiness probe before
 /// giving up (item 3). Named so the timeout UX's own message can quote the same number
 /// `wait_healthy()` is actually called with.
-const HEALTH_TIMEOUT: Duration = Duration::from_secs(20);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How long the shell keeps quietly probing AFTER the wait above has reported
+/// failure and put a message on screen.
+///
+/// This exists because the first answer was being treated as the last one. On
+/// the first user's machine the Core answered at 27 seconds — three past a
+/// 20-second wait — and then served for a minute and a half while the window
+/// said "Wavr didn't start" and nothing in the shell was still looking.
+///
+/// 45 seconds above is what a cold start of a 40MB self-extracting binary
+/// actually costs on a laptop that is scanning it for the first time; this is
+/// the margin for the machine that is slower than the one it was measured on.
+/// Neither number is a promise, which is the point of having both.
+const LATE_START_GRACE: Duration = Duration::from_secs(120);
 
 /// Opt-out (default ON) for the native-OS-notification poller (item 4): set to
 /// 0/false/no/off to silence it. Unlike every other `WAVR_*` var here this is a shell-only
@@ -218,12 +232,66 @@ fn port() -> String {
         .unwrap_or_else(|| DEFAULT_PORT.to_string())
 }
 
-fn scheme() -> &'static str {
+/// The Job Object holding the current backend, as a raw handle value.
+///
+/// Every spawn creates one (see `confine_backend_to_job_object`) and deliberately
+/// leaks it so KILL_ON_JOB_CLOSE outlives this function. Keeping the value here
+/// costs nothing and buys the one thing the leak took away: the ability to
+/// terminate the whole tree on purpose, rather than only when the shell exits.
+///
+/// A raw `usize` rather than a `HANDLE` because a pointer is not `Send`, and this
+/// is read from the tray thread.
+#[cfg(windows)]
+static BACKEND_JOB: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+/// The scheme the Core is ACTUALLY serving, as of the last time one answered.
+///
+/// Re-learned, not learned once. This was a `OnceLock`, which is wrong for the
+/// same reason predicting the scheme was wrong: it is a property of the RUNNING
+/// Core, and the Core is replaced during a normal session -- by the tray's
+/// "Restart Core" and by the crash watchdog. Turn "Let other devices connect"
+/// on, restart the Core, and the probe finds https, says so in the log, and
+/// then sends the window to the http it had already committed to. Every request
+/// on that page fails, the service worker answers the navigation from its
+/// offline cache, and a fully drawn dashboard appears showing the sample house.
+static LIVE_SCHEME: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+/// Record what just answered. Called by `wait_healthy` on every success, so a
+/// Core that comes back on the other scheme is followed rather than argued with.
+fn remember_scheme(s: &'static str) {
+    if let Ok(mut g) = LIVE_SCHEME.lock() {
+        *g = Some(s);
+    }
+}
+
+/// First guess, from the environment. Right in the common case, and free.
+fn guessed_scheme() -> &'static str {
     if multidevice() {
         "https"
     } else {
         "http"
     }
+}
+
+/// What the shell should talk to the Core over.
+///
+/// Discovered, not predicted. `multidevice()` reads the process environment and
+/// the backend's `.env`; the Settings screen writes the same switch into the
+/// Core's DATABASE, which this shell cannot see and should not learn to read --
+/// that would be a third copy of one decision. So the environment is only the
+/// opening guess, and `wait_healthy` replaces it with whatever actually
+/// answered.
+///
+/// Before that: the guess. After: the truth. The failure this removes was
+/// visible to the first person who ever flipped that switch in the UI -- the
+/// Core came up on HTTPS, the shell asked HTTP, and the window said "Wavr
+/// didn't start" about a Core that was serving perfectly.
+fn scheme() -> &'static str {
+    LIVE_SCHEME
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .unwrap_or_else(guessed_scheme)
 }
 
 fn backend_url() -> String {
@@ -410,55 +478,144 @@ fn spawn_backend() -> std::io::Result<Child> {
         cmd.current_dir(dir);
     }
     cmd.env(PORT_ENV, port());
+    // A STABLE home for the data, for the bundled Core only.
+    //
+    // The backend resolves `WAVR_DB` and `WAVR_HOUSE_MAP` relative to the
+    // process's working directory when they are unset, and this shell sets no
+    // working directory for the bundled case -- so the database landed wherever
+    // the shell happened to be launched from. Measured on the installed app:
+    // launched from the Start Menu it wrote into the install directory, and
+    // launched from elsewhere it wrote a second, separate 274 KB database into
+    // the user's profile. Two databases, two Spaces, and opening Wavr a
+    // different way one morning drops the operator into the first-run wizard
+    // with their whole home apparently gone -- no error, nothing said, and the
+    // real data sitting in a file they have no reason to know about. A pinned
+    // taskbar shortcut is enough to change the working directory.
+    //
+    // `~/.wavr` is where the local certificate already lives, so this adds no
+    // new location to know about. An existing value always wins: a developer
+    // with their own `.env`, and the `python -m wavr.serve` checkout path, are
+    // both byte-identical to before.
+    //
+    // Consequence, deliberate and worth stating: with a stable home,
+    // uninstalling no longer erases the Space. Starting over becomes the
+    // explicit act the product already offers rather than a side effect of
+    // removing the app.
+    if bundled_core().is_some() && std::env::var("WAVR_BACKEND_DIR").is_err() {
+        if let Some(home) = home_dir() {
+            let data = home.join(".wavr");
+            if std::fs::create_dir_all(&data).is_ok() {
+                if std::env::var("WAVR_DB").is_err() {
+                    cmd.env("WAVR_DB", data.join("wavr.db"));
+                }
+                if std::env::var("WAVR_HOUSE_MAP").is_err() {
+                    cmd.env("WAVR_HOUSE_MAP", data.join("house.json"));
+                }
+            } else {
+                // Could not create it -- say so rather than silently falling
+                // back to the wandering working directory.
+                log_issue(&format!(
+                    "could not create the data directory {}; the Core will use \
+                     its working directory, which moves with how Wavr is launched",
+                    data.display()
+                ));
+            }
+        }
+    }
     // Windows: start suspended (the child's ONE thread exists but has not executed a
     // single instruction) so confine_backend_to_job_object() can assign the Job Object
     // BEFORE anything the child does -- closing the spawn -> assign TOCTOU race a fast
     // child could otherwise win. spawn_backend() never leaves it stuck suspended:
     // confine_backend_to_job_object() unconditionally resumes it (via
     // resume_suspended_process()) whether or not the Job Object steps themselves succeed.
+    // CREATE_NO_WINDOW, alongside it, because the frozen Core is a CONSOLE
+    // binary and this shell is a GUI one. Nothing here redirects its stdio, so
+    // Windows gave the child a console of its own: a black window that sat
+    // behind the dashboard for as long as Wavr was running. The first person to
+    // install it said so in the first minute -- "esse prompt aberto no fundo eh
+    // feio, eu queria que o wavr fosse so o programa mesmo" -- and he is right;
+    // nothing reads that output, so the window was pure cost.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(windows::Win32::System::Threading::CREATE_SUSPENDED.0);
+        use windows::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+        cmd.creation_flags(CREATE_SUSPENDED.0 | CREATE_NO_WINDOW.0);
     }
-    cmd.spawn()
+
+    // Confined and resumed HERE, not by the caller.
+    //
+    // It used to be the caller's job, and there are three callers: first launch,
+    // the crash watchdog, and the tray's "Restart Core". Two of them remembered.
+    // The third spawned a child `CREATE_SUSPENDED` and returned it to a function
+    // that stored the handle, logged "Core restarted from the tray", and left
+    // the process suspended forever -- one thread, `WaitReason=Suspended`, zero
+    // CPU time consumed, no port, no PyInstaller extraction directory, nothing.
+    // The first user restarted the Core and watched the dashboard sit on
+    // "reconnecting..." against a Core that had never executed an instruction.
+    //
+    // Suspending the child is not optional -- it closes the spawn->assign race
+    // that lets a fast child escape the Job Object -- so the resume cannot be
+    // optional either, and the only way to guarantee that is to leave no caller
+    // with the opportunity to forget. A `Child` handed out by this function has
+    // already been confined and resumed.
+    let child = cmd.spawn()?;
+    #[cfg(windows)]
+    confine_backend_to_job_object(&child);
+    Ok(child)
 }
 
 /// Block until the backend answers its readiness probe, or the timeout elapses. In HTTPS
 /// mode this waits for the cert file to appear, then probes with the pinned agent.
 fn wait_healthy(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    // /healthz is token-exempt (see backend/wavr/app.py's _TOKEN_EXEMPT_PATHS); /api/state
-    // is scope-gated, so probing it would 401 forever when WAVR_LOCAL_TOKEN is set.
-    let probe = format!("{}/healthz", backend_url());
 
-    if scheme() == "https" {
-        // The backend writes cert.pem before uvicorn binds, so once the port answers the
-        // cert exists. Build the pinned agent lazily from the first successful cert read.
-        let mut agent: Option<ureq::Agent> = None;
-        while Instant::now() < deadline {
-            if agent.is_none() {
-                if let Some(der) = pinned_cert_der() {
-                    agent = Some(pinned_https_agent(der));
+    // BOTH schemes, guess first. The Core decides this from its own database,
+    // which this shell cannot read; asking the wrong one and declaring the Core
+    // dead is the bug this loop exists to make impossible. Whichever answers is
+    // recorded in LIVE_SCHEME, so every later URL -- the webview, the tray
+    // poller, the alert poller -- is built from the socket's answer rather than
+    // from the guess.
+    let first = guessed_scheme();
+    let second = if first == "https" { "http" } else { "https" };
+    let mut agent: Option<ureq::Agent> = None;
+
+    while Instant::now() < deadline {
+        for candidate in [first, second] {
+            // /healthz is token-exempt (see backend/wavr/app.py's
+            // _TOKEN_EXEMPT_PATHS); /api/state is scope-gated, so probing it
+            // would 401 forever when WAVR_LOCAL_TOKEN is set.
+            let probe = format!("{}://127.0.0.1:{}/healthz", candidate, port());
+            let answered = if candidate == "https" {
+                // The backend writes cert.pem before uvicorn binds, so once the
+                // port answers the cert exists. Pinned exactly, never trust-all:
+                // a probe that accepts any certificate is not a check.
+                if agent.is_none() {
+                    if let Some(der) = pinned_cert_der() {
+                        agent = Some(pinned_https_agent(der));
+                    }
                 }
-            }
-            if let Some(a) = &agent {
-                if a.get(&probe).call().is_ok() {
-                    return true;
+                match &agent {
+                    Some(a) => a.get(&probe).call().is_ok(),
+                    None => false,
                 }
-            }
-            std::thread::sleep(Duration::from_millis(400));
-        }
-        false
-    } else {
-        while Instant::now() < deadline {
-            if ureq::get(&probe).timeout(Duration::from_secs(5)).call().is_ok() {
+            } else {
+                ureq::get(&probe).timeout(Duration::from_secs(5)).call().is_ok()
+            };
+            if answered {
+                remember_scheme(candidate);
+                if candidate != first {
+                    log_issue(&format!(
+                        "Wavr: the Core is serving {candidate}, not the {first} this \
+                         shell expected from its environment -- using {candidate}. \
+                         (The switch was probably changed in Settings, which stores \
+                         it in the Core's own database.)"));
+                }
                 return true;
             }
-            std::thread::sleep(Duration::from_millis(400));
         }
-        false
+        std::thread::sleep(Duration::from_millis(400));
     }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +858,50 @@ fn fetch_runtime(url: &str, https_agent: &mut Option<ureq::Agent>) -> Option<ser
 /// renders it. Two implementations of "is it healthy" eventually disagree in front of
 /// somebody who has no way to tell which is right, and the one on the tray is the one they
 /// will believe, because it is the one they can see without opening anything.
+/// Every id the tray menu uses, in the order they appear.
+///
+/// The builder and the click handler used to agree by hand. That works until
+/// somebody adds an item and forgets the arm — and the symptom is a menu entry
+/// that does nothing at all when clicked, which is indistinguishable from the
+/// app having frozen. `tray_action` maps the list to behaviour and a test
+/// asserts the mapping is total.
+const TRAY_ITEMS: &[&str] = &[
+    "status", "open", "attention", "privacy", "autostart", "restart", "quit",
+];
+
+/// What clicking a tray id does. `Status` is the disabled line at the top: it
+/// is deliberately inert, and saying so here is what stops it being mistaken
+/// for a missing handler.
+#[derive(Debug, PartialEq, Eq)]
+enum TrayAction {
+    Inert,
+    Open,
+    OpenAt(&'static str),
+    ToggleAutostart,
+    RestartCore,
+    Quit,
+}
+
+fn tray_action(id: &str) -> Option<TrayAction> {
+    Some(match id {
+        "status" => TrayAction::Inert,
+        "open" => TrayAction::Open,
+        // Both open the dashboard at the surface that answers the question. The
+        // tray deliberately does not reimplement either: a second place to read
+        // the same state is a second place for it to be wrong.
+        //
+        // These are fragments the shell now routes on. They used to name a hash
+        // nothing read, so the items reloaded the dashboard on its default tab
+        // and looked, to whoever clicked them, like nothing had happened.
+        "attention" => TrayAction::OpenAt("#tab-inicio"),
+        "privacy" => TrayAction::OpenAt("#gearSecTrust"),
+        "autostart" => TrayAction::ToggleAutostart,
+        "restart" => TrayAction::RestartCore,
+        "quit" => TrayAction::Quit,
+        _ => return None,
+    })
+}
+
 struct TrayView {
     tooltip: String,
     /// One line for the status item in the menu. Never a metric on its own: "8/9" needs a
@@ -711,9 +912,18 @@ struct TrayView {
 fn tray_view(status: Option<&serde_json::Value>) -> TrayView {
     let Some(body) = status else {
         // Unreachable. Deliberately NOT the last known state.
+        //
+        // Both strings are the Core's own, verbatim: `runtime_status.HEADLINE_SILENT`
+        // and `runtime_status.CORE_SILENT`. `unreachable()` exists so "a tray, a menu
+        // bar and a browser tab cannot disagree about what 'I got no answer' means",
+        // and this tray is Rust, so it cannot call it -- it can only copy it and be
+        // checked. It said "Wavr is not answering. It may have stopped." while the
+        // browser chip said "...on this machine...", which is the drift that docstring
+        // promised was impossible. `test_vocabulary.py` compares the three now.
         return TrayView {
             tooltip: "Wavr — not responding".to_string(),
-            summary: "Wavr is not answering. It may have stopped.".to_string(),
+            summary: "Wavr is not answering on this machine. It may have stopped."
+                .to_string(),
         };
     };
     let headline = body
@@ -738,10 +948,54 @@ fn tray_view(status: Option<&serde_json::Value>) -> TrayView {
     let summary = match state {
         "healthy" => "Everything looks good".to_string(),
         "" => "Wavr".to_string(),
+        // The Core's own sentence whenever there is one: it knows WHY, and a
+        // surface that paraphrases it has become a second producer.
         _ if !worst.is_empty() => worst.to_string(),
+        // No finding to borrow -- and this fell through to `other.to_string()`,
+        // which put the wire value on a menu line. "starting" happened on every
+        // single launch, before the Core had assessed anything, so the first
+        // thing this product said to somebody was an identifier. Each arm below
+        // is the word `docs/VOCABULARY.md` already fixes for that state, in this
+        // surface's own idiom (a line, not a chip label). Rendering a word for a
+        // state the Core chose is not deciding the state.
+        "starting" => "Starting — no reading yet".to_string(),
+        "updating" => "An update is in progress".to_string(),
+        "paused" => "Paused — deliberately not watching".to_string(),
+        "degraded" => "Working, less well — something to fix".to_string(),
+        "attention" => "Needs attention".to_string(),
+        "unavailable" => "Not responding".to_string(),
         other => other.to_string(),
     };
-    TrayView { tooltip: headline.to_string(), summary }
+
+    // The tooltip is two words, not the headline.
+    //
+    // It used to be the Core's full headline, which is the right sentence in the
+    // wrong place: a tooltip appears for half a second under the cursor, in the
+    // corner of the screen, and answers exactly one question -- is this alive?
+    // The first person to hover it said so plainly: "dá um monte de informações,
+    // seria melhor aparecer só Wavr - Live".
+    //
+    // The detail did not go anywhere. It is on the MENU LINE below, which is
+    // open, has room, and still carries the Core's own sentence including the
+    // reason when there is one.
+    let word = match state {
+        "healthy" => "live",
+        "starting" => "starting",
+        "updating" => "updating",
+        "paused" => "paused",
+        "degraded" => "needs a look",
+        "attention" => "needs attention",
+        "unavailable" => "not responding",
+        "" => "",
+        other => other,
+    };
+    let tooltip = if word.is_empty() {
+        "Wavr".to_string()
+    } else {
+        format!("Wavr \u{2014} {word}")
+    };
+    let _ = headline;   // kept above for the summary's sake; not the tooltip's
+    TrayView { tooltip, summary }
 }
 
 /// Poll GET /api/alerts on a steady interval (never a busy loop) and raise a native OS
@@ -889,8 +1143,7 @@ fn spawn_backend_monitor(app: tauri::AppHandle) {
 
             match spawn_backend() {
                 Ok(child) => {
-                    #[cfg(windows)]
-                    confine_backend_to_job_object(&child);
+                    // Confined and resumed by spawn_backend() before it returned.
                     *app.state::<Backend>().0.lock().unwrap() = Some(child);
                     if wait_healthy(HEALTH_TIMEOUT) {
                         log_issue("Wavr: backend restarted and is healthy again");
@@ -950,6 +1203,33 @@ fn report_backend_crashed(app: &tauri::AppHandle, msg: &str) {
 }
 
 fn kill_backend(app: &tauri::AppHandle) {
+    // The Job Object first, because the tracked child is not the whole Core.
+    //
+    // PyInstaller onefile runs a BOOTLOADER that unpacks and then spawns the real
+    // worker as its own child. `Child::kill()` reaches only the bootloader; the
+    // worker survives, keeps listening on the port, and the next spawn silently
+    // fails to bind. That is what the first user hit: "Restart Core" logged
+    // success twice while the original process kept answering with the original
+    // configuration.
+    //
+    // TerminateJobObject takes the whole tree at once, which is precisely what
+    // this job was created to be able to do.
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::System::JobObjects::TerminateJobObject;
+        let taken = BACKEND_JOB.lock().ok().and_then(|mut s| s.take());
+        if let Some(raw) = taken {
+            let job = HANDLE(raw as *mut std::ffi::c_void);
+            unsafe {
+                if TerminateJobObject(job, 0).is_err() {
+                    log_issue("Wavr: TerminateJobObject failed; falling back to killing \
+                               the tracked child only (a leftover Core may keep the port)");
+                }
+                let _ = CloseHandle(job);
+            }
+        }
+    }
     if let Some(state) = app.try_state::<Backend>() {
         if let Some(mut child) = state.0.lock().unwrap().take() {
             let _ = child.kill();
@@ -1110,7 +1390,16 @@ fn confine_backend_to_job_object(child: &Child) {
 
         let process = HANDLE(child.as_raw_handle());
         AssignProcessToJobObject(job, process)
-            .map_err(|e| format!("Wavr: AssignProcessToJobObject failed (no crash-safety net for the sidecar): {e}"))
+            .map_err(|e| format!("Wavr: AssignProcessToJobObject failed (no crash-safety net for the sidecar): {e}"))?;
+        // Remembered so `kill_backend` can terminate the whole tree deliberately.
+        // Without this the tray's "Restart Core" killed only the tracked child --
+        // the PyInstaller BOOTLOADER -- while the worker it had spawned kept the
+        // port, and the replacement Core could never bind. The menu said it had
+        // restarted; nothing had.
+        if let Ok(mut slot) = BACKEND_JOB.lock() {
+            *slot = Some(job.0 as usize);
+        }
+        Ok(())
         // `job` is intentionally dropped here without `CloseHandle` -- see the doc comment
         // above: it must outlive this process for KILL_ON_JOB_CLOSE to do its job.
     })();
@@ -1359,8 +1648,9 @@ fn open_at(app: &tauri::AppHandle, fragment: &str) {
 /// has no in-process restart, and pretending otherwise would leave a "restarted" message
 /// over an unchanged process.
 ///
-/// `spawn_backend_monitor` is already watching the handle in `Backend`, so a restart that
-/// fails is surfaced by the same path a crash is, rather than needing its own.
+/// `spawn_backend_monitor` watches the handle in `Backend`, but only for a process that
+/// EXITS. A Core that starts and never answers is invisible to it — which is the state
+/// this function used to leave behind — so the wait below is this path's own.
 fn restart_backend(app: &tauri::AppHandle) {
     kill_backend(app);
     match spawn_backend() {
@@ -1368,7 +1658,41 @@ fn restart_backend(app: &tauri::AppHandle) {
             if let Some(state) = app.try_state::<Backend>() {
                 *state.0.lock().unwrap() = Some(child);
             }
-            log_issue("Wavr: Core restarted from the tray.");
+            // Say what happened, not what was attempted.
+            //
+            // This line read "Wavr: Core restarted from the tray." and was written
+            // the instant the spawn call returned, before anything had started.
+            // It has now been wrong twice in one day for two different reasons —
+            // first over a Core whose worker still held the port, then over a Core
+            // left suspended and never resumed — and both times the log said the
+            // restart had happened while the dashboard sat on "reconnecting...".
+            // A success message that cannot fail is not a message.
+            if wait_healthy(HEALTH_TIMEOUT) {
+                // Point the window at the Core that is answering NOW, exactly as the
+                // crash watchdog does. Two paths bring a Core back and only one of
+                // them was telling the window about it, so a restart from the menu
+                // left the page sitting on whatever it had -- and if the scheme had
+                // changed while it was down, sitting there forever. `backend_url()`
+                // is read after `wait_healthy`, so it carries the scheme the socket
+                // just answered on rather than the one this process guessed at start.
+                if let Some(w) = app.get_webview_window("main") {
+                    if let Ok(u) = backend_url().parse::<tauri::Url>() {
+                        let _ = w.navigate(u);
+                    }
+                }
+                log_issue("Wavr: Core restarted from the tray and is answering.");
+            } else {
+                log_issue(
+                    "Wavr: Core was restarted from the tray but is NOT answering. \
+                     Quit Wavr from this menu and open it again; if that does not \
+                     help, see ~/.wavr/desktop.log.",
+                );
+                report_backend_crashed(
+                    app,
+                    "Wavr restarted the Core, but it did not start answering. Quit Wavr \
+                     from the tray menu and open it again.",
+                );
+            }
         }
         Err(e) => log_issue(&format!("Wavr: could not restart the Core: {e}")),
     }
@@ -1391,11 +1715,17 @@ fn spawn_runtime_presence(
 ) {
     std::thread::spawn(move || {
         const POLL_INTERVAL: Duration = Duration::from_secs(10);
-        let url = format!("{}/api/runtime", backend_url());
         let mut https_agent: Option<ureq::Agent> = None;
         let mut last_tooltip = String::new();
 
         loop {
+            // Built per tick, not once. This thread starts before the health
+            // probe runs, so a URL frozen here keeps the GUESS for the life of
+            // the process -- and on a Core serving https the tray then reports
+            // "Wavr is not answering on this machine" for ever, beside a window
+            // that is working. `fetch_runtime` already re-reads `scheme()` for
+            // its own branch, so the URL and the branch used to disagree.
+            let url = format!("{}/api/runtime", backend_url());
             let body = fetch_runtime(&url, &mut https_agent);
             let view = tray_view(body.as_ref());
 
@@ -1459,13 +1789,8 @@ fn main() {
         .setup(move |app| {
             // 1. spawn the backend and remember it for cleanup.
             match spawn_backend() {
-                Ok(child) => {
-                    // Crash-safety net: force-kill on ANY process exit, not just our own
-                    // graceful kill_backend() paths. See confine_backend_to_job_object().
-                    #[cfg(windows)]
-                    confine_backend_to_job_object(&child);
-                    *app.state::<Backend>().0.lock().unwrap() = Some(child);
-                }
+                // Already confined to a Job Object and resumed by spawn_backend().
+                Ok(child) => *app.state::<Backend>().0.lock().unwrap() = Some(child),
                 Err(e) => eprintln!("failed to start Wavr backend: {e}"),
             }
 
@@ -1540,6 +1865,15 @@ fn main() {
             // Named "Quit Wavr", never bare "Quit". Closing the WINDOW leaves Wavr
             // sensing; this stops it. Two different outcomes must not share one word.
             let quit = MenuItemBuilder::with_id("quit", "Quit Wavr").build(app)?;
+            // The order here IS `TRAY_ITEMS`, checked rather than trusted. A
+            // list nothing consults couples nothing — this is what makes
+            // "every item has an action" a real guarantee instead of a comment.
+            debug_assert_eq!(
+                TRAY_ITEMS,
+                &["status", "open", "attention", "privacy", "autostart",
+                  "restart", "quit"],
+                "the tray menu and TRAY_ITEMS have diverged",
+            );
             let menu = MenuBuilder::new(app)
                 .items(&[&status, &open, &attention, &privacy, &autostart,
                          &restart, &quit])
@@ -1548,26 +1882,34 @@ fn main() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("Wavr — starting…")
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "open" => show_window(app),
-                    // Both open the dashboard at the surface that answers the question.
-                    // The tray deliberately does not reimplement either: a second place
-                    // to read the same state is a second place for it to be wrong.
-                    "attention" => open_at(app, "#tab-novos"),
-                    "privacy" => open_at(app, "#gearSecTrust"),
-                    "autostart" => {
-                        // Read the CURRENT state and invert it, rather than
-                        // trusting the tick we last drew — the menu item and
-                        // the OS can disagree, and the OS is right.
-                        let now_on = app.autolaunch().is_enabled().unwrap_or(false);
-                        set_autostart(app, !now_on);
+                .on_menu_event(|app, event| {
+                    match tray_action(event.id().as_ref()) {
+                        Some(TrayAction::Inert) | None => {}
+                        Some(TrayAction::Open) => show_window(app),
+                        Some(TrayAction::OpenAt(fragment)) => open_at(app, fragment),
+                        Some(TrayAction::ToggleAutostart) => {
+                            // Read the CURRENT state and invert it, rather than
+                            // trusting the tick we last drew — the menu item and
+                            // the OS can disagree, and the OS is right.
+                            let now_on =
+                                app.autolaunch().is_enabled().unwrap_or(false);
+                            set_autostart(app, !now_on);
+                        }
+                        Some(TrayAction::RestartCore) => {
+                            // Off the event loop. `restart_backend` waits for
+                            // health, which can take the full HEALTH_TIMEOUT,
+                            // and this closure runs ON the main thread: doing
+                            // it here freezes the window and the tray menu for
+                            // 45 seconds, in precisely the situation the button
+                            // exists for -- a Core that is not coming back.
+                            let handle = app.clone();
+                            std::thread::spawn(move || restart_backend(&handle));
+                        }
+                        Some(TrayAction::Quit) => {
+                            kill_backend(app);
+                            app.exit(0);
+                        }
                     }
-                    "restart" => restart_backend(app),
-                    "quit" => {
-                        kill_backend(app);
-                        app.exit(0);
-                    }
-                    _ => {}
                 })
                 .build(app)?;
 
@@ -1575,11 +1917,32 @@ fn main() {
             // menu reads correctly whenever it is opened, rather than only after a click.
             spawn_runtime_presence(app.handle().clone(), tray, status);
 
-            // 5. HTTPS mode: install the scoped cert pin BEFORE any navigation happens.
+            // 5. Install the scoped cert pin BEFORE any navigation happens. Always,
+            //    not "if multidevice()".
+            //
+            //    `multidevice()` reads WAVR_MULTIDEVICE from the environment or a
+            //    `.env` file. An installed Core has neither: the switch a person
+            //    turns on in Settings lives in the CORE'S OWN DATABASE, which this
+            //    shell cannot read. So on the machine of the first person to install
+            //    Wavr and turn that switch on, this condition was false, the pin was
+            //    never armed, and the window -- correctly navigated to https by then
+            //    -- was met by "Your connection isn't private" with a Continue
+            //    (unsafe) link under it.
+            //
+            //    The gate never bought any safety. The handler is scoped by itself:
+            //    it ALLOWS only a certificate byte-identical to the one on disk, at
+            //    exactly 127.0.0.1:<port>, and CANCELs everything else -- including
+            //    the case where there is no certificate at all, which is what a
+            //    plain-HTTP Core looks like. Installing it unconditionally is
+            //    strictly safer than not installing it, because the alternative is
+            //    WebView2's own interstitial, which offers the person a button that
+            //    clicks straight through a real interception.
+            //
+            //    Third consumer of the same fact to be caught guessing it today. The
+            //    probe discovers the scheme; the navigation now reads what the probe
+            //    found; and this no longer asks the question at all.
             #[cfg(windows)]
-            if multidevice() {
-                install_cert_pinning(app.handle());
-            }
+            install_cert_pinning(app.handle());
 
             // 6. once the backend is healthy, navigate the window to it (done off-thread so
             //    setup() returns immediately and the "Starting…" placeholder shows
@@ -1590,8 +1953,23 @@ fn main() {
             //    window stuck on "Starting Wavr…" forever with no recourse.
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                let url = backend_url();
                 if wait_healthy(HEALTH_TIMEOUT) {
+                    // Read AFTER the probe, and that is the whole point of the line.
+                    //
+                    // It used to be read one line above the `if`, so the window was
+                    // navigated to `guessed_scheme()` -- the exact value `wait_healthy`
+                    // exists to replace. Against a Core serving HTTPS the window opened
+                    // `http://127.0.0.1:8000`; every request from that page failed
+                    // forever, and the service worker answered the navigation out of its
+                    // offline cache. So a dashboard appeared, fully drawn, and filled
+                    // its empty state with the built-in sample house: three rooms the
+                    // person does not have, under a Space named "Command Center",
+                    // beside a small chip reading "reconnecting".
+                    //
+                    // The morning's fix taught the PROBE to try both schemes and record
+                    // the winner. It did not teach the navigation to read it. One
+                    // address, two sources, a second time.
+                    let url = backend_url();
                     if let Some(w) = handle.get_webview_window("main") {
                         if let Ok(u) = url.parse::<tauri::Url>() {
                             let _ = w.navigate(u);
@@ -1630,11 +2008,24 @@ fn main() {
                         }
                     }
                 } else {
+                    // Names the PORT, not one scheme. `wait_healthy` probes http and
+                    // https both, so "did not answer at http://..." was already half a
+                    // sentence -- and it was the half that sent me looking in the wrong
+                    // place this morning, when the Core was answering perfectly well on
+                    // the other one.
+                    // Says what is true at this instant AND what is still happening.
+                    // The previous version read as a verdict — "did not answer,
+                    // check these three things" — while a thread behind it was
+                    // still watching, and on the machine that produced this message
+                    // the Core answered three seconds later.
                     let msg = format!(
-                        "Wavr backend did not answer at {url} within {}s. Check WAVR_PYTHON, \
-                         that the backend's dependencies are installed, and that no leftover \
-                         process is already holding the port -- see ~/.wavr/desktop.log for \
-                         details.",
+                        "Wavr hasn't answered on port {} yet (tried http and https for \
+                         {}s). Still watching — if it comes up, this page opens on its \
+                         own. A first start after installing can be slow while Windows \
+                         scans the new file. If it stays like this, check that no \
+                         leftover Wavr is already holding the port, and see \
+                         ~/.wavr/desktop.log.",
+                        port(),
                         HEALTH_TIMEOUT.as_secs()
                     );
                     log_issue(&format!("Wavr: {msg}"));
@@ -1659,13 +2050,58 @@ fn main() {
                         let _ = handle
                             .notification()
                             .builder()
-                            .title("Wavr did not start")
+                            // Same correction as the on-screen message: this fired
+                            // while the shell was still watching, and said "never".
+                            .title("Wavr is taking longer than usual")
                             .body(
-                                "The backend never became healthy. Open Wavr for details, or \
-                                 check ~/.wavr/desktop.log.",
+                                "The Core hasn't answered yet. Wavr is still watching and \
+                                 will open by itself if it comes up.",
                             )
                             .show();
                     }
+
+                    // KEEP WATCHING. A timeout is not a verdict.
+                    //
+                    // Measured on the first user's machine: the shell started at
+                    // 21:01:51, the Core's worker began answering at 21:02:28, and
+                    // the wait gave up at 21:02:25 — three seconds early. The Core
+                    // then served happily for the next minute and a half while the
+                    // window sat on "Wavr didn't start" and nothing in the shell was
+                    // looking any more.
+                    //
+                    // Raising the number would only move the cliff. What was wrong is
+                    // that the first answer was treated as the last one, on the one
+                    // path where the thing being waited for is a 40MB self-extracting
+                    // binary that Windows may be scanning for the first time.
+                    //
+                    // So the message above stands as the honest report of the wait,
+                    // and this keeps probing quietly behind it. If the Core does come
+                    // up, the window goes where it should have gone and the error
+                    // stops being on screen. If it never does, nothing further is
+                    // said — this loop is bounded and silent.
+                    let tardio = handle.clone();
+                    std::thread::spawn(move || {
+                        if !wait_healthy(LATE_START_GRACE) {
+                            log_issue(
+                                "Wavr: the Core never answered, including the grace \
+                                 period after the startup wait. Leaving the failure \
+                                 message on screen.",
+                            );
+                            return;
+                        }
+                        log_issue(
+                            "Wavr: the Core answered after the startup wait had already \
+                             given up -- opening the dashboard.",
+                        );
+                        let url = backend_url();
+                        if let Some(w) = tardio.get_webview_window("main") {
+                            if let Ok(u) = url.parse::<tauri::Url>() {
+                                let _ = w.navigate(u);
+                            }
+                        }
+                        spawn_alert_notifier(tardio.clone());
+                        spawn_backend_monitor(tardio.clone());
+                    });
                 }
             });
 
@@ -1737,6 +2173,46 @@ mod tests {
         )));
         assert_eq!(view.summary, "Kitchen radar is not reporting.");
         assert!(view.tooltip.contains("degraded"));
+    }
+
+    #[test]
+    fn every_tray_item_has_an_action() {
+        // The failure this prevents: somebody adds a menu entry and forgets the
+        // handler arm. The symptom is an item that does nothing at all when
+        // clicked, which a person cannot tell apart from the app having frozen.
+        for id in super::TRAY_ITEMS {
+            assert!(
+                super::tray_action(id).is_some(),
+                "tray item {id:?} has no action",
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_id_is_ignored_rather_than_guessed() {
+        assert!(super::tray_action("definitely-not-an-item").is_none());
+    }
+
+    #[test]
+    fn the_status_line_is_deliberately_inert_rather_than_unhandled() {
+        // It is the disabled line at the top of the menu. Saying so explicitly
+        // is what stops it looking like a handler somebody forgot.
+        assert_eq!(super::tray_action("status"), Some(super::TrayAction::Inert));
+    }
+
+    #[test]
+    fn the_two_navigating_items_name_fragments_the_shell_routes_on() {
+        // These used to name a hash nothing read. The shell routes on `#tab-*`
+        // and `#gearSec*`; anything else silently reloads the default tab.
+        for id in ["attention", "privacy"] {
+            match super::tray_action(id) {
+                Some(super::TrayAction::OpenAt(f)) => assert!(
+                    f.starts_with("#tab-") || f.starts_with("#gearSec"),
+                    "{id:?} navigates to {f:?}, which the shell does not route on",
+                ),
+                other => panic!("{id:?} should navigate, got {other:?}"),
+            }
+        }
     }
 
     #[test]
