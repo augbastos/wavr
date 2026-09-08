@@ -16,6 +16,26 @@
  * Externalising the strings is a real, separate piece of work. This is the half
  * that can be done correctly now and that a translation layer will need anyway.
  *
+ * That separate piece of work has since been done — `i18n.js` is the other
+ * half, and the two resolve the same locale from the same stored key so a
+ * person cannot read Portuguese sentences over British dates. The paragraph
+ * above is kept as written because `i18n.js` quotes it; what it describes is
+ * history, not the current shape.
+ *
+ * ## A number inside a translated sentence still belongs here
+ *
+ * A translated sentence with a `{pct}` slot in it interpolates whatever
+ * `String(n)` gives, and
+ * `String(0.82)` is "0.82" in every locale on earth — an English decimal POINT,
+ * dropped into the middle of a Portuguese sentence, in the one product that
+ * went to the trouble of translating the sentence around it. `number()` and
+ * `metres()` had ZERO callers for exactly that reason: they are easy to forget,
+ * because forgetting them looks right to whoever is reading in English.
+ *
+ * So the rule is: a value that can carry a fraction — a confidence, a
+ * reliability factor, a breathing rate, a distance — goes through `number()` or
+ * `metres()` BEFORE it becomes a `{slot}`, never `toFixed` and never raw.
+ *
  * ## Where the locale comes from
  *
  * The browser, which already knows — `navigator.language` is the answer the
@@ -32,7 +52,15 @@
  * any of it. That is also why it defines a plain global rather than a module:
  * the surrounding code is classic scripts sharing one scope, and a module here
  * would be a second loading model for no benefit.
+ *
+ * ## Load position: third, ahead of every module that renders a value
+ *
+ * `WavrFmt` is called from module top level, not only from event handlers,
+ * so it must be installed before the first module that formats anything.
+ * It is also precached by the service worker for the same reason the shell
+ * is: an offline launch without it is a blank page, not a degraded one.
  */
+
 (function () {
   "use strict";
 

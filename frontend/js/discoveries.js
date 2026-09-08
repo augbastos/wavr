@@ -2,7 +2,16 @@
    A classic script, NOT a module: it calls `actionFeedback`,
    `window.switchTab` and `window.__wavrOpenGearSection`, all defined
    earlier in the document's shared global scope.
+ *
+ * ## Load position: after the shell chrome it calls into
+ *
+ * A classic script, not an ES module, and that is load-bearing: it reaches
+ * `actionFeedback`, `window.switchTab` and `window.__wavrOpenGearSection`
+ * through the global scope every classic script shares. Function hoisting
+ * does NOT cross a `<script>` boundary, so a tag moved above `shell-nav.js`
+ * breaks the navigation calls at the moment somebody presses the card.
  */
+
 // ============================================================================
 // Discoveries tab: the decision inbox (§15 "discover aggressively, activate conservatively"
 // made concrete — backend/wavr/discovery_inbox.py). GET /api/discoveries?status=, POST
@@ -50,21 +59,27 @@
   };
 
   function confBand(c){
-    if(c >= 0.8) return "high confidence";
-    if(c >= 0.5) return "medium confidence";
-    return "low confidence";
+    if(c >= 0.8) return WavrT("high confidence");
+    if(c >= 0.5) return WavrT("medium confidence");
+    return WavrT("low confidence");
   }
 
   // Sensor archetypes the backend understands (backend/wavr/nodes.py
   // SENSOR_MODALITY). The operator picks one; the node never gets to.
-  var SENSOR_TYPES = [
-    ["ld2450", "24GHz radar (HLK-LD2450)"],
-    ["mmwave", "Other mmWave radar"],
-    ["pir",    "Motion sensor (PIR)"],
-    ["ble_beacon", "Bluetooth beacon"],
-    ["generic", "Something else that senses presence"],
-    ["environmental", "Temperature / humidity (not presence)"]
-  ];
+  // A function, not a constant: `WavrT` answers in whatever language is active
+  // when it is CALLED, and a list built once at load would still be in the old
+  // language after somebody switches. The VALUES are the backend's own
+  // identifiers and never translate; only the labels do.
+  function sensorTypes(){
+    return [
+      ["ld2450", WavrT("24GHz radar (HLK-LD2450)")],
+      ["mmwave", WavrT("Other mmWave radar")],
+      ["pir",    WavrT("Motion sensor (PIR)")],
+      ["ble_beacon", WavrT("Bluetooth beacon")],
+      ["generic", WavrT("Something else that senses presence")],
+      ["environmental", WavrT("Temperature / humidity (not presence)")]
+    ];
+  }
 
   // A pending sensor needs a REAL decision, not a card dismissal. Approving one
   // requires a name, a sensor type and a room -- all from the human, because the
@@ -79,10 +94,13 @@
 
     var hint = document.createElement("p");
     hint.className = "hint";
-    hint.textContent = "This sensor says it is \u201c" +
-      ((item.detail && item.detail.name_hint) || "unnamed") + "\u201d and has a \u201c" +
-      ((item.detail && item.detail.sensor_hint) || "unknown") +
-      "\u201d sensor. Those are its own claims \u2014 what you set below is what Wavr will trust.";
+    // One sentence with two slots, not four fragments concatenated: the hints
+    // are the node's own words and stay as it typed them, but the sentence
+    // around them is ours to translate whole.
+    hint.textContent = WavrT("This sensor says it is \u201c{name}\u201d and has a \u201c{kind}\u201d sensor. Those are its own claims \u2014 what you set below is what Wavr will trust.", {
+      name: (item.detail && item.detail.name_hint) || WavrT("unnamed"),
+      kind: (item.detail && item.detail.sensor_hint) || WavrT("unknown")
+    });
     box.appendChild(hint);
 
     function field(labelText, el){
@@ -97,10 +115,10 @@
     var name = document.createElement("input");
     name.type = "text"; name.maxLength = 64;
     name.value = (item.detail && item.detail.name_hint) || "";
-    name.placeholder = "e.g. Kitchen radar";
+    name.placeholder = WavrT("e.g. Kitchen radar");
 
     var kind = document.createElement("select");
-    SENSOR_TYPES.forEach(function(t){
+    sensorTypes().forEach(function(t){
       var o = document.createElement("option");
       o.value = t[0]; o.textContent = t[1];
       if((item.detail && item.detail.sensor_hint) === t[0]) o.selected = true;
@@ -109,39 +127,35 @@
 
     var room = document.createElement("input");
     room.type = "text"; room.maxLength = 64;
-    room.placeholder = "which room is it in?";
+    room.placeholder = WavrT("which room is it in?");
 
-    box.appendChild(field("What should Wavr call it?", name));
-    box.appendChild(field("What kind of sensor is it?", kind));
-    box.appendChild(field("Where is it?", room));
+    box.appendChild(field(WavrT("What should Wavr call it?"), name));
+    box.appendChild(field(WavrT("What kind of sensor is it?"), kind));
+    box.appendChild(field(WavrT("Where is it?"), room));
 
     var go = document.createElement("button");
     go.type = "button"; go.className = "ctl small primary";
     go.style.marginTop = "10px";
-    go.textContent = "Approve sensor";
+    go.textContent = WavrT("Approve sensor");
     go.onclick = function(){
       if(!name.value.trim() || !room.value.trim()){
-        actionFeedback(fb, false, "a name and a room are required");
+        actionFeedback(fb, false, WavrT("a name and a room are required"));
         return;
       }
       go.disabled = true;
       (async function(){
         var ok = false;
         try{
-          var r = await fetch(location.origin + "/api/nodes/" +
-                              encodeURIComponent(nodeId) + "/approve", {
-            method: "POST",
-            headers: {"X-Wavr-Local":"1", "Content-Type":"application/json"},
-            body: JSON.stringify({name: name.value.trim(),
+          var r = await WavrAPI.fetch("/api/nodes/" +
+                              encodeURIComponent(nodeId) + "/approve", {method: "POST", json: {name: name.value.trim(),
                                   sensor_type: kind.value,
-                                  room: room.value.trim()})
-          });
+                                  room: room.value.trim()}});
           ok = r.ok;
           if(!ok){
             var body = await r.json().catch(function(){ return {}; });
-            actionFeedback(fb, false, body.detail || "couldn't approve it");
+            actionFeedback(fb, false, body.detail || WavrT("couldn't approve it"));
           }
-        }catch(e){ actionFeedback(fb, false, "couldn't reach Wavr"); }
+        }catch(e){ actionFeedback(fb, false, WavrT("couldn't reach Wavr")); }
         if(ok){
           // Not `actionFeedback` + immediate onDone: onDone rebuilds the whole
           // list, so that message would be destroyed before it painted. This
@@ -149,9 +163,7 @@
           while(box.firstChild) box.removeChild(box.firstChild);
           var done = document.createElement("p");
           done.className = "hint";
-          done.textContent = "\u2713 " + name.value.trim() + " is approved. " +
-            "It picks up its credential the next time it checks in, so give it " +
-            "a minute before expecting readings.";
+          done.textContent = WavrT("\u2713 {name} is approved. It picks up its credential the next time it checks in, so give it a minute before expecting readings.", { name: name.value.trim() });
           box.appendChild(done);
           setTimeout(onDone, 4000);
         } else {
@@ -175,9 +187,9 @@
     var d = item.detail || {};
     var where = document.createElement("p");
     where.className = "hint";
-    where.textContent = "Found at " + (d.ip || "an address on your network") +
-      (d.vendor ? " \u00b7 " + d.vendor : "") +
-      ". Wavr will ask it for its video address itself.";
+    where.textContent = WavrT("Found at {where}. Wavr will ask it for its video address itself.", {
+      where: (d.ip || WavrT("an address on your network")) + (d.vendor ? " \u00b7 " + d.vendor : "")
+    });
     box.appendChild(where);
 
     function field(labelText, el){
@@ -191,57 +203,51 @@
 
     var room = document.createElement("input");
     room.type = "text"; room.maxLength = 64;
-    room.placeholder = "e.g. Hall";
+    room.placeholder = WavrT("e.g. Hall");
 
     var user = document.createElement("input");
     user.type = "text"; user.maxLength = 64; user.autocomplete = "off";
-    user.placeholder = "usually admin";
+    user.placeholder = WavrT("usually admin");
 
     var pass = document.createElement("input");
     pass.type = "password"; pass.maxLength = 128; pass.autocomplete = "off";
 
-    box.appendChild(field("Which room is it in?", room));
-    box.appendChild(field("The camera\u2019s own username", user));
-    box.appendChild(field("The camera\u2019s own password", pass));
+    box.appendChild(field(WavrT("Which room is it in?"), room));
+    box.appendChild(field(WavrT("The camera\u2019s own username"), user));
+    box.appendChild(field(WavrT("The camera\u2019s own password"), pass));
 
     var note = document.createElement("p");
     note.className = "hint";
     note.style.marginTop = "8px";
-    note.textContent = "These are the login you set on the camera, not a Wavr " +
-      "account. Wavr uses them to fetch the video address and does not keep " +
-      "them anywhere else. The camera is added switched OFF.";
+    note.textContent = WavrT("These are the login you set on the camera, not a Wavr account. Wavr uses them to fetch the video address and does not keep them anywhere else. The camera is added switched OFF.");
     box.appendChild(note);
 
     var go = document.createElement("button");
     go.type = "button"; go.className = "ctl small primary";
     go.style.marginTop = "10px";
-    go.textContent = "Add camera";
+    go.textContent = WavrT("Add camera");
     go.onclick = function(){
       if(!room.value.trim()){
-        actionFeedback(fb, false, "a room is required");
+        actionFeedback(fb, false, WavrT("a room is required"));
         return;
       }
       go.disabled = true;
       (async function(){
         var body = null, ok = false;
         try{
-          var r = await fetch(location.origin + "/api/discoveries/" +
-                              encodeURIComponent(item.discovery_id) + "/add-camera", {
-            method: "POST",
-            headers: {"X-Wavr-Local":"1", "Content-Type":"application/json"},
-            body: JSON.stringify({room: room.value.trim(),
-                                  username: user.value, password: pass.value})
-          });
+          var r = await WavrAPI.fetch("/api/discoveries/" +
+                              encodeURIComponent(item.discovery_id) + "/add-camera", {method: "POST", json: {room: room.value.trim(),
+                                  username: user.value, password: pass.value}});
           body = await r.json().catch(function(){ return {}; });
           ok = r.ok;
-        }catch(e){ actionFeedback(fb, false, "couldn\u2019t reach Wavr"); }
+        }catch(e){ actionFeedback(fb, false, WavrT("couldn’t reach Wavr")); }
 
         // Clear the password from the DOM either way: it has served its purpose
         // and there is no reason for it to sit in a form field afterwards.
         pass.value = "";
 
         if(!ok){
-          actionFeedback(fb, false, (body && body.detail) || "couldn\u2019t add it");
+          actionFeedback(fb, false, (body && body.detail) || WavrT("couldn\u2019t add it"));
           go.disabled = false;
           return;
         }
@@ -249,15 +255,14 @@
         // too -- wanting a login is the normal case, not an error -- so the
         // STATUS decides, not the HTTP code.
         if(body.status !== "added"){
-          actionFeedback(fb, false, body.message || "couldn\u2019t reach the camera");
+          actionFeedback(fb, false, body.message || WavrT("couldn\u2019t reach the camera"));
           go.disabled = false;
           return;
         }
         while(box.firstChild) box.removeChild(box.firstChild);
         var done = document.createElement("p");
         done.className = "hint";
-        done.textContent = "\u2713 Added to " + (body.room || room.value.trim()) +
-          ", switched off. Turn it on in Devices when you want it watching.";
+        done.textContent = WavrT("\u2713 Added to {room}, switched off. Turn it on in Devices when you want it watching.", { room: body.room || room.value.trim() });
         box.appendChild(done);
 
         // The one thing that lifts this camera from counting people to placing
@@ -265,13 +270,12 @@
         // about this camera; the wizard itself already exists.
         var more = document.createElement("p");
         more.className = "hint";
-        more.textContent = "Wavr can also learn WHERE in the room people are, " +
-          "by having you walk to a few spots once. Takes a couple of minutes.";
+        more.textContent = WavrT("Wavr can also learn WHERE in the room people are, by having you walk to a few spots once. Takes a couple of minutes.");
         box.appendChild(more);
         var calBtn = document.createElement("button");
         calBtn.type = "button"; calBtn.className = "ctl small";
         calBtn.style.marginTop = "8px";
-        calBtn.textContent = "Set up positioning";
+        calBtn.textContent = WavrT("Set up positioning");
         calBtn.onclick = function(){
           window.__wavrCalibrateNext = body.name || null;
           if(window.switchTab) window.switchTab("dispositivos");
@@ -317,15 +321,14 @@
           (async function(){
             var ok = false;
             try{
-              var r = await fetch(location.origin + "/api/nodes/" +
-                                  encodeURIComponent(nodeId) + "/deny",
-                                  {method:"POST", headers:{"X-Wavr-Local":"1"}});
+              var r = await WavrAPI.fetch("/api/nodes/" +
+                                  encodeURIComponent(nodeId) + "/deny", {method: "POST"});
               ok = r.ok;
             }catch(e){}
             if(ok){ onDone(); }
             else {
               btn.disabled = false;
-              actionFeedback(fb, false, "couldn't deny it \u2014 try again");
+              actionFeedback(fb, false, WavrT("couldn't deny it — try again"));
             }
           })();
           return;
@@ -336,7 +339,7 @@
         var path = "/api/discoveries/" + encodeURIComponent(item.discovery_id) +
           (action.id === "dismiss" ? "/dismiss" : "/accept");
         var r;
-        try{ r = await fetch(location.origin + path, {method:"POST", headers:{"X-Wavr-Local":"1"}}); }catch(e){}
+        try{ r = await WavrAPI.fetch(path, {method: "POST"}); }catch(e){}
         if(r && r.ok){
           if(action.id !== "dismiss"){
             var route = ROUTE_FOR_ACTION[action.id];
@@ -345,7 +348,7 @@
           onDone();
         } else {
           btn.disabled = false;
-          actionFeedback(fb, false, "couldn't update — try again");
+          actionFeedback(fb, false, WavrT("couldn't update — try again"));
         }
       })();
     };
@@ -370,8 +373,10 @@
     metaLine.appendChild(confSpan);
     metaLine.appendChild(document.createTextNode(" " + MIDDOT + " "));
     var seenSpan = document.createElement("span"); seenSpan.className = "pair-dev-meta";
-    seenSpan.textContent = "first seen " + (fmtRelative(item.first_seen) || "unknown") +
-      " " + MIDDOT + " last seen " + (fmtRelative(item.last_seen) || "unknown");
+    seenSpan.textContent = WavrT("first seen {first} \u00b7 last seen {last}", {
+      first: fmtRelative(item.first_seen) || WavrT("unknown"),
+      last: fmtRelative(item.last_seen) || WavrT("unknown")
+    });
     metaLine.appendChild(seenSpan);
     left.appendChild(metaLine);
 
@@ -396,12 +401,16 @@
   function paintCounts(counts){
     counts = counts || {};
     if(countsEl){
-      countsEl.textContent = (counts.pending || 0) + " pending " + MIDDOT + " " +
-        (counts.accepted || 0) + " accepted " + MIDDOT + " " + (counts.dismissed || 0) + " dismissed";
+      countsEl.textContent = WavrT("{pending} pending \u00b7 {accepted} accepted \u00b7 {dismissed} dismissed", {
+        pending: counts.pending || 0,
+        accepted: counts.accepted || 0,
+        dismissed: counts.dismissed || 0
+      });
     }
     var n = counts.pending || 0;
     if(navCount){ navCount.hidden = n === 0; navCount.textContent = n > 99 ? "99+" : String(n); }
-    if(navBtn) navBtn.setAttribute("aria-label", n ? "Discoveries — " + n + " pending" : "Discoveries");
+    if(navBtn) navBtn.setAttribute("aria-label",
+      n ? WavrT("Discoveries — {n} pending", { n: n }) : WavrT("Discoveries"));
   }
 
   async function loadDiscoveries(){
@@ -409,24 +418,23 @@
       loadingEl.hidden = true;
       note.hidden = false;
       note.textContent = (MODE === "companion")
-        ? "Discoveries need the hub itself — not available on a view-only companion device."
-        : "Discoveries are found by your home's Wavr hub; this demo doesn't access any network.";
+        ? WavrT("Discoveries need the hub itself — not available on a view-only companion device.")
+        : WavrT("Discoveries are found by your Space's Wavr hub; this demo doesn't access any network.");
       return;
     }
     var status = filterSel ? filterSel.value : "pending";
     var r;
     try{
-      r = await fetch(location.origin + "/api/discoveries?status=" + encodeURIComponent(status),
-        {headers:{"X-Wavr-Local":"1"}});
+      r = await WavrAPI.fetch("/api/discoveries?status=" + encodeURIComponent(status));
     }catch(e){
       loadingEl.hidden = true; note.hidden = false;
-      note.textContent = "Couldn't reach the hub — try again in a moment.";
+      note.textContent = WavrT("Couldn't reach the hub — try again in a moment.");
       return;
     }
     loadingEl.hidden = true;
     if(!r.ok){
       note.hidden = false;
-      note.textContent = "Discoveries need local admin access on this hub.";
+      note.textContent = WavrT("Discoveries need local admin access on this hub.");
       return;
     }
     note.hidden = true;
@@ -436,9 +444,15 @@
     listEl.textContent = "";
     if(!items.length){
       emptyEl.hidden = false;
+      // The filter offers exactly four values and the first branch takes two of
+      // them, so "accepted" and "dismissed" are the whole of the second. Spelt
+      // out rather than interpolated, because a status word dropped into an
+      // English sentence would stay English inside a Portuguese one.
       emptyEl.textContent = (status === "pending" || status === "all")
-        ? "Nothing needs your attention."
-        : "No " + status + " discoveries yet.";
+        ? WavrT("Nothing needs your attention.")
+        : (status === "dismissed"
+            ? WavrT("No dismissed discoveries yet.")
+            : WavrT("No accepted discoveries yet."));
       return;
     }
     emptyEl.hidden = true;

@@ -6,14 +6,14 @@
  *
  * ## Why this whole section is hidden by default
  *
- * A household setting up a camera should never encounter the word "manifest".
+ * Somebody setting up a camera should never encounter the word "manifest".
  * Every control here answers a question only somebody writing software has, and
  * putting them beside the ordinary settings makes the ordinary user feel they
  * are operating a tool built for somebody else.
  *
  * ## The one thing this screen must never do
  *
- * Let a simulated house look real. Every scenario writes evidence tagged
+ * Let a simulated Space look real. Every scenario writes evidence tagged
  * `sim:`, and the Core reports which rooms currently hold any — so this screen
  * shows that live, in the place somebody would be looking when they were most
  * likely to be fooled by it.
@@ -95,13 +95,13 @@
   function renderOff(host, status) {
     var t = document.createElement("div");
     t.className = "tile";
-    t.appendChild(head("Developer mode is off", "nothing here is running"));
+    t.appendChild(head(WavrT("Developer mode is off"), WavrT("nothing here is running")));
     t.appendChild(note(
       status === 403
-        ? "Turn it on in Core settings. These tools are hidden by default "
+        ? WavrT("Turn it on in Core settings. These tools are hidden by default "
           + "because nobody who is not writing software needs them — the routes "
-          + "behind them stay protected either way."
-        : "The Core did not answer. It may be starting."));
+          + "behind them stay protected either way.")
+        : WavrT("The Core did not answer. It may be starting.")));
     host.appendChild(t);
   }
 
@@ -114,26 +114,26 @@
 
     var t = document.createElement("div");
     t.className = "tile";
-    t.appendChild(head("This Core", "what an application can talk to"));
+    t.appendChild(head(WavrT("This Core"), WavrT("what an application can talk to")));
     Object.keys(body.protocol || {}).forEach(function (k) {
       t.appendChild(row(k.replace(/_/g, " "), "v" + body.protocol[k]));
     });
-    t.appendChild(row("rooms", String((body.rooms || []).length)));
-    t.appendChild(row("rooms with a reading",
+    t.appendChild(row(WavrT("rooms"), String((body.rooms || []).length)));
+    t.appendChild(row(WavrT("rooms with a reading"),
                       String((body.rooms_with_state || []).length)));
 
     // The load-bearing line on this screen. Placed with the other facts rather
     // than in a corner, because somebody looking at a convincing dashboard needs
     // to be told here that none of it came from a sensor.
     var sim = body.simulated_rooms || [];
-    t.appendChild(row("simulated rooms", sim.length ? sim.join(", ") : "none"));
-    if (sim.length) t.appendChild(note(body.note));
+    t.appendChild(row(WavrT("simulated rooms"), sim.length ? sim.join(", ") : WavrT("none")));
+    if (sim.length && body.note) t.appendChild(note(WavrT(body.note)));
     host.appendChild(t);
 
     if ((body.experiences || []).length) {
       var e = document.createElement("div");
       e.className = "tile";
-      e.appendChild(head("Reference experiences", "served by this Core"));
+      e.appendChild(head(WavrT("Reference experiences"), WavrT("served by this Core")));
       body.experiences.forEach(function (x) {
         var a = document.createElement("a");
         a.href = x.url;
@@ -143,8 +143,8 @@
         a.textContent = x.name;
         e.appendChild(a);
       });
-      e.appendChild(note("Each one uses the real SDK against this Core. "
-                       + "Read their source — that is what they are for."));
+      e.appendChild(note(WavrT("Each one uses the real SDK against this Core. "
+                       + "Read their source — that is what they are for.")));
       host.appendChild(e);
     }
     return body;
@@ -156,17 +156,17 @@
 
     var t = document.createElement("div");
     t.className = "tile";
-    t.appendChild(head("Providers", "what this Core can take evidence from"));
+    t.appendChild(head(WavrT("Providers"), WavrT("what this Core can take evidence from")));
     (body.providers || []).forEach(function (p) {
-      t.appendChild(row(p.label, p.reach
-                        + (p.leaves_the_home ? " — leaves the home" : "")));
+      t.appendChild(row(WavrT(p.label), WavrT(p.reach)
+                        + (p.leaves_the_home ? WavrT(" — leaves your network") : "")));
     });
 
     var faults = (body.health || []).filter(function (h) { return h.fault; });
     if (faults.length) {
-      t.appendChild(note("Not working right now: " + faults.map(function (h) {
+      t.appendChild(note(WavrT("Not working right now: {list}", {list: faults.map(function (h) {
         return h.name + " (" + h.state + ")";
-      }).join(", ")));
+      }).join(", ")})));
     }
     host.appendChild(t);
   }
@@ -177,8 +177,8 @@
 
     var t = document.createElement("div");
     t.className = "tile";
-    t.appendChild(head("Simulated house",
-                       "develop without owning the sensors"));
+    t.appendChild(head(WavrT("Simulated Space"),
+                       WavrT("develop without owning the sensors")));
 
     (body.scenarios || []).forEach(function (s) {
       var wrap = document.createElement("div");
@@ -186,13 +186,13 @@
 
       var text = document.createElement("span");
       var title = document.createElement("strong");
-      title.textContent = s.title;
+      title.textContent = WavrT(s.title);
       var why = document.createElement("span");
       // `pair-dev-meta`, not `hint`: `.hint` is dimmed inside a `.tile-head` and
       // inherits full contrast anywhere else, so these paragraphs rendered at
       // the same weight as their own titles — a wall of text with no shape.
       why.className = "pair-dev-meta";
-      why.textContent = s.teaches;
+      why.textContent = WavrT(s.teaches);
       text.appendChild(title);
       text.appendChild(document.createElement("br"));
       text.appendChild(why);
@@ -200,22 +200,22 @@
       var run = document.createElement("button");
       run.type = "button";
       run.className = "ctl small";
-      run.textContent = "Run";
+      run.textContent = WavrT("Run");
       run.setAttribute(
         "data-tip",
-        "Writes simulated evidence into " + (s.rooms || []).join(", ")
-          + " — labelled sim:, and it decays out on its own");
+        WavrT("Writes simulated evidence into {rooms} — labelled sim:, and it decays out on its own",
+              {rooms: (s.rooms || []).join(", ")}));
       run.onclick = async function () {
         run.disabled = true;
-        run.textContent = "Running…";
+        run.textContent = WavrT("Running…");
         // Realtime, because a person clicking this wants to WATCH it. The
         // instant mode exists for tests, where the point is the end state.
         var out = await post("/api/dev/scenarios/" + encodeURIComponent(s.key)
                              + "/run", { realtime: true });
-        run.textContent = out && !out.__status ? "Running" : "Failed";
+        run.textContent = out && !out.__status ? WavrT("Running") : WavrT("Failed");
         setTimeout(function () {
           run.disabled = false;
-          run.textContent = "Run";
+          run.textContent = WavrT("Run");
           renderDeveloper();
         }, Math.max(2000, (s.duration_s || 0) * 1000));
       };
@@ -225,19 +225,28 @@
       t.appendChild(wrap);
     });
 
-    t.appendChild(note(body.note));
+    if (body.note) t.appendChild(note(WavrT(body.note)));
     host.appendChild(t);
   }
 
   function renderManifestChecker(host) {
     var t = document.createElement("div");
     t.className = "tile";
-    t.appendChild(head("Manifest checker", "is my document correct?"));
+    t.appendChild(head(WavrT("Manifest checker"), WavrT("is my document correct?")));
 
     var ta = document.createElement("textarea");
     ta.className = "dev-manifest";
     ta.spellcheck = false;
     ta.rows = 8;
+    // The tile heading names this tool for somebody LOOKING at it. A screen
+    // reader lands on the field itself and, with nothing here, announced bare
+    // "edit text" — the one control on this screen you are meant to type into,
+    // and the only one that did not say what it was. No visible label: the
+    // heading and its hint sit directly above, and a third line would repeat
+    // them to everybody who can see. The name carries the tool's own title, so
+    // hearing the field is as good as seeing which tile it sits in.
+    ta.setAttribute("aria-label",
+                    WavrT("Manifest checker — the document to check"));
     ta.value = JSON.stringify({
       id: "my-experience",
       name: "My Experience",
@@ -256,16 +265,16 @@
       try {
         parsed = JSON.parse(ta.value);
       } catch (e) {
-        out.textContent = "Not valid JSON: " + e.message;
+        out.textContent = WavrT("Not valid JSON: {error}", {error: e.message});
         return;
       }
       var res = await post("/api/dev/manifest/validate", { manifest: parsed });
-      if (!res || res.__status) { out.textContent = "The Core did not answer."; return; }
+      if (!res || res.__status) { out.textContent = WavrT("The Core did not answer."); return; }
       if (!res.valid) { out.textContent = res.error; return; }
       out.textContent = res.warnings && res.warnings.length
         ? res.warnings.join("  ")
-        : "Valid. Whether a Space can support it is a different question — "
-          + "the compatibility route answers that.";
+        : WavrT("Valid. Whether a Space can support it is a different question — "
+          + "the compatibility route answers that.");
     }
     ta.addEventListener("input", function () {
       clearTimeout(timer);
@@ -338,9 +347,9 @@
         if (fb) {
           fb.className = "action-fb err";
           fb.textContent = body && body.__status === 500
-            ? "Wavr refused to build this file — it failed its own check for "
-              + "leaked credentials. Please report it."
-            : "Could not build the file. This control needs local admin access.";
+            ? WavrT("Wavr refused to build this file — it failed its own check for "
+              + "leaked credentials. Please report it.")
+            : WavrT("Could not build the file. This control needs local admin access.");
         }
         return;
       }
@@ -348,6 +357,115 @@
       if (fb) {
         fb.className = "action-fb";
         fb.textContent = describe;
+      }
+    };
+  }
+
+  /* The diagnostic bundle, enriched with what Wavr already reports elsewhere.
+   *
+   * `/api/diagnostics/bundle` carries sensor coverage and the config shape —
+   * everything the export/import machinery already redacts. Three more
+   * things somebody diagnosing a dead-on-arrival install needs are already
+   * served, separately, by routes this same dashboard already calls:
+   *
+   *   - `/api/runtime`      — is the Core alive, for how long, doing what.
+   *   - `/api/health/doctor` — network/discovery reachability and sensor
+   *     faults, as a `report` STRING that the server has already redacted
+   *     (see net_doctor.redact_macs). Only that string is used here, never
+   *     the route's raw `checks` array — that array is not MAC-scrubbed the
+   *     way the text report is, and this file has no reason to be the first
+   *     place that regresses.
+   *   - `/api/attention`    — anything waiting for a person, as COUNTS only.
+   *     Its `items` carry a phone's or a camera's own name — exactly the
+   *     kind of word this file promises never to carry.
+   *
+   * Merged here, client-side, rather than by teaching the server route about
+   * three more subsystems: each of these already has its own shape and its
+   * own audience, and a second assembly point in the backend is a second
+   * place secrecy could regress. A section that fails to fetch is named in
+   * `sections_unavailable` rather than silently missing — the same "say what
+   * you could not check" rule `/api/attention` itself follows.
+   */
+  function _safeRuntime(body) {
+    if (!body || body.__status) return null;
+    // `space` and `headline` dropped deliberately: both can carry the
+    // household's own name for their home, which this file promises never to
+    // carry — the exact leak this codebase already found once, in an
+    // anchor's name (see config_export.py's module docstring).
+    return {
+      state: body.state, role: body.role, uptime_s: body.uptime_s,
+      last_state_age_s: body.last_state_age_s,
+      findings: (body.findings || []).map(function (f) {
+        return { key: f.key, state: f.state, text: f.text, detail: f.detail };
+      }),
+    };
+  }
+
+  function _safeAttention(body) {
+    if (!body || body.__status) return null;
+    return { total: body.total, blocking: body.blocking,
+             degraded: body.degraded, info: body.info };
+  }
+
+  async function buildDiagnosticBundle() {
+    var bundle = await get("/api/diagnostics/bundle");
+    if (!bundle || bundle.__status) return { __failed: bundle };
+
+    var missing = [];
+
+    var runtime = _safeRuntime(await get("/api/runtime"));
+    if (!runtime) missing.push("core_state");
+    bundle.core_state = runtime;
+
+    var doctor = await get("/api/health/doctor");
+    var report = doctor && !doctor.__status ? (doctor.report || null) : null;
+    if (!report) missing.push("network_and_sensor_report");
+    bundle.network_and_sensor_report = report;
+
+    var attention = _safeAttention(await get("/api/attention"));
+    if (!attention) missing.push("pending_items");
+    bundle.pending_items = attention;
+
+    if (missing.length) bundle.sections_unavailable = missing;
+    return bundle;
+  }
+
+  function wireBundleDownload() {
+    var btn = el("exportBundleBtn");
+    if (!btn) return;
+    btn.onclick = async function () {
+      var fb = el("backupFb");
+      btn.disabled = true;
+      // Reuses the catalogue's existing generic wait state rather than
+      // declaring a new sentence: three more requests now happen behind this
+      // click (see buildDiagnosticBundle), and "Loading…" is already
+      // translated everywhere else this dashboard waits on one.
+      if (fb) {
+        fb.className = "action-fb";
+        fb.textContent = WavrT("Loading…");
+      }
+      var body = await buildDiagnosticBundle();
+      btn.disabled = false;
+      if (body.__failed !== undefined) {
+        if (fb) {
+          fb.className = "action-fb err";
+          fb.textContent = body.__failed && body.__failed.__status === 500
+            ? WavrT("Wavr refused to build this file — it failed its own check for "
+              + "leaked credentials. Please report it.")
+            : WavrT("Could not build the file. This control needs local admin access.");
+        }
+        return;
+      }
+      download("wavr-diagnostics-" + stamp() + ".json", body);
+      if (fb) {
+        // The SAME sentence the old, simpler download used — still true of
+        // this file (nothing about who was where, no credentials), and it
+        // means this change adds no new catalogue entry a translator has not
+        // yet seen. `sections_unavailable`, when present, still travels
+        // inside the saved FILE itself for whoever reads it.
+        fb.className = "action-fb";
+        fb.textContent = WavrT("Saved. Sensor health and the event stream — no "
+          + "credentials, no coordinates, and no record of who was where.");
       }
     };
   }
@@ -401,90 +519,91 @@
       input.value = "";                      // so the same file can be re-picked
       if (!file) return;
       host.hidden = true;
-      say("", "Reading " + file.name + "…");
+      say("", WavrT("Reading {file}…", {file: file.name}));
 
       var config;
       try {
         config = JSON.parse(await file.text());
       } catch (e) {
-        say("err", "That file is not readable JSON. Pick the file Wavr "
-                 + "downloaded, not a screenshot or a zip of it.");
+        say("err", WavrT("That file is not readable JSON. Pick the file Wavr "
+                 + "downloaded, not a screenshot or a zip of it."));
         return;
       }
 
       var seen = await postDetailed("/api/config/preview", { config: config });
       if (!seen.ok) {
         say("err", (seen.data && seen.data.detail)
-                   || "Wavr could not read that file.");
+                   || WavrT("Wavr could not read that file."));
         return;
       }
       var p = seen.data;
       var rows = [];
-      rows.push("<b>" + esc((p.space && p.space.name) || "This file")
-                + "</b> — " + p.rooms_incoming.length + " room"
-                + (p.rooms_incoming.length === 1 ? "" : "s") + ", "
-                + p.anchors_incoming + " anchor"
-                + (p.anchors_incoming === 1 ? "" : "s") + ", "
-                + p.cameras_incoming + " camera"
-                + (p.cameras_incoming === 1 ? "" : "s") + ".");
+      rows.push(WavrT("{name} — {rooms}, {anchors}, {cameras}.", {
+        name: "<b>" + esc((p.space && p.space.name) || WavrT("This file")) + "</b>",
+        rooms: WavrT("{n} room|{n} rooms", {n: p.rooms_incoming.length}),
+        anchors: WavrT("{n} anchor|{n} anchors", {n: p.anchors_incoming}),
+        cameras: WavrT("{n} camera|{n} cameras", {n: p.cameras_incoming}),
+      }));
       // The destructive part, first and in a person's words.
       if (p.rooms_lost.length) {
-        rows.push('<span class="sw-warn">These rooms exist here and NOT in the '
-                  + "file, and importing removes them: <b>"
-                  + esc(p.rooms_lost.join(", ")) + "</b>.</span>");
+        rows.push('<span class="sw-warn">'
+                  + WavrT("These rooms exist here and NOT in the file, and importing "
+                          + "removes them: {rooms}.",
+                          {rooms: "<b>" + esc(p.rooms_lost.join(", ")) + "</b>"})
+                  + "</span>");
       }
       if (p.rooms_replaced.length) {
-        rows.push("Replaced: " + esc(p.rooms_replaced.join(", ")) + ".");
+        rows.push(WavrT("Replaced: {rooms}.", {rooms: esc(p.rooms_replaced.join(", "))}));
       }
       if (p.secrets_needed && p.secrets_needed.length) {
-        rows.push("You will have to enter again: "
-                  + esc(p.secrets_needed.join(", ")) + ".");
+        rows.push(WavrT("You will have to enter again: {items}.",
+                        {items: esc(p.secrets_needed.join(", "))}));
       }
       rows.push('<div class="controls-row" style="margin-top:10px">'
                 + '<button type="button" class="ctl small primary" id="importGoBtn">'
-                + "Replace my setup with this file</button>"
+                + esc(WavrT("Replace my setup with this file")) + "</button>"
                 + '<button type="button" class="ctl small" id="importCancelBtn">'
-                + "Cancel</button></div>");
+                + esc(WavrT("Cancel")) + "</button></div>");
       host.innerHTML = rows.map(function (r) { return "<p>" + r + "</p>"; }).join("");
       host.hidden = false;
-      say("", "Nothing has been written yet.");
+      say("", WavrT("Nothing has been written yet."));
 
       el("importCancelBtn").onclick = function () {
         host.hidden = true;
-        say("", "Cancelled. Nothing was changed.");
+        say("", WavrT("Cancelled. Nothing was changed."));
       };
       el("importGoBtn").onclick = async function () {
         el("importGoBtn").disabled = true;
         var done = await postDetailed("/api/config/import",
                                       { config: config, confirm_digest: p.digest });
         if (!done.ok) {
-          say("err", (done.data && done.data.detail) || "The import failed.");
+          say("err", (done.data && done.data.detail) || WavrT("The import failed."));
           el("importGoBtn").disabled = false;
           return;
         }
         var r = done.data;
-        var lines = ["Restored " + r.written.rooms + " room"
-                     + (r.written.rooms === 1 ? "" : "s") + " and "
-                     + r.written.anchors + " anchor"
-                     + (r.written.anchors === 1 ? "" : "s") + "."];
+        var lines = [WavrT("Restored {rooms} and {anchors}.", {
+          rooms: WavrT("{n} room|{n} rooms", {n: r.written.rooms}),
+          anchors: WavrT("{n} anchor|{n} anchors", {n: r.written.anchors}),
+        })];
         // Everything that did NOT happen is said here rather than discovered
         // later. A silent skip is how somebody finds out in a month.
         if (r.anchors_skipped && r.anchors_skipped.length) {
-          lines.push("Skipped, because this file has no such room: "
-                     + esc(r.anchors_skipped.map(function (a) {
-                         return a.name + " (" + a.room + ")"; }).join(", ")) + ".");
+          lines.push(WavrT("Skipped, because this file has no such room: {anchors}.",
+                     {anchors: esc(r.anchors_skipped.map(function (a) {
+                         return a.name + " (" + a.room + ")"; }).join(", "))}));
         }
         if (r.cameras_to_re_add && r.cameras_to_re_add.length) {
-          lines.push("Add these cameras again with their stream address: "
-                     + esc(r.cameras_to_re_add.map(function (c) {
-                         return c.name; }).join(", ")) + ".");
+          lines.push(WavrT("Add these cameras again with their stream address: {cameras}.",
+                     {cameras: esc(r.cameras_to_re_add.map(function (c) {
+                         return c.name; }).join(", "))}));
         }
         if (r.problems && r.problems.length) {
           lines.push('<span class="sw-warn">' + esc(r.problems.join("; "))
                      + "</span>");
         }
         host.innerHTML = lines.map(function (l) { return "<p>" + l + "</p>"; }).join("");
-        say("", "Done. Reload to see your floor plan.");
+        say("", WavrT("Done. Reload to see your floor plan."));
       };
     };
   }
@@ -498,25 +617,29 @@
   // button only appears when the operator has already switched that connector
   // on — an outward action must not be one click away from somebody who never
   // agreed to it.
+  //
+  // And the tile only asks the Core anything when there IS a Core: see the
+  // mode gate at the bottom of this file.
 
   async function renderUpdates() {
     var how = el("updateHow");
     if (!how) return;
     var body = await get("/api/updates");
     if (!body || body.__status) {
-      how.textContent = "Wavr could not read its own update settings.";
+      how.textContent = WavrT("Wavr could not read its own update settings.");
       return;
     }
     el("updateVersion").textContent =
-      "running " + (body.running || "?") + " · " + (body.channel || "unknown");
+      WavrT("running {version} · {channel}",
+            {version: body.running || "?", channel: body.channel || WavrT("unknown")});
 
     // The instruction for THIS install, which is the actually useful half.
-    how.textContent = body.how_to_update || "";
+    how.textContent = body.how_to_update ? WavrT(body.how_to_update) : "";
 
     var why = el("updateWhy");
     if (body.why_no_check) {
       why.hidden = false;
-      why.textContent = body.why_no_check;
+      why.textContent = WavrT(body.why_no_check);
     } else {
       why.hidden = true;
     }
@@ -527,10 +650,10 @@
     if (fb) {
       fb.className = "action-fb";
       fb.textContent = body.up_to_date === null
-        ? (body.check_enabled ? "Not checked yet." : "")
+        ? (body.check_enabled ? WavrT("Not checked yet.") : "")
         : body.up_to_date
-          ? "You are on the latest release."
-          : "A newer release exists. Follow the instruction above.";
+          ? WavrT("You are on the latest release.")
+          : WavrT("A newer release exists. Follow the instruction above.");
     }
     el("updateActions").hidden = !body.check_enabled;
   }
@@ -539,27 +662,92 @@
   if (checkBtn) {
     checkBtn.onclick = async function () {
       checkBtn.disabled = true;
-      el("updateFb").textContent = "Reading the release list…";
+      el("updateFb").textContent = WavrT("Reading the release list…");
       var out = await post("/api/updates/check", {});
       checkBtn.disabled = false;
       if (!out || out.__status) {
         el("updateFb").className = "action-fb err";
         el("updateFb").textContent =
-          "Could not reach the release list. Nothing was sent.";
+          WavrT("Could not reach the release list. Nothing was sent.");
         return;
       }
       renderUpdates();
     };
   }
 
-  renderUpdates();
+  /* The SAME gate `renderDeveloper` applies, and for a harder reason.
+   *
+   * This ran unconditionally, so opening the off-localhost demo fetched
+   * `/api/updates` from a host with no Core behind it. The demo states on
+   * screen that "this page makes no backend calls" — a sentence the network
+   * tab contradicted. A promise about egress is not a promise until the only
+   * thing that can break it is gone.
+   *
+   * `MODE` undefined means the shell has not been loaded around this module at
+   * all (a unit harness), and the rest of the file treats that as live rather
+   * than as a reason to render nothing. */
+  function wireUpdates() {
+    if (typeof MODE === "undefined" || MODE === "live") {
+      renderUpdates();
+      return;
+    }
+    // Not left on "Working out how this copy of Wavr updates…" — a placeholder
+    // that can never resolve is its own small lie, and on a demo it would sit
+    // there for as long as the page was open.
+    var how = el("updateHow");
+    if (how) {
+      how.textContent = WavrT("Updates are handled on the Core itself, not from here.");
+    }
+  }
+
+  /* Deferred to DOMContentLoaded, which is not tidiness.
+   *
+   * `#updateHow` is a `data-i18n` paragraph, and `js/i18n.js` snapshots the
+   * original English of every one of those as the PARSER inserts it, then
+   * restores it over the whole document on DOMContentLoaded. Anything this
+   * module wrote there while the page was still parsing was therefore rubbed
+   * out a moment later. `renderUpdates` escaped it only by accident — it
+   * awaits a request, so its write usually lands after that pass — and the
+   * sentence above, being synchronous, did not escape it at all.
+   *
+   * `js/i18n.js` is tag one, so its listener is registered before this one and
+   * runs first: the restore happens, and then this writes over it for good. */
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", wireUpdates);
+  } else {
+    wireUpdates();
+  }
+
+  /* Backup and diagnostics need a Core, and the demo has none.
+   *
+   * These fire only on a click, so they were not part of the "this page makes
+   * no backend calls" promise being broken on LOAD — but the promise is about
+   * the page, not about the load, and somebody who presses Export in the demo
+   * both makes a request and gets a failure that reads like a bug in Wavr. The
+   * tile says what it needs instead, in the same words the rest of this module
+   * uses for the same situation. */
+  if (typeof MODE !== "undefined" && MODE !== "live") {
+    ["exportConfigBtn", "exportBundleBtn"].forEach(function (id) {
+      var b = el(id);
+      if (b) b.disabled = true;
+    });
+    var why = el("backupFb");
+    if (why) {
+      why.className = "action-fb";
+      // The guard above is `MODE !== "live"`, which is the demo AND a paired
+      // companion. Saying "in this demo" to a phone somebody paired is false,
+      // and it is the phrasing `new-devices.js` and `whoshome.js` already use
+      // for the same guard: one sentence covering both, rather than a branch
+      // the next reader has to remember to add.
+      why.textContent = WavrT("Backup and diagnostics need the hub itself — not "
+        + "available in this demo or on a view-only companion device.");
+    }
+    return;
+  }
 
   wireDownload("exportConfigBtn", "/api/config/export",
                "wavr-setup-{date}.json",
-               "Saved. Camera URLs and tokens are NOT in it — re-enter those "
-               + "after importing.");
-  wireDownload("exportBundleBtn", "/api/diagnostics/bundle",
-               "wavr-diagnostics-{date}.json",
-               "Saved. Sensor health and the event stream — no credentials, no "
-               + "coordinates, and no record of who was where.");
+               WavrT("Saved. Camera URLs and tokens are NOT in it — re-enter those "
+               + "after importing."));
+  wireBundleDownload();
 })();

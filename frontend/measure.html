@@ -1,12 +1,30 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0B0E12">
-<title>Wavr · Medir com o celular</title>
+<title>Wavr · Measure with your phone</title>
+<!-- The words, in the reader's own language — the same three files, in the same
+     order, that `index.html` loads before anything else.
+
+     This page was written entirely in Portuguese and reached from an English
+     button, so it was wrong in both languages at once. It is authored in
+     English now, like every other surface: the catalogue key IS the English
+     sentence, so a missing entry renders correct English rather than a dotted
+     identifier.
+
+     Same origin, no build step, no network beyond the Core that served this
+     page. `/js/*` is served unauthenticated for exactly this reason (see
+     `_is_static_shell` in `backend/wavr/app.py`), so an unpaired LAN phone can
+     still read the "pair me first" screen in its own language. -->
+<script src="js/i18n.js"></script>
+<script src="js/locale-pt.js"></script>
+<script src="js/format.js"></script>
 <style>
-  /* Self-contained: fixed Wavr design tokens, no external requests, no fonts/CDN.
+  /* Self-contained styling: fixed Wavr design tokens, no external requests, no
+     fonts and no CDN. The only files this page pulls are the three same-origin
+     localisation scripts above.
      Green (--accent) is reserved for live/confident state + primary actions. */
   :root{
     --bg:#0B0E12; --surface:#141920; --elevated:#1C232C; --line:rgba(255,255,255,.07);
@@ -68,7 +86,6 @@
        background:linear-gradient(#0B0E12cc,#0B0E1200);color:var(--text);text-align:center;
        font-size:1rem;text-shadow:0 1px 3px #000;pointer-events:none;}
   .hud .stat{color:var(--dim);font-size:.8rem;margin-top:3px;}
-  .hud .stat b{color:var(--text);}
   .reticle{position:absolute;top:50%;left:50%;width:44px;height:44px;margin:-22px 0 0 -22px;
            pointer-events:none;color:var(--dim);transition:color .12s;}
   .reticle.hit{color:var(--accent);}
@@ -88,106 +105,108 @@
 <main>
   <!-- LOADING / feature detection -->
   <section id="card-loading" class="card">
-    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Measure with your phone</span></div>
     <div class="spin" aria-hidden="true"></div>
-    <p class="lead">Verificando suporte a WebXR…</p>
+    <p class="lead" data-i18n>Checking for WebXR support…</p>
   </section>
 
   <!-- UNSUPPORTED (iOS Safari, desktop, no WebXR) -->
   <section id="card-unsupported" class="card" hidden>
-    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
-    <h1>Este aparelho não tem WebXR</h1>
-    <p class="lead">A captura precisa de <b>realidade aumentada</b> no navegador. Funciona no
-      <b>Android (Chrome)</b> ou no <b>Quest 2 (navegador)</b>.</p>
-    <p class="note">No iPhone/iPad o Safari não tem WebXR. Desenhe o cômodo pelo
-      <b>editor 2D</b> da casa na central.</p>
-    <a class="btn" href="/">Voltar ao app</a>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Measure with your phone</span></div>
+    <h1 data-i18n>This device does not have WebXR</h1>
+    <p class="lead" data-i18n>Capture needs augmented reality in the browser. It works on Android
+      in Chrome, or in the Quest 2 browser.</p>
+    <p class="note" data-i18n>Safari on iPhone and iPad has no WebXR. Draw the room in the house's
+      2D editor on the Core instead.</p>
+    <a class="btn" href="/" data-i18n>Back to the app</a>
   </section>
 
   <!-- INSECURE (not HTTPS) -->
   <section id="card-insecure" class="card" hidden>
-    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
-    <h1>Abra pela central em HTTPS</h1>
-    <p class="lead">A realidade aumentada só funciona em conexão segura (HTTPS). Abra esta página
-      pelo endereço <b>https://</b> da sua central (WAVR_MULTIDEVICE).</p>
-    <p class="note">Ao ver o aviso de certificado, <b>não toque em “Continuar” às cegas</b>. Toque
-      no aviso → <b>Ver certificado</b> e confira se a impressão digital <b>SHA-256</b> é igual à
-      mostrada no painel da central (ao gerar o código de pareamento). Só prossiga se bater. Se for
-      diferente, pare: alguém pode estar interceptando a sua rede.</p>
-    <a class="btn" href="/">Voltar ao app</a>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Measure with your phone</span></div>
+    <h1 data-i18n>Open this page from the Core over HTTPS</h1>
+    <p class="lead" data-i18n>Augmented reality only works over a secure connection (HTTPS). Open
+      this page from your Core's https:// address (WAVR_MULTIDEVICE).</p>
+    <p class="note" data-i18n>When the certificate warning appears, do not tap Continue blindly. Tap
+      the warning, choose View certificate, and check that the SHA-256 fingerprint is the same one
+      the Core's panel showed when it generated the pairing code. Only carry on if they match. If it
+      is different, stop: somebody may be intercepting your network.</p>
+    <a class="btn" href="/" data-i18n>Back to the app</a>
   </section>
 
   <!-- NOT PAIRED (no token) -->
   <section id="card-nopair" class="card" hidden>
-    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
-    <h1>Pareie o aparelho primeiro</h1>
-    <p class="lead">Para enviar um cômodo, este aparelho precisa estar <b>pareado como central</b>
-      (não só visualização).</p>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Measure with your phone</span></div>
+    <h1 data-i18n>Pair this device first</h1>
+    <p class="lead" data-i18n>To send a room, this device has to be paired at the Admin access
+      level, not only for viewing.</p>
     <ol class="steps">
-      <li>No painel da central, gere um <b>código de pareamento</b> do tipo <b>central</b>.</li>
-      <li>Volte ao app neste celular e informe o código.</li>
-      <li>Depois abra <code>/measure.html</code> de novo.</li>
+      <li data-i18n>On the Core's panel, generate a pairing code at the Admin access level.</li>
+      <li data-i18n>Come back to the app on this phone and enter the code.</li>
+      <li data-i18n>Then open /measure.html again.</li>
     </ol>
-    <a class="btn primary" href="/">Ir parear</a>
+    <a class="btn primary" href="/" data-i18n>Go and pair</a>
   </section>
 
   <!-- READY -->
   <section id="card-ready" class="card" hidden>
-    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
-    <h1>Medir um cômodo</h1>
-    <p class="lead">Aponte o celular para o <b>chão</b> e marque cada <b>canto</b> do cômodo. O Wavr
-      monta o polígono em metros e adiciona à planta da casa, sem apagar o que você já desenhou.</p>
-    <p class="note privacy"><span class="dot" aria-hidden="true">●</span><span>A câmera é usada
-      <b>só pelo navegador</b> para o rastreamento AR: nenhum quadro chega ao Wavr nem sai da rede.
-      O app guarda apenas as coordenadas <b>(x, y em metros)</b> dos cantos que você marcar.</span></p>
-    <button id="startBtn" class="btn primary" type="button">Iniciar captura</button>
-    <p class="note">Precisa de boa luz e um chão com textura. Depois de salvar, posicione o cômodo
-      no editor 2D da central.</p>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Measure with your phone</span></div>
+    <h1 data-i18n>Measure a room</h1>
+    <p class="lead" data-i18n>Point the phone at the floor and mark each corner of the room. Wavr
+      builds the polygon in metres and adds it to the house plan without erasing what you have
+      already drawn.</p>
+    <p class="note privacy"><span class="dot" aria-hidden="true">●</span><span data-i18n>The camera
+      is used by the browser alone, for AR tracking: no frame reaches Wavr and none leaves your
+      network. The app keeps only the (x, y) coordinates in metres of the corners you mark.</span></p>
+    <button id="startBtn" class="btn primary" type="button" data-i18n>Start capture</button>
+    <p class="note" data-i18n>It needs good light and a floor with some texture. Once you have
+      saved, position the room in the Core's 2D editor.</p>
   </section>
 
   <!-- NAME + FLOOR FORM -->
   <section id="card-form" class="card" hidden>
-    <div class="brand"><b>Wavr</b> · Nomear cômodo</div>
-    <h1>Cômodo medido</h1>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Name the room</span></div>
+    <h1 data-i18n>Room measured</h1>
     <p class="lead num" id="formSummary">…</p>
     <form id="roomForm">
-      <label class="field">Nome do cômodo
+      <label class="field"><span data-i18n>Room name</span>
         <input id="roomName" type="text" maxlength="200" required autocomplete="off"
-               placeholder="ex.: escritório" enterkeyhint="done">
+               placeholder="e.g. office" data-i18n-attr="placeholder:e.g. office"
+               enterkeyhint="done">
       </label>
-      <label class="field">Andar
+      <label class="field"><span data-i18n>Floor</span>
         <select id="roomLevel">
-          <option value="-1">Subsolo (−1)</option>
-          <option value="0" selected>Térreo (0)</option>
-          <option value="1">1º andar (1)</option>
-          <option value="2">2º andar (2)</option>
-          <option value="3">3º andar (3)</option>
+          <option value="-1" data-i18n>Basement (−1)</option>
+          <option value="0" selected data-i18n>Ground floor (0)</option>
+          <option value="1" data-i18n>First floor (1)</option>
+          <option value="2" data-i18n>Second floor (2)</option>
+          <option value="3" data-i18n>Third floor (3)</option>
         </select>
       </label>
-      <button id="saveBtn" class="btn primary" type="submit">Salvar cômodo</button>
-      <button id="remeasureBtn" class="btn ghost" type="button">Medir de novo</button>
+      <button id="saveBtn" class="btn primary" type="submit" data-i18n>Save room</button>
+      <button id="remeasureBtn" class="btn ghost" type="button" data-i18n>Measure again</button>
       <div id="formFb" class="fb" aria-live="polite"></div>
     </form>
   </section>
 
   <!-- DONE -->
   <section id="card-done" class="card" hidden>
-    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
-    <h1 style="color:var(--accent)">Cômodo salvo</h1>
-    <p class="lead" id="doneMsg">Cômodo salvo! Abra o <b>editor 2D</b> da casa na central (no
-      computador) para posicioná-lo. A forma e o tamanho estão certos, falta só arrastar/girar
-      para o lugar.</p>
-    <button id="againBtn" class="btn primary" type="button">Medir outro cômodo</button>
-    <a class="btn ghost" href="/">Voltar ao app</a>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Measure with your phone</span></div>
+    <h1 style="color:var(--accent)" data-i18n>Room saved</h1>
+    <p class="lead" id="doneMsg" data-i18n>Room saved. Open the house's 2D editor on the Core, on a
+      computer, to position it. The shape and the size are right; all that is left is to drag and
+      rotate it into place.</p>
+    <button id="againBtn" class="btn primary" type="button" data-i18n>Measure another room</button>
+    <a class="btn ghost" href="/" data-i18n>Back to the app</a>
   </section>
 
   <!-- ERROR -->
   <section id="card-error" class="card" hidden>
-    <div class="brand"><b>Wavr</b> · Medir com o celular</div>
-    <h1>Não deu para iniciar</h1>
-    <p class="lead" id="errMsg">Não foi possível iniciar a sessão de realidade aumentada.</p>
-    <button id="retryBtn" class="btn primary" type="button">Tentar de novo</button>
-    <a class="btn ghost" href="/">Usar o editor 2D</a>
+    <div class="brand"><b>Wavr</b><span aria-hidden="true">·</span><span data-i18n>Measure with your phone</span></div>
+    <h1 data-i18n>Could not start</h1>
+    <p class="lead" id="errMsg" data-i18n>The augmented reality session could not be started.</p>
+    <button id="retryBtn" class="btn primary" type="button" data-i18n>Try again</button>
+    <a class="btn ghost" href="/" data-i18n>Use the 2D editor</a>
   </section>
 </main>
 
@@ -195,20 +214,23 @@
 <canvas id="glcanvas" hidden></canvas>
 <div id="overlay" hidden>
   <div class="hud">
-    <div id="hudStatus">Aponte para o chão…</div>
-    <div class="stat num"><b id="hudCount">0</b> cantos · perímetro <b id="hudPerim">0,00</b> m ·
-      área <b id="hudArea">0,00</b> m²</div>
+    <div id="hudStatus" data-i18n>Point at the floor…</div>
+    <!-- Written whole by `refreshHud`, never assembled from translated pieces:
+         Portuguese agrees gender and number across the words that would be
+         joined, so the count, the perimeter and the area are slots in one
+         sentence rather than three fragments with markup between them. -->
+    <div class="stat num" id="hudStats"></div>
   </div>
   <svg class="reticle" id="reticle" viewBox="0 0 44 44" aria-hidden="true">
     <circle cx="22" cy="22" r="16" fill="none" stroke="currentColor" stroke-width="2" opacity=".9"/>
     <circle cx="22" cy="22" r="2.5" fill="currentColor"/>
   </svg>
   <canvas class="minimap" id="minimap" width="132" height="132" aria-hidden="true"></canvas>
-  <button class="btn abort" id="abortBtn" type="button">Sair</button>
+  <button class="btn abort" id="abortBtn" type="button" data-i18n>Leave</button>
   <div class="actions">
-    <button class="btn" id="undoBtn" type="button" disabled>Desfazer</button>
-    <button class="btn primary grow" id="markBtn" type="button" disabled>Marcar canto</button>
-    <button class="btn grow" id="finishBtn" type="button" disabled>Concluir</button>
+    <button class="btn" id="undoBtn" type="button" disabled data-i18n>Undo</button>
+    <button class="btn primary grow" id="markBtn" type="button" disabled data-i18n>Mark corner</button>
+    <button class="btn grow" id="finishBtn" type="button" disabled data-i18n>Finish</button>
   </div>
 </div>
 
@@ -226,14 +248,17 @@
   function showCard(id){
     CARDS.forEach(c => { const el = $(c); if(el) el.hidden = (c !== id); });
   }
-  // pt-BR number formatting for the readouts (comma decimal), tabular-nums in CSS.
-  const fmt = (v) => (Math.round(v*100)/100).toFixed(2).replace(".", ",");
+  // Numbers go through `WavrFmt`, never through `toFixed`. The old code did
+  // `.toFixed(2).replace(".", ",")` -- a comma decimal hard-coded for one
+  // language, on a page an English reader also opens.
+  const fmt = (v) => WavrFmt.number(v, { minimumFractionDigits: 2,
+                                         maximumFractionDigits: 2 });
 
   // ---- capture state ----
   let session = null, gl = null, refSpace = null, hitTestSource = null;
   let corners = [];          // [{x, z}] raw WebXR floor poses (meters)
   let currentHit = null;     // {x, z} of the live reticle hit, or null
-  let finishing = false;     // set true when the user taps "Concluir"
+  let finishing = false;     // set true when the user taps "Finish"
 
   // ---- geometry helpers (meters) ----
   function polyStats(pts){
@@ -255,6 +280,19 @@
     let minX = Infinity, minZ = Infinity;
     for(const p of corners){ if(p.x<minX) minX=p.x; if(p.z<minZ) minZ=p.z; }
     return corners.map(p => [round3(p.x-minX), round3(p.z-minZ)]);
+  }
+
+  // One sentence, with the count selecting the plural form. `{n} corner|{n}
+  // corners` on its own would force the perimeter and the area to be glued on
+  // afterwards, which is the concatenation this page is not allowed to do.
+  function summary(){
+    const st = polyStats(corners);
+    return WavrT(
+      "{n} corner · perimeter {perimeter} m · area {area} m²|"
+      + "{n} corners · perimeter {perimeter} m · area {area} m²",
+      { n: corners.length,
+        perimeter: fmt(st.per),
+        area: fmt(corners.length >= 3 ? st.area : 0) });
   }
 
   // ---- minimap (top-down plan of the polygon being built) ----
@@ -286,15 +324,12 @@
     }
   }
   function refreshHud(){
-    const st = polyStats(corners);
-    $("hudCount").textContent = String(corners.length);
-    $("hudPerim").textContent = fmt(st.per);
-    $("hudArea").textContent  = fmt(corners.length >= 3 ? st.area : 0);
+    $("hudStats").textContent = summary();
     $("undoBtn").disabled   = corners.length === 0;
     $("finishBtn").disabled = corners.length < 3;
     $("hudStatus").textContent = corners.length < 3
-      ? (currentHit ? "Toque em Marcar canto" : "Aponte para o chão…")
-      : (currentHit ? "Marque mais cantos ou Concluir" : "Aponte para o chão…");
+      ? (currentHit ? WavrT("Tap Mark corner") : WavrT("Point at the floor…"))
+      : (currentHit ? WavrT("Mark more corners, or Finish") : WavrT("Point at the floor…"));
   }
 
   // ---- WebXR session ----
@@ -303,7 +338,9 @@
     const canvas = $("glcanvas");
     try{
       gl = canvas.getContext("webgl", { xrCompatible: true, alpha: true, antialias: false });
-      if(!gl) throw new Error("sem WebGL");
+      // Not translated on purpose: this message never reaches a screen. The
+      // catch below shows `err.name`, which is "Error" for any of these.
+      if(!gl) throw new Error("no WebGL");
       if(gl.makeXRCompatible) await gl.makeXRCompatible();
       // PRIVACY (ADR-0002): we DELIBERATELY DO NOT request the 'camera-access' feature, so
       // no camera frame/pixel is ever exposed to JS -- only tapped floor poses (x/y meters).
@@ -314,9 +351,11 @@
       });
     }catch(err){
       teardownGl();
-      showError("Não foi possível iniciar a realidade aumentada. Confira a impressão digital do "
-              + "certificado da central (SHA-256) antes de aceitar, garanta boa iluminação, ou use "
-              + "o editor 2D. (" + (err && err.name || "erro") + ")");
+      showError(WavrT(
+        "Augmented reality could not be started. Check the Core's certificate fingerprint "
+        + "(SHA-256) before accepting it, make sure the light is good, or use the 2D editor. "
+        + "({reason})",
+        { reason: (err && err.name) || WavrT("error") }));
       return;
     }
     session.addEventListener("end", onSessionEnd);
@@ -376,12 +415,10 @@
     teardownGl();
     $("overlay").hidden = true;
     $("glcanvas").hidden = true;
-    // Only advance to the naming form on an explicit "Concluir" with a valid polygon.
-    // "Sair" / an unexpected session exit returns to the ready screen (work discarded).
+    // Only advance to the naming form on an explicit "Finish" with a valid polygon.
+    // "Leave" / an unexpected session exit returns to the ready screen (work discarded).
     if(finishing && corners.length >= 3){
-      const st = polyStats(corners);
-      $("formSummary").textContent =
-        corners.length + " cantos · perímetro " + fmt(st.per) + " m · área " + fmt(st.area) + " m²";
+      $("formSummary").textContent = summary();
       $("formFb").textContent = ""; $("formFb").className = "fb";
       showCard("card-form");
       $("roomName").focus();
@@ -399,12 +436,14 @@
     ev.preventDefault();
     const token = getToken();
     if(!token){ showCard("card-nopair"); return; }
+    // The name is the household's own word for a place. It is sent to the Core
+    // and never looked up in the catalogue.
     const name = ($("roomName").value || "").trim();
-    if(!name){ setFb("Informe um nome para o cômodo.", "err"); return; }
-    if(corners.length < 3){ setFb("Marque pelo menos 3 cantos.", "err"); return; }
+    if(!name){ setFb(WavrT("Enter a name for the room."), "err"); return; }
+    if(corners.length < 3){ setFb(WavrT("Mark at least 3 corners."), "err"); return; }
     const level = parseInt($("roomLevel").value, 10);
     const body = { level: level, room: { name: name, polygon: buildPolygon() } };
-    $("saveBtn").disabled = true; setFb("Enviando…", "");
+    $("saveBtn").disabled = true; setFb(WavrT("Sending…"), "");
     let res;
     try{
       res = await fetch("/api/house/room", {
@@ -414,7 +453,7 @@
       });
     }catch(_){
       $("saveBtn").disabled = false;
-      setFb("Sem conexão com a central. Verifique a rede e tente de novo.", "err");
+      setFb(WavrT("No connection to the Core. Check the network and try again."), "err");
       return;
     }
     if(res.status === 200){
@@ -423,16 +462,24 @@
     }
     $("saveBtn").disabled = false;
     if(res.status === 403){
-      setFb("Este aparelho não tem permissão de central. Gere um código de pareamento "
-          + "do tipo central no painel e pareie de novo.", "err");
+      setFb(WavrT("This device does not have Admin access. Generate a pairing code at the Admin "
+                + "access level on the panel and pair again."), "err");
     }else if(res.status === 409){
-      setFb("A central está sem WAVR_HOUSE_MAP configurado. Não há onde salvar a planta.", "err");
+      setFb(WavrT("The Core has no WAVR_HOUSE_MAP configured, so there is nowhere to save the "
+                + "plan."), "err");
+      // Two whole sentences rather than one with a fallback noun dropped into a
+      // slot: Portuguese agrees around the words either branch would supply.
     }else if(res.status === 422){
-      let detail = "geometria inválida";
-      try{ const j = await res.json(); if(j && j.detail) detail = (typeof j.detail === "string") ? j.detail : JSON.stringify(j.detail); }catch(_){}
-      setFb("Cômodo recusado: " + detail, "err");
+      let detail = null;
+      try{
+        const j = await res.json();
+        if(j && j.detail) detail = (typeof j.detail === "string") ? j.detail : JSON.stringify(j.detail);
+      }catch(_){}
+      setFb(detail
+        ? WavrT("The Core refused the room: {reason}", { reason: detail })
+        : WavrT("The Core refused the room: the geometry is not valid."), "err");
     }else{
-      setFb("Falha ao salvar (código " + res.status + "). Tente de novo.", "err");
+      setFb(WavrT("Could not save (code {code}). Try again.", { code: res.status }), "err");
     }
   }
   function setFb(msg, kind){
@@ -440,7 +487,14 @@
     el.textContent = msg;
     el.className = "fb" + (kind ? " " + kind : "");
   }
-  function showError(msg){ $("errMsg").textContent = msg; showCard("card-error"); }
+  function showError(msg){
+    const el = $("errMsg");
+    // The default sentence is marked `data-i18n`; a repaint would otherwise put
+    // it back over the specific reason we just wrote here.
+    el.removeAttribute("data-i18n");
+    el.textContent = msg;
+    showCard("card-error");
+  }
 
   // ---- boot / feature gate ----
   async function boot(){

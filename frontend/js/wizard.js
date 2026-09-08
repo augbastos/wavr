@@ -23,27 +23,22 @@
   var state = { step: 0, path: null, kind: "home", name: "", owner: "",
                 scan: null, status: null, functions: null, busy: false };
 
-  function api(path, opts) {
-    opts = opts || {};
-    var headers = { "X-Wavr-Local": "1" };
-    if (opts.body) headers["Content-Type"] = "application/json";
-    return fetch(location.origin + path, {
-      method: opts.method || "GET", headers: headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok) throw new Error(j.detail || ("Wavr answered " + r.status));
-        return j;
-      });
-    });
-  }
+  // The Core, through the shared client.
+  //
+  // This function used to be fourteen lines, and `wizard.js` carried a
+  // byte-identical copy of them. Two implementations of one decision is the
+  // shape that eventually disagrees: the next person to improve the error
+  // message improves one of them, and the product starts saying two different
+  // things about the same failure depending on which screen you were looking
+  // at. `js/api.js` owns it now; the signature here is unchanged.
+  function api(path, opts) { return WavrAPI.json(path, opts); }
 
   function fail(err) {
     var box = el("swErr");
     box.hidden = false;
     // Never render a raw stack or a bare status code at a first-time user.
     box.textContent = (err && err.message) ? err.message
-      : "Something went wrong. Wavr is still running — you can try again.";
+      : WavrT("Something went wrong. Wavr is still running — you can try again.");
   }
   function clearErr() { el("swErr").hidden = true; }
 
@@ -79,23 +74,23 @@
   function stepStart() {
     steps(0);
     var legacy = state.status && state.status.existing_devices > 0;
-    el("swTitle").textContent = legacy ? "Let's finish setting up Wavr" : "Welcome to Wavr";
+    el("swTitle").textContent = legacy ? WavrT("Let's finish setting up Wavr") : WavrT("Welcome to Wavr");
     el("swLede").textContent = legacy
-      ? "Wavr is already running on this machine with " + state.status.existing_devices +
-        " paired device" + (state.status.existing_devices === 1 ? "" : "s") +
-        ". Give it a name and nothing you've set up changes."
-      : "Wavr turns this machine and your network into a space it can understand. "
-        + "This takes about a minute.";
+      ? WavrT("Wavr is already running on this machine with {n} paired device. Give it a name and nothing you've set up changes."
+              + "|Wavr is already running on this machine with {n} paired devices. Give it a name and nothing you've set up changes.",
+              {n: state.status.existing_devices})
+      : WavrT("Wavr turns this machine and your network into a space it can understand. "
+        + "This takes about a minute.");
 
     var opts = [];
     if (legacy) {
-      opts.push({ id: "adopt", t: "Name what's already here",
-                  d: "Keeps every paired device, every camera and every setting exactly as it is." });
+      opts.push({ id: "adopt", t: WavrT("Name what's already here"),
+                  d: WavrT("Keeps every paired device, every camera and every setting exactly as it is.") });
     }
-    opts.push({ id: "create", t: legacy ? "Start fresh instead" : "Create a new Space",
-                d: "This machine becomes the Core — the part of Wavr that does the thinking." });
-    opts.push({ id: "join", t: "Join a Space that already exists",
-                d: "Another device on this network is already running Wavr." });
+    opts.push({ id: "create", t: legacy ? WavrT("Start fresh instead") : WavrT("Create a new Space"),
+                d: WavrT("This machine becomes the Core — the part of Wavr that does the thinking.") });
+    opts.push({ id: "join", t: WavrT("Join a Space that already exists"),
+                d: WavrT("Another device on this network is already running Wavr.") });
 
     el("swBody").innerHTML = '<div class="sw-choice">' + opts.map(function (o) {
       return '<button class="sw-opt" data-p="' + o.id + '" aria-pressed="' +
@@ -111,46 +106,81 @@
       });
     });
 
-    actions([{ label: "Continue", primary: true, disabled: !state.path, go: next }]);
+    actions([{ label: WavrT("Continue"), primary: true, disabled: !state.path, go: next }]);
   }
 
   // -- Step 1: name it -------------------------------------------------------
-  var KINDS = [["home", "Home"], ["apartment", "Apartment"], ["office", "Office"],
-               ["shop", "Shop"], ["workshop", "Workshop"], ["other", "Somewhere else"]];
+  // A FUNCTION, not a constant.
+  //
+  // As a module-level table its labels were plain literals that no extractor
+  // could see: they reach the screen through `WavrT(table[key])`, so they were
+  // looked up at runtime and declared nowhere, which means they could never be
+  // translated and nothing could report that. Built per call, the literals sit
+  // inside `WavrT(...)` where they are visible — and the table is rebuilt in
+  // whatever language is current, instead of frozen in the one that was active
+  // when the file parsed.
+  function kinds() {
+    return [["home", WavrT("Home")],
+            ["apartment", WavrT("Apartment")],
+            ["office", WavrT("Office")],
+            ["shop", WavrT("Shop")],
+            ["workshop", WavrT("Workshop")],
+            ["other", WavrT("Somewhere else")]];
+  }
 
   function stepName() {
     steps(1);
-    el("swTitle").textContent = "What is this place?";
-    el("swLede").textContent = "Wavr uses this to pick sensible room names and defaults. "
-      + "You can change it at any time.";
+    el("swTitle").textContent = WavrT("What is this place?");
+    el("swLede").textContent = WavrT("Wavr uses this to pick sensible room names and defaults. "
+      + "You can change it at any time.");
     el("swBody").innerHTML =
-      '<div class="sw-grid">' + KINDS.map(function (k) {
+      '<div class="sw-grid">' + kinds().map(function (k) {
         return '<button class="sw-opt" data-k="' + k[0] + '" aria-pressed="' +
-          (state.kind === k[0]) + '"><span><b>' + esc(k[1]) + "</b></span></button>";
+          (state.kind === k[0]) + '"><span><b>' + esc(WavrT(k[1])) + "</b></span></button>";
       }).join("") + "</div>" +
       '<div class="sw-card" style="margin-top:14px">' +
-        '<label for="swName">What should Wavr call it?</label>' +
+        '<label for="swName">' + esc(WavrT("What should Wavr call it?")) + '</label>' +
         '<input type="text" id="swName" maxlength="64" autocomplete="off" spellcheck="false">' +
-        '<p class="sw-note" style="margin-top:10px">This name stays on this machine. ' +
-        'Wavr never broadcasts it to your network.</p>' +
+        '<p class="sw-note" style="margin-top:10px">' + esc(WavrT("This name stays on this machine. " +
+        "Wavr never broadcasts it to your network.")) + '</p>' +
       "</div>" +
       '<div class="sw-card" style="margin-top:10px">' +
-        '<label for="swOwner">And who are you?</label>' +
+        '<label for="swOwner">' + esc(WavrT("And who are you?")) + '</label>' +
         '<input type="text" id="swOwner" maxlength="64" autocomplete="off">' +
-        '<p class="sw-note" style="margin-top:10px">You become the Owner — the only ' +
-        'person who can hand this Space to someone else.</p>' +
+        '<p class="sw-note" style="margin-top:10px">' + esc(WavrT("You become the Owner — the only " +
+        "person who can hand this Space to someone else.")) + '</p>' +
+      "</div>" +
+      /* The room this machine is in.
+       *
+       * Optional, and an empty map is the honest default — a floor plan Wavr
+       * invented is a map of rooms that do not exist. But the release notes
+       * said "setup keeps the first room you name", the backend's `seed_room`
+       * was built and tested for exactly this, and the wizard never asked. One
+       * of the two had to change, and asking is the better product: one room
+       * turns an empty Space screen into a screen with something on it.
+       */
+      '<div class="sw-card" style="margin-top:10px">' +
+        '<label for="swRoom">' + esc(WavrT("Which room is this machine in?")) + '</label>' +
+        '<input type="text" id="swRoom" maxlength="64" autocomplete="off" ' +
+          'placeholder="' + esc(WavrT("e.g. living room")) + '">' +
+        '<p class="sw-note" style="margin-top:10px">' + esc(WavrT("Optional. It becomes the "
+        + "first room on your floor plan — you can draw the rest later, or skip this and "
+        + "start with an empty map.")) + '</p>' +
       "</div>";
 
-    var nameIn = el("swName"), ownerIn = el("swOwner");
+    var nameIn = el("swName"), ownerIn = el("swOwner"), roomIn = el("swRoom");
     nameIn.value = state.name || (state.kind === "home" ? "My Home" : "");
     ownerIn.value = state.owner || "";
+    roomIn.value = state.room || "";
     function sync() {
       state.name = nameIn.value;
       state.owner = ownerIn.value;
+      state.room = roomIn.value;
       el("swActions").querySelector(".primary").disabled = !nameIn.value.trim();
     }
     nameIn.addEventListener("input", sync);
     ownerIn.addEventListener("input", sync);
+    roomIn.addEventListener("input", sync);
 
     el("swBody").querySelectorAll("[data-k]").forEach(function (b) {
       b.addEventListener("click", function () {
@@ -163,8 +193,8 @@
     });
 
     actions([
-      { label: "Back", go: back },
-      { label: "Continue", primary: true, disabled: !nameIn.value.trim(), go: next }
+      { label: WavrT("Back"), go: back },
+      { label: WavrT("Continue"), primary: true, disabled: !nameIn.value.trim(), go: next }
     ]);
     setTimeout(function () { nameIn.focus(); }, 0);
   }
@@ -177,12 +207,12 @@
 
   function stepScan() {
     steps(2);
-    el("swTitle").textContent = "Looking at this device";
-    el("swLede").textContent = "Wavr is checking what this machine can do. "
-      + "Nothing is switched on and nothing leaves this device.";
+    el("swTitle").textContent = WavrT("Looking at this device");
+    el("swLede").textContent = WavrT("Wavr is checking what this machine can do. "
+      + "Nothing is switched on and nothing leaves this device.");
     el("swBody").innerHTML = '<div class="sw-card"><span class="sw-spin"></span>' +
-      "Checking…</div>";
-    actions([{ label: "Back", go: back }]);
+      esc(WavrT("Checking…")) + "</div>";
+    actions([{ label: WavrT("Back"), go: back }]);
 
     api("/api/setup/scan", { method: "POST" }).then(function (res) {
       state.scan = res;
@@ -191,50 +221,57 @@
 
       var caps = [["camera", "Camera"], ["ble", "Bluetooth"], ["wifi", "Wi-Fi"],
                   ["ethernet", "Ethernet"], ["gpu", "Graphics"], ["battery", "Battery"]];
-      var factsHtml = fact("System", m.os_version || "Unknown", !m.os_version) +
-        fact("Memory", m.ram_mb ? (Math.round(m.ram_mb / 1024 * 10) / 10) + " GB" : "Unknown",
+      var factsHtml = fact(WavrT("System"), m.os_version || WavrT("Unknown"), !m.os_version) +
+        fact(WavrT("Memory"), m.ram_mb ? (Math.round(m.ram_mb / 1024 * 10) / 10) + " GB" : WavrT("Unknown"),
              !m.ram_mb) +
-        fact("Processors", m.cpu_count != null ? String(m.cpu_count) : "Unknown",
+        fact(WavrT("Processors"), m.cpu_count != null ? String(m.cpu_count) : WavrT("Unknown"),
              m.cpu_count == null) +
         caps.map(function (c) {
           var v = m.capabilities[c[0]];
           // Tristate, honestly: null is "we couldn't tell", never "no".
-          return fact(c[1], v === true ? "Yes" : v === false ? "No" : "Couldn't tell",
+          return fact(WavrT(c[1]), v === true ? WavrT("Yes") : v === false ? WavrT("No") : WavrT("Couldn't tell"),
                       v == null);
         }).join("");
 
       el("swBody").innerHTML =
-        '<div class="sw-rec"><b>Recommended: ' + esc(rec.label) + "</b><ul>" +
-          rec.reasons.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") +
+        '<div class="sw-rec"><b>' + esc(WavrT("Recommended: {label}", {label: rec.label})) + "</b><ul>" +
+          rec.reasons.map(function (r) { return "<li>" + esc(WavrT(r)) + "</li>"; }).join("") +
         "</ul></div>" +
         '<dl class="sw-facts">' + factsHtml + "</dl>" +
-        '<p class="sw-note" style="margin-top:12px">Anything Wavr couldn’t work out is ' +
-        'marked <span class="sw-unknown">Couldn’t tell</span> rather than guessed at. ' +
-        'You can change what this device does later.</p>';
+        '<p class="sw-note" style="margin-top:12px">' +
+        WavrT("Anything Wavr couldn’t work out is marked {marked} rather than guessed at. "
+              + "You can change what this device does later.",
+              {marked: '<span class="sw-unknown">' + esc(WavrT("Couldn’t tell")) + '</span>'}) +
+        '</p>';
 
-      actions([{ label: "Back", go: back },
-               { label: "Use this setup", primary: true, go: next }]);
+      actions([{ label: WavrT("Back"), go: back },
+               { label: WavrT("Use this setup"), primary: true, go: next }]);
     }).catch(function (e) {
       fail(e);
-      el("swBody").innerHTML = '<div class="sw-card">Wavr couldn’t check this device. ' +
-        "You can still continue — it will start as a Core and you can adjust it later.</div>";
+      el("swBody").innerHTML = '<div class="sw-card">' + esc(WavrT("Wavr couldn’t check this device. " +
+        "You can still continue — it will start as a Core and you can adjust it later.")) + "</div>";
       state.functions = ["core", "client"];
-      actions([{ label: "Back", go: back },
-               { label: "Continue anyway", primary: true, go: next }]);
+      actions([{ label: WavrT("Back"), go: back },
+               { label: WavrT("Continue anyway"), primary: true, go: next }]);
     });
   }
 
   // -- Step 3: commit --------------------------------------------------------
   function stepFinish() {
     steps(3);
-    el("swTitle").textContent = "Setting up " + (state.name || "your Space");
+    el("swTitle").textContent = WavrT("Setting up {name}", {name: state.name || WavrT("your Space")});
     el("swLede").textContent = "";
     el("swBody").innerHTML = '<div class="sw-card"><span class="sw-spin"></span>' +
-      "Creating…</div>";
+      esc(WavrT("Creating…")) + "</div>";
     el("swActions").innerHTML = "";
 
+    // `room` travels with it. The backend's `seed_room` puts it on the empty
+    // floor plan; without this line the wizard was asking nobody, and the
+    // release notes' "setup keeps the first room you name" was a promise about
+    // a question nothing ever put.
     var body = { name: state.name.trim(), kind: state.kind,
-                 owner_name: (state.owner || "").trim() || "Owner" };
+                 owner_name: (state.owner || "").trim() || "Owner",
+                 room: (state.room || "").trim() };
     var path = "/api/setup/create-space";
     if (state.path === "adopt") {
       path = "/api/setup/adopt";
@@ -246,77 +283,102 @@
       steps(4);
       // textContent, so NOT esc() -- escaping here double-encodes, and a Space
       // called "Mum & Dad's" would greet its owner as "Mum &amp; Dad&#39;s".
-      el("swTitle").textContent = res.space.name + " is ready";
+      el("swTitle").textContent = WavrT("{name} is ready", {name: res.space.name});
       el("swLede").textContent = "";
       var core = res.core || {};
-      el("swBody").innerHTML =
-        '<div class="sw-rec"><b>This device is now your ' +
-          (core.status === "primary" ? "Core" : "standby Core") + "</b>" +
-          '<ul><li>Wavr will start watching for what is around it.</li>' +
-          "<li>You can add phones, tablets and sensors from the Devices tab.</li></ul></div>" +
-        (res.adopted_devices
-          ? '<p class="sw-note" style="margin-top:12px">' + res.adopted_devices +
-            " existing device" + (res.adopted_devices === 1 ? " was" : "s were") +
-            " kept exactly as they were.</p>"
-          : "") +
-        '<p class="sw-note sw-warn" style="margin-top:12px">Right now only this machine ' +
-        "can reach Wavr. To use it from your phone, turn on <b>Let other devices " +
-        "connect</b> in Settings — Wavr will explain what that changes before " +
-        "you do.</p>";
-      actions([{ label: "Open Wavr", primary: true, go: done }]);
+      // `multi` decides only the closing note's wording (see renderReady below);
+      // everything else on this screen is unaffected by it either way.
+      function renderReady(multi) {
+        el("swBody").innerHTML =
+          '<div class="sw-rec"><b>' +
+            esc(WavrT(core.status === "primary"
+                      ? "This device is now your Core"
+                      : "This device is now your standby Core")) + "</b>" +
+            '<ul><li>' + esc(WavrT("Wavr will start watching for what is around it.")) + '</li>' +
+            "<li>" + esc(WavrT("You can add phones, tablets and sensors from the Devices tab.")) + "</li></ul></div>" +
+          (res.adopted_devices
+            ? '<p class="sw-note" style="margin-top:12px">' +
+              esc(WavrT("{n} existing device was kept exactly as they were."
+                        + "|{n} existing devices were kept exactly as they were.",
+                        {n: res.adopted_devices})) + "</p>"
+            : "") +
+          '<p class="sw-note' + (multi ? "" : " sw-warn") + '" style="margin-top:12px">' +
+          (multi
+            ? esc(WavrT("Other devices on your network can already reach Wavr — pair one from the Devices tab in Settings."))
+            : WavrT("Right now only this machine can reach Wavr. To use it from your phone, "
+                    + "turn on {setting} in Settings — Wavr will explain what that changes before you do.",
+                    {setting: "<b>" + esc(WavrT("Let other devices connect")) + "</b>"})) +
+          "</p>";
+        actions([{ label: WavrT("Open Wavr"), primary: true, go: done }]);
+      }
+      // The closing note used to say "only this machine can reach Wavr" and tell
+      // the operator to turn on "Let other devices connect" UNCONDITIONALLY --
+      // including on an install where that setting was already on (adopting an
+      // existing multi-device install, or a Core re-run through setup after the
+      // switch was flipped). `/api/status` is the one place `cfg.multidevice`
+      // is already exposed to the browser (no new route); read it once, here,
+      // rather than assume the off-by-default case is the only case. A failed
+      // probe (older Core) falls back to the honest single-machine default
+      // rather than blocking the "Space is ready" screen on it.
+      api("/api/status").then(function (st) {
+        renderReady(!!(st && st.features && st.features.multidevice));
+      }).catch(function () { renderReady(false); });
     }).catch(function (e) {
       fail(e);
       // Deliberately does NOT claim "nothing was changed" -- the client cannot
       // know that. The Core rolls back a half-created Space itself; this says
       // what happened and offers the retry.
-      el("swBody").innerHTML = '<div class="sw-card">Setup didn\u2019t finish. ' +
-        "Wavr is still running and you can try again.</div>";
-      actions([{ label: "Back", go: function () { state.step = 2; render(); } }]);
+      el("swBody").innerHTML = '<div class="sw-card">' + esc(WavrT("Setup didn\u2019t finish. " +
+        "Wavr is still running and you can try again.")) + "</div>";
+      actions([{ label: WavrT("Back"), go: function () { state.step = 2; render(); } }]);
     });
   }
 
   // -- Join path -------------------------------------------------------------
   function stepJoin() {
     steps(1);
-    el("swTitle").textContent = "Wavr Spaces on this network";
-    el("swLede").textContent = "Looking for other devices already running Wavr.";
+    el("swTitle").textContent = WavrT("Wavr Spaces on this network");
+    el("swLede").textContent = WavrT("Looking for other devices already running Wavr.");
     el("swBody").innerHTML = '<div class="sw-card"><span class="sw-spin"></span>' +
-      "Searching…</div>";
-    actions([{ label: "Back", go: back }]);
+      esc(WavrT("Searching…")) + "</div>";
+    actions([{ label: WavrT("Back"), go: back }]);
 
     api("/api/setup/nearby").then(function (res) {
       if (!res.available) {
-        el("swBody").innerHTML = '<div class="sw-card">Wavr can’t search this ' +
-          "network from here. That usually means the optional discovery component " +
-          "isn’t installed.<p class=\"sw-note\" style=\"margin-top:10px\">You can " +
-          "still set this machine up as its own Space and connect the two later.</p></div>";
+        el("swBody").innerHTML = '<div class="sw-card">' +
+          esc(WavrT("Wavr can’t search this network from here. That usually means the "
+                    + "optional discovery component isn’t installed.")) +
+          '<p class="sw-note" style="margin-top:10px">' +
+          esc(WavrT("You can still set this machine up as its own Space and connect the two later.")) +
+          "</p></div>";
       } else if (!res.cores.length) {
-        el("swBody").innerHTML = '<div class="sw-card">No other Wavr Cores answered.' +
-          '<p class="sw-note" style="margin-top:10px">Make sure the other device is ' +
-          "switched on, running Wavr, and on this same Wi-Fi.</p></div>";
+        el("swBody").innerHTML = '<div class="sw-card">' + esc(WavrT("No other Wavr Cores answered.")) +
+          '<p class="sw-note" style="margin-top:10px">' +
+          esc(WavrT("Make sure the other device is switched on, running Wavr, and on this same Wi-Fi.")) +
+          "</p></div>";
       } else {
         el("swBody").innerHTML = '<div class="sw-choice">' + res.cores.map(function (c, i) {
           return '<button class="sw-opt" data-core="' + i + '"><span><b>' + esc(c.name) +
             "</b><span>" + esc(c.host) + ":" + esc(c.port) + "</span></span></button>";
         }).join("") + "</div>" +
-        '<p class="sw-note" style="margin-top:12px">Pick the device that is already ' +
-        "running your Space.</p>";
+        '<p class="sw-note" style="margin-top:12px">' +
+        esc(WavrT("Pick the device that is already running your Space.")) + "</p>";
         el("swBody").querySelectorAll("[data-core]").forEach(function (b) {
           b.addEventListener("click", function () {
             stepJoinConfirm(res.cores[Number(b.dataset.core)]);
           });
         });
       }
-      actions([{ label: "Back", go: back },
-               { label: "Search again", go: stepJoin }]);
+      actions([{ label: WavrT("Back"), go: back },
+               { label: WavrT("Search again"), go: stepJoin }]);
     }).catch(function (e) {
       fail(e);
       // Replace the spinner. Without this the operator gets an error message
       // above something that spins forever -- the two success branches above
       // both replace it, and this one used not to.
-      el("swBody").innerHTML = '<div class="sw-card">Wavr couldn\u2019t search ' +
-        "the network just now.</div>";
-      actions([{ label: "Back", go: back }, { label: "Try again", go: stepJoin }]);
+      el("swBody").innerHTML = '<div class="sw-card">' +
+        esc(WavrT("Wavr couldn\u2019t search the network just now.")) + "</div>";
+      actions([{ label: WavrT("Back"), go: back }, { label: WavrT("Try again"), go: stepJoin }]);
     });
   }
 
@@ -326,21 +388,22 @@
   // other device. Nothing else is asked -- no address, no port, no id.
   function stepJoinConfirm(core) {
     steps(1);
-    el("swTitle").textContent = "Join this Space";
-    el("swLede").textContent = "This machine becomes a second Core for it.";
+    el("swTitle").textContent = WavrT("Join this Space");
+    el("swLede").textContent = WavrT("This machine becomes a second Core for it.");
     el("swBody").innerHTML =
       '<div class="sw-card"><b>' + esc(core.name) + "</b>" +
         '<span class="sw-note" style="display:block;margin-top:4px">' +
         esc(core.host) + ":" + esc(core.port) + "</span></div>" +
       '<div class="sw-card" style="margin-top:12px">' +
-        '<label for="swJoinName">What did you call this place on that device?</label>' +
+        '<label for="swJoinName">' + esc(WavrT("What did you call this place on that device?")) + '</label>' +
         '<input type="text" id="swJoinName" maxlength="64" autocomplete="off" ' +
         'spellcheck="false" placeholder="My Home">' +
-        '<p class="sw-note" style="margin-top:10px">Wavr can’t read the name off ' +
-        "the network — it is never broadcast — so it needs yours.</p>" +
+        '<p class="sw-note" style="margin-top:10px">' +
+        esc(WavrT("Wavr can’t read the name off the network — it is never broadcast — so it needs yours.")) +
+        "</p>" +
       "</div>" +
       '<div class="sw-card" style="margin-top:10px">' +
-        '<label for="swJoinOwner">And who are you?</label>' +
+        '<label for="swJoinOwner">' + esc(WavrT("And who are you?")) + '</label>' +
         '<input type="text" id="swJoinOwner" maxlength="64" autocomplete="off">' +
       "</div>";
 
@@ -357,15 +420,15 @@
     ownerIn.addEventListener("input", sync);
 
     actions([
-      { label: "Back", go: stepJoin },
-      { label: "Join", primary: true, disabled: !nameIn.value.trim(),
+      { label: WavrT("Back"), go: stepJoin },
+      { label: WavrT("Join"), primary: true, disabled: !nameIn.value.trim(),
         go: function () { doJoin(core); } }
     ]);
   }
 
   function doJoin(core) {
     el("swBody").innerHTML = '<div class="sw-card"><span class="sw-spin"></span>' +
-      "Joining…</div>";
+      esc(WavrT("Joining…")) + "</div>";
     actions([]);
     api("/api/setup/join-space", { method: "POST", body: {
       space_id: core.space_id,
@@ -376,24 +439,29 @@
       // shared id and stands by; it does not authenticate against the other Core
       // and copies no state. Calling that a warm spare would be a lie the
       // operator only discovers when they need it.
-      el("swTitle").textContent = "Joined — one step left";
+      el("swTitle").textContent = WavrT("Joined — one step left");
       el("swLede").textContent = "";
       el("swBody").innerHTML =
-        '<div class="sw-card">This machine is now a <b>standby Core</b> for ' +
-        esc(res.space && res.space.name ? res.space.name : "your Space") + "." +
-        '<p class="sw-note" style="margin-top:10px">It does not mirror the other ' +
-        "Core yet. Connect the two and they will agree on who is in charge, and " +
-        "notice if they ever disagree.</p></div>" +
-        '<div class="sw-card" style="margin-top:10px">Connect them from ' +
-        "<b>Settings → Devices → Cores</b> on either machine. It is a " +
-        "one-time code compare, so neither trusts the other on the network’s " +
-        "word.</div>";
-      actions([{ label: "Open Wavr", primary: true, go: done }]);
+        '<div class="sw-card">' +
+        WavrT("This machine is now a {role} for {name}.",
+              {role: "<b>" + esc(WavrT("standby Core")) + "</b>",
+               name: esc(res.space && res.space.name ? res.space.name : WavrT("your Space"))}) +
+        '<p class="sw-note" style="margin-top:10px">' +
+        esc(WavrT("It does not mirror the other Core yet. Connect the two and they will agree "
+                  + "on who is in charge, and notice if they ever disagree.")) +
+        "</p></div>" +
+        '<div class="sw-card" style="margin-top:10px">' +
+        WavrT("Connect them from {path} on either machine. It is a one-time code compare, "
+              + "so neither trusts the other on the network’s word.",
+              {path: "<b>" + esc(WavrT("Settings → Devices → Cores")) + "</b>"}) +
+        "</div>";
+      actions([{ label: WavrT("Open Wavr"), primary: true, go: done }]);
     }).catch(function (e) {
       fail(e);
-      el("swBody").innerHTML = '<div class="sw-card">Wavr couldn’t join that ' +
-        "Space. It is still running and nothing on the other device was touched.</div>";
-      actions([{ label: "Back", go: function () { stepJoinConfirm(core); } }]);
+      el("swBody").innerHTML = '<div class="sw-card">' +
+        esc(WavrT("Wavr couldn’t join that Space. It is still running and nothing "
+                  + "on the other device was touched.")) + "</div>";
+      actions([{ label: WavrT("Back"), go: function () { stepJoinConfirm(core); } }]);
     });
   }
 
@@ -432,7 +500,11 @@
   api("/api/setup/status").then(function (s) {
     state.status = s;
     if (s.needs_setup) show();
-    else showSpaceName(s.space);
+    // The writer lives in runtime.js, not here: this IIFE returns early for
+    // every mode but "live", so a copy defined below it would be unreachable
+    // on exactly the surfaces that need the Space name most -- a paired
+    // phone and the Core kiosk face.
+    else if (window.__wavrShowSpace) window.__wavrShowSpace(s.space);
   }).catch(function (err) {
     // Degrading to "no wizard" is right for an older Core without these routes.
     // Being UNDIAGNOSABLE is not: a fresh Core whose probe 403s or 500s would
@@ -441,15 +513,4 @@
     console.warn("Wavr: setup probe failed, skipping the first-run wizard.", err);
   });
 
-  // Naming a Space and then never seeing the name is half a feature. Show it
-  // beside the wordmark and in the window title, so a household running two
-  // Cores can tell one browser tab from the other.
-  function showSpaceName(space) {
-    if (!space || !space.name) return;
-    var slot = el("brandSpace");
-    // textContent, never innerHTML: the Space name is operator input and this
-    // is the one place it lands in the shell's own chrome.
-    if (slot) slot.textContent = space.name;
-    document.title = space.name + " \u2014 Wavr";
-  }
 })();
