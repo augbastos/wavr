@@ -51,6 +51,10 @@ LAYER_PHYSICAL = "physical"
 STATUS_OK = "ok"
 STATUS_NOTICE = "notice"
 STATUS_ALERT = "alert"
+# Not a severity between the others: a refusal to answer. Nothing is wrong AND
+# nothing was watching, which is not the same as all clear. See
+# `compose_house_status`'s "SILENCE, honestly".
+STATUS_UNKNOWN = "unknown"
 
 # See module docstring ("RECENCY, honestly"). An hour is generous enough that a
 # genuinely still-live LAN issue (which keeps re-firing/staying edge-triggered
@@ -71,12 +75,32 @@ def _network_what(a: dict, kind: str) -> str:
     exposes (never a new raw field). Falls back to the bare kind name for a
     future alert kind this module has not been taught to caption yet -- an
     unrecognized `kind` must never crash the composer."""
+    # The DATA goes in brackets, OUTSIDE the sentence literal.
+    #
+    # These were single f-strings — "unrecognized device on the network
+    # (Microsoft)" — so the sentence a translating client looks up contained a
+    # vendor name, an IP or a hostname. It therefore existed in no source file,
+    # could never be in a catalogue, and stayed English on every screen. It
+    # also made a household's network data into a translation key, which is the
+    # same mistake the Space name made in three other places.
+    #
+    # Splitting the literal from the value fixes both at once: the sentence is
+    # a constant a catalogue can hold, and the bracketed part passes through as
+    # the data it always was.
+    # Bound to a name first, not written adjacent to the f-string. Python
+    # concatenates adjacent literals AT PARSE TIME, so
+    # `("a sentence" f" ({x})")` folds into one f-string whose first constant is
+    # `"a sentence ("` — the trailing bracket glued on, and the clean sentence
+    # gone from the module's string table. Which is where a catalogue looks.
     if kind == "rogue_device":
-        return f"unrecognized device on the network ({a.get('vendor') or 'unknown vendor'})"
+        what = "unrecognized device on the network"
+        return f"{what} ({a.get('vendor') or 'unknown vendor'})"
     if kind == "rogue_dhcp":
-        return f"extra DHCP server offering on the LAN ({a.get('extra_server', 'unknown')})"
+        what = "extra DHCP server offering on the LAN"
+        return f"{what} ({a.get('extra_server', 'unknown')})"
     if kind == "gateway_identity":
-        return f"router (gateway) identity changed ({a.get('gateway_ip', 'unknown')})"
+        what = "router (gateway) identity changed"
+        return f"{what} ({a.get('gateway_ip', 'unknown')})"
     return (kind or "network").replace("_", " ")
 
 
@@ -172,13 +196,38 @@ def _routine_reasons(routine_flags) -> list[dict]:
 
 def compose_house_status(*, network_alerts=None, intrusion_alerts=None, fall_alerts=None,
                           routine_flags=None, now: datetime | None = None,
-                          window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES) -> dict:
-    """Fuse the already-existing signal sources into one `{status, score, reasons, ts}`
-    verdict. Pure function -- no I/O, no background state; app.py gathers the inputs from
-    the live monitors/logs and calls this on every GET /api/house-status. `fall_alerts`
-    (A9, RESEARCH-GRADE) is additive/optional -- omitted entirely (unchanged shape) when
-    None, same rule as every other optional input here. See the module docstring for the
-    recency-window and score semantics."""
+                          window_minutes: float = DEFAULT_NETWORK_WINDOW_MINUTES,
+                          sources_checked=None) -> dict:
+    """Fuse the already-existing signal sources into one
+    `{status, score, reasons, ts}` verdict. Pure function -- no I/O, no
+    background state; app.py gathers the inputs from the live monitors/logs and
+    calls this on every GET /api/house-status. `fall_alerts` (A9,
+    RESEARCH-GRADE) is additive/optional -- omitted entirely (unchanged shape)
+    when None, same rule as every other optional input here. See the module
+    docstring for the recency-window and score semantics.
+
+    ## SILENCE, honestly (`sources_checked`)
+
+    An empty `reasons` list has two causes that mean opposite things: every
+    layer looked and found nothing, or no layer looked at all. Reported as
+    `ok`, the dashboard says "Everything looks normal." and the
+    `get_house_status` MCP tool lets an agent say "everything's fine" -- about
+    a house with the network monitor off, no cameras, no Watch and no
+    occupancy log. Nothing was wrong because nothing was watching. That is the
+    single most damaging sentence this product can produce, and it is the same
+    mistake the map's screen-reader summary once made by announcing "Empty
+    home" while every camera was offline.
+
+    So a caller may declare WHICH layers were actually able to report --
+    `{"network", "physical"}` -- and with no reasons and no live layer the
+    verdict is `unknown`, not `ok`. The returned `checked` list carries it, in
+    keeping with this module's rule that a verdict always shows its work.
+
+    Omitting the argument keeps the old behaviour exactly. That is deliberate
+    rather than lazy: a caller that never says what it checked cannot be
+    second-guessed here, and every existing caller and test predates the idea.
+    app.py, which does know, passes it.
+    """
     now = now or datetime.now(timezone.utc)
     reasons = (
         _network_reasons(network_alerts, now=now, window_minutes=window_minutes)
@@ -189,15 +238,19 @@ def compose_house_status(*, network_alerts=None, intrusion_alerts=None, fall_ale
     reasons.sort(key=lambda r: r["ts"] or "")
 
     if not reasons:
-        status, score = STATUS_OK, 0
+        blind = sources_checked is not None and not sources_checked
+        status, score = (STATUS_UNKNOWN if blind else STATUS_OK), 0
     else:
         worst_rank = max(severity_rank(r["severity"]) for r in reasons)
         score = worst_rank + 1  # 1..5 -- the rank of the single worst reason, see docstring
         status = STATUS_ALERT if worst_rank >= _ALERT_RANK else STATUS_NOTICE
 
-    return {
+    out = {
         "status": status,
         "score": score,
         "reasons": reasons,
         "ts": now.isoformat(),
     }
+    if sources_checked is not None:
+        out["checked"] = sorted(sources_checked)
+    return out

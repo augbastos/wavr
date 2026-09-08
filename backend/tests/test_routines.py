@@ -283,3 +283,57 @@ def test_rules_engine_fires_on_room_edge():
     r.handle({"room": "cozinha", "occupied": False, "confidence": 1.0, "ts": "t"})  # flip -> edge
     r.handle({"room": "cozinha", "occupied": True, "confidence": 1.0, "ts": "t"})   # flip -> edge
     assert edges == [("cozinha", False), ("cozinha", True)]
+
+
+# -- a routine that delivers nothing must not report "ok" ----------------------
+
+def test_a_notify_routine_with_no_channel_reports_failed_not_ok():
+    """The failure a household would never find out about.
+
+    They open Routines, click the quick start Wavr itself offers — "Nobody home
+    by midnight → notify me" — create it, and press Test. The button said
+    "✓ ran ok" and the row recorded `last_status: ok`. Nothing was sent and
+    nothing ever would be: ntfy is off by default and no other channel was on.
+    Every surface in the product agreed the routine was healthy.
+
+    `_notify_all` returned None and its docstring said calling it with both
+    sinks off "costs nothing". True of the cost. The cost was one layer up.
+    """
+    from wavr.routines import ActionExecutor
+
+    def refuses(_msg):
+        raise RuntimeError("no notification channel is switched on")
+
+    ex = ActionExecutor(notify=refuses)
+    assert ex.run([{"kind": "notify", "params": {"message": "hi"}}]) == "failed"
+
+
+def test_a_notify_routine_with_a_channel_still_reports_ok():
+    sent = []
+    from wavr.routines import ActionExecutor
+    ex = ActionExecutor(notify=sent.append)
+    assert ex.run([{"kind": "notify", "params": {"message": "hi"}}]) == "ok"
+    assert sent == ["hi"]
+
+
+def test_the_app_wires_the_failing_notifier_not_the_silent_one():
+    """The executor doing the right thing is half of it. This is the half that
+    was actually wrong: `create_app` handed it a lambda that swallowed the
+    "nobody took this" case and returned None, which reads as success."""
+    from pathlib import Path
+    import wavr.app as appmod
+    src = Path(appmod.__file__).read_text(encoding="utf-8")
+    assert "notify=lambda m: _notify_or_fail(" in src, (
+        "the routine executor is back on a notifier that cannot report a "
+        "message nobody accepted")
+    assert "def _notify_all(" in src and "-> int:" in src
+
+
+def test_the_message_names_what_to_switch_on():
+    """A failure a person cannot act on is only half an improvement over a lie."""
+    from pathlib import Path
+    import wavr.app as appmod
+    src = Path(appmod.__file__).read_text(encoding="utf-8")
+    i = src.index("def _notify_or_fail(")
+    body = src[i:i + 1400]
+    assert "Connectors" in body and "ntfy" in body and "Telegram" in body

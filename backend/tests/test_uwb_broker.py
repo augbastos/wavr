@@ -207,7 +207,8 @@ def _app(monkeypatch, tmp_path):
     return app, TestClient(app, headers={"X-Wavr-Local": "1"})
 
 
-def test_the_claiming_device_is_taken_from_the_token_never_the_request(monkeypatch, tmp_path):
+def test_the_claiming_device_is_taken_from_the_token_never_the_request(
+        monkeypatch, tmp_path, served_routes):
     """A device-id PARAMETER here would let any paired device ask for another's
     session key, which is the entire secret of a ranging session.
 
@@ -218,8 +219,11 @@ def test_the_claiming_device_is_taken_from_the_token_never_the_request(monkeypat
     import inspect
 
     app, _client = _app(monkeypatch, tmp_path)
-    route = next(r for r in app.routes
-                 if getattr(r, "path", "") == "/api/uwb/sessions/{session_id}/claim")
+    # `served_routes` walks into the included routers. Read straight off
+    # `app.routes` this raised StopIteration -- a security check that could
+    # not find the endpoint it guards.
+    route = next(r for r in served_routes(app)
+                 if r.path == "/api/uwb/sessions/{session_id}/claim")
     params = set(inspect.signature(route.endpoint).parameters)
     assert "device_id" not in params
     assert params <= {"session_id", "authorization", "_"}, params

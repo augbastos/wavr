@@ -11,7 +11,7 @@ import sys
 from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable
 
-from wavr.events import Identity, SensingEvent
+from wavr.events import HOUSE_ROOM, Identity, SensingEvent
 
 # Matches a MAC with either "-" (Windows arp) or ":" (Unix) separators.
 _MAC_RE = re.compile(r"(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}")
@@ -193,7 +193,7 @@ class NetworkSource:
 
     def __init__(self, known_macs: set[str],
                  scan: Callable[[], Awaitable[set[str]]] | None = None,
-                 room: str = "casa", interval: float = 15.0,
+                 room: str = HOUSE_ROOM, interval: float = 15.0,
                  grace: int = 2, present_confidence: float = 0.8,
                  known: dict[str, str] | None = None,
                  emit_identity: bool = False,

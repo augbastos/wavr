@@ -5,21 +5,58 @@ from collections.abc import Callable
 from wavr.connectors.http import post_json as _post_json
 
 
-def build_prompt(state: dict, history: list) -> str:
-    """Build a natural-language-summary prompt from DERIVED occupancy only. Never
-    include raw vitals numbers, source internals, frames, MACs, or RTSP URLs — the
-    LLM sees occupancy, not biometrics. This PRIVACY ALLOWLIST is shared verbatim by
-    EVERY provider (cloud or local): switching the backend never changes what leaves
-    the box."""
-    lines = ["Resuma em português, em 1-2 frases, o estado de presença da casa.",
-             "Estado atual por cômodo:"]
+# The languages this product ships an interface in, and the name to put in
+# front of a model. A tag Wavr does not offer is NOT passed through: a
+# caller-supplied string interpolated into an LLM prompt is an injection
+# surface, and the honest answer for a language Wavr does not speak is the
+# default one.
+LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "pt": "Brazilian Portuguese",
+}
+DEFAULT_LANGUAGE = "en"
+
+
+def language_name(tag: str | None) -> str:
+    """`"pt-BR"` -> `"Brazilian Portuguese"`. Anything unknown -> English."""
+    base = str(tag or "").split("-")[0].split("_")[0].strip().lower()
+    return LANGUAGE_NAMES.get(base, LANGUAGE_NAMES[DEFAULT_LANGUAGE])
+
+
+def build_prompt(state: dict, history: list, language: str | None = None) -> str:
+    """Build a natural-language-summary prompt from DERIVED occupancy only.
+
+    Never include raw vitals numbers, source internals, frames, MACs, or RTSP
+    URLs — the LLM sees occupancy, not biometrics. This PRIVACY ALLOWLIST is
+    shared verbatim by EVERY provider (cloud or local): switching the backend
+    never changes what leaves the box.
+
+    ## Why the prompt is English now, and the language is an argument
+
+    Every line here was Portuguese, and the first one said "Resuma em
+    português". An English household with the narrator switched on therefore
+    got a Portuguese paragraph about their own house, always, with no setting
+    anywhere that changed it — and the product's language selector had no
+    effect on the one screen whose entire output is prose.
+
+    The prompt is English like every other source string in this codebase, and
+    the OUTPUT language is named explicitly. `language` is a BCP-47 tag from
+    the caller, mapped through `language_name`, which only knows the languages
+    Wavr ships: an unrecognised tag becomes English rather than reaching the
+    prompt as text.
+    """
+    lang = language_name(language)
+    lines = [f"Summarise the home's presence state in 1-2 sentences. "
+             f"Answer in {lang}.",
+             "Current state by room:"]
     for room, rs in sorted(state.items()):
         pct = round(rs.get("confidence", 0) * 100)
-        status = "ocupado" if rs.get("occupied") else "vazio"
-        lines.append(f"- {room}: {status} ({pct}% de confiança)")
+        status = "occupied" if rs.get("occupied") else "empty"
+        lines.append(f"- {room}: {status} ({pct}% confidence)")
     if history:
         occ = sum(1 for h in history if h.get("occupied"))
-        lines.append(f"Nas últimas {len(history)} leituras houve {occ} com presença detectada.")
+        lines.append(f"In the last {len(history)} readings, {occ} had presence "
+                     f"detected.")
     return "\n".join(lines)
 
 
@@ -29,8 +66,9 @@ class Narrator:
     def __init__(self, generate: Callable[[str], str]):
         self._generate = generate
 
-    def narrate(self, state: dict, history: list) -> str:
-        return self._generate(build_prompt(state, history))
+    def narrate(self, state: dict, history: list,
+                language: str | None = None) -> str:
+        return self._generate(build_prompt(state, history, language))
 
 
 

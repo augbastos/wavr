@@ -325,6 +325,38 @@ class DiscoveryInbox:
             self._conn.commit()
         return self.get(discovery_id)      # type: ignore[return-value]
 
+    def resolve(self, kind: str, subject: str,
+                status: str = STATUS_ACCEPTED) -> bool:
+        """Mark the pending item for (kind, subject) decided, when the person
+        answered it somewhere else. Returns True if there was one to resolve.
+
+        A question answered somewhere else is answered. "New devices" and this
+        inbox both ask "do you recognise this?", from two producers: that tab
+        filters `known == False` off the inventory, while `discovery_feed`
+        raises a `device_new` item. Pressing "That's mine" flips `known`, which
+        stops the feed re-observing — but a row already pending merely stops
+        being refreshed, so it sat there for the full fourteen-day prune window
+        asking a question the person had already answered, on a screen that
+        carries a count badge.
+
+        `subject` is the MAC, in the one format both sides use: lowercase
+        colon-form (`netinventory` normalises on read, `normalize_mac` on
+        write). If those ever diverge this silently resolves nothing, which is
+        why the test pins the whole round trip rather than this method alone.
+
+        Only PENDING rows move. Re-deciding a decided item would overwrite a
+        person's "Ignore" with an "accepted" they never gave.
+        """
+        if status not in (STATUS_ACCEPTED, STATUS_DISMISSED):
+            raise DiscoveryError("status must be 'accepted' or 'dismissed'")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE discoveries SET status = ?, decided_ts = ?"
+                " WHERE kind = ? AND subject = ? AND status = ?",
+                (status, self._now(), kind, subject, STATUS_PENDING))
+            self._conn.commit()
+        return cur.rowcount > 0
+
     def counts(self) -> dict:
         """`{"pending": n, "accepted": n, "dismissed": n}` — the badge number."""
         with self._lock:

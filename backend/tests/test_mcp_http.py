@@ -169,7 +169,12 @@ def test_app_wires_real_whole_house_data_sources_into_mcp_mount(tmp_path, monkey
     assert captured["occupancy_provider"].timeline(None) == []
     assert callable(captured["house_status_fn"])
     status = anyio.run(captured["house_status_fn"])
-    assert status["status"] == "ok" and status["reasons"] == []   # nothing wrong -> composes clean
+    # It composes, and it blames nothing. NOT `status == "ok"`: this Core has
+    # nothing watching, and the composer now says `unknown` rather than
+    # "everything looks normal" about a house nobody is looking at. Pinning the
+    # verdict here would pin the defect.
+    assert status["reasons"] == [] and status["score"] == 0, status
+    assert status["status"] in ("ok", "unknown"), status
 
 
 def test_mcp_not_mounted_when_multidevice_off(tmp_path, monkeypatch):
@@ -607,14 +612,19 @@ def test_mcp_get_house_status_live_round_trip(app):
         r = central.post("/mcp", headers=MCP_HDRS, json=_tool_call("get_house_status"))
         assert r.status_code == 200, r.text
         payload = _tool_result(r.json())
-        assert payload["status"] == "ok" and payload["reasons"] == []   # nothing wrong -> clean
+        # The property worth pinning is that the MCP tool and the HTTP route
+        # give the SAME answer — that is what "share this EXACT composition and
+        # can never drift" means — not that the answer is any particular word.
+        route = central.get("/api/house-status").json()
+        assert payload["status"] == route["status"], (payload, route)
+        assert payload["reasons"] == [] and route["reasons"] == []
 
         # `window_minutes` actually reaches app.py's real _compute_house_status closure
         # over the wire (FastMCP param binding), not just the plain-function unit test.
         r2 = central.post("/mcp", headers=MCP_HDRS,
                           json=_tool_call("get_house_status", {"window_minutes": 5}, id_=3))
         assert r2.status_code == 200, r2.text
-        assert _tool_result(r2.json())["status"] == "ok"
+        assert _tool_result(r2.json())["status"] == route["status"]
 
 
 # --------------------------------------------------------------------------- #
@@ -911,3 +921,76 @@ def test_filter_tools_list_response_ignores_non_list_results():
 def test_filter_tools_list_response_malformed_or_empty_body_is_unchanged():
     assert _filter_tools_list_response(b"not json{{{", frozenset()) == b"not json{{{"
     assert _filter_tools_list_response(b"", frozenset()) == b""
+
+
+# -- the credential the documentation tells you to mint ------------------------
+
+def _loopback_client(tmp_path):
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+    os.environ["WAVR_DB"] = str(tmp_path / "agent.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(tmp_path / "house.json")
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    os.environ["WAVR_MULTIDEVICE"] = "1"
+    return TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+
+
+def test_an_agent_credential_can_be_minted(tmp_path):
+    """`auth.py` builds a whole authorisation axis for the `agent` role —
+    `DEFAULT_SCOPES["agent"] = {"mcp"}`, the tool-scope sets,
+    `tool_call_allowed`, and a per-tool gate in `mcp_http.py` — and none of it
+    was reachable by an operator. `/api/pair-code` refused the role, the
+    pairing UI offered User and Admin, and the only door was hand-rolled curl
+    against `/api/devices/{id}/role`.
+
+    The consequence was not a missing feature. `docs/mcp-connect.md` told
+    people to mint `user`, which has no `mcp` scope and is refused on every
+    request including `initialize`; the credential that actually worked was
+    `central`, which is admin over the entire HTTP API. So the working
+    instruction was "hand your AI agent a token that can read your cameras".
+    """
+    c = _loopback_client(tmp_path)
+    r = c.post("/api/pair-code", json={"role": "agent"})
+    assert r.status_code == 200, r.text
+    assert r.json()["role"] == "agent"
+    assert r.json()["code"]
+
+
+def test_an_agent_credential_belongs_to_no_person(tmp_path):
+    """`narrower_role` compares HUMAN tiers and has nothing to say about an
+    agent. Pairing one against a person would either widen it to whatever that
+    person holds or silently do nothing; refusing says which."""
+    c = _loopback_client(tmp_path)
+    c.post("/api/setup/create-space",
+           json={"name": "H", "owner_name": "Tester"})
+    people = c.get("/api/space").json().get("people") or []
+    if not people:
+        import pytest
+        pytest.skip("no person to pair against")
+    r = c.post("/api/pair-code",
+               json={"role": "agent", "person_id": people[0]["person_id"]})
+    assert r.status_code == 400
+    assert "no person" in r.json()["detail"]
+
+
+def test_guest_is_still_refused_here(tmp_path):
+    """Widening to `agent` must not have widened to `guest`: a guest paired
+    this way would never expire, which is the whole reason
+    `/api/guest/invite` exists."""
+    c = _loopback_client(tmp_path)
+    r = c.post("/api/pair-code", json={"role": "guest"})
+    assert r.status_code == 400, r.text
+
+
+def test_the_mcp_doc_tells_you_to_mint_the_role_that_works():
+    """The doc and the gate are two halves of one instruction, and they
+    disagreed. Keep them together."""
+    from pathlib import Path
+    doc = (Path(__file__).resolve().parents[2] / "docs"
+           / "mcp-connect.md").read_text(encoding="utf-8")
+    step = doc[doc.index("Step 2 —"):][:2500]
+    assert 'POST /api/pair-code   { "role": "agent" }' in step, (
+        "the connection procedure mints a role again — check it is one whose "
+        "default scopes include `mcp`")
+    assert '"role": "user" }' not in step

@@ -110,3 +110,97 @@ def test_the_developer_endpoint_reports_the_whole_table():
     assert set(DEVELOPER_PROTOCOL) <= set(CONTRACTS)
     for name, v in DEVELOPER_PROTOCOL.items():
         assert v == CONTRACTS[name], name
+
+
+# -- the SDKs ship the contract the Core ships ---------------------------------
+
+def test_every_sdk_declares_the_contract_version_the_core_ships():
+    """Three constants in three languages, and nothing tied them to this file.
+
+    `experience_context` went to 2 for a breaking change — `sensors[].sensor_id`
+    removed, `label` added — and none of the SDKs moved with it. Each declares
+    `PROTOCOL_VERSION`, each computes `protocolAhead = coreVersion >
+    PROTOCOL_VERSION`, and every one of them therefore reported the Core as
+    ahead of itself from the first run, including an SDK and a Core shipped in
+    the same commit.
+
+    That is worse than a stale number. Wavr's own `spatial-web` reference page
+    renders "This Core speaks a newer contract than this page was written
+    against" on every load, and any application that follows the SDKs' advice
+    to branch on `protocolAhead` takes its degraded path forever — so the
+    signal is spent before a real bump can use it.
+
+    The constants are plain literals in all three files, so this reads them
+    directly rather than trusting a changelog.
+    """
+    import re
+    from pathlib import Path
+    from wavr.contracts import version
+
+    root = Path(__file__).resolve().parents[2]
+    want = version("experience_context")
+    files = {
+        "sdk/javascript/wavr.js": r"export const PROTOCOL_VERSION = (\d+);",
+        "sdk/python/wavr_sdk/__init__.py": r"^PROTOCOL_VERSION = (\d+)$",
+        "core-launcher/app/src/main/java/dev/wavr/sdk/WavrClient.kt":
+            r"const val PROTOCOL_VERSION = (\d+)",
+    }
+    wrong = {}
+    for rel, pat in files.items():
+        path = root / rel
+        assert path.is_file(), f"{rel} moved; this test can no longer see it"
+        m = re.search(pat, path.read_text(encoding="utf-8"), re.M)
+        assert m, f"{rel}: PROTOCOL_VERSION is no longer a plain literal"
+        if int(m.group(1)) != want:
+            wrong[rel] = int(m.group(1))
+    assert not wrong, (
+        f"the Core ships experience_context v{want} and these do not: {wrong}. "
+        f"Every one of them will report `protocolAhead` on every connection, "
+        f"and an application that branches on it degrades permanently.")
+
+
+# -- a document may not promise a door that does not exist ---------------------
+
+def test_a_module_with_no_route_is_not_described_as_reachable():
+    """`docs/EXTERNAL-PROVIDERS.md` filed OpenXR and Apple under "built and
+    tested" and said "Identity, fully".
+
+    Both modules ARE built and tested — and imported by nothing but their own
+    test files. No route parses an OpenXR entity, none solves an alignment,
+    there is no SDK method and no frontend surface. A headset developer read
+    that page, went looking for the endpoint, and found none.
+
+    The code was never the problem; the claim was. This holds the two together:
+    while nothing imports a module, the document must say so, and the day a
+    route appears the exemption disappears with it.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    backend = root / "backend" / "wavr"
+    doc = (root / "docs" / "EXTERNAL-PROVIDERS.md").read_text(encoding="utf-8")
+
+    for module in ("openxr", "apple"):
+        importers = [
+            p.name for p in backend.rglob("*.py")
+            if p.stem != module
+            and re.search(rf"\b(?:from wavr\.{module} import|import wavr\.{module}\b"
+                          rf"|from wavr import [^\n]*\b{module}\b)", 
+                          p.read_text(encoding="utf-8", errors="replace"))
+        ]
+        section = _section_for(doc, module)
+        if importers:
+            continue          # wired: the document is free to say so
+        assert "no endpoint" in section.lower() or "there is no route" in section.lower(), (
+            f"nothing in backend/wavr imports `{module}`, so no caller can "
+            f"reach it — and its section of EXTERNAL-PROVIDERS.md does not say "
+            f"so. Either wire a route or keep the document honest.")
+
+
+def _section_for(doc: str, module: str) -> str:
+    """The chunk of the document that talks about this module."""
+    key = "OpenXR runtimes" if module == "openxr" else "Apple · `apple_spatial`"
+    i = doc.index(key)
+    j = doc.find("\n## ", i)
+    return doc[i:j if j > 0 else len(doc)]

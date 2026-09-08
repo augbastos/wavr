@@ -212,3 +212,148 @@ def test_a_watch_level_alert_stays_ambient():
     assert collect(alerts=[{"kind": "rogue_device", "severity": "note",
                             "title": "A new device"}]) == []
     assert collect(alerts=[{"kind": "x", "severity": "watch", "title": "y"}]) == []
+
+
+# -- The wording is a template, and a household's words are never the key ------
+
+def _one_of_everything():
+    """One item of every kind this module can produce."""
+    return collect(
+        pending_pairings=[{"requester_name": "Ana's phone", "request_id": "p1",
+                           "created_at": "2026-01-01T00:00:00Z"}],
+        node_requests=[{"label": "kitchen-radar", "request_id": "n1",
+                        "created_ts": "2026-01-01T00:00:00Z"}],
+        coverage_rows=[
+            {"sensor_id": "radar-1", "room": "sala", "health": "offline",
+             "precision_level": "count"},
+            {"sensor_id": "radar-2", "room": "", "health": "silent",
+             "precision_level": "position"},
+            {"sensor_id": "radar-3", "room": "escritório", "health": "failed",
+             "precision_level": ""},
+        ],
+        cameras_needing_url=[{"name": "hall-cam"}],
+        discoveries=[{"discovery_id": "d1", "status": "pending",
+                      "title": "Camera found at 10.0.0.5",
+                      "detail": {"room": "sala"}}],
+        alerts=[{"kind": "rogue_dhcp", "severity": "alert",
+                 "extra_server": "10.0.0.9", "ts": "2026-01-01T00:00:00Z"},
+                {"kind": "something_new", "severity": "critical",
+                 "ip": "10.0.0.5", "ts": "2026-01-01T00:00:00Z"}],
+        update={"behind": True})
+
+
+def test_every_sentence_a_row_can_show_is_declared():
+    """A row added with an inline literal must fail here.
+
+    `TEMPLATES` is what `test_the_attention_inbox_is_translated` requires a
+    translation for. That check is only worth something while the list is
+    complete, and a list maintained by hand beside the code it describes is
+    exactly the kind that quietly stops being complete. So this drives the
+    collector over one of every kind of item and holds the result against it.
+    """
+    from wavr.attention import TEMPLATES
+
+    undeclared = sorted({t for i in _one_of_everything()
+                         for t in (i.title_template, i.detail_template) if t}
+                        - set(TEMPLATES))
+    assert not undeclared, (
+        "these sentences reach a screen and are not in TEMPLATES, so nothing "
+        "requires them to be translated:\n  "
+        + "\n  ".join(repr(u) for u in undeclared))
+
+
+def test_no_row_makes_a_household_word_part_of_its_key():
+    """The defect this shape exists to prevent.
+
+    The dashboard translates a row by looking up its template. If the values —
+    a camera's name, a room's name, a phone's name — are inside that template
+    rather than beside it, the key is unique to one household and can never be
+    in any catalogue: the row stays English, and the private name is recorded
+    as a missing translation.
+
+    Wording this module did not write goes through as `*_text` and is never
+    looked up at all, which is the other half of the same rule.
+    """
+    private = ("Ana's phone", "kitchen-radar", "hall-cam", "sala",
+               "escritório", "radar-1", "10.0.0.9", "10.0.0.5")
+    leaked = []
+    for i in _one_of_everything():
+        for t in (i.title_template, i.detail_template):
+            for word in private:
+                if word in t:
+                    leaked.append(f"{word!r} in {t!r}")
+    assert not leaked, "household data inside a lookup key:\n  " + "\n  ".join(leaked)
+
+
+def test_only_wording_from_elsewhere_bypasses_translation():
+    """`*_text` is rendered verbatim and never looked up. That is right for
+    wording this module did not write, and it is a hole if anything else uses
+    it.
+
+    A row that composes its own sentence into `title_text` passes every other
+    check in this file: nothing leaks into the catalogue, because nothing is
+    looked up at all. It simply stays English for ever, in silence. That is not
+    hypothetical — it is the mutation that found this test missing.
+
+    Two sources may speak for themselves. A discovery card's title was composed
+    by `discovery_feed` out of what is on the network, and an install's update
+    instructions were written by whoever packaged the build. An alert kind Wavr
+    has no words for falls back to the identifier, which is not a sentence.
+    Everything else must be a template.
+    """
+    from wavr.attention import _ALERT_WORDS
+
+    rows = list(_one_of_everything())
+    # The other half of the update item: an install that DID supply its own
+    # instructions. `_one_of_everything` covers the branch that does not.
+    rows += collect(update={"behind": True,
+                            "instructions": "Run `apt upgrade wavr`."})
+
+    offenders = []
+    for i in rows:
+        for slot, tpl, text in (("title", i.title_template, i.title_text),
+                                ("detail", i.detail_template, i.detail_text)):
+            if tpl or not text:
+                continue
+            if slot == "title" and i.key.startswith("discovery:"):
+                continue
+            if slot == "detail" and i.key == "update":
+                continue
+            if (slot == "title" and i.key.startswith("alert:")
+                    and i.key.split(":", 1)[1] not in _ALERT_WORDS):
+                continue
+            offenders.append(f"{i.key} {slot}: {text!r}")
+    assert not offenders, (
+        "these rows skip the catalogue without being wording from elsewhere, "
+        "so they stay English in every language:\n  " + "\n  ".join(offenders))
+
+
+def test_the_composed_english_still_reads_as_a_sentence():
+    """`wavr status` and the tray read `title`/`detail` and translate nothing.
+    Handing either a literal `{name}` is the same bug pointing the other way.
+    """
+    for i in _one_of_everything():
+        assert "{" not in i.title and "}" not in i.title, i.title
+        assert "{" not in i.detail and "}" not in i.detail, i.detail
+        assert i.title.strip(), f"a row with no title: {i.key}"
+
+
+def test_a_discovery_card_keeps_its_own_words():
+    """A discovery title is written by `discovery_feed` out of what is on the
+    network. This module cannot translate it and must not pretend to: it goes
+    through as text, so no lookup happens and no address is recorded as a
+    missing translation."""
+    item = next(i for i in _one_of_everything() if i.key.startswith("discovery:"))
+    assert item.title_template == ""
+    assert item.title_text == "Camera found at 10.0.0.5"
+    assert item.title == "Camera found at 10.0.0.5"
+
+
+def test_an_alert_keeps_its_evidence_outside_the_sentence():
+    """"10.0.0.9" alone is not an errand and the sentence alone is not
+    evidence — but joined, the sentence carries an IP address into the lookup
+    key. Beside it, both survive."""
+    item = next(i for i in _one_of_everything() if i.key == "alert:rogue_dhcp")
+    assert item.evidence == "extra server: 10.0.0.9"
+    assert "10.0.0.9" not in item.detail_template
+    assert "10.0.0.9" in item.detail, "the producer's own evidence was lost"

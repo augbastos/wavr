@@ -27,12 +27,21 @@ So there are now three independent axes, and this module owns the first two:
 
 Axis 3 is deliberately left exactly as it is. It is the tested security surface,
 and widening it would be the easiest way to turn an onboarding convenience into
-a privilege bug. `device_role_for_person()` below expresses how axis 1 *should*
-derive axis 3 — an Owner's new phone pairing as `central`, a User's as `user` —
-but it is NOT yet consulted by `pairing.py`; it currently powers only a preview
-in the admin UI. So nothing in this file changes what any credential reaches
-today, and when pairing does adopt it, it will feed the existing gate rather
-than bypass it.
+a privilege bug. `device_role_for_person()` below expresses how axis 1 derives
+axis 3 — an Owner's new phone pairing as `central`, a User's as `user`.
+
+**That function is load-bearing, on every authenticated request.** `app.py`'s
+`_person_role` reads the credential owner's CURRENT person role and passes it
+through `device_role_for_person()` into `auth._apply_person_cap` as
+`person_role_fn`, so axis 1 caps axis 3 live: demote somebody to `user` and
+their already-issued `central` token narrows on the very next request, remove
+them from the Space and it stops working entirely. `test_person_authorization.py`
+pins that wiring.
+
+The one thing still true of the original note is the direction. `pairing.py`
+does NOT consult this — nothing here MINTS a credential. It only ever narrows
+one that `devices.py` already issued (`narrower_role`, never wider), so this is
+a ceiling over the existing gate, not a second door into it.
 
 ## Storage
 
@@ -46,6 +55,7 @@ import json
 import secrets
 import sqlite3
 import threading
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -143,8 +153,13 @@ def has_capability(caps: frozenset[str] | None, cap: str) -> bool:
 
 
 def device_role_for_person(person_role: str) -> str:
-    """Credential role a device gets when it pairs *as* this person. Unknown
-    person role → `"guest"`, the weakest thing `devices.VALID_ROLES` has."""
+    """The credential role this person's authority maps to. Unknown person role
+    → `"guest"`, the weakest thing `devices.VALID_ROLES` has.
+
+    Read on every authenticated request: `app.py`'s `_person_role` calls this and
+    hands the answer to `auth._apply_person_cap`, which caps the credential at the
+    narrower of (issued role, this). It is a ceiling, never a mint — `pairing.py`
+    does not consult it."""
     return _PERSON_TO_DEVICE_ROLE.get(person_role, "guest")
 
 
@@ -347,6 +362,46 @@ class SpaceStore:
         self._now = now_fn
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+
+    def healthy(self) -> bool:
+        """Can this store still be WRITTEN to?
+
+        `runtime_status.assess` carries a storage finding — "Wavr cannot write
+        to its database. Nothing is being recorded." — and `app.py` fed it
+        `db_ok=True` because nothing implemented this method. The state was
+        therefore unreachable: a full disk, a read-only mount or a deleted file
+        left every surface saying everything was fine while nothing was being
+        recorded. A failure state that cannot be reached is not a safeguard, it
+        is a sentence in a docstring.
+
+        A read would not answer the question, because SQLite keeps serving
+        reads from a database it can no longer write.
+
+        So this takes a write LOCK and immediately drops it. `BEGIN IMMEDIATE`
+        acquires the RESERVED lock a write needs — it fails on a read-only
+        file, a read-only mount and a database locked by another process — and
+        `ROLLBACK` releases it having changed nothing.
+
+        The first version of this wrote a row into a scratch table and rolled
+        back, which was wrong twice. Python's sqlite3 does not open an implicit
+        transaction around DDL, so the `CREATE TABLE` committed and the rollback
+        took only the insert: the probe left a permanent `_health_probe` table
+        behind. `test_data_inventory_is_complete` caught it immediately — every
+        table Wavr creates has to be named on the privacy screen, and this one
+        was a table the product could not explain to the household whose
+        database it was in.
+        """
+        try:
+            with self._lock:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute("ROLLBACK")
+            return True
+        except sqlite3.Error:
+            # An in-flight transaction of our own would raise here too. Leave
+            # the connection usable rather than half-open.
+            with suppress(sqlite3.Error):
+                self._conn.execute("ROLLBACK")
+            return False
 
     # -- Space ---------------------------------------------------------------
 

@@ -29,12 +29,24 @@ own users that Wavr cannot keep, and the failure will surface as Wavr's bug.
 No `person.*` events at all. No `transition.detected` — Wavr can say a room's
 occupancy changed and another room's changed too, but calling that one person
 moving is an inference topology can *assess* and nothing here may *assert*.
+
+**And no `sensor_id`.** A sensor id in this codebase is very often the NAME an
+operator typed — the camera source stamps the camera's own name on every event
+it produces, so a fixture's "hall-cam" is a real house's "<person>'s office
+cam". Protocol 2 took that string out of the experience context for exactly
+that reason (`experience._visible_sensors`), and this stream went on shipping
+it: the same private string, to the same `presence:read` audience, over a
+different route. Sensors are named here the way they are named there — derived.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from wavr.contracts import version
+# The prefix -> provenance table, imported rather than copied. `experience`
+# classifies the same ids for the same reason, and two tables drift; that it is
+# spelled private there is about who may change it, not about who may read it.
+from wavr.experience import _SENSOR_SOURCE
 
 # The shape of an event. Stamped on every one rather than published only at a
 # discovery endpoint: an event arrives on a socket a consumer may have opened
@@ -86,6 +98,61 @@ def _disagreeing(state: dict) -> bool:
         any(not s.get("presence") for s in fresh)
 
 
+class _SensorNames:
+    """Derived names for sensors, so no event carries the operator's own text.
+
+    "camera 1", "mmwave 2" — what `experience._visible_sensors` gives an
+    application, for the same reason it gives it: an experience needs to tell
+    two cameras apart and is entitled to nothing about whose room this is or
+    what the household calls its equipment.
+
+    Assigned in first-seen order per room and REMEMBERED, which the context does
+    not have to do: a context is one response and can number a list, while this
+    is a stream, and the `sensor.offline` an application receives has to carry
+    the same name as the `sensor.online` that follows it. A name that changed
+    between the two would make the pair unreadable, and naming the sensor is the
+    entire reason these events exist rather than one "something changed".
+
+    It is a DISPLAY name, not a join key. A context response numbers its own
+    census — the hardware coverage rows, renumbered per response — so "camera 1"
+    there and "camera 1" here are not promised to be the same camera. Correlate
+    events with events.
+    """
+
+    def __init__(self):
+        self._names: dict[str, dict[str, str]] = {}
+        self._counts: dict[str, dict[str, int]] = {}
+
+    def describe(self, room: str, sensor_id: str, source: dict) -> dict:
+        """One sensor, as an application is allowed to hear about it."""
+        modality = str(source.get("modality") or "sensor")
+        names = self._names.setdefault(room, {})
+        label = names.get(sensor_id)
+        if label is None:
+            counts = self._counts.setdefault(room, {})
+            counts[modality] = counts.get(modality, 0) + 1
+            label = f"{modality} {counts[modality]}"
+            names[sensor_id] = label
+        origin = "wavr"
+        for prefix, name in _SENSOR_SOURCE:
+            if sensor_id.startswith(prefix):
+                origin = name
+                break
+        return {
+            "label": label,
+            "modality": modality,
+            "source": origin,
+            # A boolean rather than a prefix a client has to remember to parse.
+            # The guarantee that simulated evidence never looks like real
+            # evidence is only worth something if it cannot be missed.
+            "simulated": origin == "simulated",
+        }
+
+    def forget(self, room: str) -> None:
+        self._names.pop(room, None)
+        self._counts.pop(room, None)
+
+
 class SpatialEvents:
     """Turns a stream of room states into events, remembering just enough.
 
@@ -97,6 +164,7 @@ class SpatialEvents:
     def __init__(self, on_event=None):
         self._prev: dict[str, dict] = {}
         self._on_event = on_event
+        self._sensors = _SensorNames()
 
     def observe(self, state: dict) -> list[dict]:
         """Diff one room state against the last, returning what changed.
@@ -111,6 +179,14 @@ class SpatialEvents:
             return []
         prev = self._prev.get(room)
         self._prev[room] = state
+        now = _fresh_sensors(state)
+        # Named as they APPEAR, not as they are first mentioned in an event —
+        # and before the first-sighting return below, so the room's original
+        # sensors are numbered from the frame that introduced them. Numbering
+        # them at emit time instead numbers from whichever one broke first, so
+        # the only working camera in the room comes out "camera 2".
+        for sid in sorted(now):
+            self._sensors.describe(room, sid, now[sid])
         if prev is None:
             # The first sighting of a room is not a change. Emitting one would
             # make every application see a burst of "everything just happened"
@@ -145,18 +221,19 @@ class SpatialEvents:
                  previous=prev.get("precision_level"),
                  how_to_improve=state.get("precision_next"))
 
-        before, now = _fresh_sensors(prev), _fresh_sensors(state)
+        before = _fresh_sensors(prev)
+        # `describe`, never the raw id: see the module docstring. The name is
+        # assigned on first sight and kept, so the offline event and the online
+        # event that follows it name the sensor identically.
         for sid in sorted(set(before) - set(now)):
-            emit(EV_SENSOR_OFFLINE, sensor_id=sid,
-                 modality=before[sid].get("modality", ""))
+            emit(EV_SENSOR_OFFLINE, **self._sensors.describe(room, sid, before[sid]))
         for sid in sorted(set(now) - set(before)):
-            emit(EV_SENSOR_ONLINE, sensor_id=sid,
-                 modality=now[sid].get("modality", ""))
+            emit(EV_SENSOR_ONLINE, **self._sensors.describe(room, sid, now[sid]))
 
         was, is_now = _disagreeing(prev), _disagreeing(state)
         if was != is_now:
             emit(EV_DISAGREEMENT if is_now else EV_AGREEMENT,
-                 sensors=[{"sensor_id": sid,
+                 sensors=[{**self._sensors.describe(room, sid, s),
                            "says": "occupied" if s.get("presence") else "empty"}
                           for sid, s in sorted(now.items())])
 
@@ -166,9 +243,12 @@ class SpatialEvents:
         return events
 
     def forget(self, room: str) -> None:
-        """Drop a room's baseline — for when it is deleted or renamed.
+        """Drop a room's baseline and its sensor names — deleted, or renamed.
 
         Without this, a renamed room's old entry would sit there forever and the
-        new name would look like a brand-new room on its next reading.
+        new name would look like a brand-new room on its next reading. The names
+        go with it: keeping them would number the next camera installed in a
+        deleted room "camera 4" for a room that has one.
         """
         self._prev.pop(room, None)
+        self._sensors.forget(room)

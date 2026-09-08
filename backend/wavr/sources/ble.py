@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable
 
-from wavr.events import Identity, SensingEvent
+from wavr.events import HOUSE_ROOM, Identity, SensingEvent
 
 
 def _norm(addr: str) -> str:
@@ -40,7 +40,7 @@ class BLESource:
 
     def __init__(self, known: dict[str, str],
                  scan: Callable[[], Awaitable[dict[str, int]]] | None = None,
-                 room: str = "casa", rssi_min: int = -80,
+                 room: str = HOUSE_ROOM, rssi_min: int = -80,
                  interval: float = 15.0, scan_window: float = 5.0,
                  grace: int = 2, present_confidence: float = 0.7,
                  emit_identity: bool = False,

@@ -1,4 +1,7 @@
-"""Camera person-localization geometry (roadmap spec A).
+"""Camera person-localization geometry.
+
+(Historically "roadmap spec A". `docs/ROADMAP.md` has since been deleted, so the
+letter points at nothing — kept here only so an old reference resolves.)
 
 Turns a CV *feet pixel* (bottom-centre of a YOLO person box) into a *floor point*
 in the house-map's metre frame, so a camera can place a person AT an (x, y) on the
@@ -13,13 +16,14 @@ COORDINATE FRAMES (load-bearing -- everything here is metres unless named `_px`)
     ((x1 + x2) / 2, y2).
 
   * FLOOR / HOUSE (metres): the SAME frame housemap.py polygons live in -- x right,
-    y down, top-left origin, one flat plane per level (housemap.py:21, DEFAULT_MAP).
+    y down, top-left origin, one flat plane per level (`housemap.DEFAULT_MAP`).
     Height (up) is a separate axis `h`; the floor is the plane h = 0.
 
   * ROOM-LOCAL (metres): what events.Target.x/y carry (events.py:9) and what the
-    radar/3D map renders (frontend placeDot, index.html:3206) -- an offset from the
-    room polygon's MIN corner. `to_room_local()` converts FLOOR -> ROOM-LOCAL so a
-    positioned Target drops straight into the existing render seam.
+    radar/3D map renders (`placeDot` in `frontend/js/housemap.js`, which draws at
+    `room.x + t.x`) -- an offset from the room polygon's MIN corner.
+    `to_room_local()` converts FLOOR -> ROOM-LOCAL so a positioned Target drops
+    straight into the existing render seam.
 
 WORLD AXES for the monocular ray (right-handed): X = floor-x, Y = floor-y, Z = up.
 A camera sits at C = (pos_x, pos_y, height); its optical axis has azimuth `yaw`
@@ -305,7 +309,7 @@ def monocular_floor_point(u: float, v: float, img_w: float, img_h: float,
 
 def polygon_min_corner(poly) -> tuple[float, float]:
     """(min_x, min_y) of a room polygon -- the origin the render uses for room-local
-    Target coords (frontend placeDot does room.x + t.x, index.html:3206)."""
+    Target coords (`placeDot` in `frontend/js/housemap.js` does room.x + t.x)."""
     xs = [float(p[0]) for p in poly]
     ys = [float(p[1]) for p in poly]
     return (min(xs), min(ys)) if xs and ys else (0.0, 0.0)

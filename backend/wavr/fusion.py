@@ -359,6 +359,10 @@ class FusionEngine:
                    "confidence": round(e.confidence, 3),
                    "age_s": round(age_s), "health": health,
                    "count": (e.count if modality in COUNTING_MODALITIES else None)}
+            # Carried so the share below can be worked out once `den` is final.
+            # Not published: `mass` is an internal magnitude and only its SHARE
+            # of the total means anything to a reader.
+            row["_mass"] = mass
             # Published ONLY when it actually changed the arithmetic. A
             # `reliability: 1.0` on every row is noise that trains a reader to
             # stop looking; a row that carries one is a row where the answer
@@ -380,6 +384,22 @@ class FusionEngine:
         # unchanged by this loop. None = no counting-capable source vouches for a number
         # here (unknown, not a fabricated 0). `live_count` is the CURRENT frame's count;
         # the FUSION-B latch below decides the RoomState's actual `person_count`.
+        # -- Each source's actual share of the vote ---------------------------
+        #
+        # Published because the dashboard was computing it from a COPY of
+        # `DEFAULT_WEIGHTS` kept in the frontend, which knows nothing about the
+        # freshness decay or the per-sensor reliability factor that also went
+        # into `mass`. So the evidence panel showed an authoritative-looking
+        # percentage that was wrong for exactly the sensors a person is looking
+        # at it about: the aging one and the measured-unreliable one.
+        #
+        # One producer. The share is a share of `den`, so it sums to 1 across
+        # the sources that voted, and a source with no mass reads 0 rather than
+        # being hidden — a sensor that contributed nothing is a fact worth
+        # seeing, not an absence.
+        for row in sources:
+            row["share"] = round(row.pop("_mass") / den, 3) if den > 0 else 0.0
+
         live_count: int | None = None
         live_count_ts = None   # the winning count event's OWN ts -- what the latch stamps with
         best_cw = -1.0
@@ -436,13 +456,25 @@ class FusionEngine:
                         or (live_count is not None and live_count > 0)
                         or house_present)
         occupied, pending_s = self._debounce_occupancy(room, raw_occupied, ref)
-        parts = [f"{s['modality']}: {'presente' if s['presence'] else 'vazio'}" for s in sources]
-        explanation = " · ".join(parts) + f" → {int(confidence * 100)}% ocupado"
+        # English at the source, because every human-facing string in this
+        # product is English at the source and the frontend's catalogue is
+        # keyed BY that English.
+        #
+        # This composed `presente`/`vazio`/`ocupado`/`confirmando saída` —
+        # Portuguese baked into the engine. It reached an English household
+        # verbatim in the room "Why?" panel, as
+        # `ble: vazio · network: vazio → 0% ocupado`, and it was equally
+        # unreachable for a Portuguese one: a catalogue keyed on English source
+        # strings has nothing to match against a Portuguese key. One decision,
+        # wrong in both languages.
+        parts = [f"{s['modality']}: {'present' if s['presence'] else 'empty'}"
+                 for s in sources]
+        explanation = " · ".join(parts) + f" → {int(confidence * 100)}% occupied"
         if pending_s is not None:
             # Confidence has dropped below threshold but the room is still HELD
             # occupied by the dwell -- show the countdown, do not hide the doubt.
             rem = math.ceil(pending_s)
-            explanation += f", confirmando saída {rem // 60}:{rem % 60:02d}"
+            explanation += f", confirming exit {rem // 60}:{rem % 60:02d}"
 
         best_targets: list = []
         best_w = -1.0

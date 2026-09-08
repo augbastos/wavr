@@ -30,12 +30,40 @@ surface, by anybody.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from wavr import simulator
 from wavr.contracts import version as contract_version
 from wavr.experience_manifest import ManifestError, parse, validate
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _restamp(step, ts: datetime):
+    """The same step, stamped when it is actually being fed in.
+
+    A scenario's steps carry `simulator.EPOCH + at_s`, a fixed 2026-01-01, so
+    two runs of the same story produce identical timestamps — which is what
+    makes a scenario assertable, and is right for the SCENARIO.
+
+    It is wrong for the ENGINE. Production's FusionEngine ages evidence against
+    the wall clock, so every simulated reading arrived roughly eight months
+    stale: `health: "dead"`, mass 0.0, and the room stayed vacant at 0%
+    confidence. The whole "run a scenario and watch Wavr react" onboarding
+    produced a house where nothing ever happened, and the test that covered it
+    passed because its fixture built a FusionEngine with an injected clock that
+    production never uses.
+
+    So the timeline is preserved and MOVED: `at_s` still says where a step sits
+    in the story, and `ts` says when that moment is arriving here.
+    """
+    return dataclasses.replace(
+        step, event=dataclasses.replace(step.event, ts=ts.isoformat()))
 
 # What a developer is told this Core speaks. Collected in one response rather
 # than left to be discovered a 404 at a time.
@@ -210,12 +238,24 @@ def build_router(*, enabled_fn, providers_fn, source_health_fn, anchors_fn,
                     "note": ("Running on its own timeline. Watch the dashboard, "
                              "or /ws/events.")}
 
+        # Instant replay: the whole story is fed at once, so it is stamped so
+        # that its LAST moment is now and the earlier ones sit behind it by
+        # exactly the gaps the scenario describes. Feeding it stamped in
+        # January instead is what made every scenario produce a vacant house.
+        #
+        # Ending at `now` rather than starting there matters: the state a
+        # caller asserts on is the state at the END of the story, and that one
+        # has to be FRESH or fusion has already decayed it before the response
+        # is written. Earlier steps ageing out is not a bug — a house really
+        # would have aged them.
+        end = _now()
         steps = []
         while True:
             step = run.next_step()
             if step is None:
                 break
-            await ingest_fn(step.event)
+            at = end - timedelta(seconds=max(0.0, scenario.duration_s - step.at_s))
+            await ingest_fn(_restamp(step, at).event)
             steps.append(step.to_dict())
         return {
             "scenario": key, "realtime": False, "steps": steps,
@@ -244,7 +284,11 @@ def build_router(*, enabled_fn, providers_fn, source_health_fn, anchors_fn,
             if gap:
                 await asyncio.sleep(gap)
             try:
-                await ingest_fn(step.event)
+                # Stamped NOW, not at the scenario's fixed epoch. This is the
+                # mode a person watches, and evidence stamped eight months ago
+                # is dead on arrival — the dashboard sat still through every
+                # scenario and looked like the feature did nothing.
+                await ingest_fn(_restamp(step, _now()).event)
             except Exception:      # noqa: BLE001 -- a scenario must not be able
                 return             # to take the Core down; stop the run instead
 

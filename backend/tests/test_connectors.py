@@ -16,7 +16,7 @@ CSRF = {"X-Wavr-Local": "1"}
 
 
 class _FakeNarrator:
-    def narrate(self, state, history):
+    def narrate(self, state, history, language=None):
         return "casa ocupada"
 
 

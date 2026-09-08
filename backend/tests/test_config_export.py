@@ -7,6 +7,7 @@ ones a person emails to a stranger, and the allowlists are only as good as the
 last person who added a field.
 """
 import json
+import sys
 
 import pytest
 
@@ -161,6 +162,46 @@ def test_a_bundle_includes_the_clock_estimates():
     assert bundle["clocks"]["unusable"] == ["home_assistant"]
 
 
+def test_the_bundle_carries_a_safe_space_fingerprint_not_the_join_secret():
+    """`space_id` is the credential `api_space.join_space` accepts to join
+    this Space — it belongs on the same list as a token, not a room name. A
+    supporter comparing two bundles from one household still needs to tell
+    they came from the same install; a one-way hash gives them that without
+    handing back the value the hash was made from."""
+    bundle = diagnostic_bundle(config=full_export(),
+                               space={"space_id": "the-real-join-secret-abc123"})
+    assert bundle["space_fingerprint"]
+    assert "the-real-join-secret-abc123" not in json.dumps(bundle)
+    assert bundle["space_fingerprint"].startswith("sp_")
+
+    # Stable across calls, so two bundles pulled a week apart from the same
+    # Core can be compared without a person retyping anything.
+    again = diagnostic_bundle(config=full_export(),
+                              space={"space_id": "the-real-join-secret-abc123"})
+    assert bundle["space_fingerprint"] == again["space_fingerprint"]
+
+    # And it changes with the Space, so it is not just a constant that always
+    # reads the same regardless of what was fed in.
+    other = diagnostic_bundle(config=full_export(),
+                              space={"space_id": "a-totally-different-space"})
+    assert other["space_fingerprint"] != bundle["space_fingerprint"]
+
+
+def test_a_bundle_with_no_space_has_no_fingerprint_rather_than_a_fake_one():
+    assert diagnostic_bundle(config=full_export())["space_fingerprint"] is None
+
+
+def test_the_bundle_reports_node_health_as_counts_not_names():
+    """The same "shape, not content" rule `config_shape` follows, applied to
+    nodes: a node's own name can carry a person's name, exactly like the
+    anchor-name leak this module's docstring already describes finding once."""
+    bundle = diagnostic_bundle(config=full_export())
+    assert bundle["nodes"]["count"] == 1
+    assert bundle["nodes"]["by_state"] == {"active": 1}
+    assert bundle["nodes"]["by_modality"] == {"pir": 1}
+    assert "Hall PIR" not in json.dumps(bundle["nodes"])
+
+
 # -- Importing ------------------------------------------------------------------
 
 def test_a_file_from_a_newer_wavr_is_refused_not_partially_read():
@@ -231,6 +272,7 @@ def test_every_secret_setting_is_actually_a_secret():
 def _client(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
     from wavr.app import create_app
+    from wavr.housemap import SAMPLE_MAP
     from wavr.camera_store import CameraStore
     from wavr.fusion import FusionEngine
     from wavr.hub import Hub
@@ -242,7 +284,13 @@ def _client(monkeypatch, tmp_path):
     # it becomes the default map for every other test in the run — which is
     # exactly what happened: three developer-mode tests started failing with
     # "kitchen is not a room in the default map", nowhere near the cause.
-    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
+    # Written out, not just pinned: the product's fallback map is empty now
+    # (a fresh install has no rooms), and this test exports a camera bound to
+    # one.
+    import json
+    _house = tmp_path / "house.json"
+    _house.write_text(json.dumps(SAMPLE_MAP), encoding="utf-8")
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(_house))
     app = create_app(sources=[], storage=Storage(":memory:"), hub=Hub(),
                      fusion=FusionEngine(), camera_store=CameraStore(":memory:"),
                      health_resolvers={}, health_check=lambda: True)
@@ -272,6 +320,166 @@ def test_a_real_bundle_carries_no_camera_url(monkeypatch, tmp_path):
                                      "rtsp_url": "rtsp://a:b@cam/s"})
         text = c.get("/api/diagnostics/bundle").text
         assert "rtsp://" not in text and "b@cam" not in text
+
+
+def _client_with_nodes(monkeypatch, tmp_path):
+    """`_client`, plus everything node enrollment needs — its own fixture
+    rather than a flag on `_client`, because turning on multidevice/nodes
+    pulls in three extra on-disk stores that every other test in this file has
+    no reason to carry."""
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+    from wavr.camera_store import CameraStore
+    from wavr.core_registry import CoreRegistry
+    from wavr.discovery_inbox import DiscoveryInbox
+    from wavr.fusion import FusionEngine
+    from wavr.housemap import SAMPLE_MAP
+    from wavr.hub import Hub
+    from wavr.settings_store import SettingsStore
+    from wavr.space_store import SpaceStore
+    from wavr.storage import Storage
+
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    monkeypatch.setenv("WAVR_NODES_ENABLED", "1")
+    db = str(tmp_path / "w.db")
+    monkeypatch.setenv("WAVR_DB", db)
+    _house = tmp_path / "house.json"
+    _house.write_text(json.dumps(SAMPLE_MAP), encoding="utf-8")
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(_house))
+    app = create_app(sources=[], storage=Storage(":memory:"), hub=Hub(),
+                     fusion=FusionEngine(), camera_store=CameraStore(":memory:"),
+                     health_resolvers={}, health_check=lambda: True,
+                     space_store=SpaceStore(db), core_registry=CoreRegistry(db),
+                     settings_store=SettingsStore(db),
+                     discovery_inbox=DiscoveryInbox(db))
+    return TestClient(app, headers={"X-Wavr-Local": "1"})
+
+
+def test_a_real_token_and_a_real_camera_password_never_leave_in_either_file(
+        monkeypatch, tmp_path):
+    """The test this whole module exists to make possible: seed a REAL node
+    bearer token (minted by the actual enrollment flow, not typed into a
+    fixture) and a REAL camera password into a running Core, then prove
+    neither string reaches either exported file. A secret that leaks into a
+    bundle somebody emails to a stranger is the worst defect this surface can
+    have.
+    """
+    with _client_with_nodes(monkeypatch, tmp_path) as c:
+        room = c.get("/api/house").json()["floors"][0]["rooms"][0]["name"]
+
+        camera_password = "N0tAPlaceholder-7f3c9d"
+        added = c.post("/api/cameras", json={
+            "name": "hall-cam", "room": room,
+            "rtsp_url": f"rtsp://admin:{camera_password}@192.168.1.9/stream"})
+        assert added.status_code == 200, added.text
+
+        req = c.post("/api/nodes/request",
+                     json={"name_hint": "esp32", "sensor_hint": "ld2450"})
+        assert req.status_code == 200, req.text
+        node_id = req.json()["node_id"]
+        request_id = req.json()["request_id"]
+
+        approved = c.post(f"/api/nodes/{node_id}/approve", json={
+            "name": "Hall radar", "sensor_type": "ld2450", "room": room})
+        assert approved.status_code == 200, approved.text
+
+        claimed = c.post("/api/nodes/claim", json={"request_id": request_id})
+        assert claimed.status_code == 200, claimed.text
+        node_token = claimed.json()["token"]
+        assert node_token, "the token must actually have been minted"
+
+        for path in ("/api/config/export", "/api/diagnostics/bundle"):
+            resp = c.get(path)
+            # A real 200 with the secret gone, not a 500 that merely refused
+            # to answer — the audit gate refusing IS a defence, but a test
+            # that also passes on a refusal is not proving the allowlist
+            # actually redacts anything.
+            assert resp.status_code == 200, (
+                f"{path} did not build cleanly: {resp.text[:200]}")
+            text = resp.text
+            assert camera_password not in text, f"camera password leaked via {path}"
+            assert node_token not in text, f"node token leaked via {path}"
+            assert "rtsp://" not in text, f"a raw camera URL leaked via {path}"
+
+
+def test_the_bundle_carries_network_reachability_from_an_injected_check(monkeypatch):
+    """Off the event loop, on demand, never able to crash the bundle — see
+    wavr.lan_reachability's own docstring. Injected here so this test never
+    shells out to the real Windows firewall, and `serves_the_lan`/`bound_host`/
+    `bound_port` are monkeypatched rather than read from real process state,
+    which is a module-level global another test in this same run may have
+    already changed."""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from wavr import lan_reachability
+    from wavr.api_config_export import build_router
+
+    monkeypatch.setattr(lan_reachability, "serves_the_lan", lambda: True)
+    monkeypatch.setattr(lan_reachability, "bound_host", lambda: "0.0.0.0")
+    monkeypatch.setattr(lan_reachability, "bound_port", lambda *a, **kw: 8000)
+
+    calls = []
+
+    def fake_check(program, port):
+        calls.append((program, port))
+        return SimpleNamespace(to_dict=lambda: {
+            "state": "blocked",
+            "reason": "an enabled inbound BLOCK rule matches this Core",
+            "rules": ["WavrCoreBlock"], "checked": True})
+
+    router = build_router(
+        gather_config=lambda: dict(space=None, house={}, cameras=[], nodes=[],
+                                   anchors=[], ha_mappings=[], providers=[],
+                                   settings=[], topology={}),
+        gather_bundle=lambda: {},
+        existing_rooms_fn=lambda: [], existing_anchors_fn=lambda: [],
+        require_local=lambda: None, require_scope=lambda scope: (lambda: None),
+        reachability_fn=fake_check)
+
+    app = FastAPI()
+    app.include_router(router)
+    body = TestClient(app).get("/api/diagnostics/bundle").json()
+
+    assert body["network_reachability"] == {
+        "state": "blocked",
+        "reason": "an enabled inbound BLOCK rule matches this Core",
+        "rules": ["WavrCoreBlock"], "checked": True,
+        "serves_the_lan": True, "bound_host": "0.0.0.0"}
+    assert calls == [(sys.executable, 8000)], (
+        "the Core's own listener, not a default, must reach the check")
+
+
+def test_a_failing_reachability_check_degrades_rather_than_500s():
+    """`lan_reachability.check` promises never to raise. This proves the
+    ROUTE keeps that promise even if a future check somehow does — an
+    unwired or broken firewall probe must not take the whole diagnostic
+    download down with it."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from wavr.api_config_export import build_router
+
+    def broken_check(program, port):
+        raise RuntimeError("netsh exploded")
+
+    router = build_router(
+        gather_config=lambda: dict(space=None, house={}, cameras=[], nodes=[],
+                                   anchors=[], ha_mappings=[], providers=[],
+                                   settings=[], topology={}),
+        gather_bundle=lambda: {},
+        existing_rooms_fn=lambda: [], existing_anchors_fn=lambda: [],
+        require_local=lambda: None, require_scope=lambda scope: (lambda: None),
+        reachability_fn=broken_check)
+
+    app = FastAPI()
+    app.include_router(router)
+    resp = TestClient(app).get("/api/diagnostics/bundle")
+    assert resp.status_code == 200
+    assert resp.json()["network_reachability"]["state"] == "unknown"
 
 
 def test_the_audit_is_a_gate_not_a_report(monkeypatch, tmp_path):

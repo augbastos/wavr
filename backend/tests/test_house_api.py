@@ -78,19 +78,19 @@ def test_default_house_map_persists_out_of_the_box(tmp_path, monkeypatch):
 
 
 def test_put_house_does_not_corrupt_default_map(tmp_path, monkeypatch):
-    # Security MUST-FIX regression: load_house_map returns the module-level DEFAULT_MAP
+    # Security MUST-FIX regression: load_house_map returns the module-level SAMPLE_MAP
     # object on any fallback, and put_house mutates _house in place (clear/update).
-    # create_app must deepcopy so a PUT never rewrites DEFAULT_MAP process-wide. Point
-    # WAVR_HOUSE_MAP at a not-yet-existing tmp file so _house starts as the DEFAULT_MAP
-    # fallback, PUT a different map, then assert DEFAULT_MAP is unchanged.
-    before = copy.deepcopy(housemap.DEFAULT_MAP)
+    # create_app must deepcopy so a PUT never rewrites SAMPLE_MAP process-wide. Point
+    # WAVR_HOUSE_MAP at a not-yet-existing tmp file so _house starts as the SAMPLE_MAP
+    # fallback, PUT a different map, then assert SAMPLE_MAP is unchanged.
+    before = copy.deepcopy(housemap.SAMPLE_MAP)
     monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
     c = TestClient(create_app(
         sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
         storage=Storage(":memory:"), camera_store=CameraStore(":memory:")))
     assert c.put("/api/house", json=_valid(), headers=CSRF).status_code == 200
-    assert housemap.DEFAULT_MAP == before                        # not mutated
-    assert len(housemap.DEFAULT_MAP["floors"][0]["rooms"]) == 3
+    assert housemap.SAMPLE_MAP == before                        # not mutated
+    assert len(housemap.SAMPLE_MAP["floors"][0]["rooms"]) == 3
 
 
 # === F2: PUT /api/house/room (phone "medir com o celular") =========================

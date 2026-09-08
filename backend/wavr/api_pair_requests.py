@@ -89,19 +89,28 @@ def build_pair_request_router(approvals, cert_fingerprint_fn) -> APIRouter:
     async def create_request(request: Request,
                              requester_name: str = Body(...),
                              platform: str | None = Body(None),
-                             reported_fp: str | None = Body(None)):
+                             reported_fp: str | None = Body(None),
+                             device_key: str | None = Body(None)):
         # Untrusted in-subnet caller, pre-token. The typed params above give a
         # clean 422 for a non-string field under pydantic v2 -- but NOT under
         # v1, which coerces. `_reject_coerced` makes both runtimes answer the
         # same way; everything else ("is there actually a name", length bounds)
         # is the manager's, which applies them before anything sits in memory.
         await _reject_coerced(request, "requester_name", "platform",
-                              "reported_fp")
+                              "reported_fp", "device_key")
         source_ip = request.client.host if request.client else None
+        # `device_key`: optional, client-hashed, "this is the same phone as
+        # last time". It is carried to the mint so re-pairing retires this
+        # device's earlier credentials instead of stacking another live key.
+        # An in-subnet caller could of course send somebody else's key -- but
+        # nothing is revoked until the OPERATOR approves this request by
+        # echoing its compare_code, so the gate that guards minting a token
+        # is the same gate that guards retiring one.
         try:
             request_id, compare_code = approvals.create(
                 requester_name, source_ip=source_ip,
-                platform=platform, reported_fp=reported_fp)
+                platform=platform, reported_fp=reported_fp,
+                device_key=device_key)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return {

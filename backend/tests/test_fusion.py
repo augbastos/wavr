@@ -60,7 +60,7 @@ def test_weak_lone_source_scores_below_strong_lone_source():
 
 def test_negative_source_confidence_is_clamped_in_fused_result():
     # A source reporting a negative confidence must not drive the fused
-    # confidence negative (e.g. an explanation of "-64% ocupado").
+    # confidence negative (e.g. an explanation of "-64% occupied").
     f = FusionEngine()
     rs = f.update(ev("sala", "wifi_csi", True, -3.0))
     assert 0.0 <= rs.confidence <= 1.0
@@ -90,7 +90,7 @@ def test_malformed_timestamp_does_not_cascade_and_kill_later_good_events():
     # this fixture's event declares no instance identity.
     assert rs.sources == [{"modality": "camera", "sensor_id": "", "presence": True,
                            "confidence": 0.9, "age_s": 0, "health": "fresh",
-                           "count": None}]
+                           "count": None, "share": 1.0}]
 
 
 def test_none_timestamp_does_not_cascade_and_kill_later_good_events():
@@ -135,7 +135,7 @@ def test_occupied_is_immediate_no_dwell_on_the_way_up():
     f = _lone()
     rs = f.update(_cam("sala", True, 0.6, 0))
     assert rs.occupied is True
-    assert "confirmando" not in rs.explanation
+    assert "confirming exit" not in rs.explanation
 
 
 def test_single_frame_dip_does_not_flip_room_vacant():
@@ -150,7 +150,7 @@ def test_single_frame_dip_does_not_flip_room_vacant():
     assert dip.occupied is True                    # HELD, not flipped
     assert dip.confidence < 0.5                     # confidence NOT debounced -- honest
     assert back.occupied is True
-    assert "confirmando" not in back.explanation    # pending cancelled on re-cross
+    assert "confirming exit" not in back.explanation    # pending cancelled on re-cross
 
 
 def test_pending_vacate_is_surfaced_in_the_explanation():
@@ -160,8 +160,8 @@ def test_pending_vacate_is_surfaced_in_the_explanation():
     f.update(_cam("sala", True, 0.6, 0))
     held = f.update(_cam("sala", False, 0.0, 1))
     assert held.occupied is True
-    assert "ocupado" in held.explanation
-    assert "confirmando" in held.explanation
+    assert "occupied" in held.explanation
+    assert "confirming exit" in held.explanation
 
 
 def test_vacate_grace_expires_flips_to_vacant():
@@ -173,7 +173,7 @@ def test_vacate_grace_expires_flips_to_vacant():
     gone = f.update(_cam("sala", False, 0.0, 60))   # 60 s since drop -> vacant
     assert held.occupied is True
     assert gone.occupied is False
-    assert "confirmando" not in gone.explanation
+    assert "confirming exit" not in gone.explanation
 
 
 def test_reoccupy_during_grace_resets_the_dwell():
@@ -186,7 +186,7 @@ def test_reoccupy_during_grace_resets_the_dwell():
     # Drop again; only 20 s later -> must still be held (grace restarted at 31 s).
     still = f.update(_cam("sala", False, 0.0, 51))
     assert still.occupied is True
-    assert "confirmando" in still.explanation
+    assert "confirming exit" in still.explanation
 
 
 def test_vacate_s_zero_disables_the_dwell():
@@ -195,7 +195,7 @@ def test_vacate_s_zero_disables_the_dwell():
     f.update(_cam("sala", True, 0.9, 0))
     gone = f.update(_cam("sala", False, 0.0, 1))
     assert gone.occupied is False
-    assert "confirmando" not in gone.explanation
+    assert "confirming exit" not in gone.explanation
 
 
 def test_single_frame_dip_emits_no_vacant_mqtt_edge():
@@ -220,8 +220,8 @@ def test_dwell_is_per_room_independent():
     f.update(_cam("sala", False, 0.0, 1))           # sala drops (held)
     quarto = f.update(_cam("quarto", True, 0.9, 2))  # quarto still present
     sala = f.state("sala")
-    assert quarto.occupied is True and "confirmando" not in quarto.explanation
-    assert sala.occupied is True and "confirmando" in sala.explanation
+    assert quarto.occupied is True and "confirming exit" not in quarto.explanation
+    assert sala.occupied is True and "confirming exit" in sala.explanation
 
 
 # ---------------------------------------------------------------------------

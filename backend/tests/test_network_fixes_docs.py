@@ -21,7 +21,8 @@ _ACTIONABLE = {
 
 
 def _html():
-    return _INDEX.read_text(encoding="utf-8")
+    from tests.frontend_source import ALL
+    return ALL          # index.html plus every module it loads
 
 
 def _fix_guide_keys(html):

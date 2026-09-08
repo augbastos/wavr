@@ -59,6 +59,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from wavr.events import HOUSE_ROOM
 from wavr.fusion import RESOLUTION_SCOPE
 from wavr.nodes import (
     STATE_ACTIVE, STATE_DISABLED, STATE_PENDING, STATE_REVOKED,
@@ -418,7 +419,14 @@ def rooms_without_coverage(rooms, coverage: list[SensorCoverage]) -> list[str]:
     so instead of an `else` branch someone can forget.
     """
     covered = set(by_room(coverage))
-    return [r for r in (rooms or []) if r not in covered]
+    # The whole-building pseudo-room is not a room with no sensor; it is not a
+    # room. It arrived here because `FusionEngine.rooms()` reports every scope
+    # it has ever fused, and the LAN scan reports into it on every default
+    # install -- so the Trust screen listed it as blind and said "Wavr cannot
+    # see this room", which reads as an errand: go and buy something for it.
+    # There is nothing to buy. It also inflated the "N of M rooms watched"
+    # denominator by one on every install that has ever seen a device.
+    return [r for r in (rooms or []) if r not in covered and r != HOUSE_ROOM]
 
 
 def best_precision(coverage: list[SensorCoverage]) -> str:
@@ -452,10 +460,15 @@ def summarize(rooms, coverage: list[SensorCoverage]) -> dict:
                 # switched off" is the case a bare sensor list hides.
                 "observing": any(c.observing for c in grouped[room]),
             }
-            for room in sorted(grouped)
+            for room in sorted(grouped) if room != HOUSE_ROOM
         ],
         "uncovered": rooms_without_coverage(rooms, coverage),
-        "house_wide": [c.to_dict() for c in coverage if not c.room],
+        # Coverage that is not about a room -- which is exactly what a sensor
+        # reporting into the whole-building pseudo-room is. Bluetooth on its
+        # default setting landed in `rooms` above and became a card named after
+        # a place nobody has; this key already existed and already means this.
+        "house_wide": [c.to_dict() for c in coverage
+                       if not c.room or c.room == HOUSE_ROOM],
         "note": ("A room in `uncovered` has no sensor at all — Wavr cannot see "
                  "it, which is not the same as it being empty. A room whose "
                  "`observing` is false has a sensor that is switched off or not "

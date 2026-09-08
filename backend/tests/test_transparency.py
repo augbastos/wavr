@@ -14,6 +14,7 @@ import json
 from fastapi.testclient import TestClient
 
 from wavr.app import create_app
+from wavr.housemap import SAMPLE_MAP
 from wavr.camera_store import CameraStore
 from wavr.connector_store import ConnectorStore
 from wavr.device_meta import DeviceMeta
@@ -39,7 +40,13 @@ def _client(**kwargs):
 
 def test_default_shape_and_all_egress_off(monkeypatch, tmp_path):
     monkeypatch.setenv("WAVR_DB", ":memory:")
-    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nonexistent.json"))  # -> DEFAULT_MAP
+    # WRITE the sample plan. Naming a nonexistent file used to reach a
+    # three-room fallback; the fallback is empty now, because a fresh install
+    # has no rooms, so a test that counts rooms has to supply them.
+    import json
+    _house = tmp_path / "house.json"
+    _house.write_text(json.dumps(SAMPLE_MAP), encoding="utf-8")
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(_house))
     with _client() as c:
         r = c.get("/api/transparency")
         assert r.status_code == 200

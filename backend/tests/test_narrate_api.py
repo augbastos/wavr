@@ -19,7 +19,7 @@ def _client(narrator=None):
     return TestClient(app, headers={"X-Wavr-Local": "1"})
 
 class _FakeNarrator:
-    def narrate(self, state, history):
+    def narrate(self, state, history, language=None):
         return "Casa vazia no momento."
 
 def test_narrate_returns_text_when_configured():
@@ -40,7 +40,7 @@ def test_narrate_requires_local_header():
 
 def test_narrate_502_on_generator_error():
     class _Boom:
-        def narrate(self, state, history):
+        def narrate(self, state, history, language=None):
             raise RuntimeError("gemini down")
     with _client(narrator=_Boom()) as c:
         assert c.post("/api/narrate").status_code == 502

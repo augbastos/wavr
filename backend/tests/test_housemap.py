@@ -1,11 +1,11 @@
-from wavr.housemap import DEFAULT_MAP, load_house_map, room_names, room_polygon
+from wavr.housemap import DEFAULT_MAP, SAMPLE_MAP, load_house_map, room_names, room_polygon
 
 
 def test_default_map_is_v2():
-    assert DEFAULT_MAP["version"] == 2
-    assert DEFAULT_MAP["units"] == "m"
-    assert isinstance(DEFAULT_MAP["floors"], list) and DEFAULT_MAP["floors"]
-    f0 = DEFAULT_MAP["floors"][0]
+    assert SAMPLE_MAP["version"] == 2
+    assert SAMPLE_MAP["units"] == "m"
+    assert isinstance(SAMPLE_MAP["floors"], list) and SAMPLE_MAP["floors"]
+    f0 = SAMPLE_MAP["floors"][0]
     assert f0["level"] == 0
     assert all("polygon" in r for r in f0["rooms"])
 
@@ -28,10 +28,21 @@ def test_v1_rectangles_migrate_to_v2_polygons(tmp_path):
     assert room["polygon"] == [[0, 0], [4, 0], [4, 3], [0, 3]]
 
 
-def test_malformed_falls_back_to_default(tmp_path):
+def test_malformed_falls_back_to_an_empty_plan(tmp_path):
+    """The fallback is DEFAULT_MAP, and DEFAULT_MAP has no rooms.
+
+    It used to be a three-room Portuguese house, which made "unreadable file"
+    indistinguishable from "a house somebody drew" — and shipped those three
+    invented rooms to every real install. An unreadable map now yields a plan
+    with a floor and nothing on it, which is the truth: Wavr does not know this
+    person's rooms.
+    """
     p = tmp_path / "bad.json"
     p.write_text("{ not json")
-    assert load_house_map(str(p)) == DEFAULT_MAP
+    got = load_house_map(str(p))
+    assert got == DEFAULT_MAP
+    assert got["floors"][0]["rooms"] == []
+    assert got != SAMPLE_MAP
 
 
 def test_room_names_flattens_v2_across_floors():
@@ -47,12 +58,12 @@ def test_room_names_tolerates_v1():
 
 
 def test_room_polygon_returns_named_polygon():
-    poly = room_polygon(DEFAULT_MAP, "quarto")
+    poly = room_polygon(SAMPLE_MAP, "quarto")
     assert poly == [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]
 
 
 def test_room_polygon_unknown_room_is_none():
-    assert room_polygon(DEFAULT_MAP, "no-such-room") is None
+    assert room_polygon(SAMPLE_MAP, "no-such-room") is None
 
 
 def test_room_polygon_level_filter():
@@ -85,7 +96,7 @@ def _valid():
 
 
 def test_default_map_validates():
-    validate_house_map(DEFAULT_MAP)          # must not raise
+    validate_house_map(SAMPLE_MAP)          # must not raise
 
 
 def test_valid_doc_passes():
@@ -208,9 +219,9 @@ def test_save_empty_path_raises(tmp_path):
 
 def test_editor_emitted_doc_still_accepted():
     # The exact shape frontend/index.html's DEMO_HOUSE / saveHouseDoc() emits (mirrors
-    # DEFAULT_MAP): top-level {version,units,floors}, floor {id,name,level,rooms,walls,
+    # SAMPLE_MAP): top-level {version,units,floors}, floor {id,name,level,rooms,walls,
     # features,backdrop}, room {id,name,polygon}. Must NOT be broken by the new bounds.
-    validate_house_map(DEFAULT_MAP)
+    validate_house_map(SAMPLE_MAP)
     validate_house_map(_valid())
 
 

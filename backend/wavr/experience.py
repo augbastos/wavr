@@ -248,26 +248,64 @@ def redact(body: dict, scopes) -> dict:
     return out
 
 
-def _room_capabilities(coverage_rows, anchors, devices) -> tuple[str, ...]:
+# A live source's freshness vocabulary is not the coverage census's. `fresh`
+# and `stale` both still carry weight in fusion; `dead` carries none, and
+# neither do the error labels.
+_LIVE_OK = frozenset({"fresh", "stale"})
+
+
+def _capability_from(level: str, caps: set) -> None:
+    if level in ("room", "count", "position"):
+        caps.add(CAP_PRESENCE)
+    if level in ("count", "position"):
+        caps.add(CAP_COUNT)
+    if level == "position":
+        caps.add(CAP_POSITION)
+
+
+def _room_capabilities(coverage_rows, anchors, devices,
+                       room_state=None) -> tuple[str, ...]:
     """What this room can currently support, from what is actually working.
 
     Built from sensors that are OBSERVING, not from sensors that exist. A camera
     that is switched off makes the room watchable, not watched, and an
     application told it has `count` in a room whose only counting sensor is dark
     will show a headcount that never changes.
+
+    ## Two censuses, and why one of them was not enough
+
+    `coverage_rows` is a HARDWARE inventory — the cameras and nodes this Core
+    owns. It is silent about every other way evidence arrives: Home Assistant
+    motion sensors, an external provider posting to
+    `POST /api/providers/{id}/observations`, the simulator.
+
+    Reading only that census made one response contradict itself. It carried
+    `occupied: true, confidence: 0.665, precision: "room"` beside
+    `capabilities: []`, `sensors: []` and "No sensor covers sala. Wavr cannot
+    tell whether anybody is here." Every SDK's documented guard —
+    `room.can("presence")` — was therefore false for a room Wavr was actively
+    sensing, so a correctly written application refused to act on it, and an
+    agent reading the MCP coverage tool reported that nothing was watching a
+    kitchen Home Assistant was watching.
+
+    So the live `room_state` is unioned in: its `sources[]` are what is feeding
+    fusion right now, whatever the hardware census knows about them. A
+    capability claimed here still means OBSERVED — a `dead` source contributes
+    nothing here, exactly as it contributes nothing to the confidence.
     """
     caps: set[str] = set()
     for row in coverage_rows or []:
         if row.get("health") != _HEALTH_OK:
             continue
-        level = row.get("precision_level") or RESOLUTION_SCOPE.get(
-            row.get("modality", ""), "house")
-        if level in ("room", "count", "position"):
-            caps.add(CAP_PRESENCE)
-        if level in ("count", "position"):
-            caps.add(CAP_COUNT)
-        if level == "position":
-            caps.add(CAP_POSITION)
+        _capability_from(
+            row.get("precision_level")
+            or RESOLUTION_SCOPE.get(row.get("modality", ""), "house"), caps)
+    for src in (room_state or {}).get("sources") or []:
+        if src.get("health") not in _LIVE_OK:
+            continue
+        _capability_from(
+            src.get("precision_level")
+            or RESOLUTION_SCOPE.get(src.get("modality", ""), "house"), caps)
     if anchors:
         caps.add(CAP_ANCHORS)
     for d in devices or []:
@@ -287,13 +325,30 @@ def _limitations(room, room_state, coverage_rows, capabilities) -> tuple[str, ..
     out: list[str] = []
     rows = list(coverage_rows or [])
     working = [r for r in rows if r.get("health") == _HEALTH_OK]
+    # Evidence arriving from somewhere the hardware census cannot see: Home
+    # Assistant, an external provider, the simulator. Its presence is what
+    # makes "no sensor covers this room" a false sentence to print beside a
+    # confidence, in the same payload, about the same room.
+    live = [s for s in ((room_state or {}).get("sources") or [])
+            if s.get("health") in _LIVE_OK]
 
-    if not rows:
+    if not rows and not live:
         out.append(f"No sensor covers {room}. Wavr cannot tell whether anybody "
                    f"is here.")
         return tuple(out)
 
-    if not working:
+    if not rows:
+        # Sensed, but by nothing this Core owns. Say that, rather than either
+        # of the two lies available: "no sensor covers this room" (it is
+        # covered) or silence (a person cannot tell where the reading came
+        # from, and cannot go and fix it if it stops).
+        what = ", ".join(sorted({str(s.get("modality") or "?") for s in live}))
+        out.append(f"{room} is sensed by an integration rather than by a "
+                   f"sensor Wavr manages ({what}). If it stops reporting, the "
+                   f"fix is over there, not here.")
+        return tuple(out)
+
+    if not working and not live:
         broken = len(rows)
         out.append(
             f"{'The sensor' if broken == 1 else f'All {broken} sensors'} in "
@@ -460,7 +515,11 @@ def build_context(*, room: str, space=None, room_state=None, coverage_rows=(),
     room_anchors = [dict(a) for a in (anchors or [])
                     if str(a.get("room") or "") == room]
     dev = _visible_devices(devices, room)
-    caps = _room_capabilities(rows, room_anchors, dev)
+    # `rs` as well as `rows`: the hardware census does not know about evidence
+    # arriving through Home Assistant, an external provider or the simulator,
+    # and a capability list built from it alone told every SDK that a room Wavr
+    # was actively sensing had no sensing at all.
+    caps = _room_capabilities(rows, room_anchors, dev, rs)
     return ExperienceContext(
         space_id=(space or {}).get("space_id", ""),
         space_name=(space or {}).get("name", ""),

@@ -3,6 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
+# The whole-building pseudo-room.
+#
+# Evidence that cannot localise reports here: the LAN scan (one antenna sees the
+# house, never a room) and Bluetooth on its default setting. That is the DEFAULT
+# sensing level, so on a fresh install it is the only "room" anything reports
+# into -- and it is not a room. Nobody stands in it, nothing can cover it, and
+# no sensor can be bought for it.
+#
+# `frontend/js/shared.js` holds the same constant for the same reason: four
+# modules had written the literal by hand, and the fifth forgot. This is the
+# Python half of that. `test_vocabulary.py` requires the two to agree.
+HOUSE_ROOM = "casa"
+
 
 @dataclass(frozen=True)
 class Target:

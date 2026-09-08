@@ -35,8 +35,8 @@ from wavr.discovery_inbox import (
     DiscoveryError, KIND_CAMERA_FOUND, STATUS_ACCEPTED, STATUS_DISMISSED)
 from wavr.settings_store import SPECS_BY_KEY, SettingsError
 from wavr.space_store import (
-    PERSON_ROLES, ROLE_GUEST, ROLE_OWNER, SPACE_KINDS, SpaceError,
-    device_role_for_person)
+    DEFAULT_SPACE_KIND, PERSON_ROLES, ROLE_GUEST, ROLE_OWNER, SPACE_KINDS,
+    SpaceError, device_role_for_person)
 
 
 def _deps_not_wired():
@@ -58,13 +58,51 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
                        instance_name: str = "Wavr", port: int = 8000,
                        local_ip: str = "127.0.0.1", cert_fingerprint: str = "",
                        browse_peers=None, scheme: str = "http",
-                       hostname: str = "wavr.local", deps=None) -> APIRouter:
+                       hostname: str = "wavr.local", seed_room=None,
+                       deps=None) -> APIRouter:
     """The first-run flow. Every route here is loopback-root-gated by app.py.
 
     `browse_peers` is injected (defaults to a no-op) so the nearby-Space lookup
     is testable without zeroconf and cannot 500 a fresh install that lacks the
-    `[mdns]` extra."""
+    `[mdns]` extra.
+
+    `seed_room(name) -> bool` puts the room the operator names onto an empty
+    floor plan. Injected for the same reason: this router owns no filesystem
+    path, and a setup flow that writes files directly cannot be tested without
+    one.
+
+    `scheme` and `cert_fingerprint` each take a plain value OR a zero-arg
+    provider. app.py passes providers, because both answers depend on the
+    connection a request arrived on and this router is built at startup, before
+    any connection exists. Passing `cert_fingerprint()`'s value here once is
+    exactly how a Core that generated a certificate during a past multidevice
+    run went on serving that fingerprint forever over plain HTTP -- to a screen
+    that asks the operator to compare it against their phone's certificate
+    warning, which a plain-HTTP page never shows."""
     router = APIRouter(dependencies=deps if deps is not None else _deps_not_wired())
+
+    def _scheme() -> str:
+        return scheme() if callable(scheme) else scheme
+
+    def _cert_fp() -> str:
+        return (cert_fingerprint() if callable(cert_fingerprint)
+                else cert_fingerprint) or ""
+
+    def _port() -> int:
+        """The port, resolved per request for the same reason as the host: a
+        launcher can state it on the command line where the configuration
+        never sees it."""
+        return (port() if callable(port) else port) or 8000
+
+    def _host() -> str:
+        """The address to hand another device, resolved per request.
+
+        A provider for the same reason as `_scheme`: whether the LAN address is
+        the truth depends on the interface the launcher bound, which is not
+        known when this router is built. A plain string still works, which is
+        what tests pass.
+        """
+        return (local_ip() if callable(local_ip) else local_ip) or "127.0.0.1"
 
     @router.get("/api/setup/status")
     async def setup_status():
@@ -93,18 +131,20 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
             "this_core": me.to_dict() if me else None,
             "people": len(space_store.list_people()) if space else 0,
             "instance_name": instance_name,
-            # The scheme is passed in rather than assumed: `serve.py` only wires
-            # TLS when multidevice is on, so a default install really is plain
-            # HTTP. Printing an https:// URL that cannot connect is a small lie
-            # that costs a first-time user ten confused minutes.
-            "lan_url": f"{scheme}://{local_ip}:{port}",
+            # The scheme is read off the connection rather than assumed. It is
+            # not enough to read `WAVR_MULTIDEVICE`: that flag says TLS was
+            # asked for, and only `serve.py` acts on it -- the Dockerfile and
+            # scripts/wavr.ps1 launch uvicorn directly and serve plain HTTP with
+            # the flag set. Printing an https:// URL that cannot connect is a
+            # small lie that costs a first-time user ten confused minutes.
+            "lan_url": f"{_scheme()}://{_host()}:{_port()}",
             # The name-based route. Resolvable wherever mDNS is (iOS, macOS, most
             # modern Androids, Linux with Avahi) and the reason a phone rarely
             # needs the numeric address. Offered as a convenience, never as the
             # only way in -- the QR on the pairing screen is the path that always
             # works and carries the certificate fingerprint with it.
-            "lan_hostname_url": f"{scheme}://{hostname}:{port}",
-            "cert_fingerprint": cert_fingerprint,
+            "lan_hostname_url": f"{_scheme()}://{hostname}:{_port()}",
+            "cert_fingerprint": _cert_fp(),
         }
 
     @router.post("/api/setup/scan")
@@ -180,8 +220,8 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
             battery = manifest.capability("battery")
             core = cores.register(
                 core_id, space.space_id, instance_name,
-                base_url=f"{scheme}://{local_ip}:{port}",
-                cert_fingerprint=cert_fingerprint, platform=manifest.platform,
+                base_url=f"{_scheme()}://{_host()}:{_port()}",
+                cert_fingerprint=_cert_fp(), platform=manifest.platform,
                 # A battery-powered Core is portable until told otherwise (SS31).
                 portable=bool(battery), room=room, is_self=True,
                 health={"compute_tier": manifest.compute_tier})
@@ -194,13 +234,22 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
             space_store.destroy_space()
             raise _bad(exc, 500) from None
 
+        # The room the operator just named becomes the first room on the floor
+        # plan. It was already being recorded against the Core; the map ignored
+        # it and showed `DEFAULT_MAP` instead, which until now was a fictional
+        # three-room house. AFTER the rollback block on purpose: a plan that
+        # cannot be written is a map to draw later, not a reason to refuse to
+        # create the Space.
+        seeded = bool(seed_room and room and seed_room(room))
+
         return {"space": space.to_dict(), "owner": owner.to_dict(),
                 "core": core.to_dict(), "manifest": manifest.to_dict(),
-                "functions": sorted(wanted)}
+                "functions": sorted(wanted), "room_seeded": seeded}
 
     @router.post("/api/setup/join-space")
     async def join_space(space_id: str = Body(...), name: str = Body(...),
                          owner_name: str = Body("Owner"),
+                         kind: str = Body(DEFAULT_SPACE_KIND),
                          functions: list[str] = Body(None)):
         """Adopt an EXISTING Space's identity on this Core.
 
@@ -212,9 +261,18 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
         Note what this does NOT do: it does not synchronise state from the other
         Core. Cross-Core state replication is not implemented, and a standby
         that has never synced is honestly reported as such rather than being
-        presented as a warm spare it is not."""
+        presented as a warm spare it is not.
+
+        `kind` is asked for, not assumed. It was hardcoded `"home"`, so a
+        clinic's or an office's second Core recorded a DIFFERENT kind for the
+        SAME Space, and the answer to "what is this place" then depended on
+        which Core the phone happened to be paired to. The joiner is already
+        being asked for the name for exactly this reason — the Core cannot
+        discover it, because joining does not synchronise state — and the kind
+        is the same class of fact.
+        """
         try:
-            space = space_store.create_space(name, "home", space_id=space_id)
+            space = space_store.create_space(name, kind, space_id=space_id)
             space_store.add_person(owner_name, ROLE_OWNER)
         except SpaceError as exc:
             raise _bad(exc) from None
@@ -222,8 +280,8 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
         core = cores.register(
             f"core-{space.space_id[:8]}-{instance_name[:8].lower()}",
             space.space_id, instance_name,
-            base_url=f"{scheme}://{local_ip}:{port}",
-            cert_fingerprint=cert_fingerprint, platform=manifest.platform,
+            base_url=f"{_scheme()}://{_host()}:{_port()}",
+            cert_fingerprint=_cert_fp(), platform=manifest.platform,
             portable=bool(manifest.capability("battery")), is_self=True,
             health={"compute_tier": manifest.compute_tier, "synced": False})
         return {"space": space.to_dict(), "core": core.to_dict(),
@@ -278,8 +336,8 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
             manifest = scan_host()
             core_id = f"core-{space.space_id[:16]}"
             cores.register(core_id, space.space_id, instance_name,
-                           base_url=f"{scheme}://{local_ip}:{port}",
-                           cert_fingerprint=cert_fingerprint,
+                           base_url=f"{_scheme()}://{_host()}:{_port()}",
+                           cert_fingerprint=_cert_fp(),
                            platform=manifest.platform,
                            portable=bool(manifest.capability("battery")),
                            is_self=True,
@@ -364,6 +422,28 @@ def build_space_router(space_store, cores, *, devices=None,
     async def update_space(name: str = Body(...), kind: str = Body(None)):
         try:
             return space_store.rename_space(name, kind).to_dict()
+        except SpaceError as exc:
+            raise _bad(exc) from None
+
+    @router.put("/api/space/policy")
+    async def update_policy(policy: dict = Body(..., embed=True)):
+        """Per-Space policy, which the API has been advertising and nothing
+        could fill.
+
+        `GET /api/space` returned `"policy": {}` on every install forever,
+        because `SpaceStore.set_policy` existed with its own bounded-JSON
+        validation and had no route and no caller. An integrator reading the
+        API took it for a real configuration surface and built against a field
+        the product could not populate — the sort of claim this codebase
+        removes rather than leaves standing.
+
+        Two ways to make it true: expose it, or drop the column, the method and
+        the key. Exposing it is the smaller change and the honest one — the
+        storage, the size cap and the round-trip were already written and
+        tested; only the door was missing.
+        """
+        try:
+            return space_store.set_policy(policy).to_dict()
         except SpaceError as exc:
             raise _bad(exc) from None
 

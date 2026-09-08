@@ -17,10 +17,30 @@ _DEVICE = {
 }
 
 # PRIVACY INVARIANT (hard): discovery + the state topics it points at expose ONLY
-# occupancy + confidence, and (Build C4) the three DERIVED trigger signals below --
-# unrecognized-person counts, an occupancy-anomaly bool, and house-status
-# captions/severity. Positions (x/y), targets, pose and vitals are NEVER
-# referenced in any topic, template, or payload built here. Keep it that way.
+# occupancy, confidence, a person COUNT, the precision-ladder rung label, the
+# room's sensor-health/coverage rollup, and (Build C4) the three DERIVED trigger
+# signals below -- unrecognized-person counts, an occupancy-anomaly bool, and
+# house-status captions/severity. Every one of those is a count, a boolean or a
+# capability label. Positions (x/y), targets, pose and vitals are NEVER referenced
+# in any topic, template, or payload built here. Keep it that way.
+
+# The room-state attribute set: the facts the fused RoomState and the coverage
+# rollup already carry, surfaced on the occupancy entity so an automation can read
+# them without a second subscription. `.get(...)` throughout, and `available`
+# defaulting to true, so a RETAINED payload written by an older Wavr (which had
+# none of these keys) still renders correctly instead of going blank.
+# `precision_pct` is the ordinal rung (0/25/50/75/100), not a certainty and not
+# the rung's enum label -- see `wavr.rules.precision_pct` for why the label stays
+# off the wire.
+_ROOM_ATTRIBUTES_TEMPLATE = (
+    "{{ {'confidence': value_json.confidence,"
+    " 'person_count': value_json.get('person_count'),"
+    " 'precision_pct': value_json.get('precision_pct'),"
+    " 'sensors': value_json.get('sensors'),"
+    " 'sensors_observing': value_json.get('observing'),"
+    " 'sensor_health': value_json.get('health'),"
+    " 'available': value_json.get('available', true)} | tojson }}"
+)
 
 
 def publish_ha_discovery(
@@ -38,8 +58,13 @@ def publish_ha_discovery(
 
     Per room it emits:
       - a `binary_sensor` (device_class ``occupancy``) reading the retained room
-        state topic, extracting the ``occupied`` boolean into ON/OFF;
-      - a `sensor` for ``confidence`` (%), reading the same state topic;
+        state topic, extracting the ``occupied`` boolean into ON/OFF -- or into
+        HA's ``None`` sentinel (state *unknown*, NOT "Clear") when that room's
+        ``available`` flag is false, i.e. when nothing is watching it. Its
+        ``json_attributes`` carry the rest of the export: ``person_count``,
+        ``precision_pct``, and the room's sensor-health/coverage rollup;
+      - a `sensor` for ``confidence`` (%), reading the same state topic, likewise
+        going *unknown* rather than reporting a confidence for a blind room;
       - Build C4: a `binary_sensor` (device_class ``safety``, ON = unrecognized
         person present) reading Watch's A2 per-room intrusion topic;
       - Build C4: a `binary_sensor` (device_class ``problem``, ON = unusual for
@@ -54,6 +79,17 @@ def publish_ha_discovery(
     Every payload also declares an ``availability_topic`` (``{prefix}/status``):
     the publisher's retained Last Will flips it to ``offline`` when Wavr drops off,
     so HA renders these entities *unavailable* instead of showing stale presence.
+    That topic is HOUSE-scoped -- it answers "is Wavr running?", never "can Wavr
+    see the kitchen?". The room-scoped half of the same question rides on the
+    state payload's ``available`` flag (above), which is what turns a blind room
+    into *unknown* instead of "Clear"; the rules engine also publishes it as a
+    plain retained online/offline on `mqtt_topics.room_availability_topic` for
+    non-HA subscribers. Folding that per-room topic into HA's own availability
+    machinery needs the discovery ``availability`` LIST (with
+    ``availability_mode: all``), which HA documents as mutually exclusive with
+    ``availability_topic`` -- so it is deliberately NOT used here while every
+    payload is contracted to carry the single-topic form.
+
     The room segment of every state topic is slugged (via `mqtt_topics`) IDENTICALLY
     to what the rules engine publishes -- so a room name with an MQTT wildcard
     (`+`/`#`) or `/` still yields a legal, matching topic."""
@@ -70,7 +106,13 @@ def publish_ha_discovery(
         state_topic = room_state_topic(prefix, room)
 
         # Occupancy: pull the `occupied` boolean out of the retained JSON and map
-        # it to ON/OFF (HA's binary_sensor payload contract).
+        # it to ON/OFF (HA's binary_sensor payload contract) -- EXCEPT when the
+        # room is unavailable or `occupied` is null, where the template renders
+        # HA's `None` sentinel and the entity reads *unknown*. That branch is the
+        # whole point: HA draws a plain `off` occupancy sensor as "Clear", so a
+        # room whose only camera died was indistinguishable from a room a healthy
+        # sensor confirmed empty. Unknown is the honest state -- Wavr is online,
+        # it simply cannot see in there.
         publish(
             f"{discovery_prefix}/binary_sensor/wavr_{oid}/config",
             json.dumps({
@@ -78,23 +120,36 @@ def publish_ha_discovery(
                 "unique_id": f"wavr_{oid}_occupancy",
                 "device_class": "occupancy",
                 "state_topic": state_topic,
-                "value_template": "{{ 'ON' if value_json.occupied else 'OFF' }}",
+                "value_template": (
+                    "{{ 'None' if value_json.occupied is none"
+                    " or not value_json.get('available', true)"
+                    " else ('ON' if value_json.occupied else 'OFF') }}"
+                ),
                 "payload_on": "ON",
                 "payload_off": "OFF",
+                # person_count, the precision ladder and the sensor-health /
+                # coverage rollup, on the entity a user already has open.
+                "json_attributes_topic": state_topic,
+                "json_attributes_template": _ROOM_ATTRIBUTES_TEMPLATE,
                 "device": _DEVICE,
                 **availability,
             }),
             True,   # retained: HA picks up the config even if it starts after Wavr
         )
 
-        # Confidence: same retained state topic, exposed as a 0-100 % reading.
+        # Confidence: same retained state topic, exposed as a 0-100 % reading --
+        # and *unknown* for a blind room, because "how sure are you nobody is
+        # here" has no answer when nothing looked.
         publish(
             f"{discovery_prefix}/sensor/wavr_{oid}_confidence/config",
             json.dumps({
                 "name": f"{room} confidence",
                 "unique_id": f"wavr_{oid}_confidence",
                 "state_topic": state_topic,
-                "value_template": "{{ (value_json.confidence * 100) | round(0) }}",
+                "value_template": (
+                    "{{ 'None' if not value_json.get('available', true)"
+                    " else ((value_json.confidence * 100) | round(0)) }}"
+                ),
                 "unit_of_measurement": "%",
                 "device": _DEVICE,
                 **availability,

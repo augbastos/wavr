@@ -524,7 +524,7 @@ async def test_camera_emits_positioned_target_end_to_end(monkeypatch):
     from wavr.localize import make_localizer, MountPose
     monkeypatch.setattr(_cam, "_pose_model",
                         lambda: (lambda frame, **kw: [_pose_result_with_box((600.0, 300.0, 700.0, 700.0))]))
-    # quarto polygon from DEFAULT_MAP; a mount prior -> monocular estimate.
+    # quarto polygon from SAMPLE_MAP; a mount prior -> monocular estimate.
     poly = [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]
     loc = make_localizer(poly, mount=MountPose(pos_x=4.2, pos_y=0.0, height=2.4,
                                                tilt_deg=40.0, yaw_deg=45.0, hfov_deg=90.0))
@@ -549,7 +549,7 @@ def test_camera_factory_enables_pose_when_calibrated():
     from wavr.app import _camera_factory
     from wavr.config import load_config
     from wavr.localize import MountPose
-    from wavr.housemap import DEFAULT_MAP
+    from wavr.housemap import SAMPLE_MAP
     cfg = load_config()
     cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": 0.4}
 
@@ -561,12 +561,12 @@ def test_camera_factory_enables_pose_when_calibrated():
 
     calibrated = _Calib({"mount": MountPose(pos_x=4.2, pos_y=0.0), "homography": None,
                          "img_w": None, "img_h": None})
-    src = _camera_factory(cam, cfg, None, calibrated, DEFAULT_MAP)()
+    src = _camera_factory(cam, cfg, None, calibrated, SAMPLE_MAP)()
     assert src._pose is True
     assert src._pose_detect is not None
 
     uncalibrated = _Calib(None)
-    src2 = _camera_factory(cam, cfg, None, uncalibrated, DEFAULT_MAP)()
+    src2 = _camera_factory(cam, cfg, None, uncalibrated, SAMPLE_MAP)()
     assert src2._pose is False           # no calibration -> unchanged, room-centred
 
 

@@ -105,7 +105,8 @@ class CapabilityManifest:
     ram_mb: int | None = None
     cpu_count: int | None = None
     compute_tier: str = TIER_LOW
-    # Free-form, human-facing. "Acer a laptop", "Raspberry Pi 5 Model B".
+    # Free-form, human-facing: whatever the device calls itself.
+    # e.g. "Raspberry Pi 5 Model B", "Galaxy S24", "ThinkCentre M75q".
     model: str = ""
     # Protocol version this manifest was minted under. Lets a Core reject or
     # down-convert a manifest from a future Node instead of misreading it.
@@ -657,6 +658,19 @@ _LABELS = {
 }
 
 
+def _camera_inference_available() -> bool:
+    """Can THIS build actually run person detection on a camera frame?
+
+    Not "is a camera present" -- whether the code that would look at the frame
+    shipped. The frozen desktop Core excludes `ultralytics` and `torch` on
+    purpose (see `desktop/sidecar/wavr-core.spec`), so on that build the answer
+    is no however many cameras are plugged in. Import, do not guess: an extra
+    can be installed later and this must not be a compile-time constant.
+    """
+    import importlib.util
+    return importlib.util.find_spec("ultralytics") is not None
+
+
 def recommend(manifest: CapabilityManifest, space_has_core: bool = False) -> Recommendation:
     """Turn a manifest into a proposed set of functions.
 
@@ -677,7 +691,17 @@ def recommend(manifest: CapabilityManifest, space_has_core: bool = False) -> Rec
     if can_core and not space_has_core:
         functions.append(ROLE_CORE)
         if tier == TIER_HIGH:
-            reasons.append("Plenty of memory and CPU — it can run camera analysis locally.")
+            # The hardware could; whether THIS BUILD can is a separate question,
+            # and answering only the first one put "it can run camera analysis
+            # locally" three lines above "this build cannot use a camera" on one
+            # screen. A machine being fast enough is not permission to promise a
+            # feature that was deliberately left out of the download.
+            if _camera_inference_available():
+                reasons.append("Plenty of memory and CPU — it can run camera "
+                               "analysis locally.")
+            else:
+                reasons.append("Plenty of memory and CPU — comfortably more than "
+                               "the Wavr Core needs.")
         elif tier == TIER_MEDIUM:
             reasons.append("Enough memory and CPU to run the Wavr Core comfortably.")
         else:
@@ -700,6 +724,19 @@ def recommend(manifest: CapabilityManifest, space_has_core: bool = False) -> Rec
     refining = [k for k in ("camera", "ble", "mmwave", "microphone")
                 if manifest.capability(k) is True]
 
+    # What we deliberately did NOT look for. `None` is "unknown", not "absent",
+    # and the two were being rendered the same way -- as silence.
+    #
+    # On Windows and macOS `_has_camera()` returns None on purpose: the only way
+    # to be sure is to open the device, and opening it would light the lens
+    # before anybody agreed to anything (ADR-0002). That refusal is right. What
+    # was wrong is that the screen then said nothing at all, so the first person
+    # to run setup on a laptop with a webcam read it as "it failed to detect my
+    # camera" -- and reported it as a defect, correctly, because a product that
+    # goes quiet about something is indistinguishable from one that got it wrong.
+    unknown = [k for k in ("camera", "ble", "mmwave", "microphone")
+               if manifest.capability(k) is None]
+
     if on_network or refining:
         functions.append(ROLE_NODE)
         if on_network:
@@ -711,6 +748,24 @@ def recommend(manifest: CapabilityManifest, space_has_core: bool = False) -> Rec
             lead = "It also has " if on_network else "It has "
             reasons.append(lead + _join_human([pretty[k] for k in refining])
                            + ", which sharpens that into room-level presence.")
+
+    if unknown:
+        pretty_unknown = {"camera": "a camera", "ble": "Bluetooth",
+                          "mmwave": "a radar sensor", "microphone": "a microphone"}
+        reasons.append(
+            "Wavr did not check whether this machine has "
+            + _join_human([pretty_unknown[k] for k in unknown])
+            + ". Finding out for certain would mean switching the device on, and "
+              "nothing here switches a sensor on to see if it is there. You can "
+              "add one yourself later.")
+
+    if "camera" in unknown or "camera" in refining:
+        if not _camera_inference_available():
+            reasons.append(
+                "Note that this build of Wavr cannot use a camera even if one is "
+                "here: the person-detection model is left out deliberately, "
+                "because bundling it would take the download from tens of "
+                "megabytes to over a gigabyte. Running Wavr from source enables it.")
     elif ROLE_NODE in manifest.functions_supported:
         also.append(ROLE_NODE)
 

@@ -37,8 +37,16 @@ import json
 import os
 import ssl
 import sys
+from contextlib import suppress
 import urllib.parse
 import urllib.request
+
+# "It renders; it does not decide" is this module's own heading, and its failure
+# branch used to compose a state object of its own -- the fourth implementation
+# the heading warns about. `unreachable()` is the one producer of what "I got no
+# answer" means; before this it had no production caller anywhere, so the
+# guarantee in its docstring was held by nobody.
+from wavr.runtime_status import unreachable
 
 DEFAULT_URL = "https://127.0.0.1:8000"
 
@@ -164,6 +172,17 @@ def render(runtime: dict, attention: dict | None) -> str:
 
 
 def main(argv=None) -> int:
+    # The marks below are "●", "○" and "×", and Windows hands a redirected
+    # stdout a legacy code page that cannot encode any of them. So the command
+    # documented for cron and for a monitor printed a UnicodeEncodeError
+    # traceback instead of a status the moment its output was not a console —
+    # which is every use where nobody is watching, and the only use where the
+    # exit code has to be trustworthy.
+    for stream in (sys.stdout, sys.stderr):
+        with suppress(Exception):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(errors="replace")
+
     ap = argparse.ArgumentParser(
         prog="wavr status",
         description="Is Wavr running, and is anything waiting for you.")
@@ -185,8 +204,20 @@ def main(argv=None) -> int:
         # A sentence, not a traceback. Somebody running this is already worried,
         # and a stack trace answers a question they did not ask.
         if args.json:
-            print(json.dumps({"state": "unavailable", "error": str(exc),
-                              "url": args.url}))
+            # The SAME shape as a reachable Core. This used to emit a bespoke
+            # `{"state", "error", "url"}` object while the success path emits
+            # `{"runtime", "attention"}` -- so a monitor reading
+            # `["runtime"]["state"]` got a KeyError in exactly the state this
+            # command exists to detect, and `--help` calls this output the
+            # stable interface. `error` and `url` stay, additively.
+            #
+            # `unreachable()` composes the runtime half. It is the one producer
+            # of what "I got no answer" means -- its docstring says so -- and
+            # until now nothing in production called it, so the claim was held
+            # by nobody and this file was quietly the second implementation.
+            print(json.dumps({"runtime": unreachable().to_dict(),
+                              "attention": None,
+                              "error": str(exc), "url": args.url}, indent=2))
         elif not args.quiet:
             hint = ("  Start it with:  python -m wavr.serve"
                     if is_loopback(args.url) else
@@ -214,6 +245,19 @@ def main(argv=None) -> int:
     if state == "unavailable":
         return UNREACHABLE
     if state in ("degraded", "attention") or (attention or {}).get("total"):
+        return ATTENTION
+    # An inbox that could not be read is not an empty inbox.
+    #
+    # "Success means nothing needs you" is the documented contract, and under
+    # `-q` the exit code is the ONLY output — so a monitor reading 0 was told
+    # "nothing needs you" about a list nobody managed to read. The dashboard's
+    # own attention route refuses to make that claim for exactly this reason:
+    # it reports `could_not_check` rather than an empty list, and this is the
+    # consumer that was ignoring it.
+    if attention is None or attention.get("could_not_check"):
+        if not args.quiet and not args.json:
+            print("Wavr could not read everything that might need you, so this "
+                  "is not a clean bill of health.", file=sys.stderr)
         return ATTENTION
     return OK
 

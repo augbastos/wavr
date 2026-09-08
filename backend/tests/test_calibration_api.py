@@ -2,7 +2,7 @@
 
 Uses TestClient with an injected CameraStore (tmp db) and WAVR_DB pointed at a tmp
 file so the CalibrationStore never touches the repo's wavr.db. The camera lives in
-`quarto`, whose polygon comes from the default house map (DEFAULT_MAP).
+`quarto`, whose polygon comes from the default house map (SAMPLE_MAP).
 """
 import os
 

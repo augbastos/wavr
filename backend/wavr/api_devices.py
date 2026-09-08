@@ -50,16 +50,41 @@ def build_pair_router(store, pairing, on_redeem=None) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/pair")
-    async def pair(request: Request, code: str = Body(...), device_name: str = Body(...)):
+    async def pair(request: Request, code: str = Body(...), device_name: str = Body(...),
+                   device_key: str | None = Body(None)):
         code = code.strip()
         device_name = device_name.strip()
         if not code or not device_name:
             raise HTTPException(status_code=400, detail="code and device_name are required")
+        # `device_key` is OPTIONAL and hashed by the client: the same physical
+        # device sends the same value every time it pairs. When one arrives, the
+        # redeem retires the credentials that device held before, so re-installing
+        # the app stops leaving another live key to the home behind. A client that
+        # doesn't send one (an older app, a browser) pairs exactly as it always did.
+        chave = (device_key or "").strip()[:200] or None
         # Pass the caller's IP so the failed-attempt rate-limiter is keyed per host
         # (sweep [4]/[13]): a junk-flooding host throttles only itself, not everyone.
         source_ip = request.client.host if request.client else None
-        result = pairing.redeem(code, device_name, source_ip=source_ip)
+        result = pairing.redeem(code, device_name, source_ip=source_ip, device_key=chave)
         if result is None:
+            # Two different refusals, and they used to read the same.
+            #
+            # After ten failed guesses this host is blocked for a minute, and
+            # `redeem` then refuses the CORRECT code without looking at it --
+            # right, and indistinguishable from "you typed it wrong". Somebody
+            # who mistyped a few times gets told their good code is invalid,
+            # generates a new one, and is told the same, because the block is on
+            # the host and not the code. 429 with a sentence that says to wait
+            # is the difference between a minute and giving up.
+            #
+            # Asked AFTER the attempt, so the attempt that crossed the line is
+            # already counted and reports honestly. `is_throttled` records
+            # nothing, so asking cannot cause what it reports.
+            if getattr(pairing, "is_throttled", None) and pairing.is_throttled(source_ip):
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many attempts from this device. Wait a minute, "
+                           "then try the same code again.")
             raise HTTPException(status_code=403, detail="invalid or expired pairing code")
         device_id, token = result
         if on_redeem is not None:

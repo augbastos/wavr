@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -186,6 +187,7 @@ class DeviceStore:
         self._migrate_consent_column()
         self._migrate_expires_at_column()
         self._migrate_person_id_column()
+        self._migrate_device_key_column()
 
     def _migrate_scopes_column(self) -> None:
         """Wavr Pass (Phase 1), additive: add the nullable `scopes` column to an
@@ -235,6 +237,111 @@ class DeviceStore:
             self._conn.execute("ALTER TABLE devices ADD COLUMN expires_at TEXT")
             self._conn.commit()
 
+    def _migrate_device_key_column(self) -> None:
+        """One live credential per physical device, additive.
+
+        Pairing the same phone again minted another credential and left the old
+        one valid. The first user's Core finished the day with four:
+
+            Augusto    central   seen 16:31
+            a handset  user      seen 16:32
+            S25        central   seen 18:44
+            S25        user      seen 20:53
+
+        One phone, four rows, three of them stale and every one of them still a
+        working key to his home. He said it plainly: a device should be
+        recognised instead of piling up.
+
+        `device_key` is what the phone says it is: a value that is the same
+        phone tomorrow. It is hashed on the device before it is sent — the Core
+        stores an opaque string it cannot reverse, and only ever compares it to
+        another one. Nullable, because a client that does not send one (an older
+        app, a browser, a script) must keep behaving exactly as before: no key,
+        no matching, no surprise revocations.
+
+        Same idempotent, PRAGMA-guarded, no-backfill pattern as the five
+        migrations above. Nothing is guessed for existing rows: we cannot know
+        which physical device an old credential belongs to, and pairing two of
+        them together on a hunch would revoke somebody's working phone."""
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(devices)")}
+        if "device_key" not in cols:
+            self._conn.execute("ALTER TABLE devices ADD COLUMN device_key TEXT")
+            self._conn.commit()
+
+    def set_revoke_hook(self, on_revoke) -> None:
+        """What else has to be forgotten when a credential stops being live.
+
+        There are two ways that happens — somebody revokes a device from the
+        admin screen, and a device supersedes its own earlier credential by
+        pairing again — and they used to clean up differently: the first ran
+        `on_revoke` through the router, the second wrote the row and stopped.
+        Setting it here means the two agree by construction instead of by
+        somebody remembering.
+        """
+        self._on_revoke = on_revoke
+
+    def supersede_same_device(self, device_key: str, keep_device_id: str,
+                              on_revoke=None) -> list[str]:
+        """Revoke this device's earlier credentials OF THE SAME KIND.
+
+        Returns the ids revoked, so the caller can say what happened rather than
+        doing it silently — a credential disappearing from somebody's list is
+        exactly the kind of thing that should be reported, not inferred.
+
+        **Same kind** is load-bearing, and it is not a detail. A guest invite is
+        redeemed through the same `POST /api/pair` as a normal pairing, and the
+        phone attaches its device key without knowing which kind of code it is
+        holding. Matching on the key alone therefore let a four-hour visitor
+        code retire the permanent credential of the phone that runs the house —
+        and when the guest row expired on its own, that phone held nothing at
+        all. So a credential that expires may only retire credentials that
+        expire, and a permanent one only permanent ones. Reproduced before this
+        line existed; `test_the_same_phone_gets_one_key.py` keeps it reproduced.
+
+        `on_revoke(device_id)` is the same cleanup hook `DELETE /api/devices/…`
+        runs (app.py wires it to the experience-grant store). Without it a
+        retired credential keeps showing up as holding access to an experience:
+        gone from one screen, present on another.
+
+        Revoked rather than deleted: the row is the record that this phone was
+        paired at that time, and an audit trail that erases itself when a device
+        re-pairs is not one. Only credentials that are still live are touched,
+        so re-running this is a no-op.
+        """
+        chave = (device_key or "").strip()
+        if not chave:
+            return []
+        with self._lock:
+            atual = self._conn.execute(
+                "SELECT expires_at FROM devices WHERE device_id = ?",
+                (keep_device_id,)).fetchone()
+            temporario = bool(atual and atual["expires_at"])
+            # `expires_at IS NULL` and `IS NOT NULL` partition the table, so
+            # every row belongs to exactly one kind and none is missed.
+            faixa = ("expires_at IS NOT NULL" if temporario
+                     else "expires_at IS NULL")
+            linhas = self._conn.execute(
+                "SELECT device_id FROM devices "
+                "WHERE device_key = ? AND device_id != ? AND revoked = 0 "
+                f"AND {faixa}",
+                (chave, keep_device_id)).fetchall()
+            ids = [r["device_id"] for r in linhas]
+            if ids:
+                self._conn.executemany(
+                    "UPDATE devices SET revoked = 1 WHERE device_id = ?",
+                    [(i,) for i in ids])
+                self._conn.commit()
+        # Outside the lock: the hook belongs to another store with its own.
+        on_revoke = on_revoke or getattr(self, "_on_revoke", None)
+        if ids and callable(on_revoke):
+            for i in ids:
+                try:
+                    on_revoke(i)
+                except Exception:      # noqa: BLE001
+                    logging.warning("devices: could not clean up after retiring "
+                                    "a superseded credential", exc_info=True)
+        return ids
+
     def _migrate_person_id_column(self) -> None:
         """Person association, additive: the nullable `person_id` linking a
         credential to a human in `space_store.people`. Same idempotent,
@@ -266,7 +373,8 @@ class DeviceStore:
 
     def add(self, name: str, role: str, scopes: frozenset[str] | None = None,
             tool_scopes: frozenset[str] | None = None,
-            consent: str | None = None, expires_at: str | None = None) -> tuple[str, str]:
+            consent: str | None = None, expires_at: str | None = None,
+            device_key: str | None = None) -> tuple[str, str]:
         """Create a device and return (device_id, token). The token is generated
         here, stored hashed, and returned exactly once — the caller must hand it to
         the device now; it can never be recovered later.
@@ -283,7 +391,12 @@ class DeviceStore:
         green/yellow/red only for a future consent-aware pairing flow. `expires_at`
         (guest mode) is a UTC-ISO deadline stamped only on a guest invite -- None
         (every other caller) means the credential never expires; a value makes
-        verify() reject the token once that instant passes."""
+        verify() reject the token once that instant passes. `device_key` is the
+        SAME NULL-means-as-before idiom for physical-device identity: an opaque,
+        client-hashed string that is the same phone tomorrow, stored so a later
+        pairing of that same phone can retire this credential
+        (`supersede_same_device`). None -- every caller that predates it -- is
+        stored as NULL and never matches anything."""
         if role not in VALID_ROLES:
             raise ValueError(f"invalid role: {role!r} (expected one of {sorted(VALID_ROLES)})")
         if consent is not None and consent not in VALID_CONSENT:
@@ -295,10 +408,12 @@ class DeviceStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO devices (device_id, name, role, token_hash, created_ts,"
-                " last_seen_ts, revoked, scopes, tool_scopes, consent, expires_at)"
-                " VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)",
+                " last_seen_ts, revoked, scopes, tool_scopes, consent, expires_at,"
+                " device_key)"
+                " VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?)",
                 (device_id, name, role, token_hash, ts, _serialize_scopes(scopes),
-                 _serialize_scopes(tool_scopes), consent, expires_at),
+                 _serialize_scopes(tool_scopes), consent, expires_at,
+                 (device_key or "").strip() or None),
             )
             self._conn.commit()
         return device_id, token

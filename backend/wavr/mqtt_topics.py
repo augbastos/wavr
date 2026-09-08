@@ -29,8 +29,48 @@ def room_event_topic(prefix: str, room: str) -> str:
 
 def status_topic(prefix: str) -> str:
     """Retained availability / Last-Will topic: 'online' while Wavr is connected,
-    'offline' (via the broker's Last Will) the moment it drops off."""
+    'offline' (via the broker's Last Will) the moment it drops off.
+
+    HOUSE-level only: it answers "is Wavr running?", never "can Wavr see the
+    kitchen?". A Core that is perfectly online with a dead kitchen camera keeps
+    publishing 'online' here -- which is why `room_availability_topic` exists."""
     return f"{prefix}/status"
+
+
+def room_availability_topic(prefix: str, room: str) -> str:
+    """Retained PER-ROOM availability: 'online' while Wavr can currently say
+    something about this room, 'offline' while it cannot.
+
+    This is the room-scoped counterpart to `status_topic`, and it exists because
+    a broker subscriber (Home Assistant above all) otherwise cannot tell two very
+    different rooms apart: one a healthy sensor confirmed empty, and one whose
+    only camera died an hour ago. Both used to arrive as a bare
+    `{"occupied": false}` on the state topic and render as "Clear". Silence must
+    not render as "nobody here" -- the same rule the dashboard's map painter
+    already follows internally.
+
+    Payloads are 'online'/'offline' so they match the discovery configs'
+    `payload_available`/`payload_not_available` (and HA's own defaults) with no
+    template."""
+    return f"{prefix}/rooms/{slug_room(room)}/availability"
+
+
+def room_coverage_topic(prefix: str, room: str) -> str:
+    """Retained per-room sensor health + coverage rollup:
+    `{sensors, observing, health, precision_level}` -- how many sensors the room
+    has, how many are actually contributing, the room's health in
+    `wavr.sensor_coverage`'s own vocabulary, and the finest answer the observing
+    ones can honestly support. Counts and capability labels only: never a
+    position, a target or a vital."""
+    return f"{prefix}/rooms/{slug_room(room)}/coverage"
+
+
+def house_coverage_topic(prefix: str) -> str:
+    """Retained house-level coverage rollup: `{rooms, covered, uncovered,
+    observing}`. COUNTS ONLY -- which rooms are blind is already implicit in the
+    per-room coverage topics, so the house view does not need to re-list the
+    household's own room names on a shared bus."""
+    return f"{prefix}/house/coverage"
 
 
 # ---- Build C4: derived-signal topics (RulesEngine publishes, ha_discovery points at) ----

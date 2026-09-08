@@ -41,12 +41,39 @@ def notebook(monkeypatch, tmp_path):
     monkeypatch.setenv("WAVR_DB", db)
     monkeypatch.setenv("WAVR_MULTIDEVICE", "1")     # the owner turns this on in step 2
 
+    # This Core's OWN certificate, in this test's own directory.
+    #
+    # The loop above clears every WAVR_* variable and the client below asks for
+    # `https://`, so `cfg.tls_cert` fell back to its default — `~/.wavr/cert.pem`
+    # — and the fingerprint assertion in step 3 was reading whatever certificate
+    # happened to be sitting in the developer's home directory. It passed on this
+    # machine and would have failed on any clean checkout. It failed the instant
+    # the real `~/.wavr` was cleared, which is precisely the state this fixture's
+    # own docstring claims to be modelling: "no environment, nothing configured".
+    #
+    # The fix is to move HOME, not to add `WAVR_TLS_CERT`: pointing the variable
+    # at a test path would make `test_nothing_in_the_journey_needed_a_config_file`
+    # fail, and that test is right — an owner never sets it. Relocating the home
+    # directory keeps the DEFAULT path under test, which is the one the product
+    # actually uses, and leaves the environment as bare as the docstring claims.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("USERPROFILE", str(home))     # Path.home() on Windows
+    monkeypatch.setenv("HOME", str(home))            # and everywhere else
+    from wavr.tls import ensure_cert
+    ensure_cert("", "", "192.0.2.10")     # TEST-NET-1: documented as never routable
+
     app = create_app(
         sources=[], storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
         camera_store=CameraStore(db), health_resolvers={},
         space_store=SpaceStore(db), core_registry=CoreRegistry(db),
         settings_store=SettingsStore(db), discovery_inbox=DiscoveryInbox(db))
-    with TestClient(app) as client:
+    # HTTPS: step 2 of the journey below turns multidevice on and step 3 pairs a
+    # phone against a certificate fingerprint, so this owner IS on a TLS Core.
+    # The scheme is read off the connection now rather than from the flag --
+    # the flag is also set on launchers that serve plain HTTP, where the
+    # fingerprint compare in step 3 has no certificate behind it.
+    with TestClient(app, base_url="https://testserver") as client:
         yield client, app, db
 
 

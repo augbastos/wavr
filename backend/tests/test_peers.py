@@ -390,14 +390,30 @@ def _peers_app(tmp_path, monkeypatch, peers="1", multidevice="1"):
         storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
 
 
-def test_peers_enabled_requires_multidevice(tmp_path, monkeypatch):
-    # Prerequisite validation: peers ON without multidevice must fail fast.
+def test_peers_enabled_without_multidevice_degrades_instead_of_dying(
+        tmp_path, monkeypatch, served_paths):
+    """Peer identity IS a multidevice central identity, so the peer routers
+    must NOT be mounted without it. That has not changed.
+
+    What changed is the cost. This asserted `RuntimeError`, and "Connect to
+    other Cores" is a switch on the Settings screen — so saving it without
+    "Let other devices connect" gave the operator a Core that refused to start,
+    and the screen that could undo it is inside the process that no longer
+    starts. See the twin in `test_app.py` and
+    `test_a_setting_cannot_brick_the_core.py`.
+    """
     monkeypatch.setenv("WAVR_PEERS_ENABLED", "1")
     monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
     monkeypatch.setenv("WAVR_DB", str(tmp_path / "x.db"))
-    with pytest.raises(RuntimeError, match="requires WAVR_MULTIDEVICE"):
-        create_app(sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
-                   storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    app = create_app(sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+                     storage=Storage(":memory:"),
+                     camera_store=CameraStore(":memory:"))
+    # See the note in `test_app.py`: read through `served_paths`, because
+    # `app.routes` cannot see a route that arrived through a router, and a
+    # negative assertion against a blind list passes forever.
+    paths = served_paths(app)
+    assert not any(p.startswith("/api/peers") for p in paths), sorted(
+        p for p in paths if p.startswith("/api/peers"))
 
 
 def test_admin_peer_routes_gated_but_public_redeem_open(tmp_path, monkeypatch):
@@ -486,10 +502,21 @@ def test_c1_closed_in_subnet_host_cannot_obtain_central_token(tmp_path, monkeypa
 
 def test_acceptance_pairing_revocation_and_root_gates(tmp_path, monkeypatch):
     # (b)+(c)+(d)+(e) in one real two-instance run.
+    #
+    # Served over HTTPS, and that is not decoration. A peer link exchanges
+    # `central` tokens, so `_require_lan_https` refuses a plain-HTTP peer and
+    # `/api/peers/confirm` refuses a plain-HTTP SELF. Both Cores here are the
+    # multidevice install this flow is for, and the base_url is how a
+    # transport-agnostic test says "this one is serving TLS" -- the scheme is
+    # read off the connection now, not off `WAVR_MULTIDEVICE`, because that
+    # flag is set on launchers (the Dockerfile, scripts/wavr.ps1) that serve
+    # plain HTTP and cannot do otherwise.
     d_app, c_app = _two_real_apps(tmp_path, monkeypatch)
-    d_root = TestClient(d_app)                                # loopback root operator on D
-    c_root = TestClient(c_app)                                # loopback root operator on C
-    c_from_d = TestClient(c_app, client=("192.168.1.10", 12345))   # D as seen by C
+    TLS = "https://testserver"
+    d_root = TestClient(d_app, base_url=TLS)                  # loopback root operator on D
+    c_root = TestClient(c_app, base_url=TLS)                  # loopback root operator on C
+    c_from_d = TestClient(c_app, base_url=TLS,
+                          client=("192.168.1.10", 12345))     # D as seen by C
 
     captured = {}
     import json as _json

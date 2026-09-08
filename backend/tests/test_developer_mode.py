@@ -394,3 +394,75 @@ def test_the_mapping_is_published_with_the_run(monkeypatch, tmp_path):
         # The default house map is in Portuguese, so a remap must have happened.
         assert body["room_mapping"], "kitchen is not a room in the default map"
         assert list(body["rooms"]) == list(body["room_mapping"].values())
+
+
+# -- the scenario has to reach the engine ALIVE --------------------------------
+
+def test_a_scenario_actually_moves_a_room_in_a_production_shaped_app(tmp_path,
+                                                                     monkeypatch):
+    """The onboarding this file's other tests describe, run for real.
+
+    Scenario steps carry `simulator.EPOCH + at_s`, a fixed 2026-01-01, which is
+    what makes a scenario deterministic and assertable. Fed to production's
+    FusionEngine — which ages evidence against the wall clock — every reading
+    arrived roughly eight months stale: `health: "dead"`, mass 0.0, and the
+    room stayed `occupied: false, confidence: 0.0, precision_level: "none"`.
+    A developer with no sensors followed sdk/README.md's "Developing without
+    the sensors", ran a scenario, watched nothing happen, and had no way to
+    tell whether the feature or their code was broken.
+
+    The existing tests missed it because their fixture INJECTS a FusionEngine,
+    and the injected one is not the one `create_app` builds. So this builds the
+    app the way `wavr.serve` does — no injected fusion, no injected storage —
+    and asserts the thing a developer is actually looking for: a room that
+    changed.
+    """
+    monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "sim.db"))
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "house.json"))
+    monkeypatch.setenv("WAVR_DEVELOPER_MODE", "1")
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+
+    keys = [s["key"] for s in c.get("/api/dev/scenarios").json()["scenarios"]]
+    assert "count_appears_and_vanishes" in keys, keys
+    out = c.post("/api/dev/scenarios/count_appears_and_vanishes/run",
+                 json={"realtime": False}).json()
+
+    rooms = {r: s for r, s in (out.get("rooms") or {}).items() if s}
+    assert rooms, out
+    assert any(s.get("occupied") for s in rooms.values()), (
+        f"every room came back vacant: {rooms}. The scenario's evidence is "
+        f"reaching fusion already decayed — check that the steps are being "
+        f"restamped at ingest rather than kept at simulator.EPOCH.")
+    live = [s for s in rooms.values() if s.get("occupied")]
+    assert any((s.get("confidence") or 0) > 0.2 for s in live), (
+        f"occupied at ~0% confidence is the stale-evidence signature: {live}")
+    assert any(src.get("health") == "fresh"
+               for s in live for src in (s.get("sources") or [])), (
+        "no source in an occupied room is fresh, so nothing a developer "
+        "watches will move")
+
+
+def test_the_story_keeps_its_shape_when_it_is_restamped():
+    """Restamping must move the timeline, not flatten it. If every step landed
+    at the same instant, a scenario about something happening OVER TIME —
+    a sensor going offline, precision degrading — would stop being about
+    anything, and would still look fine in the assertion above."""
+    from datetime import datetime, timezone
+    from wavr.api_developer import _restamp
+    from wavr.simulator import SCENARIOS
+
+    sc = SCENARIOS["count_appears_and_vanishes"]
+    end = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    stamps = []
+    for step in sc.steps:
+        from datetime import timedelta
+        at = end - timedelta(seconds=max(0.0, sc.duration_s - step.at_s))
+        moved = _restamp(step, at)
+        stamps.append(moved.event.ts)
+        assert moved.at_s == step.at_s, "at_s is the story, and must not move"
+        assert moved.event.room == step.event.room
+        assert moved.event.sensor_id == step.event.sensor_id
+    assert len(set(stamps)) > 1, (
+        f"every step landed at the same instant: {set(stamps)}")
+    assert stamps == sorted(stamps), "the story came back out of order"

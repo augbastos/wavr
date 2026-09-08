@@ -558,3 +558,172 @@ def test_the_ui_is_told_which_keys_are_local_only(tmp_path):
         assert rows["fusion_threshold"]["local_only"] is False
     finally:
         s.close()
+
+
+# -- the Space is not always a home --------------------------------------------
+
+def test_a_second_core_records_the_kind_it_is_told(tmp_path):
+    """`kind` was hardcoded `"home"` on the join path.
+
+    A clinic running two Cores ended up with an office Space on Core A and a
+    home Space on Core B — the same Space describing itself two different ways
+    depending on which one your phone was paired to. The joiner is already
+    asked for the NAME for exactly this reason (joining does not synchronise
+    state, so the Core cannot discover it), and the kind is the same class of
+    fact.
+    """
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+
+    os.environ["WAVR_DB"] = str(tmp_path / "b.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(tmp_path / "house.json")
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+
+    r = c.post("/api/setup/join-space",
+               json={"space_id": "spsharedclinic1", "name": "North Clinic",
+                     "kind": "office", "owner_name": "Tester"})
+    assert r.status_code == 200, r.text
+    assert r.json()["space"]["kind"] == "office", r.json()["space"]
+
+    got = c.get("/api/space").json()
+    assert got["kind"] == "office", (
+        "the second Core recorded a different kind for the same Space")
+
+
+def test_joining_without_a_kind_still_works(tmp_path):
+    """The parameter is optional, so an older client that does not send one
+    behaves exactly as before."""
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+    from wavr.space_store import DEFAULT_SPACE_KIND
+
+    os.environ["WAVR_DB"] = str(tmp_path / "c.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(tmp_path / "house.json")
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+    r = c.post("/api/setup/join-space",
+               json={"space_id": "spsharedhome2", "name": "Home"})
+    assert r.status_code == 200, r.text
+    assert r.json()["space"]["kind"] == DEFAULT_SPACE_KIND
+
+
+def test_a_fresh_install_has_no_invented_rooms(tmp_path):
+    """`DEFAULT_MAP` was a three-room Portuguese house — `sala`, `quarto`,
+    `quintal`, on a floor called `Térreo` — and it shipped as the fallback for
+    every install. Somebody putting Wavr in a workshop landed on a map of three
+    rooms that do not exist, with nothing marking them as placeholders, and
+    coverage then reported them as real."""
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+
+    os.environ["WAVR_DB"] = str(tmp_path / "d.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(tmp_path / "house.json")
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+    house = c.get("/api/house").json()
+    assert house["floors"], "a plan with no floors at all is not the fix"
+    assert house["floors"][0]["rooms"] == [], (
+        f"a fresh install still ships invented rooms: "
+        f"{[r.get('name') for r in house['floors'][0]['rooms']]}")
+    assert "Térreo" not in house["floors"][0]["name"], (
+        "the floor name is still Portuguese in an English product")
+
+
+def test_setup_puts_the_room_the_operator_named_on_the_map(tmp_path):
+    """The wizard asks which room the Core is in and used that answer only to
+    label the Core, so the first screen after setup showed a map of nothing
+    beside a Core that knew perfectly well it was in the kitchen."""
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+
+    os.environ["WAVR_DB"] = str(tmp_path / "e.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(tmp_path / "house.json")
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+    r = c.post("/api/setup/create-space",
+               json={"name": "Workshop", "kind": "workshop",
+                     "owner_name": "Tester", "room": "Bench room"})
+    assert r.status_code == 200, r.text
+    assert r.json()["room_seeded"] is True
+    rooms = [x["name"] for x in
+             c.get("/api/house").json()["floors"][0]["rooms"]]
+    assert rooms == ["Bench room"], rooms
+
+
+def test_seeding_never_overwrites_a_plan_somebody_drew(tmp_path):
+    """The narrow part of the rule, and the one worth a test: a Core adopted
+    into an existing install must not have its floor plan replaced by one room
+    named in a wizard."""
+    import json
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+
+    plan = {"version": 2, "units": "m", "floors": [
+        {"id": "f0", "name": "Ground floor", "level": 0, "walls": [],
+         "features": [], "zones": [], "backdrop": None,
+         "rooms": [{"id": "r_a", "name": "Studio",
+                    "polygon": [[0, 0], [3, 0], [3, 3], [0, 3]]}]}]}
+    path = tmp_path / "house.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    os.environ["WAVR_DB"] = str(tmp_path / "f.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(path)
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+    r = c.post("/api/setup/create-space",
+               json={"name": "Studio Space", "owner_name": "T",
+                     "room": "Bench room"})
+    assert r.status_code == 200, r.text
+    assert r.json()["room_seeded"] is False
+    rooms = [x["name"] for x in
+             c.get("/api/house").json()["floors"][0]["rooms"]]
+    assert rooms == ["Studio"], rooms
+
+
+def test_the_policy_field_can_actually_be_written(tmp_path):
+    """`GET /api/space` returned `"policy": {}` on every install forever.
+
+    `SpaceStore.set_policy` existed, with its own bounded-JSON validation, and
+    had no route and no caller — so an integrator reading the API took `policy`
+    for a real per-Space configuration surface and built against a field the
+    product could not populate.
+    """
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+
+    os.environ["WAVR_DB"] = str(tmp_path / "p.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(tmp_path / "house.json")
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+    c.post("/api/setup/create-space", json={"name": "H", "owner_name": "T"})
+
+    assert c.get("/api/space").json()["policy"] == {}
+    r = c.put("/api/space/policy",
+              json={"policy": {"quiet_hours": {"from": "22:00", "to": "07:00"}}})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["quiet_hours"]["from"] == "22:00"
+    assert c.get("/api/space").json()["policy"]["quiet_hours"]["to"] == "07:00"
+
+
+def test_an_oversized_policy_is_refused_rather_than_stored(tmp_path):
+    """The size cap `set_policy` already applied is the reason exposing it was
+    the small change. It has to still apply through the route."""
+    import os
+    from fastapi.testclient import TestClient
+    from wavr.app import create_app
+
+    os.environ["WAVR_DB"] = str(tmp_path / "q.db")
+    os.environ["WAVR_HOUSE_MAP"] = str(tmp_path / "house.json")
+    os.environ["WAVR_LOCAL_TOKEN"] = ""
+    c = TestClient(create_app(), headers={"X-Wavr-Local": "1"})
+    c.post("/api/setup/create-space", json={"name": "H", "owner_name": "T"})
+
+    r = c.put("/api/space/policy", json={"policy": {"x": "y" * 200_000}})
+    assert r.status_code in (400, 413, 422), r.status_code
+    assert c.get("/api/space").json()["policy"] == {}

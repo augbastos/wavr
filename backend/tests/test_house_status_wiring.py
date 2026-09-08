@@ -136,12 +136,25 @@ def _wait_until(predicate, tries=40, interval=0.05):
     return predicate()
 
 
-def test_house_status_ok_when_nothing_wired():
+def test_house_status_says_unknown_when_nothing_is_watching():
+    """This asserted `ok`, and its own name said why that was wrong: nothing
+    was wired.
+
+    An empty `reasons` list has two causes that mean opposite things — every
+    layer looked and found nothing, or no layer looked. Reported as `ok`, the
+    tile says "Everything looks normal." over a house nobody is watching, which
+    is the single most damaging sentence this product can produce.
+
+    What the test still proves is that a Core with nothing attached composes
+    cleanly and blames nothing. What it no longer does is call that fine.
+    """
     app = create_app(sources=[], camera_store=CameraStore(":memory:"),
                       net_inventory=_FakeInvService())
     with TestClient(app) as client:
         body = client.get("/api/house-status").json()
-    assert body["status"] == "ok" and body["score"] == 0 and body["reasons"] == []
+    assert body["score"] == 0 and body["reasons"] == []
+    assert body["status"] == "unknown", body
+    assert body["checked"] == [], body
 
 
 def test_house_status_surfaces_recent_network_alert_same_as_api_alerts():
@@ -158,12 +171,19 @@ def test_house_status_surfaces_recent_network_alert_same_as_api_alerts():
 
 
 def test_house_status_omits_stale_network_alert():
+    """The property is the OMISSION: an alert from 2020 is not news.
+
+    The status is `unknown` rather than `ok` because this Core has nothing
+    watching — a separate fact, pinned by its own test above, and one this test
+    should not restate.
+    """
     stale = "2020-01-01T00:00:00+00:00"
     app = create_app(sources=[], camera_store=CameraStore(":memory:"),
                       net_inventory=_FakeInvService([_FakeRogueAlert(stale)]))
     with TestClient(app) as client:
         body = client.get("/api/house-status").json()
-    assert body["status"] == "ok" and body["reasons"] == []
+    assert body["reasons"] == [], body
+    assert body["status"] != "notice", body
 
 
 def test_house_status_surfaces_routine_anomaly():
@@ -191,7 +211,12 @@ def test_house_status_omits_normal_or_insufficient_data_occupancy():
     with TestClient(app) as client:
         _settle(client, ["sala"])
         body = client.get("/api/house-status").json()
-    assert body["status"] == "ok" and body["reasons"] == []
+    # The property is the OMISSION: a normal hour is not a reason. And this
+    # Core IS watching — a real source is feeding fusion — so `ok` is an
+    # honest verdict here rather than the silence-shaped one.
+    assert body["reasons"] == [], body
+    assert body["status"] == "ok", body
+    assert "physical" in body["checked"], body
 
 
 def test_house_status_surfaces_active_intrusion_and_clears_when_watch_turned_off(monkeypatch):

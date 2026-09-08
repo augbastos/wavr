@@ -66,7 +66,15 @@ def test_pair_code_returns_live_cert_fingerprint(tmp_path, monkeypatch):
     app = create_app(
         sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
         storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
-    central = TestClient(app)
+    # Served over HTTPS, because that is the condition the fingerprint is FOR.
+    # The scheme used to be inferred from WAVR_MULTIDEVICE, so this passed over
+    # a plain-HTTP connection -- which is precisely the install (the Dockerfile,
+    # scripts/wavr.ps1) where the ceremony this asserts has nothing behind it:
+    # no TLS means no certificate warning on the phone, so nothing to compare
+    # the fingerprint against. The claim is read off the connection now, and a
+    # base_url is how a transport-agnostic test states one. The plain-HTTP twin
+    # lives in test_the_tls_claim_matches_the_socket.py.
+    central = TestClient(app, base_url="https://testserver")
     body = central.post("/api/pair-code", json={"role": "user"}, headers=CSRF).json()
     assert body["cert_fingerprint"] == cert_fingerprint(cert)
     assert len(body["cert_fingerprint"].split(":")) == 32
@@ -94,7 +102,9 @@ def test_pair_code_response_includes_matching_verify6(tmp_path, monkeypatch):
     app = create_app(
         sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
         storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
-    central = TestClient(app)
+    # HTTPS for the same reason as the test above: verify6 is derived from the
+    # fingerprint, so it exists only where the fingerprint means something.
+    central = TestClient(app, base_url="https://testserver")
     body = central.post("/api/pair-code", json={"role": "user"}, headers=CSRF).json()
 
     assert body["verify6"] == verification_code(cert_fingerprint(cert), body["code"])

@@ -13,11 +13,37 @@ The reasoning: the allowlists are only as good as the last person who added a
 field, and the failure they guard against is a credential sitting in a file that
 somebody has already emailed. A refused download is an obvious bug that gets
 fixed on the spot. A leaked one is discovered by whoever received it.
+
+## Network reachability rides along, off the event loop
+
+Two questions, both from `wavr.lan_reachability`, neither answerable by
+anything else in this bundle:
+
+  * **Is the socket even on the LAN?** `serves_the_lan()` / `bound_host()`
+    read what the launcher actually told uvicorn to bind to — in-memory,
+    instant, no I/O. A Core "Let other devices connect" turned on but still
+    listening on loopback is a real, already-found failure mode, and it looks
+    identical to a firewall block from a phone's point of view: silence.
+  * **If it is, would the firewall let a packet through?** `check()` shells
+    out to `netsh` (~1.5s warm), so it is dispatched through
+    `asyncio.to_thread` rather than awaited on the event loop directly — the
+    same "on demand, off the hot path" rule its own docstring states.
+
+`program`/`port` are resolved from `lan_reachability` itself at call time
+(`sys.executable`, `bound_port()`) rather than threaded through from the
+caller: the launcher (`serve.py`) already calls `note_bound_host` before this
+Core accepts a request, so nothing here needs app.py to hand over a port it
+would otherwise have to go and find. `reachability_fn` stays injectable so a
+test never shells out to `netsh`.
 """
 from __future__ import annotations
 
+import asyncio
+import sys
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from wavr import lan_reachability
 from wavr.config_export import (
     TransferError, audit, check_import, diagnostic_bundle, export_config,
     plan_import, preview_import,
@@ -26,8 +52,33 @@ from wavr.config_export import (
 
 def build_router(*, gather_config, gather_bundle, existing_rooms_fn,
                  existing_anchors_fn, require_local, require_scope,
-                 apply_fn=None, validate_house=None) -> APIRouter:
+                 apply_fn=None, validate_house=None,
+                 reachability_fn=None) -> APIRouter:
     router = APIRouter()
+    reachability_fn = reachability_fn or lan_reachability.check
+
+    async def _network_reachability() -> dict:
+        """Never raises, never blocks the loop. A failed check degrades to
+        the same honest UNKNOWN a Linux Core or a query timeout already
+        produces — see lan_reachability.Reachability's own default."""
+        served = False
+        host = ""
+        try:
+            served = lan_reachability.serves_the_lan()
+            host = lan_reachability.bound_host()
+        except Exception:                     # noqa: BLE001
+            pass
+        try:
+            program = sys.executable or ""
+            port = lan_reachability.bound_port()
+            result = await asyncio.to_thread(reachability_fn, program, port)
+            out = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+        except Exception:                     # noqa: BLE001
+            out = {"state": "unknown", "reason": "the reachability check "
+                   "itself failed", "rules": [], "checked": False}
+        out["serves_the_lan"] = served
+        out["bound_host"] = host
+        return out
 
     def _checked(document: dict, what: str) -> dict:
         leaks = audit(document)
@@ -60,8 +111,20 @@ def build_router(*, gather_config, gather_bundle, existing_rooms_fn,
         state history: "the kitchen was occupied at 23:40" is a fact about
         somebody's evening, and a support bundle ends up in a ticket system.
         """
-        body = diagnostic_bundle(config=export_config(**gather_config()),
+        # Read once, used twice: `export_config` gets the whole gathered dict
+        # as before, and `space` (the RAW row, carrying `space_id`) goes to
+        # `diagnostic_bundle` separately so it can be fingerprinted without
+        # ever being exported itself — see config_export._space_fingerprint.
+        gathered = gather_config()
+        body = diagnostic_bundle(config=export_config(**gathered),
+                                 space=gathered.get("space"),
                                  **gather_bundle())
+        # Real I/O, added AFTER the pure bundle is built and BEFORE the audit
+        # gate below — so a firewall rule NAME (the one thing this check could
+        # ever surface that looks like it came from the machine rather than
+        # the Space) still passes through the same credential check as
+        # everything else here, rather than riding in on a side door.
+        body["network_reachability"] = await _network_reachability()
         return _checked(body, "bundle")
 
     @router.post("/api/config/preview")

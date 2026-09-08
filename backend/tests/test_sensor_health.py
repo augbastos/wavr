@@ -105,12 +105,18 @@ def test_health_and_age_fields_present_across_states():
     assert by_mod["camera"]["health"] == "fresh" and by_mod["camera"]["age_s"] == 0
     assert by_mod["wifi_csi"]["health"] == "stale" and by_mod["wifi_csi"]["age_s"] == 60
     assert by_mod["network"]["health"] == "dead" and by_mod["network"]["age_s"] == 120
-    # additive only — existing keys stay, plus the two new ones.
+    # additive only — existing keys stay, plus the new ones.
+    # `share` joined when the room card's "Why?" panel stopped computing each
+    # source's weight from its own copy of DEFAULT_WEIGHTS: that copy knew
+    # nothing about freshness decay or per-sensor reliability, so it printed an
+    # authoritative percentage that was wrong for exactly the two sensors
+    # somebody opens that panel about. Fusion publishes it now, once.
     # `sensor_id` joined the projection when the merge became per-SENSOR: two
     # cameras in one room are two entries now, and a consumer has to be able
     # to tell them apart.
     assert set(by_mod["camera"]) == {"modality", "sensor_id", "presence",
-                                     "confidence", "age_s", "health", "count"}
+                                     "confidence", "age_s", "health", "count",
+                                     "share"}
 
 
 def test_custom_windows_are_respected():

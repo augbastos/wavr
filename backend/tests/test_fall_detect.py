@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from wavr.alert_severity import SEVERITY_ALERT
 from wavr.fall_detect import DISCLAIMER, FallAlert, FallDetector, lying_outside_zone
-from wavr.housemap import DEFAULT_MAP
+from wavr.housemap import SAMPLE_MAP
 
 # ------------------------------------------------------------------------------------- #
 # lying_outside_zone: pure geometry, no dwell/timing involved.
@@ -28,7 +28,7 @@ REST_ZONE_HOUSE = {
 
 def test_lying_outside_zone_true_when_no_zone_covers_the_room():
     targets = [{"id": 1, "x": 1.0, "y": 1.0, "posture": "lying", "confidence": 0.9}]
-    assert lying_outside_zone(DEFAULT_MAP, "quarto", targets) is True
+    assert lying_outside_zone(SAMPLE_MAP, "quarto", targets) is True
 
 
 def test_lying_inside_bed_zone_never_flags():

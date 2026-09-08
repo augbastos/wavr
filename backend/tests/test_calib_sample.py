@@ -16,7 +16,7 @@ from wavr.app import create_app, _camera_factory, _CALIB_SAMPLE_MIN_CONFIDENCE
 from wavr.calib_sample import CalibSampleStore
 from wavr.camera_store import CameraStore
 from wavr.config import load_config
-from wavr.housemap import DEFAULT_MAP
+from wavr.housemap import SAMPLE_MAP
 from wavr.localize import floor_spots_for_room, homography_from_points
 
 
@@ -135,7 +135,7 @@ def test_on_feet_coexists_with_localizer(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def test_floor_spots_centroid_plus_corners():
-    poly = [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]   # quarto (DEFAULT_MAP)
+    poly = [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]   # quarto (SAMPLE_MAP)
     spots = floor_spots_for_room(poly)
     assert len(spots) == 5                       # centroid + 4 corners
     assert spots[0] == pytest.approx((5.95, 1.5))  # centroid first
@@ -177,7 +177,7 @@ def test_factory_sampling_records_feet_without_calibration(monkeypatch):
             return None
 
     store = CalibSampleStore()
-    src = _camera_factory(cam, cfg, None, _NoCalib(), DEFAULT_MAP,
+    src = _camera_factory(cam, cfg, None, _NoCalib(), SAMPLE_MAP,
                           sample_store=store, sampling=True)()
     assert src._pose is True                       # sampling forces pose ON
     assert src._pose_detect is not None
@@ -199,7 +199,7 @@ def test_factory_no_sampling_is_unchanged():
         def get(self, name):
             return None
 
-    src = _camera_factory(cam, cfg, None, _NoCalib(), DEFAULT_MAP)()
+    src = _camera_factory(cam, cfg, None, _NoCalib(), SAMPLE_MAP)()
     assert src._pose is False
 
 
@@ -217,7 +217,7 @@ def test_factory_sampling_raises_confidence_floor(monkeypatch):
     # setting.
     cfg = load_config()
     cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": 0.0}
-    src = _camera_factory(cam, cfg, None, _no_calib(), DEFAULT_MAP,
+    src = _camera_factory(cam, cfg, None, _no_calib(), SAMPLE_MAP,
                           sample_store=CalibSampleStore(), sampling=True)()
     assert src._confidence == pytest.approx(_CALIB_SAMPLE_MIN_CONFIDENCE)
 
@@ -228,7 +228,7 @@ def test_factory_sampling_never_lowers_a_stricter_camera_floor(monkeypatch):
     cfg = load_config()
     strict = _CALIB_SAMPLE_MIN_CONFIDENCE + 0.2
     cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": strict}
-    src = _camera_factory(cam, cfg, None, _no_calib(), DEFAULT_MAP,
+    src = _camera_factory(cam, cfg, None, _no_calib(), SAMPLE_MAP,
                           sample_store=CalibSampleStore(), sampling=True)()
     assert src._confidence == pytest.approx(strict)
 
@@ -241,7 +241,7 @@ def test_factory_sampling_drops_marginal_detection_below_calib_floor(monkeypatch
     cfg = load_config()
     cam = {"name": "cam_q", "room": "quarto", "rtsp_url": "rtsp://x", "confidence": 0.0}
     store = CalibSampleStore()
-    src = _camera_factory(cam, cfg, None, _no_calib(), DEFAULT_MAP,
+    src = _camera_factory(cam, cfg, None, _no_calib(), SAMPLE_MAP,
                           sample_store=store, sampling=True)()
     boxes = [((600.0, 300.0, 700.0, 700.0), _CALIB_SAMPLE_MIN_CONFIDENCE - 0.1)]
     monkeypatch.setattr(_cam, "_pose_model", lambda: (lambda frame, **kw: [_pose_result(boxes)]))
@@ -265,10 +265,16 @@ _SEED = {"name": "cam_q", "room": "quarto",
 
 def _client(tmp_path, monkeypatch, seed=True):
     monkeypatch.setenv("WAVR_DB", str(tmp_path / "wavr.db"))
-    # Point the house map at a nonexistent path so load_house_map falls back to
-    # DEFAULT_MAP (which has the 'quarto' room), keeping the test hermetic + independent
-    # of any repo-root house.json.
-    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nohouse.json"))
+    # WRITE the sample plan.
+    #
+    # This used to name a nonexistent path and let the fallback supply
+    # `quarto`, which worked only while the product's fallback WAS a three-room
+    # house — and that fallback shipped three invented rooms to every real
+    # install. It is empty now, so a test that needs a room writes one.
+    import json
+    house = tmp_path / "house.json"
+    house.write_text(json.dumps(SAMPLE_MAP), encoding="utf-8")
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(house))
     store = CameraStore(str(tmp_path / "cams.db"))
     if seed:
         store.add(**_SEED)

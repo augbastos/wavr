@@ -209,10 +209,18 @@ _DESCRIPTIONS = {
               f"external egress: sends a coarse summary -- {_CLOUD_SCOPE_SUMMARY} -- to "
               "that endpoint to answer."),
     },
-    "openai": f"Sends a coarse summary -- {_CLOUD_SCOPE_SUMMARY} -- to OpenAI to answer.",
-    "anthropic": (f"Sends a coarse summary -- {_CLOUD_SCOPE_SUMMARY} -- to Anthropic "
-                 "Claude to answer."),
-    "gemini": f"Sends a coarse summary -- {_CLOUD_SCOPE_SUMMARY} -- to Google Gemini to answer.",
+    # Written out rather than interpolated from `_CLOUD_SCOPE_SUMMARY`.
+    # Nothing varies at runtime, and an f-string here produced a sentence that
+    # exists in no source file — so the frontend looked up a key no catalogue
+    # could hold, and these three stayed English on a Portuguese screen with
+    # nothing able to report it. The constant is still the wording's single
+    # source; a test below asserts these three agree with it.
+    "openai": ("Sends a coarse summary -- current room/house occupancy and the "
+               "house-status verdict -- to OpenAI to answer."),
+    "anthropic": ("Sends a coarse summary -- current room/house occupancy and "
+                  "the house-status verdict -- to Anthropic Claude to answer."),
+    "gemini": ("Sends a coarse summary -- current room/house occupancy and the "
+               "house-status verdict -- to Google Gemini to answer."),
     "manual": ("Your own OpenAI-compatible endpoint. Local (loopback) stays zero-egress; "
               "anything else is treated as cloud egress (coarse tool scope only)."),
 }

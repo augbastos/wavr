@@ -9,13 +9,49 @@ import tempfile
 
 log = logging.getLogger(__name__)
 
+# What a Space that has not drawn its rooms yet actually has: no rooms.
+#
+# This used to be a three-room Portuguese house — `sala`, `quarto`, `quintal`,
+# on a floor called `Térreo` — and it shipped as the fallback for EVERY
+# install. Somebody putting Wavr in a workshop finished the four-step wizard
+# and landed on a map of three rooms that do not exist, in a language they may
+# not speak, with nothing marking them as placeholders. Coverage then reported
+# those invented rooms, the topology panel reasoned about them, and the camera
+# form offered them as the room to assign a camera to.
+#
+# An empty floor is the honest starting state, and it is also the only one that
+# makes an empty state on the map REACHABLE — with three fictional rooms sitting
+# there, it never was.
 DEFAULT_MAP = {
     "version": 2,
     "units": "m",
     "floors": [
         {
             "id": "f0",
-            "name": "Térreo",
+            # English, like every other source string in this product.
+            # `Térreo` reached an English household verbatim, and was invisible
+            # to a translation layer whose keys are English.
+            "name": "Ground floor",
+            "level": 0,
+            "rooms": [],
+            "walls": [],
+            "features": [],
+            "zones": [],
+            "backdrop": None,
+        }
+    ],
+}
+
+# The three-room house, kept for the two places it is honest: the simulated
+# demo, and tests that need a plan with rooms in it. Never the fallback for a
+# real install.
+SAMPLE_MAP = {
+    "version": 2,
+    "units": "m",
+    "floors": [
+        {
+            "id": "f0",
+            "name": "Ground floor",
             "level": 0,
             "rooms": [
                 {"id": "r_sala",    "name": "sala",    "polygon": [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]},
@@ -43,10 +79,15 @@ def _migrate_v1(m: dict) -> dict:
             poly = _rect_to_polygon(float(r["x"]), float(r["y"]), float(r["w"]), float(r["h"]))
         except (KeyError, TypeError, ValueError):
             continue
-        rooms.append({"id": r.get("id") or f"r{i}", "name": str(r.get("name", f"cômodo {i}")), "polygon": poly})
+        # English defaults. `cômodo 3` and `Térreo` were Portuguese words
+        # written into an English product's data by a migration, so they
+        # reached an English household verbatim and were invisible to a
+        # translation layer whose keys are English.
+        rooms.append({"id": r.get("id") or f"r{i}",
+                      "name": str(r.get("name", f"Room {i}")), "polygon": poly})
     return {"version": 2, "units": "m", "floors": [
-        {"id": "f0", "name": "Térreo", "level": 0, "rooms": rooms, "walls": [], "features": [],
-         "zones": [], "backdrop": None}
+        {"id": "f0", "name": "Ground floor", "level": 0, "rooms": rooms,
+         "walls": [], "features": [], "zones": [], "backdrop": None}
     ]}
 
 
@@ -433,3 +474,20 @@ def save_house_map(path: str, doc: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def room_placeholder(name: str, index: int = 0) -> dict:
+    """A plain rectangle for a room somebody has NAMED but not drawn.
+
+    The setup wizard asks which room the Core is in, and until now threw that
+    answer away as far as the floor plan was concerned: it was recorded against
+    the Core and the map stayed fictional. A named room with an obviously
+    provisional shape beats an invented room with a precise one — the name is
+    real, the geometry plainly is not, and the map editor is where it gets
+    corrected.
+    """
+    x = (index % 3) * 4.2
+    y = (index // 3) * 3.2
+    slug = "".join(c if c.isalnum() else "_" for c in str(name).lower())[:24]
+    return {"id": f"r_{slug or index}", "name": str(name),
+            "polygon": _rect_to_polygon(x, y, 4.0, 3.0)}

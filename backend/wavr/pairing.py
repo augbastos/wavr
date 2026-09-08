@@ -14,6 +14,7 @@ deterministic under test with zero real waiting.
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -102,10 +103,40 @@ class PairingManager:
             session_expires_at=now + timedelta(hours=hours))
         return code
 
-    def redeem(self, code: str, name: str, source_ip: str | None = None) -> tuple[str, str] | None:
+    def is_throttled(self, source_ip: str | None = None) -> bool:
+        """Is this host currently over the failed-attempt cap?
+
+        Exists so a caller can tell the two refusals apart. `redeem` returns
+        `None` both for a wrong code and for a throttled host, and a screen that
+        renders one sentence for both tells somebody holding the CORRECT code
+        that their code is invalid -- then tells them the same about the next
+        code they generate, because the block is on the host. Two rounds of that
+        and "pairing is broken" is the reasonable conclusion.
+
+        Read-only: it purges expired timestamps (which is what keeps the map
+        bounded) and counts. It never records an attempt, so ASKING can never
+        push somebody over the line.
+        """
+        now = self._now()
+        self._purge_failed(now)
+        return len(self._failed.get(source_ip or "", ())) >= self._max_failed
+
+    def redeem(self, code: str, name: str, source_ip: str | None = None,
+               device_key: str | None = None) -> tuple[str, str] | None:
         """Redeem a code for a new device: returns (device_id, token) once, or None
         if the code is unknown, already used, or expired. One-time: the code is
         consumed on the first attempt (valid or not) so it can't be reused.
+
+        `device_key` is an opaque, already-hashed value the client says is the
+        same on the same physical device tomorrow. When one is given, the
+        credentials this device held BEFORE are revoked as part of the redeem:
+        one phone, one live key. Without it nothing is matched and nothing is
+        revoked — which is every caller that predates this and every client that
+        cannot produce a stable value.
+
+        Pairing the same phone four times gave the first user four live
+        credentials to his home, three of them forgotten. Re-pairing is not a
+        rare event: it happens on every reinstall.
 
         `source_ip` (the caller's `request.client.host`) keys the FAILED-attempt
         rate-limiter PER HOST (sweep [4]/[13]): one host's junk guesses throttle
@@ -128,10 +159,49 @@ class PairingManager:
         # expires on its own. A NORMAL code passes NO expires_at kwarg at all, so this
         # call is byte-identical to before guest mode for every existing caller and every
         # test stub whose add() signature predates the kwarg (regression-safe).
+        chave = (device_key or "").strip() or None
+        # `device_key=` is passed only when there IS one. A test double or an
+        # older store whose `add()` predates the kwarg keeps working untouched,
+        # which is the same care the `expires_at` line below was written with.
+        extras = {"device_key": chave} if chave else {}
         if pending.session_expires_at is not None:
-            return self._store.add(name, pending.role,
-                                   expires_at=pending.session_expires_at.isoformat())
-        return self._store.add(name, pending.role)
+            resultado = self._store.add(
+                name, pending.role,
+                expires_at=pending.session_expires_at.isoformat(), **extras)
+        else:
+            resultado = self._store.add(name, pending.role, **extras)
+
+        # Retire what this same phone held before. AFTER the new credential
+        # exists, never before: a redeem that revoked first and then failed to
+        # mint would lock somebody out of their own home with no way back in.
+        if chave and resultado:
+            aposentar = getattr(self._store, "supersede_same_device", None)
+            if callable(aposentar):
+                try:
+                    # Say it. The store returns the ids precisely so a
+                    # credential does not disappear from somebody's list with
+                    # no record of why, and an empty list is worth nothing in
+                    # the log, so only a real retirement is reported.
+                    retirados = aposentar(chave, resultado[0]) or []
+                    if retirados:
+                        logging.info(
+                            "pairing: %d earlier credential(s) for this same "
+                            "device retired: %s", len(retirados),
+                            ", ".join(retirados))
+                except Exception:      # noqa: BLE001
+                    # The pairing succeeded and the person has a working key.
+                    # A stale row left behind is a tidiness problem; failing the
+                    # redeem over it would be a lockout.
+                    logging.warning("pairing: could not retire this device's "
+                                    "previous credentials", exc_info=True)
+            else:
+                # Louder than the failure path used to be. A store without the
+                # method degrades all the way back to stacking live keys, and
+                # that must not be the quietest outcome in this function.
+                logging.warning("pairing: this store cannot retire a device's "
+                                "earlier credentials; duplicates will "
+                                "accumulate")
+        return resultado
 
     # -- WS tickets --------------------------------------------------------
     def mint_ticket(self, device_id: str) -> str:

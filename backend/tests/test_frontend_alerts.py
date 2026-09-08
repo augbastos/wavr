@@ -12,7 +12,8 @@ _INDEX = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 
 
 def _html() -> str:
-    return _INDEX.read_text(encoding="utf-8")
+    from tests.frontend_source import ALL
+    return ALL          # index.html plus every module it loads
 
 
 def test_fall_alert_has_honest_render_branch_in_network_list():
@@ -27,6 +28,12 @@ def test_fall_alert_has_honest_render_branch_in_network_list():
 
 def test_fall_alert_glance_box_explain_is_honest_and_disclaims():
     html = _html()
-    # The Core glance-box "why" map has a fall entry with the disclaimer.
-    assert "fall_suspected:" in html
+    # The glance box explains `fall_suspected`, and the explanation disclaims.
+    #
+    # This looked for the literal `fall_suspected:` — the shape of an object
+    # KEY — and the map became a `switch` when those strings were made
+    # translatable. The colon was never the point. Matched on the kind and the
+    # disclaimer separately, so a refactor of the dispatch cannot break this
+    # again while a deleted disclaimer still can.
+    assert "fall_suspected" in html
     assert "not a certified medical" in html

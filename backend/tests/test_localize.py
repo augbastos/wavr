@@ -201,7 +201,7 @@ def test_monocular_rejects_bad_image_size():
 # --------------------------------------------------------------------------- #
 
 def test_polygon_min_corner_and_room_local():
-    poly = [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]   # quarto (DEFAULT_MAP)
+    poly = [[4.2, 0.0], [7.7, 0.0], [7.7, 3.0], [4.2, 3.0]]   # quarto (SAMPLE_MAP)
     assert polygon_min_corner(poly) == (4.2, 0.0)
     # A floor point at (5.2, 1.0) is 1.0m right, 1.0m down inside the room.
     assert to_room_local((5.2, 1.0), poly) == pytest.approx((1.0, 1.0))

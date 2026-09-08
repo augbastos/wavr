@@ -326,6 +326,44 @@ class Config:
     watch_intrusion_loud: bool
 
 
+def _bind_host() -> str:
+    """Which address the Core listens on, and why the default depends.
+
+    `WAVR_BIND` wins whenever it is set, because that is somebody stating an
+    address on purpose -- from their own environment, or from the "Listen on"
+    setting, which the settings store exports into `WAVR_BIND`.
+
+    With nothing stated, the default follows the switch that decides whether
+    other devices are welcome at all:
+
+      * multidevice OFF -> `127.0.0.1`. Unchanged, and `serve.py` hardcodes
+        loopback on that branch anyway, so it is the honest value rather than a
+        second one that never applies.
+      * multidevice ON  -> `0.0.0.0`, because "Let other devices connect" has
+        to mean that.
+
+    ## The failure this replaces
+
+    The default was `127.0.0.1` in both modes, so turning the switch on gave a
+    Core that spoke HTTPS to itself. Measured on the frozen binary, with the
+    switch flipped from the settings screen and the Core restarted: it
+    advertised `https://<lan-ip>:<port>` on the setup screen and inside the
+    pairing QR, and `netstat` showed it LISTENING on `127.0.0.1` only. A phone
+    scanning that QR dials an address where nothing is listening. No error
+    reaches the Core, because nothing reaches the Core.
+
+    Getting it right required knowing that a second setting existed, that it
+    was called "Listen on", and that `0.0.0.0` is how you say "everyone" --
+    three pieces of network knowledge, to make a switch do what its own label
+    already promised.
+    """
+    stated = os.getenv("WAVR_BIND")
+    if stated:
+        return stated
+    multidevice = os.getenv("WAVR_MULTIDEVICE", "").lower() in ("1", "true", "yes")
+    return "0.0.0.0" if multidevice else "127.0.0.1"
+
+
 def load_config() -> Config:
     # Network MAC->person map (WAVR_NET_KNOWN, "mac=person" pairs), mirroring the
     # BLE parse below. Computed before Config(...) so its keys can be folded into
@@ -435,7 +473,7 @@ def load_config() -> Config:
         # to start if this is on without multidevice (mirrors peers_enabled above).
         nodes_enabled=os.getenv("WAVR_NODES_ENABLED", "").lower() in ("1", "true", "yes"),
         instance_name=os.getenv("WAVR_INSTANCE_NAME", "Wavr"),
-        bind_host=os.getenv("WAVR_BIND", "127.0.0.1"),
+        bind_host=_bind_host(),
         tls_cert=os.getenv("WAVR_TLS_CERT", ""),
         tls_key=os.getenv("WAVR_TLS_KEY", ""),
         # Listen port for `python -m wavr.serve` (both plain and TLS modes).

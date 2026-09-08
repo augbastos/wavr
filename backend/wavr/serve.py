@@ -33,6 +33,7 @@ import uvicorn
 from wavr.app import DEFAULT_MAX_BODY_BYTES, app
 from wavr.app import MaxBodySizeMiddleware as MaxBodySizeMiddleware  # noqa: F401 (re-exported)
 from wavr.config import load_config
+from wavr.lan_reachability import note_bound_host
 
 
 def main() -> None:
@@ -73,6 +74,11 @@ def main() -> None:
 
         local_ip = _local_ipv4() or "127.0.0.1"
         cert_file, key_file = ensure_cert(cfg.tls_cert, cfg.tls_key, local_ip)
+        # Tell the app which address the socket really took, so the setup
+        # screen and the pairing QR advertise something that answers. Only the
+        # launcher knows: `cfg.bind_host` is intent, and the Dockerfile states
+        # its own on the command line where the config never sees it.
+        note_bound_host(cfg.bind_host, cfg.port)
         uvicorn.run(
             bound_app,
             host=cfg.bind_host,
@@ -82,6 +88,7 @@ def main() -> None:
         )
     else:
         # Default: loopback-only plain HTTP, byte-identical to today.
+        note_bound_host("127.0.0.1", cfg.port)
         uvicorn.run(bound_app, host="127.0.0.1", port=cfg.port)
 
 

@@ -5,6 +5,8 @@ know who walked in or that anyone walked at all. An application built against
 `person.entered_room` would make promises to its own users that Wavr cannot
 keep, and the failure would surface as Wavr's bug.
 """
+import json
+
 from wavr.spatial_events import (
     EV_AGREEMENT, EV_COUNT, EV_DISAGREEMENT, EV_OCCUPANCY, EV_PRECISION,
     EV_SENSOR_OFFLINE, EV_SENSOR_ONLINE, EVENT_TYPES, SpatialEvents,
@@ -120,12 +122,24 @@ def test_precision_changes_carry_what_would_improve_it():
 # -- Per-sensor health, only possible since the merge stopped collapsing them ---
 
 def test_a_sensor_going_quiet_is_named():
+    """Named by a LABEL this module assigns, never by the id.
+
+    `sensor_id` is very often the words an operator typed — "hall-radar",
+    "Ana's room camera" — and protocol 2 removed it from the experience context
+    for exactly that reason. It went on shipping here, on `/ws/events` and
+    `/api/events/recent`: the same private string, the same audience, a
+    different route. An application still needs to know WHICH sensor, so it
+    gets a stable per-room label instead.
+    """
     ev = SpatialEvents()
     ev.observe(state(sources=[src("hall-cam"), src("hall-radar", "mmwave")]))
     out = ev.observe(state(sources=[src("hall-cam")]))
     assert _kinds(out) == [EV_SENSOR_OFFLINE]
-    assert out[0]["sensor_id"] == "hall-radar"
     assert out[0]["modality"] == "mmwave"
+    assert out[0]["label"] == "mmwave 1"
+    assert "sensor_id" not in out[0], (
+        "the operator's own word for the sensor is back on the event stream")
+    assert "hall-radar" not in json.dumps(out[0])
 
 
 def test_a_sensor_coming_back_is_named():
@@ -133,7 +147,19 @@ def test_a_sensor_coming_back_is_named():
     ev.observe(state(sources=[src("hall-cam")]))
     out = ev.observe(state(sources=[src("hall-cam"), src("hall-radar", "mmwave")]))
     assert _kinds(out) == [EV_SENSOR_ONLINE]
-    assert out[0]["sensor_id"] == "hall-radar"
+    assert out[0]["label"] == "mmwave 1"
+    assert "hall-radar" not in json.dumps(out[0])
+
+
+def test_the_same_sensor_keeps_the_same_label_across_events():
+    """A label that changed between "went offline" and "came back" would be
+    useless for the one thing it exists for: telling an application that the
+    thing that returned is the thing that left."""
+    ev = SpatialEvents()
+    ev.observe(state(sources=[src("hall-cam"), src("hall-radar", "mmwave")]))
+    gone = ev.observe(state(sources=[src("hall-cam")]))
+    back = ev.observe(state(sources=[src("hall-cam"), src("hall-radar", "mmwave")]))
+    assert gone[0]["label"] == back[0]["label"]
 
 
 def test_a_stale_sensor_counts_as_offline():
@@ -160,9 +186,12 @@ def test_sensors_starting_to_disagree_is_an_event():
     out = ev.observe(state(sources=[src("cam", presence=False),
                                     src("radar", "mmwave", presence=True)]))
     assert EV_DISAGREEMENT in _kinds(out)
-    said = {s["sensor_id"]: s["says"] for s in
-            [e for e in out if e["event"] == EV_DISAGREEMENT][0]["sensors"]}
-    assert said == {"cam": "empty", "radar": "occupied"}
+    row = [e for e in out if e["event"] == EV_DISAGREEMENT][0]
+    said = {s["label"]: s["says"] for s in row["sensors"]}
+    assert said == {"camera 1": "empty", "mmwave 1": "occupied"}
+    # The disagreement carries the most detail of anything on this stream,
+    # which makes it the likeliest place for an id to come back.
+    assert "sensor_id" not in json.dumps(row), row
 
 
 def test_resolving_a_disagreement_is_an_event_too():

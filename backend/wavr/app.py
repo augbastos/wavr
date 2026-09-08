@@ -14,6 +14,7 @@ import sqlite3
 import sys
 import tarfile
 from contextlib import asynccontextmanager, suppress
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,12 +27,21 @@ from starlette.responses import JSONResponse
 from wavr import __version__
 from wavr.config import load_config
 from wavr.runtime_status import assess as assess_runtime
-from wavr.attention import collect as collect_attention, summarise as summarise_attention
+from wavr.attention import (
+    CAMERA_URL_TITLE, collect as collect_attention,
+    summarise as summarise_attention,
+)
 from wavr.disagreement import disagreement as room_disagreement
 from wavr.contracts import version as contract_version
-from wavr.housemap import (load_house_map, room_names, room_polygon, save_house_map,
-                           upsert_room, validate_house_map, HouseMapError)
+from wavr.housemap import (load_house_map, room_names, room_placeholder,
+                           room_polygon, save_house_map, upsert_room,
+                           validate_house_map, HouseMapError)
 from wavr.storage import Storage
+from wavr.lan_reachability import bound_port, serves_the_lan
+# Module level, and it stays cheap: `wavr.tls` is stdlib-only at import time --
+# `cryptography` is a lazy in-function import on the generate/validate path
+# only, so a base install without the [tls] extra is unaffected.
+from wavr.tls import SchemeRecorder, served_scheme, serving_tls
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine, house_person_count
 from wavr.sourcemanager import SourceManager
@@ -57,7 +67,8 @@ from wavr.notifier import make_notifier
 from wavr.narrator import Narrator, make_generate, provider_configured
 from wavr.netinventory_service import NetworkInventoryService
 from wavr.api_inventory import build_inventory_router, inventory_view, merge_alerts
-from wavr.house_status import compose_house_status, DEFAULT_NETWORK_WINDOW_MINUTES
+from wavr.house_status import (compose_house_status, LAYER_NETWORK,
+                               LAYER_PHYSICAL, DEFAULT_NETWORK_WINDOW_MINUTES)
 from wavr.watch import (WatchMode, IntrusionAlertLog, known_present_persons,
                         project_state, room_unrecognized, house_unrecognized)
 from wavr.fall_detect import FallDetector, lying_outside_zone
@@ -100,6 +111,11 @@ from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
 from wavr.person_presence import DevicePresence, PersonPresence, RoomPresence
 from wavr.stillness import StillnessDetector, room_motionless
 from wavr.connector_store import ConnectorStore
+# `_generic_descriptor` is imported, not reimplemented, so the connector list
+# the privacy/trust/runtime surfaces reason about is BYTE-IDENTICAL to the one
+# GET /api/connectors serves -- a second copy of that shape would drift, and
+# the drift would be an egress row that one screen shows and another does not.
+from wavr.api_connectors import _generic_descriptor as generic_connector_descriptor
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
 from wavr.connectors.notify.digest import compose_digest, send_digest
@@ -110,7 +126,8 @@ from wavr.api_identity import build_identity_router
 from wavr.api_routines import build_routines_router
 from wavr.devices import DeviceStore, VALID_CONSENT, _is_expired
 from wavr.space_store import SpaceStore
-from wavr.core_registry import CoreRegistry, VERDICT_CONTESTED, VERDICT_YIELD
+from wavr.core_registry import (CoreRegistry, LEASE_SECONDS, VERDICT_CONTESTED,
+                                VERDICT_YIELD)
 from wavr.discovery_inbox import KIND_PEER_CORE
 from wavr.discovery_inbox import KIND_CAMERA_FOUND as _KIND_CAMERA_FOUND
 from wavr import peer_client
@@ -126,6 +143,7 @@ from wavr.discovery_inbox import DiscoveryInbox
 from wavr.discovery_feed import (feed_core_topology, feed_devices,
                                  feed_pending_nodes)
 from wavr.api_coverage import build_coverage_router
+from wavr.api_erasure import build_erasure_router
 from wavr.api_privacy import build_privacy_router
 from wavr.provider_catalog import build_registry as build_provider_registry
 from wavr.spatial_events import SpatialEvents
@@ -136,7 +154,10 @@ from wavr.reliability import CAP_PRESENCE, ReliabilityStore
 from wavr.topology import TopologyStore
 from wavr.validation import ValidationSession, ValidationStore
 from wavr.services.discovery import run_discovery_pass
-from wavr.sensor_coverage import collect_coverage, summarize as coverage_summary
+from wavr.sensor_coverage import (
+    KIND_HOST as COVERAGE_KIND_HOST, collect_coverage,
+    summarize as coverage_summary,
+)
 from wavr.api_space import (build_discovery_router, build_self_manifest_router,
                             build_settings_router, build_setup_router,
                             build_space_router)
@@ -306,6 +327,28 @@ def _load_device_catalog() -> list:
 _OTA_ASSET_NAMES = ("index.html", "manifest.webmanifest", "sw.js", "icon.svg", "measure.html")
 
 
+def _ota_module_names() -> tuple[str, ...]:
+    """The `js/` modules the shell loads, in the order it loads them.
+
+    Read from index.html rather than listed here, for the reason the whole
+    `/js/{name}` route exists: a hand-maintained list beside a shell that
+    changes is a list that goes stale, and this one goes stale INVISIBLY. Until
+    this was added the bundle was still the pre-split five files — and before
+    the split index.html carried 783 KB of inline script, so those five WERE the
+    application. Afterwards the tarball was a 349 KB shell plus a service worker
+    naming 44 files that were not in the archive: a companion that applied the
+    update got chrome that renders and does nothing.
+    """
+    import re
+    try:
+        shell = _INDEX.read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    names = re.findall(r'<script src="js/([a-z0-9.-]+)"', shell)
+    # Same containment rule as the route that serves them.
+    return tuple(n for n in names if (_INDEX.parent / "js" / n).is_file())
+
+
 @functools.lru_cache(maxsize=1)
 def _build_ota_bundle() -> dict:
     """Gzip-tar the OTA-eligible web assets + hash/size the result. Cached
@@ -318,6 +361,8 @@ def _build_ota_bundle() -> dict:
             path = _INDEX.parent / name
             if path.exists():
                 tar.add(path, arcname=name)
+        for name in _ota_module_names():
+            tar.add(_INDEX.parent / "js" / name, arcname=f"js/{name}")
     data = buf.getvalue()
     return {"data": data, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 
@@ -340,7 +385,27 @@ _TOKEN_EXEMPT_PATHS = frozenset({
 
 
 def _is_token_exempt(path: str) -> bool:
-    return path in _TOKEN_EXEMPT_PATHS or path.startswith("/vendor/")
+    # "/js/" is exempt for the same reason "/" and "/vendor/" are, and leaving
+    # it out was not a stricter policy — it was a broken product.
+    #
+    # With WAVR_LOCAL_TOKEN set, `/` and `/index.html` returned 200 and every
+    # module returned 401. The chrome painted — tabs, tiles, headings, all
+    # visible — and nothing worked: no tab switched, no overlay opened, `WavrT`
+    # and `MODE` and `provider` were undefined. A photograph of a product, with
+    # no message saying why. And it took the kiosk lock with it: the
+    # `if (r.status === 401) return {pin_set: true}` fail-safe, added
+    # specifically so this flag could not leave a panel unlocked, lives in
+    # `core-panel.js` — which was itself one of the 401s.
+    #
+    # These files are what the browser must fetch to render the page it was
+    # just allowed to fetch. They are script and markup, no data and no action;
+    # every route they then call is gated normally, and the local token is
+    # about stopping a same-machine process READING inventory and PII, which
+    # none of them contain. The `/js/{name}` route additionally refuses any
+    # name that is not a bare `*.js` inside `frontend/js`.
+    return (path in _TOKEN_EXEMPT_PATHS
+            or path.startswith("/vendor/")
+            or path.startswith("/js/"))
 
 
 # Everything reachable WITHOUT a credential, in one place.
@@ -382,11 +447,15 @@ _UNAUTH_ONBOARDING_PATHS = frozenset({
 _STATIC_SHELL_PATHS = frozenset({
     "/", "/index.html", "/measure.html", "/manifest.webmanifest",
     "/sw.js", "/icon.svg",
-    "/js/wizard.js", "/js/discoveries.js", "/js/trust.js", "/js/developer.js",
-    "/js/runtime.js", "/js/format.js",
     "/sdk/javascript/wavr.js",
 })
-_STATIC_SHELL_PREFIXES = ("/vendor/", "/experiences/")
+# "/js/" is a PREFIX rather than a list of filenames for the same reason the
+# route that serves it is one route: the list had to be edited in lockstep with
+# the shell, and a module missing from it is not "one script gated" — the
+# script 404s, `Cache.addAll` rejects as a unit, and offline launch is gone.
+# Nothing behind the prefix is data or action; the route itself refuses any
+# name that is not a bare `*.js` inside `frontend/js`.
+_STATIC_SHELL_PREFIXES = ("/vendor/", "/experiences/", "/js/")
 
 
 def _is_static_shell(path: str) -> bool:
@@ -655,6 +724,50 @@ def _probe_mcast_viability(own_ip: str, duration: float = 4.0):
                 s.close()
 
 
+# -- "Does this leave your network?", asked once ----------------------------
+#
+# Every surface that answers that question -- the runtime status (tray, menu
+# bar, Android notification, `wavr status`, the shell chip), the Privacy
+# posture screen and the Trust screen -- reads `_egress_now()` inside
+# `create_app`, which filters connector DESCRIPTORS (the shape GET
+# /api/connectors serves) through this predicate. It is deliberately the same
+# rule the Connectors screen already draws with, in
+# `frontend/js/connectors.js`:
+#
+#     direction === "outbound" && !/^local/i.test(scope || "")
+#
+# Two implementations of "is anything reaching out" eventually disagree in
+# front of somebody who has no way to tell which is right, and this is the one
+# question on which a comfortable answer costs the whole product's credibility.
+#
+# The predicate takes a DESCRIPTOR, never a raw ConnectorStore row: that table
+# is id/kind/label/enabled/scope/config_json/created_ts and carries no
+# direction at all, so a row-based version can only guess. (An earlier one
+# filtered on `reach`, which is a PROVIDER field present nowhere on this table,
+# so its answer was permanently "" and the egress list was always empty.)
+#
+# A descriptor with no scope counts as egress. An unknown reach must read as
+# "leaves", never as "stays": that is the only direction a privacy claim is
+# allowed to be wrong in.
+def _is_egress_connector(descriptor) -> bool:
+    if descriptor.get("direction") != "outbound":
+        return False
+    return not str(descriptor.get("scope") or "").lower().startswith("local")
+
+
+# The connectors whose own sending code re-reads the System-tab egress master
+# (`ConnectorStore.egress_allowed()`) before it sends -- verified at each
+# chokepoint: the narrator (`/api/narrate`), the Telegram sender
+# (`make_telegram_send`), the daily digest, the diagnostics auto-send and the
+# Assistant's cloud engine. For these, master-off means the connection really
+# cannot carry anything, so naming it as reaching out would be a false alarm.
+# Home Assistant control does NOT consult the master, and is absent here on
+# purpose: narrowing it would report "off" for a path that still works, which
+# is the one direction these screens must never be wrong in.
+_MASTER_GATED_EGRESS = frozenset({
+    "narrator", "telegram", "digest", "diagnostics", "assistant-cloud"})
+
+
 def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=None,
                rules_publish=None, narrator=None, notify=None, device_meta=None,
                internet_monitor=None, health_check=None, dhcp_monitor=None,
@@ -699,17 +812,36 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # as a `role=central` device, so the whole DeviceStore/PairingManager/middleware
     # stack that multidevice builds MUST be present. Fail fast rather than silently
     # mounting peer routers that reference a None _devices/_pairing.
+    # DEGRADE, do not die.
+    #
+    # These two raised RuntimeError, and both flags are writable from the
+    # Settings screen — so saving one without "Let other devices connect" made
+    # the next start fail, and the only surface that could undo it is served by
+    # the process that no longer boots. A UI-writable setting must never be
+    # able to brick the Core.
+    #
+    # `settings_store` now refuses the write, which stops it happening again;
+    # this is the recovery for an install that already has the bad pair on
+    # disk. The original intent is kept exactly: the peer routers are still NOT
+    # mounted, because they reference a `_devices`/`_pairing` that does not
+    # exist without multidevice. The flag is simply treated as the off it
+    # effectively is, loudly.
     if cfg.peers_enabled and not cfg.multidevice:
-        raise RuntimeError(
-            "WAVR_PEERS_ENABLED requires WAVR_MULTIDEVICE=1 -- peer identity "
-            "IS a multidevice central identity")
+        logging.error(
+            "WAVR_PEERS_ENABLED needs WAVR_MULTIDEVICE=1 — peer identity IS a "
+            "multidevice central identity. Starting with peers OFF; turn on "
+            "'Let other devices connect' in Settings, then this one.")
+        cfg = replace(cfg, peers_enabled=False)
     # Sensor nodes (design 2026-07-11): a node is a LAN device that needs multidevice's
     # LAN bind + local TLS -- same "fail fast rather than silently mount a broken
     # surface" rule as the peers check above.
     if cfg.nodes_enabled and not cfg.multidevice:
-        raise RuntimeError(
-            "WAVR_NODES_ENABLED requires WAVR_MULTIDEVICE=1 -- a node is a LAN "
-            "device that needs multidevice's LAN bind + local TLS")
+        logging.error(
+            "WAVR_NODES_ENABLED needs WAVR_MULTIDEVICE=1 — a node is a LAN "
+            "device that needs multidevice's LAN bind and local TLS. Starting "
+            "with nodes OFF; turn on 'Let other devices connect' in Settings, "
+            "then this one.")
+        cfg = replace(cfg, nodes_enabled=False)
     _hub = hub or Hub()
     _storage = storage or Storage(cfg.db_path)
     # Wall-clock ageing is applied ONLY to the engine this function builds itself
@@ -820,6 +952,42 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # would corrupt DEFAULT_MAP process-wide. Copy once so _house is always private.
     _house = copy.deepcopy(load_house_map(cfg.house_map))
 
+    def _seed_first_room(name: str) -> bool:
+        """Put the room the operator named onto an otherwise empty floor plan.
+
+        `DEFAULT_MAP` ships with no rooms now, because a fresh install genuinely
+        has none — and the wizard already asks which room the Core is in, then
+        used that answer only to label the Core. So the first screen after setup
+        showed a map of nothing, next to a Core that knew perfectly well it was
+        in the kitchen.
+
+        Deliberately narrow: it refuses if the plan already has ANY room, so it
+        can never overwrite a floor plan somebody drew, and it is a no-op
+        without a name. The rectangle is a placeholder and looks like one; the
+        map editor is where it becomes the right shape.
+        """
+        name = str(name or "").strip()
+        if not name:
+            return False
+        if any(f.get("rooms") for f in _house.get("floors") or []):
+            return False
+        doc = copy.deepcopy(_house)
+        floors = doc.get("floors") or []
+        if not floors:
+            return False
+        floors[0]["rooms"] = [room_placeholder(name, 0)]
+        try:
+            save_house_map(cfg.house_map, doc)
+        except Exception:                 # noqa: BLE001
+            # A Space that exists with no floor plan is recoverable in the map
+            # editor; a setup that 500s because the plan could not be written
+            # is not. Log and carry on.
+            logging.warning("could not seed the first room", exc_info=True)
+            return False
+        _house.clear()
+        _house.update(doc)
+        return True
+
     # Connector registry (project_wavr_connectors_vision): the persistence for the
     # single 'Connectors & Services' egress surface. Always built (like CameraStore /
     # identity_store), inert until the admin toggles something -- an EMPTY registry is
@@ -864,18 +1032,37 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     _telegram_send = make_telegram_send(_connectors)
 
     def _notify_all(msg: str, *, kind: str, severity: str = "alert",
-                    room: str | None = None) -> None:
-        """Fan a derived-only alert edge out to every opt-in sink: the existing
-        ntfy `_notify` (unchanged, sync fire) AND Telegram (`telegram` connector
-        row). `send()` is a blocking urllib POST (see connectors/notify/
-        telegram.py's own NON-BLOCKING note), so it is offloaded via
-        asyncio.to_thread rather than awaited inline -- this never stalls the
-        fusion/ingest path it is called from. Each sink is independently
-        opt-in: calling this unconditionally costs nothing when both are off
-        (ntfy: `_notify` is None -> skipped; Telegram: the is_enabled() check
-        below skips the thread dispatch entirely -- zero network attempted)."""
+                    room: str | None = None) -> int:
+        """Fan a derived-only alert edge out to every opt-in sink, and report
+        HOW MANY took it.
+
+        The sinks are the existing ntfy `_notify` (unchanged, sync fire) and
+        Telegram (`telegram` connector row). `send()` is a blocking urllib POST
+        (see connectors/notify/telegram.py's own NON-BLOCKING note), so it is
+        offloaded via asyncio.to_thread rather than awaited inline -- this never
+        stalls the fusion/ingest path it is called from. Each sink is
+        independently opt-in.
+
+        ## Why it returns a count
+
+        It used to return None, and its own docstring said "calling this
+        unconditionally costs nothing when both are off". True of the cost, and
+        the reason for a much worse failure one layer up: a routine whose only
+        action was "Send me a notification" ran, delivered nothing, and
+        reported `ok`. The Test button said "✓ ran ok", the row said
+        `last_status: ok`, and the household believed they would be told when
+        nobody was home by midnight. They never would be — ntfy is off by
+        default and nothing else was on — and every surface in the product
+        agreed the routine was healthy.
+
+        Zero sinks is not a successful send. The caller decides what to do
+        about it; `ActionExecutor` treats it as a failed action, which is what
+        turns "✓ ran ok" into a row that says why.
+        """
+        taken = 0
         if _notify:
             _notify(msg)
+            taken += 1
         if _connectors.is_enabled("telegram"):
             try:
                 loop = asyncio.get_running_loop()
@@ -884,6 +1071,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if loop is not None:
                 # On the event loop (fusion/ingest alert path): offload the blocking send.
                 loop.create_task(asyncio.to_thread(_telegram_send, kind, severity, room, msg))
+                # Dispatched, not yet delivered — the honest count on this path.
+                # A failure inside the task logs; it cannot be awaited here
+                # without stalling fusion, which is the thing this offload
+                # exists to avoid.
+                taken += 1
             else:
                 # Called from a WORKER THREAD (a routine action runs in asyncio.to_thread) --
                 # there is no running loop to create_task on. The old `except RuntimeError:
@@ -892,8 +1084,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # failure logs loudly instead of vanishing.
                 try:
                     _telegram_send(kind, severity, room, msg)
+                    taken += 1
                 except Exception:
                     logging.warning("telegram send (off-loop routine path) failed", exc_info=True)
+        return taken
+
+    def _notify_or_fail(msg: str, *, kind: str, severity: str = "alert",
+                        room: str | None = None) -> None:
+        """`_notify_all`, for a caller that must not be told it succeeded.
+
+        A routine action is exactly that caller. Raising here is what makes
+        `ActionExecutor.run` return "failed" instead of "ok", so the Test
+        button and the routine's own row say the truth: the message went
+        nowhere, and here is the reason.
+        """
+        if _notify_all(msg, kind=kind, severity=severity, room=room) == 0:
+            raise RuntimeError(
+                "no notification channel is switched on — turn on ntfy or "
+                "Telegram in Connectors, or this routine delivers nothing")
 
     # --- Routines: the user-authored "when THIS -> do THAT" spine (routines.py). The
     # engine taps the SAME arrived/left edge AwayMonitor already emits (via the on_edge
@@ -933,7 +1141,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         lead = (prefix + " ") if prefix else ""
         since = _away_since["ts"]
         if not since:
-            _notify_all(lead + "Welcome home.", kind="routine", severity="note")
+            _notify_or_fail(lead + "Welcome home.", kind="routine", severity="note")
             return
         try:
             meta = _device_meta.all()            # {mac: {first_seen, ...}}
@@ -941,13 +1149,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # A locked/failed read must NOT masquerade as "nothing appeared": the whole
             # point of this push is what showed up while you were out, so a read we could
             # not complete is reported HONESTLY, never as a false all-clear (ADR-0003, F1).
-            _notify_all(lead + "Couldn't check for new devices while you were out.",
+            _notify_or_fail(lead + "Couldn't check for new devices while you were out.",
                         kind="routine", severity="note")
             return
         new_macs = {m for m, d in meta.items() if (d.get("first_seen") or "") >= since}
         n = len(new_macs)
         if n == 0:
-            _notify_all(lead + "No new devices appeared while you were out.",
+            _notify_or_fail(lead + "No new devices appeared while you were out.",
                         kind="routine", severity="note")
             return
         vendors = []
@@ -959,12 +1167,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             vendors = []
         tail = (" (" + ", ".join(vendors[:4]) + ")") if vendors else ""
         plural = "device" if n == 1 else "devices"
-        _notify_all(f"{lead}{n} new {plural} appeared while you were out{tail}.",
+        _notify_or_fail(f"{lead}{n} new {plural} appeared while you were out{tail}.",
                     kind="routine", severity="note")
 
     _routine_executor = ActionExecutor(
         ha_call=_routine_ha_call,
-        notify=lambda m: _notify_all(m, kind="routine", severity="note"),
+        # `_notify_or_fail`, not `_notify_all`: a routine that delivered
+        # nothing must not report "ok". See the docstring on `_notify_all`.
+        notify=lambda m: _notify_or_fail(m, kind="routine", severity="note"),
         watch_set=_watch.set,
         new_devices_notify=_routine_new_devices_notify)
     _routines = RoutinesEngine(
@@ -1140,7 +1350,21 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if _connectors.egress_allowed():
                 _raw_rules_publish(topic, payload, retain)
 
-    _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix) if _rules_publish else None
+    # `coverage_provider` is what carries sensor health, per-room coverage and
+    # per-room availability onto MQTT. Without it `RulesEngine` publishes
+    # occupancy alone, so Home Assistant renders a room whose only camera has
+    # died as a plain "Clear" — indistinguishable from a room a healthy sensor
+    # confirmed empty. That is the collapse the map painter already refuses to
+    # make internally, reappearing at the one boundary where somebody else's
+    # automations act on it.
+    #
+    # A lambda rather than the function itself: `_coverage_summary` is defined
+    # further down this same factory, and the name resolves when the provider is
+    # CALLED, which is a fuse tick later at the earliest. `_refresh_coverage`
+    # throttles the pull and keeps the last known coverage if it raises.
+    _rules = RulesEngine(_rules_publish, prefix=cfg.mqtt_prefix,
+                         coverage_provider=lambda: _coverage_summary()
+                         ) if _rules_publish else None
     # AwayMonitor runs whenever MQTT OR ntfy OR Telegram is opt-in'd -- all three
     # consumers need the SAME house-level arrived/left edge detection. `_rules_publish`
     # stays optional (AwayMonitor no-ops its own `publish` when None) so an ntfy/
@@ -1796,15 +2020,22 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 _rules.handle_routine_anomaly(room, unusual)
                 if unusual:
                     routine_flags.append({"room": room, "ts": now.isoformat()})
-        network_alerts = merge_alerts(_inventory, dhcp_monitor=_dhcp_monitor,
-                                      gateway_monitor=_gateway_monitor)
-        status = compose_house_status(
-            network_alerts=network_alerts,
-            intrusion_alerts=_intrusion.active_alerts(),
-            fall_alerts=_fall.active_alerts() if _fall is not None else None,
-            routine_flags=routine_flags,
-        )
-        _rules.handle_house_status(status)
+        # The SAME composition the dashboard and the MCP tool read, not a second
+        # one beside it.
+        #
+        # This called `compose_house_status` itself, and when the
+        # "nothing is watching" safeguard was added it was added to the other
+        # call site only. The two then disagreed about the same house at the
+        # same moment: `GET /api/house-status` answered `unknown` while this one
+        # published `ok` — RETAINED — to `wavr/house/status`, so a Home
+        # Assistant subscriber held the reassuring answer indefinitely, with no
+        # `checked` field to tell it which answer it had. `_compute_house_status`
+        # says in its own comment that it exists so these "can never drift".
+        #
+        # The routine sweep above is not wasted: it feeds `handle_routine_anomaly`
+        # per room, which is this function's own job, and the composition below
+        # reads the same flags through the shared cache.
+        _rules.handle_house_status(await _compute_house_status())
 
     async def _refuse_loop():
         while True:
@@ -2209,11 +2440,59 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 ]
                 _routine_cache["ts"] = now
                 _routine_cache["flags"] = routine_flags
+        # WHICH layers were actually able to report. Without this, an install
+        # with the network monitor off, no Watch and no occupancy log produces
+        # zero reasons, and zero reasons used to mean "ok" -- the tile said
+        # "Everything looks normal." and the get_house_status MCP tool let an
+        # agent say "everything's fine" about a house nothing was watching.
+        # Nothing was wrong because nothing was looking. See
+        # `compose_house_status`'s "SILENCE, honestly".
+        checked = set()
+        if cfg.net_inventory:
+            checked.add(LAYER_NETWORK)
+        # A layer counts as CHECKED when something is actually observing on it,
+        # never when a store object exists.
+        #
+        # This read `_occupancy_log is not None`, and the occupancy log defaults
+        # to ON (`WAVR_OCCUPANCY_LOG`, "1") — so an empty SQLite table declared
+        # the physical layer able to report, on every fresh install. The
+        # safeguard directly above could therefore not fire in the one case it
+        # was written for: a Core with no cameras, no Watch and no network
+        # monitor answered "ok", and the tile said "Everything looks normal."
+        # over a house nothing was watching. `unknown` was reachable only by
+        # switching OFF a feature that is on by default.
+        #
+        # The log is a RECORD of the physical layer, not a member of it. What
+        # counts is a sensor that is currently healthy, Watch being on, or fall
+        # detection running.
+        # A sensor of the SPACE, not a capability of the machine. `KIND_HOST`
+        # is the host's own BLE radio and its network scan — its own docstring
+        # says so — and both are listed as healthy on a Core with nothing
+        # attached, so counting them was the occupancy-log mistake again in a
+        # different costume.
+        watching = False
+        with suppress(Exception):
+            watching = any(
+                str(getattr(c, "kind", "")) != COVERAGE_KIND_HOST
+                and str(c.health) not in ("offline", "disabled", "unknown",
+                                          "silent", "failed")
+                for c in _sensor_coverage())
+        # And a Core that is actually producing room readings IS observing,
+        # whatever the census says: an injected or external source feeds fusion
+        # without appearing in the hardware inventory, and reporting `unknown`
+        # over a Core that is answering about rooms would be this safeguard
+        # crying wolf — which is how a real warning stops being read.
+        if not watching:
+            with suppress(Exception):
+                watching = bool(list(_fusion.rooms()))
+        if watching or _watch.on or _fall is not None:
+            checked.add(LAYER_PHYSICAL)
         return compose_house_status(network_alerts=network_alerts,
                                     intrusion_alerts=intrusion_alerts,
                                     fall_alerts=fall_alerts,
                                     routine_flags=routine_flags,
-                                    window_minutes=window_minutes)
+                                    window_minutes=window_minutes,
+                                    sources_checked=checked)
 
     async def _digest_once() -> dict:
         # One daily-digest composition+send pass (test seam: app.state.digest_once,
@@ -2273,6 +2552,29 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         except Exception:
             logging.warning("daily digest tick failed", exc_info=True)
             return {"ok": False, "status": "error", "via": None}
+
+    async def _core_heartbeat_loop():
+        """Refresh THIS Core's lease while it is alive.
+
+        The registry decides staleness from `last_seen_ts` against a 120-second
+        lease. Nothing was refreshing it, so the answer was always "stale" and
+        the Space screen carried a permanent, self-referential warning.
+
+        Interval is a third of the lease: one missed tick is slack, two is a
+        signal. Failures are swallowed on purpose -- a Core must not fall over
+        because it could not write a timestamp about itself -- but they are
+        logged, because a heartbeat that quietly stops is how this got here.
+        """
+        interval = max(5.0, LEASE_SECONDS / 3.0)
+        while True:
+            try:
+                me = _core_registry.self_core()
+                if me is not None:
+                    _core_registry.heartbeat(me.core_id)
+            except Exception:      # noqa: BLE001 -- never fatal, always visible
+                logging.warning("this Core could not refresh its own lease",
+                                exc_info=True)
+            await asyncio.sleep(interval)
 
     async def _digest_loop():
         while True:
@@ -2435,11 +2737,20 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         }
 
     # MCP-over-streamable-HTTP (ADR-0008, Slice 1): mount the READ-ONLY MCP transport
-    # in-process at /mcp so it inherits loopback_or_authed + TrustedHostMiddleware + TLS +
-    # DeviceStore. Wired ONLY when multidevice is ON (TLS present) AND the [mcp] extra is
-    # importable; the per-request mcp-http kill-switch (Connectors, default-OFF) is enforced
-    # inside the guard. call_ha_service is ABSENT from this transport (read-only). The stdio
-    # bridge (wavr.mcp_serve) keeps the full gated toolset, unchanged.
+    # in-process at /mcp so it inherits loopback_or_authed + TrustedHostMiddleware +
+    # whatever the socket is + DeviceStore. Wired ONLY when multidevice is ON AND the
+    # [mcp] extra is importable; the per-request mcp-http kill-switch (Connectors,
+    # default-OFF) is enforced inside the guard. call_ha_service is ABSENT from this
+    # transport (read-only). The stdio bridge (wavr.mcp_serve) keeps the full gated
+    # toolset, unchanged.
+    #
+    # This used to read "(TLS present)", which the flag does not mean. It means TLS was
+    # ASKED for, and only `serve.py` acts on it -- the Dockerfile and scripts/wavr.ps1
+    # launch uvicorn directly and serve plain HTTP with the flag set. The mount itself
+    # cannot be decided any other way: it happens at startup, before a connection exists
+    # to read a scheme off. What CAN answer honestly is `features.tls`, which reads the
+    # live connection (see `_serving_tls`), so an operator can see that this transport is
+    # riding an unencrypted socket even though the flag that mounted it says otherwise.
     _mcp_http_route = None
     _mcp_http_sm = None
     if cfg.multidevice:
@@ -2511,9 +2822,26 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                     epoch=(_adv_core.epoch if _adv_core else 0),
                     status=(_adv_core.status if _adv_core else ""),
                     protocol_version=WAVR_PROTOCOL_VERSION)
+            except ModuleNotFoundError:
+                # An optional dependency that simply is not installed. Wavr runs
+                # fine without it; only "other Cores find this one by themselves"
+                # is missing. So: one calm line, not a stack trace.
+                #
+                # This used to log with `exc_info=True`, and the frozen Core
+                # prints to a console window. The first person to install Wavr
+                # therefore watched a Python traceback scroll past on startup and
+                # reported it as the app being stuck. A traceback is a report
+                # that nobody knew what to do with a situation; here somebody
+                # did, three lines up.
+                logging.info("peer discovery over mDNS is off: the optional "
+                             "'zeroconf' package is not installed. Everything "
+                             "else works; other Cores just will not find this "
+                             "one on their own.")
             except Exception:
+                # Anything else is genuinely unexpected, and keeps its traceback.
                 logging.warning("peer mDNS self-advertise unavailable "
-                                "(zeroconf missing or registration failed)", exc_info=True)
+                                "(zeroconf is present but registration failed)",
+                                exc_info=True)
         await manager.start()
         if cfg.net_inventory:
             await _inventory.start()   # opt-in (WAVR_NET_INVENTORY): real LAN scan loop
@@ -2540,6 +2868,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # "digest" connector row), so flipping that on via the Connectors screen
         # takes effect on the NEXT tick with no restart, unlike AwayMonitor's
         # Telegram wiring above.
+        # This Core saying it is still here.
+        #
+        # `CoreRegistry.heartbeat()` was written, documented and never called --
+        # by anything, anywhere. `last_seen_ts` was set once at registration and
+        # never again, and `LEASE_SECONDS` is 120, so two minutes after any
+        # start every Wavr declared its own primary Core absent, permanently, on
+        # its own Settings screen. The first user found it by scrolling.
+        #
+        # A third of the lease, so a missed tick is late rather than fatal, and
+        # so the panel's claim means what it says: a Core that stops answering
+        # really has stopped.
+        cores_task = asyncio.create_task(_core_heartbeat_loop())
         digest_task = asyncio.create_task(_digest_loop())
         routines_task = asyncio.create_task(_routines_loop())
         discovery_task = asyncio.create_task(_discovery_loop())
@@ -2567,7 +2907,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             with suppress(Exception):
                 _routines_warmup_handle.cancel()   # a TimerHandle, cancel is enough
             for t in (rules_task, away_task, refuse_task, digest_task, routines_task,
-                      discovery_task, *list(_routine_tasks)):
+                      discovery_task, cores_task, *list(_routine_tasks)):
                 if t:
                     t.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -2635,7 +2975,75 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 with suppress(Exception):
                     await _mcp_cm.__aexit__(None, None, None)
 
-    app = FastAPI(title="Wavr", lifespan=lifespan)
+    # No auto-mounted docs. FastAPI's defaults put `/docs`, `/redoc` and
+    # `/openapi.json` on the app with NO dependency of their own, so the full
+    # schema of the admin surface -- every route, body shape and parameter --
+    # was readable by any principal the middleware let through, including the
+    # two whose documented containment is a single route each: 'agent'
+    # (surface: /mcp) and 'guest' (surface: the presence:write
+    # register-companion route).
+    #
+    # `/openapi.json` comes back below, gated at `admin` like the rest of the
+    # administration surface. The two HTML UIs do not: Swagger UI and ReDoc
+    # load their JavaScript and CSS from a public CDN, so on a product whose
+    # claim is that nothing leaves the network, opening the built-in docs
+    # would make an outbound request that the Connectors screen -- the ONE
+    # screen that is supposed to enumerate everything reaching outward --
+    # never listed.
+    app = FastAPI(title="Wavr", lifespan=lifespan,
+                  docs_url=None, redoc_url=None, openapi_url=None)
+    # What this Core is ACTUALLY serving, read off the connection.
+    #
+    # `cfg.multidevice` is a feature flag. `serve.py` turns TLS on when it is
+    # set, but serve.py is not the only launcher -- `backend/Dockerfile` and
+    # `scripts/wavr.ps1` run `uvicorn wavr.app:app` directly and are plain HTTP
+    # whatever the flag says. Every claim below used to read the flag, so those
+    # installs printed `https://` URLs nothing could connect to, put one inside
+    # the pairing QR, and asked the operator to compare a certificate
+    # fingerprint against a certificate nobody was serving.
+    #
+    # `SchemeRecorder` writes `app.state.served_scheme` from the ASGI scope, so
+    # the answer comes from uvicorn's own socket. It is state rather than a
+    # request parameter for one reason: some of the callers are zero-arg
+    # providers handed to routers that were built long before any connection
+    # existed, and threading a `Request` through all of them would have meant
+    # five signature changes for one process-wide fact.
+    app.state.served_scheme = ""
+    app.add_middleware(SchemeRecorder, state=app.state)
+
+    def _served_scheme() -> str:
+        return served_scheme(app.state)
+
+    def _reachable_host() -> str:
+        """The host to put in an address handed to another device.
+
+        The LAN address only when the socket is actually on the LAN. A Core
+        listening on loopback that advertises `192.168.x.y` produces a QR a
+        phone dials into silence -- measured, on the frozen binary, before the
+        bind default was fixed: it advertised the LAN address while `netstat`
+        showed it LISTENING on 127.0.0.1 alone.
+
+        Falling back to loopback is not a nicer lie; it is the address that
+        answers. Somebody reading it on the machine itself can still use it,
+        and a phone that cannot reach it now finds out at the moment it is
+        offered rather than after scanning a code.
+        """
+        return _local_ip if serves_the_lan(cfg.bind_host) else "127.0.0.1"
+
+    def _reachable_port() -> int:
+        """The port an address handed to another device should name.
+
+        The third coordinate, and it was the one still coming from
+        configuration. `cfg.port` reads `WAVR_PORT`; a launcher that states
+        `--port` on the command line leaves that unset, so the product
+        advertised 8000 while answering elsewhere. Host, port and scheme are
+        one address: taking two from the socket and one from a setting is the
+        same defect twice removed.
+        """
+        return bound_port(cfg.port)
+
+    def _serving_tls() -> bool:
+        return serving_tls(app.state)
     # Test seams (not routes — never reachable over HTTP, carry no secrets):
     #  * refuse_once: the periodic re-fuse body, invokable once without loop timing
     #    so a test can drive one deterministic decayed tick.
@@ -2740,6 +3148,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 raise HTTPException(status_code=403, detail=f"missing scope: {scope}")
         return _dep
 
+    @app.get("/openapi.json", include_in_schema=False)
+    async def openapi_schema(_=Depends(require_scope("admin"))):
+        """The API schema, at the same tier as the rest of administration.
+
+        Re-registered by hand because FastAPI's own mount carries no
+        dependency at all (see the FastAPI() call above). `admin` is the scope
+        the connectors/identity/device-management routers already gate their
+        reads with: the loopback operator passes (root bypasses scopes), a
+        paired central admin passes, and 'user', 'agent' and 'guest' -- whose
+        surfaces are deliberately a fraction of this schema -- do not.
+
+        No CSRF header requirement: a read a developer opens in a browser tab
+        cannot send one, and the same reasoning that took `require_local` off
+        the reference-experience pages applies here.
+        """
+        return app.openapi()
+
     if cfg.multidevice:
         # `on_redeem` closes the person loop: a code minted for a named person
         # stamps that person onto the device that redeems it, so the middleware
@@ -2761,6 +3186,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                                  delete_deps=[Depends(require_csrf_root)],
                                  on_revoke=_grants.forget_device),
             dependencies=[Depends(require_central), Depends(require_scope("admin"))])
+        # The same cleanup for the other way a credential stops being live: a
+        # phone pairing again and superseding what it held before. Without this
+        # the credential vanishes from the device list and keeps appearing as
+        # holding access to an experience.
+        _devices.set_revoke_hook(_grants.forget_device)
 
     # PRIVACY: the load-bearing access control. Default (WAVR_MULTIDEVICE off) is strict
     # loopback-only, enforced in code so it holds even under --host 0.0.0.0 ("testclient"
@@ -2957,7 +3387,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         name_deps=[Depends(require_local), Depends(require_scope("control"))],
         dhcp_monitor=_dhcp_monitor, gateway_monitor=_gateway_monitor,
         known_store=_known_store, intrusion_log=_intrusion, fall_log=_fall,
-        intrusion_house_loud=cfg.watch_intrusion_loud),
+        intrusion_house_loud=cfg.watch_intrusion_loud,
+        # So that answering "that's mine" in New devices also stops the
+        # Discoveries inbox asking the same question about the same MAC.
+        discovery_inbox=_discovery_inbox),
         dependencies=[Depends(require_scope("network:read"))])
 
     # Peer pairing (Phase 1, C1-fix reshape). Mounted here -- AFTER require_local/
@@ -2980,7 +3413,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             _peer_store, _pairing, cfg))
         app.include_router(build_peers_admin_router(
             _peer_store, _pairing, _devices, cfg, cfg.instance_name,
-            self_base_url=f"https://{_local_ip}:{cfg.port}", local_ip=_local_ip,
+            # A provider, not a string: this router is built before any
+            # connection exists, and the scheme is only knowable from one.
+            self_base_url=lambda: f"{_served_scheme()}://{_reachable_host()}:{_reachable_port()}",
+            local_ip=_local_ip,
             admin_deps=[Depends(require_local), Depends(require_root)],
             linkback_deps=[Depends(require_central)],
             # What a PAIRED peer may ask us about our own leadership. Same
@@ -3017,6 +3453,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         survive the default (non-multidevice) install where no cert has ever been
         generated -- the setup screen runs before TLS exists, so a missing cert is
         an ordinary state here, not an error."""
+        # A cert on disk is not evidence that this connection is encrypted.
+        # `~/.wavr/cert.pem` outlives the process that generated it, so an
+        # install that ran multidevice once and now serves plain HTTP still has
+        # the file -- and used to hand its fingerprint to the pairing screen,
+        # which asks the operator to compare it against what their phone's
+        # browser shows. There is no certificate warning on a plain-HTTP page,
+        # so that comparison cannot be made; the ceremony was theatre, and the
+        # operator finished it believing they had checked something.
+        if not _serving_tls():
+            return ""
         try:
             from wavr.tls import cert_fingerprint, resolved_cert_path
             return cert_fingerprint(resolved_cert_path(cfg.tls_cert)) or ""
@@ -3053,25 +3499,56 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #    (SS15: discover aggressively, activate conservatively).
     app.include_router(build_setup_router(
         _space_store, _settings_store, _core_registry, devices=_devices,
-        instance_name=cfg.instance_name, port=cfg.port, local_ip=_local_ip,
-        cert_fingerprint=_space_cert_fp(),
+        instance_name=cfg.instance_name, port=_reachable_port,
+        # Both are providers rather than values: this router is built at
+        # startup and both answers depend on a connection that does not exist
+        # yet. `cert_fingerprint()` was called HERE, once, so a Core that
+        # generated a cert in a past multidevice run served that fingerprint
+        # forever, over plain HTTP, to a screen that asks the operator to
+        # verify it by hand.
+        cert_fingerprint=_space_cert_fp,
         browse_peers=_browse_wavr_peers,
-        # serve.py only turns on TLS in multidevice mode; anything else is
-        # plain HTTP and the URLs we hand the operator must say so.
-        scheme="https" if cfg.multidevice else "http",
+        # A provider too, for the same reason as the scheme: whether the LAN
+        # address is the truth depends on which interface the launcher bound,
+        # and this router is built before any of that has happened.
+        local_ip=_reachable_host,
+        # Read off the socket, not off the flag: `cfg.multidevice` says TLS was
+        # ASKED for, and only `serve.py` acts on it. The Dockerfile and
+        # scripts/wavr.ps1 launch uvicorn directly and are plain HTTP with the
+        # flag on, and an https:// address the socket cannot answer costs a
+        # first-time operator ten confused minutes.
+        scheme=_served_scheme,
         # Matches the `server=` mdns_peers advertises, so the URL we hand out is
         # the name that is actually being published.
         hostname=f"{cfg.instance_name.lower().replace(' ', '-')}.local",
+        # The wizard asks which room the Core is in, and that answer used to go
+        # only onto the Core record — the floor plan stayed whatever
+        # `DEFAULT_MAP` said, which was a three-room Portuguese house nobody
+        # lives in. The one room the operator DID name now becomes the first
+        # real room on the map. Injected rather than reached for, so the setup
+        # router still owns no filesystem path.
+        seed_room=_seed_first_room,
         deps=[Depends(require_local), Depends(require_root)]))
     # A device describing ITSELF. Mounted here, not beside the other device
     # routes, because `require_authenticated` is defined further down this
-    # function. No scope beyond "is a real principal": the id comes from the
-    # credential, so the only row reachable is the caller's own, and a manifest
-    # is evidence for a recommendation rather than authority. Without this the
-    # Capability Manifest had no writer a companion could reach and stayed NULL.
+    # function. The id comes from the credential, so the only row reachable is
+    # the caller's own, and a manifest is evidence for a recommendation rather
+    # than authority. Without this the Capability Manifest had no writer a
+    # companion could reach and stayed NULL.
+    #
+    # `presence:read` on top, which is not about reading: it is the narrowest
+    # scope that separates a paired COMPANION from the two contained
+    # principals. require_authenticated alone was "is a real principal", and
+    # auth.can_view() includes 'guest' -- so a phone let in for the evening
+    # could write a persistent row that steers what Wavr offers that device,
+    # while auth.py documents its containment twice over as "its ONLY
+    # reachable surface is the presence:write register-companion route".
+    # 'agent' (documented surface: /mcp alone) is already outside can_view.
+    # Same tightening, and the same reason, as /api/core/pin/verify.
     app.include_router(
         build_self_manifest_router(_space_store, _devices,
-                                   deps=[Depends(require_authenticated)]))
+                                   deps=[Depends(require_authenticated),
+                                         Depends(require_scope("presence:read"))]))
     # Coverage names every room and every sensor, so it carries the same gate as
     # administration rather than a read-only one.
     # Guided validation. `latest` is the FULL internal room state (never the
@@ -3091,9 +3568,18 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # report a house that no longer exists.
     @app.get("/api/events/recent")
     async def recent_events(since: str = "", limit: int = 50,
-                            _=Depends(require_local),
-                            __=Depends(require_scope("presence:read"))):
+                            _=Depends(require_scope("presence:read"))):
         """The last few semantic events, for a client that just connected.
+
+        Gated at `presence:read` ONLY, which is the same gate `/ws/events`
+        carries. It also had `require_local`, whose job is state-CHANGING
+        routes and which refuses any role that is not `central` — so one stream
+        had two transports with two different gates, and the HTTP one refused
+        the `user` credential an ordinary pairing produces. This is the only
+        event mechanism in the Python and Kotlin SDKs, and the Python one
+        re-raises `WavrAuthError` without retrying, so `for event in
+        wavr.events():` died on its first iteration for every application that
+        followed the documented pairing.
 
         A short tail, not a history: `since` filters by the event's own
         timestamp so a reconnecting application can catch up without replaying
@@ -3127,10 +3613,16 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             cam_names = {c["name"] for c in _cameras.list()}
             cams_on = sum(1 for s in st.get("sources", [])
                           if s.get("enabled") and s.get("name") in cam_names)
+        # The SAME producer the runtime status and the Trust screen read, so
+        # the three cannot contradict each other -- see `_egress_now`. Counting
+        # enabled registry ROWS (what this did) counted the wrong set twice
+        # over: it included inbound connectors, which reach nothing, and the
+        # reserved `sys:` master-switch rows, which are not connections at all,
+        # while the sentence below promised "the only way anything leaves this
+        # network".
         connectors_on = 0
         with suppress(Exception):
-            connectors_on = sum(1 for c in _connectors.list()
-                                if c.get("enabled"))
+            connectors_on = len(_egress_now())
         return {
             "internet_required": False,
             "account_required": False,
@@ -3156,6 +3648,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     app.include_router(build_privacy_router(
         db_path=cfg.db_path, posture_fn=_privacy_posture, registry=_providers,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
+    # The ACTING half of the privacy screen, kept off the read-only router on
+    # purpose (see api_privacy's docstring) and gated harder than it is:
+    # require_root, the same pair that guards ARP blocking, so an admin
+    # companion across the network cannot delete a household's history. The
+    # cost of that is a walk to the Core; the cost of the alternative is
+    # somebody else's history.
+    app.include_router(build_erasure_router(
+        db_path=cfg.db_path,
+        deps=[Depends(require_local), Depends(require_root)]))
     app.include_router(build_topology_router(
         house_fn=lambda: _house, store=_topology_store,
         deps=[Depends(require_local), Depends(require_scope("admin"))]))
@@ -3308,10 +3809,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # Only the ones actually switched ON, and only the ones that leave
             # this machine. A person must be able to see that something reaches
             # the internet; not being able to find out is the problem.
-            egress = [c.get("connector_id") or c.get("id")
-                      for c in _connectors.list()
-                      if c.get("enabled") and str(c.get("reach", "")) not in
-                      ("local", "lan", "")]
+            #
+            # `_egress_now` because this read USED to be its own: it filtered
+            # raw store rows on a `reach` column that the connectors table does
+            # not have (`reach` is a PROVIDER field), so `str(None-ish)` was ""
+            # and "" was in the excluded tuple -- the list was empty on every
+            # install that has ever run, and the "N connections to the outside
+            # is switched on" finding below was unreachable code.
+            egress = [c["id"] for c in _egress_now()]
 
         space_name = ""
         with suppress(Exception):
@@ -3328,15 +3833,36 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             core = _core_registry.self_core()
             role = str(getattr(core, "status", "") or "") if core else ""
 
+        # A real write probe now that `SpaceStore.healthy()` exists. The
+        # `hasattr` guard stays for an injected double that does not implement
+        # it, but the production path no longer takes it — until it did, the
+        # storage-failure finding was a state nothing could reach.
         db_ok = True
         with suppress(Exception):
-            db_ok = bool(_space_store.healthy()) if hasattr(_space_store, "healthy")                 else True
+            db_ok = (bool(_space_store.healthy())
+                     if hasattr(_space_store, "healthy") else True)
+
+        # Whether the household has switched sensing off.
+        #
+        # `assess` has taken a `sensing_paused` argument since it was written
+        # and this caller never passed one, so PAUSED — the one state that says
+        # "running, and deliberately not watching" — could not occur. The
+        # product then had two ways to describe a paused Space and reached
+        # neither: not this, and (until the fix in `runtime_status`) not the
+        # sensor branch either, which called it HEALTHY.
+        #
+        # Defaults to False on any error rather than True: claiming a pause the
+        # household did not ask for would explain away a genuine outage.
+        sensing_paused = False
+        with suppress(Exception):
+            sensing_paused = not _connectors.sensing_allowed()
 
         return assess_runtime(
             uptime_s=(datetime.now(timezone.utc) - _started_at).total_seconds(),
             last_state_at=last_ts, space_name=space_name, role=role,
             coverage_rows=coverage, source_states=source_states, nodes=nodes,
-            egress_connectors=egress, db_ok=db_ok)
+            egress_connectors=egress, db_ok=db_ok,
+            sensing_paused=sensing_paused)
 
     def _attention_items():
         """Everything waiting for a person, from the stores that already know.
@@ -3447,10 +3973,23 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         cameras = plan.get("cameras", [])
         for cam in cameras:
             with suppress(Exception):
+                # The SAME sentence `attention.CAMERA_URL_TITLE` carries, from
+                # the one constant rather than a second f-string — this was a
+                # second producer of one line, and the two had already drifted:
+                # the attention item was a template the catalogue could hold,
+                # this was a finished sentence with the camera's name inside it.
+                # A discovery card's title is data to the attention inbox, so it
+                # was rendered verbatim, and the row stayed English.
+                #
+                # The template rides in `detail`, which is already a JSON column,
+                # so a translating consumer gets a key it can look up and every
+                # existing consumer still reads the composed `title`.
                 _discovery_inbox.observe(
                     _KIND_CAMERA_FOUND, f"restored:{cam.get('name')}",
-                    f"{cam.get('name')} needs its stream address",
-                    detail={"room": cam.get("room", ""), "restored": True})
+                    CAMERA_URL_TITLE.format(name=cam.get("name")),
+                    detail={"room": cam.get("room", ""), "restored": True,
+                            "title_template": CAMERA_URL_TITLE,
+                            "title_args": {"name": cam.get("name")}})
 
         skipped = plan.get("anchors", {}).get("skipped_no_such_room", [])
         return {
@@ -3502,11 +4041,24 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         ingest_fn=_ingest,
         experiences_fn=_bundled_experiences,
         require_local=require_local, require_scope=require_scope))
+    # `presence:read`, and no `require_local`, because this is a READ.
+    #
+    # `sdk/README.md` lists coverage under "what every SDK can reach", and an
+    # application paired the ordinary way holds `user`. It was refused twice
+    # over: `require_local` rejects anything that is not `central` (its job is
+    # state-CHANGING routes) and `admin` rejects `user` outright. So the one
+    # surface that exists to say "no sensor covers this room" — the honesty
+    # this whole product is built on — could not be read by the credential the
+    # documentation tells you to mint.
+    #
+    # Nothing behind it is privileged: `summarize` returns rooms, derived
+    # sensor LABELS (never ids) and where the gaps are, which is strictly less
+    # than the room state a `presence:read` holder already reads.
     app.include_router(build_coverage_router(
         coverage_fn=_sensor_coverage,
         rooms_fn=lambda: list(_fusion.rooms()),
         identity_enabled_fn=lambda: cfg.identity_enabled,
-        deps=[Depends(require_local), Depends(require_scope("admin"))]))
+        deps=[Depends(require_scope("presence:read"))]))
     app.include_router(build_space_router(
         _space_store, _core_registry, devices=_devices,
         deps=[Depends(require_local), Depends(require_scope("admin"))],
@@ -3668,6 +4220,41 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                       "ever sent automatically; the manual 'Send report' button asks each time",
              "env_flag": "WAVR_DIAG_ENDPOINT"},
         ]
+
+    def _connector_descriptors() -> list[dict]:
+        """Every connector, in the shape GET /api/connectors serves.
+
+        The built-in catalogue above plus one descriptor per generic registry
+        row -- assembled exactly as `api_connectors._all_connectors` does, from
+        the same two halves, so the answer a screen gets here and the answer it
+        would get from the API are the same list.
+        """
+        return [*_connector_catalog(),
+                *(generic_connector_descriptor(r) for r in _connectors.list()
+                  if r.get("kind") == "generic")]
+
+    def _egress_now() -> list[dict]:
+        """The connectors that are reaching OUTSIDE this network right now.
+
+        The ONE producer behind three surfaces -- the runtime status, the
+        Privacy posture screen and the Trust screen. Each of them used to
+        derive this for itself and each derived it differently, so a household
+        could read "there are none enabled" on one screen while another named
+        two, with nothing to say which was true.
+
+        Two conditions, both from facts other code established: the connector
+        LEAVES the network (`_is_egress_connector`, the same rule the
+        Connectors screen draws with) and it is ACTIVE -- the descriptor's
+        honest "gate on AND able to run right now", so an enabled connector
+        still waiting on a key or a restart is not reported as reaching out,
+        because it reaches nowhere. The System-tab egress master narrows it
+        further for the connectors that actually consult it
+        (`_MASTER_GATED_EGRESS`).
+        """
+        master = _connectors.egress_allowed()
+        return [c for c in _connector_descriptors()
+                if _is_egress_connector(c) and c.get("active")
+                and (master or c.get("id") not in _MASTER_GATED_EGRESS)]
 
     def _connectors_active() -> int:
         # Honest count for the status header badge: live built-ins + enabled generics.
@@ -3851,7 +4438,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         return _house
 
     @app.post("/api/narrate")
-    async def narrate(_=Depends(require_local), __=Depends(require_scope("control"))):
+    async def narrate(request: Request,
+                      _=Depends(require_local), __=Depends(require_scope("control"))):
         # Connectors & Services override (REVOCABLE, read per request). Checked FIRST so a
         # deliberate "off" kill-switch revokes even a live narrator immediately, no restart.
         narr_ov = _connectors.override("narrator")
@@ -3884,9 +4472,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 status_code=503,
                 detail="narration not configured (set WAVR_NARRATE_ENABLED=1 and configure "
                        f"the '{cfg.narrate_provider}' provider)")
+        # The reader's language, from the header the browser already sends.
+        #
+        # The narrator used to answer in Portuguese unconditionally, because
+        # its prompt was written in Portuguese and asked for Portuguese. An
+        # English household got a Portuguese paragraph about their own house
+        # and no setting changed it. `narrator.language_name` maps this to a
+        # language Wavr actually ships or to English — the header is a
+        # caller-supplied string and never reaches the prompt as text.
+        lang = request.headers.get("accept-language", "")
         try:
             rows = await asyncio.to_thread(_storage.recent, 50)
-            text = await asyncio.to_thread(_narrator.narrate, _project_all(), rows)
+            text = await asyncio.to_thread(_narrator.narrate, _project_all(),
+                                           rows, lang)
         except Exception:
             logging.exception("narrate failed")
             raise HTTPException(status_code=502, detail="narration backend error")
@@ -4098,6 +4696,28 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         any_cam_enabled = any(s["enabled"] for s in st["sources"] if s["name"] in cam_names)
         return "precise" if any_cam_enabled else "presence"
 
+    def _space_identity():
+        """Which Space this is: name and kind, nothing else.
+
+        Identity only. The people list and the Core topology stay behind the
+        admin gate on GET /api/space -- this is the SAME Space, projected down
+        to what a paired phone may know about the place it is looking at.
+
+        It lives on /api/status because that is the one payload a companion can
+        already read (presence:read), and a phone showing a room map with no
+        idea WHICH home it belongs to is the ambiguity that makes somebody act
+        on the wrong house. None until setup creates a Space; a store hiccup
+        reads as None rather than 500ing a route the whole shell depends on.
+        """
+        try:
+            sp = _space_store.get_space()
+        except sqlite3.Error:
+            return None
+        if sp is None:
+            return None
+        d = sp.to_dict()
+        return {"name": d.get("name"), "kind": d.get("kind")}
+
     @app.get("/api/status")
     async def status(_=Depends(require_scope("presence:read"))):
         # READ-ONLY, NO SECRETS: sources are name+active only (no rtsp/mac), features
@@ -4121,9 +4741,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 "mcp_control": cfg.mcp_control,
                 "narrate": cfg.narrate_enabled,
                 "net_inventory": cfg.net_inventory,
-                # TLS is coupled 1:1 to multidevice mode (see serve.py: HTTPS/WSS is
-                # only enabled when WAVR_MULTIDEVICE is on).
-                "tls": cfg.multidevice,
+                # NOT `cfg.multidevice`. That flag says TLS was asked for, and
+                # only `serve.py` acts on it -- the Dockerfile and
+                # scripts/wavr.ps1 launch uvicorn directly and serve plain HTTP
+                # with the flag set. This row is a privacy receipt: it is read
+                # by somebody deciding whether their tokens are on the Wi-Fi in
+                # clear, so it has to answer for the connection they are on.
+                "tls": _serving_tls(),
                 "ntfy": bool(cfg.ntfy_url),
                 "internet_monitor": cfg.internet_monitor,
                 # Passive/active protocol collectors (defensive-inventory collectors +
@@ -4225,6 +4849,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
                 # presence = running with no camera enabled.
                 "hub_level": _hub_level(),
             },
+            "space": _space_identity(),
             "house": {
                 "floors": len(_house.get("floors", [])),
                 "rooms": len(room_names(_house)),
@@ -4297,60 +4922,85 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         except Exception:
             rooms = 0
 
-        # Egress: one row per channel that can actually carry data OFF the box.
-        # `on` mirrors the SAME chokepoint each feature's own route enforces --
-        # never a softer/rosier read than what a real call would hit.
+        # What leaves YOUR NETWORK -- one row per channel that can carry data
+        # off the box, produced by the registry rather than remembered.
         #
-        # Home Assistant control: matches _connector_catalog's hactl_env exactly --
-        # cfg.mcp_control (opt-in) AND an HAClient actually resolves (ha_url +
-        # ha_token both set; client_from_config returns None otherwise).
-        ha_control_on = bool(cfg.mcp_control) and client_from_config(cfg) is not None
-        # Telegram: the SAME connector gate _notify_all/away/digest all read.
-        telegram_on = _connectors.is_enabled("telegram")
-        # ntfy: `_notify` IS the ntfy sink (opt-in via WAVR_NTFY_URL, built once at
-        # wiring time above) -- its mere presence is the honest "will an alert
-        # actually reach ntfy" signal, not a second re-derivation of cfg.ntfy_url.
-        ntfy_on = _notify is not None
-        # Cloud AI narrator: mirrors POST /api/narrate's own three-gate chokepoint
-        # (connector override != "off", the provider client actually built, and --
-        # for a CLOUD provider only -- the System-tab egress kill switch) so this
-        # never reports "on" more optimistically than a real narrate call would
-        # behave. Ollama is the ONE local provider (narrator.py: "ZERO external
-        # egress") -- a fully-enabled local narrator must still report False here,
-        # since nothing leaves the home. This is the honesty nuance the screen
-        # exists to get right: "narrator enabled" is NOT the same question as
-        # "narrator reaches the cloud".
+        # ("your network", not "this home": a Space is as often an office, a
+        # clinic or a workshop, and the person reading this screen is not
+        # always a household.)
+        #
+        # This was a hand-written array of four channels, each re-deriving its
+        # own `on` from the chokepoint it happened to know about. The honesty
+        # cost is what a hand-written array always costs: every connector that
+        # shipped afterwards -- diagnostics auto-send, the daily digest, the
+        # Assistant's cloud engine, the four enrich lookups -- could be fully
+        # switched on and appear NOWHERE on the one screen whose job is to say
+        # what leaves. `_egress_now()` is the same producer the runtime status
+        # and the Privacy posture screen read, so the three cannot disagree,
+        # and a connector added tomorrow shows up here for free.
+        reaching_out = {c["id"]: c for c in _egress_now()}
+
+        # The channels people have already learned to look for keep their row
+        # even when they are off: an absent row reads as "Wavr does not do
+        # that", not as "off", and a trust screen that answers by omission has
+        # answered nothing. Their `on` is no longer re-derived here -- it is
+        # membership of the shared set above, which is exactly the same
+        # chokepoint each feature enforces:
+        #   * ha-control's `active` IS cfg.mcp_control AND a resolvable
+        #     HAClient (_connector_catalog's hactl_env);
+        #   * telegram's is the connector gate _notify_all/away/digest read;
+        #   * narrator's is POST /api/narrate's own chokepoint -- and a LOCAL
+        #     (ollama) narrator is excluded by the egress rule itself, since
+        #     its scope is "local, zero egress". That is the honesty nuance
+        #     this screen exists to get right: "narrator enabled" is NOT the
+        #     same question as "narrator reaches the cloud".
         # KNOWN IMPRECISION (documented, not silently swallowed): the 'openai'
         # provider can ALSO be pointed at a loopback server via
         # WAVR_OPENAI_BASE_URL (narrator.py's own docstring: "Cloud egress when
         # base_url is the OpenAI default; LOCAL when pointed at a loopback
-        # server") -- this route has no clean way to tell those apart from a bare
-        # bool, so it treats 'openai' as cloud unconditionally, same as
-        # _connector_catalog's narr_scope above. That is the SAFE direction to be
-        # wrong in for a trust screen (a rare false "on" for a self-hosted OpenAI-
-        # compatible box beats ever silently reporting cloud egress as off).
-        narr_provider = getattr(cfg, "narrate_provider", "gemini")
-        narr_is_cloud = narr_provider != "ollama"
-        narr_live = (_narrator is not None
-                     and _connectors.override("narrator") != "off"
-                     and (not narr_is_cloud or _connectors.egress_allowed()))
-        cloud_narrator_on = narr_is_cloud and narr_live
+        # server") -- the catalogue's scope string has no clean way to tell
+        # those apart, so it calls 'openai' cloud unconditionally. That is the
+        # SAFE direction to be wrong in for a trust screen (a rare false "on"
+        # for a self-hosted OpenAI-compatible box beats ever silently
+        # reporting cloud egress as off).
+        _NAMED = (("ha-control", "Home Assistant control",
+                   "Wavr can switch your Home Assistant devices"),
+                  ("telegram", "Telegram notifications",
+                   "Alerts sent to Telegram"),
+                  ("narrator", "Cloud AI narrator",
+                   "Room summaries sent to a cloud AI"))
+        egress_rows = [{"channel": channel, "on": cid in reaching_out,
+                        "detail": detail} for cid, channel, detail in _NAMED]
+
+        # ntfy is the ONE exception, named rather than hidden: it has no
+        # registry row at all. It is opt-in through WAVR_NTFY_URL and `_notify`
+        # (the sink built at wiring time) IS the honest "will an alert actually
+        # reach ntfy" signal -- wrapped there in the same `egress_allowed()`
+        # master check every other path re-reads, which is why the master is
+        # ANDed in here too. Giving it a real connector row with a real toggle
+        # would delete this special case; until then it is listed by hand and
+        # says so.
+        egress_rows.insert(2, {"channel": "ntfy notifications",
+                               "on": _notify is not None and _connectors.egress_allowed(),
+                               "detail": "Alerts pushed via ntfy"})
+
+        # Everything else that is reaching out right now. Never dropped for
+        # being unfamiliar -- the connector nobody remembered to add to a list
+        # is precisely the one worth showing. Label and scope are registry
+        # data, rendered as text by transparency.js exactly like the connector
+        # cards render them.
+        for cid, c in reaching_out.items():
+            if any(cid == named[0] for named in _NAMED):
+                continue
+            egress_rows.append({"channel": c.get("label") or cid, "on": True,
+                                "detail": c.get("scope") or c.get("label") or cid})
 
         return {
             "sensing_on": bool(st.get("running")),
             "cameras": cameras,
             "counts": {"people_known": people_known, "devices_seen": devices_seen,
                        "rooms": rooms},
-            "egress": [
-                {"channel": "Home Assistant control", "on": ha_control_on,
-                 "detail": "Wavr can switch your Home Assistant devices"},
-                {"channel": "Telegram notifications", "on": telegram_on,
-                 "detail": "Alerts sent to Telegram"},
-                {"channel": "ntfy notifications", "on": ntfy_on,
-                 "detail": "Alerts pushed via ntfy"},
-                {"channel": "Cloud AI narrator", "on": cloud_narrator_on,
-                 "detail": "Room summaries sent to a cloud AI"},
-            ],
+            "egress": egress_rows,
         }
 
     # System toggles (feature "system-toggles"): the two System-tab master
@@ -5577,12 +6227,45 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # operator may deliberately pair an Admin's tablet as a plain `user`,
             # but may not pair a User's phone as `central`. Honouring the wider
             # request would make the person axis decorative.
-            if role not in ("central", "user"):
-                raise HTTPException(status_code=400, detail="role must be central or user")
+            # `agent` is mintable, and that is a security FIX rather than a
+            # widening.
+            #
+            # `auth.py` builds a whole second authorisation axis for it —
+            # `DEFAULT_SCOPES["agent"] = {"mcp"}`, the tool-scope sets,
+            # `tool_call_allowed`, and a per-tool gate in `mcp_http.py` that
+            # filters both `tools/call` and `tools/list`. None of it was
+            # reachable: this route refused the role, the pairing UI offered
+            # User and Admin, and the only door was a hand-rolled
+            # `POST /api/devices/{id}/role` with curl.
+            #
+            # So `docs/mcp-connect.md` told people to mint `user`, `user` has
+            # no `mcp` scope and is refused by `/mcp` on every request
+            # including `initialize`, and the credential that DOES work is
+            # `central` — which is simultaneously admin over the whole HTTP
+            # API. The practical instruction was "give your AI agent a token
+            # that can read your cameras, export your Space and revoke other
+            # devices". Making the least-privilege role mintable is what closes
+            # that.
+            #
+            # Unlike `guest` it needs no expiry: it is a long-lived integration
+            # credential whose reach is bounded by scope, not by time.
+            if role not in ("central", "user", "agent"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="role must be central, user or agent")
             if person_id:
                 granted = _person_role(person_id)
                 if granted is None:
                     raise HTTPException(status_code=404, detail="unknown person")
+                # An agent is not a person's device. `narrower_role` compares
+                # human tiers and has nothing to say about it, so pairing one
+                # against a person is refused rather than silently widened to
+                # whatever that person holds.
+                if role == "agent":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="an agent credential belongs to no person; "
+                               "omit person_id")
                 role = narrower_role(role, granted) or role
                 if role not in ("central", "user"):
                     # A Guest's device is minted through /api/guest/invite, which
@@ -5597,8 +6280,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # its certificate warning BEFORE accepting. A pairing-time TLS MitM presents a
             # different self-signed cert -> different fingerprint -> the operator sees the
             # mismatch and stops. `cryptography` is not imported (pure-stdlib fingerprint).
+            #
+            # Gated on the LIVE connection, not on the cert file: a Core that
+            # ran multidevice once keeps `~/.wavr/cert.pem` forever, and over
+            # plain HTTP the phone gets no certificate warning at all, so there
+            # is nothing for the operator to compare it against. Empty here
+            # means the pairing screen hides the fingerprint block and the QR
+            # (both are gated on it already) and shows the typed code, which is
+            # the honest flow on an unencrypted socket.
             from wavr.tls import cert_fingerprint, resolved_cert_path, verification_code
-            fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+            fingerprint = (cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+                           if _serving_tls() else None)
             code = _pairing.mint_code(role)
             # Convenience-tier 6-digit, bound to THIS code so it rotates with it
             # (pinned derivation, see wavr.tls.verification_code). None if the cert
@@ -5609,9 +6301,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # LAN-reachable base for the QR builder (P2 self-contained QR): when this panel is
             # viewed on the hub itself (kiosk/loopback), location.origin is 127.0.0.1/localhost --
             # useless to a phone that scans the code cold. _local_ip is the SAME LAN address
-            # self_base_url already uses for the peers-admin router above; TLS is coupled 1:1 to
-            # multidevice (see serve.py), so "https" here is exactly as safe as line ~1675.
-            lan_url = f"https://{_local_ip}:{cfg.port}"
+            # self_base_url already uses for the peers-admin router above, and the scheme is the
+            # one this very request arrived on -- the QR is the thing a phone acts on without a
+            # human reading it first, so an address the socket cannot answer fails silently.
+            lan_url = f"{_served_scheme()}://{_reachable_host()}:{_reachable_port()}"
             if person_id:
                 # Remember whose code this is, so the redeem can stamp the
                 # association onto the device it mints.
@@ -5639,11 +6332,15 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             if hours != hours or hours in (float("inf"), float("-inf")):
                 raise HTTPException(status_code=422, detail="hours must be a finite number")
             hours = max(0.25, min(float(hours), 24.0))   # clamp server-side: 15 min .. 24 h
+            # Same live-connection gate as /api/pair-code above: the guest scans the
+            # identical QR and does the identical compare, so it must be honest in
+            # the identical way.
             from wavr.tls import cert_fingerprint, resolved_cert_path, verification_code
-            fingerprint = cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+            fingerprint = (cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+                           if _serving_tls() else None)
             code = _pairing.mint_guest_code(hours)
             verify6 = verification_code(fingerprint, code) if fingerprint else None
-            lan_url = f"https://{_local_ip}:{cfg.port}"
+            lan_url = f"{_served_scheme()}://{_reachable_host()}:{_reachable_port()}"
             expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
             return {"code": code, "cert_fingerprint": fingerprint, "verify6": verify6,
                     "lan_url": lan_url, "expires_at": expires_at, "role": "guest"}
@@ -5665,8 +6362,14 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # (so the Core operator banner can show its own fingerprint for the eyeball
         # compare without minting a pairing code as a side effect).
         def _live_cert_fp() -> str:
+            # Same gate as `_space_cert_fp` and /api/pair-code, for the same
+            # reason: this fingerprint is shown to an operator who is being
+            # asked to compare it against a certificate warning, and a
+            # plain-HTTP page produces no such warning.
+            if not _serving_tls():
+                return ""
             from wavr.tls import cert_fingerprint, resolved_cert_path
-            return cert_fingerprint(resolved_cert_path(cfg.tls_cert))
+            return cert_fingerprint(resolved_cert_path(cfg.tls_cert)) or ""
 
         app.include_router(build_pair_request_router(_pair_approvals, _live_cert_fp))
         app.include_router(build_pending_pairings_router(
@@ -5812,9 +6515,19 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     #
     # Served from the Core so they are one click away from the machine that has
     # the data, rather than something a developer has to host themselves and
-    # then fight CORS over. Gated on the switch AND on `require_local` +
-    # `admin`: these pages read the Space, and a page served to anybody who can
-    # reach the port is a page that reads the Space for anybody.
+    # then fight CORS over.
+    #
+    # Gated on the developer-mode switch and on a fixed list of names, and
+    # deliberately on NOTHING else -- no header check and no scope. An earlier
+    # version of this comment described a header-and-scope pair that the
+    # routes below do not carry and must not: a top-level browser navigation
+    # cannot send a custom header, so that gate made the pages impossible to
+    # open, which is the single thing they exist for (see `experience_page`,
+    # and the `/experiences/*` clause in `_is_static_shell`). They are static
+    # HTML carrying no data, exactly as "/" is; the Space stays behind the API
+    # they then call, which does send the header and is redacted per
+    # experience. A comment describing a gate the code does not have is how
+    # the next reader concludes a surface is safer than it is.
 
     _EXPERIENCE_PAGES = ("spatial-web", "capability-aware", "anchor-demo")
 
@@ -5898,57 +6611,49 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     async def icon():
         return FileResponse(_FRONTEND / "icon.svg", media_type="image/svg+xml")
 
-    # The two blocks lifted out of index.html. Named explicitly rather than
-    # served from a StaticFiles mount: an allowlist of two filenames has no
-    # traversal surface, and the shell is small enough that naming it is
-    # clearer than a directory.
-    @app.get("/js/wizard.js")
-    async def js_wizard():
-        return FileResponse(_FRONTEND / "js" / "wizard.js",
-                            media_type="text/javascript")
+    # Every module lifted out of index.html, served by ONE route.
+    #
+    # This was eleven hand-written routes, one per file, under a comment
+    # arguing that "an allowlist of two filenames has no traversal surface".
+    # That was true at two. At eleven it had turned into a chore, and the chore
+    # gates something bigger than one script: a module the shell requests and
+    # the backend does not serve 404s, `Cache.addAll` is all-or-nothing, so the
+    # service worker's install fails as a unit and the whole OFFLINE shell goes
+    # with it. Forgetting a route costs offline launch, not one feature.
+    #
+    # The traversal surface is closed by construction rather than by
+    # enumeration. Two independent checks, either one sufficient:
+    #
+    #   * the name must be a bare lowercase filename ending in `.js` — no
+    #     slash, no dot-segment, no backslash, nothing encoded survives, and
+    #     Starlette percent-DECODES the path parameter before this sees it, so
+    #     the string being matched is the one that would reach the filesystem;
+    #   * the resolved path must be a direct child of `frontend/js` and a
+    #     regular file, checked AFTER resolution, so a symlink planted in that
+    #     directory and pointing elsewhere still opens nothing.
+    _JS_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.js$")
+    _JS_DIR = (_FRONTEND / "js").resolve()
 
-    @app.get("/js/discoveries.js")
-    async def js_discoveries():
-        return FileResponse(_FRONTEND / "js" / "discoveries.js",
-                            media_type="text/javascript")
+    @app.get("/js/{name}")
+    async def js_module(name: str):
+        """A shell script: markup and script, no data, no action.
 
-    @app.get("/js/trust.js")
-    async def js_trust():
-        return FileResponse(_FRONTEND / "js" / "trust.js",
-                            media_type="text/javascript")
-
-    # Served unconditionally, unlike the developer ROUTES it calls. The script is
-    # inert on a normal install — its first request comes back 403 and it renders
-    # "developer mode is off" — and gating the file itself would make the service
-    # worker's precache fail as a unit (Cache.addAll is all-or-nothing), taking
-    # the whole offline shell down with it.
-    @app.get("/js/format.js")
-    async def js_format():
-        """Dates, times and numbers in the reader's conventions.
-
-        Loaded before every inline block in the shell, so it must be served
-        under the same rules as the shell itself.
+        Served without the `X-Wavr-Local` header, like the rest of the shell —
+        a browser navigating to the page cannot send a custom header, and a
+        script it cannot fetch is a blank screen with nothing to explain it.
+        Developer tooling is the same class: `developer.js` is inert on a
+        normal install (its first request comes back 403 and it renders
+        "developer mode is off"), and gating the FILE would take the offline
+        shell down for everybody to hide a script that already says no.
         """
-        return FileResponse(_FRONTEND / "js" / "format.js",
-                            media_type="application/javascript")
+        if not _JS_NAME.match(name):
+            raise HTTPException(status_code=404, detail="not found")
+        path = (_JS_DIR / name).resolve()
+        if path.parent != _JS_DIR or not path.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(path, media_type="text/javascript")
 
-    @app.get("/js/runtime.js")
-    async def js_runtime():
-        """The runtime-presence chip. Same class as the other shell scripts.
-
-        Served without the CSRF header for the same reason as the rest of the
-        shell: a browser navigating to the page cannot send one, and the chip is
-        the one part of the chrome whose absence is itself a silent failure.
-        """
-        return FileResponse(_FRONTEND / "js" / "runtime.js",
-                            media_type="application/javascript")
-
-    @app.get("/js/developer.js")
-    async def js_developer():
-        return FileResponse(_FRONTEND / "js" / "developer.js",
-                            media_type="text/javascript")
-
-    # F2 phone-capture shell (WebXR "medir com o celular"). Static, carries nothing
+    # F2 phone-capture shell (WebXR, "Measure with your phone"). Static, carries nothing
     # sensitive -- like "/" it is token/subnet-exempt so an unpaired LAN phone can load
     # it; the data endpoint (PUT /api/house/room) still requires a central-role token.
     @app.get("/measure.html")

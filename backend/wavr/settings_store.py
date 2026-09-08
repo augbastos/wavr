@@ -100,6 +100,17 @@ class SettingSpec:
     # rationale `require_root` already carries for ARP blocking. Reading them
     # stays open to any admin -- it is the WRITE that widens.
     local_only: bool = False
+    # Other settings that must be ON before this one can be. Declarative,
+    # because the consequence of getting it wrong is not a wrong value: it is a
+    # Core that will not start. `create_app` raises RuntimeError when
+    # `peers_enabled` or `nodes_enabled` is set without multidevice, and BOTH
+    # of those are writable from this screen. Saved without their prerequisite,
+    # the next start failed — and the screen that could have undone it is
+    # served by the process that no longer boots.
+    #
+    # A UI-writable setting must never be able to stop the Core booting, so the
+    # refusal happens here, at the write, while a person is looking at it.
+    requires: tuple[str, ...] = ()
     choices: tuple[str, ...] = ()
     minimum: float | None = None
     maximum: float | None = None
@@ -125,10 +136,18 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
        "connect to Wavr with a paired credential. Without this, Wavr answers "
        "only to the machine it runs on.",
        sensitive=True, local_only=True),
+    # ADVANCED, and deliberately not part of the normal path. Turning on "Let
+    # other devices connect" already binds every interface (see
+    # `config._bind_host`); this exists for the one person who wants the TLS of
+    # multidevice mode WITHOUT the LAN, and it says so in words rather than in
+    # netmasks. Leaving it unset is the normal state and is what a household
+    # gets.
     _s("bind_host", "WAVR_BIND", "choice", "127.0.0.1",
        "Listen on",
-       "Which network address the Core listens on. This only takes effect when "
-       "'Let other devices connect' is on.",
+       "Advanced. Leave this alone unless you know you want it. 'Let other "
+       "devices connect' already opens Wavr to this network; setting this to "
+       "127.0.0.1 keeps Wavr on this machine only while still using the "
+       "encrypted connection.",
        choices=("127.0.0.1", "0.0.0.0"), sensitive=True, local_only=True),
     _s("port", "WAVR_PORT", "int", "8000",
        "Port", "The port the Core listens on.",
@@ -137,12 +156,12 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
        "Accept sensor nodes",
        "Lets small sensors you flash yourself (ESP32, radar, PIR) enrol and "
        "report to this Core. Requires 'Let other devices connect'.",
-       sensitive=True, local_only=True),
+       sensitive=True, local_only=True, requires=("lan_access",)),
     _s("peers_enabled", "WAVR_PEERS_ENABLED", "bool", "0",
        "Connect to other Cores",
        "Lets this Core pair with another Wavr Core in the same Space. "
        "Requires 'Let other devices connect'.",
-       sensitive=True, local_only=True),
+       sensitive=True, local_only=True, requires=("lan_access",)),
     _s("developer_mode", "WAVR_DEVELOPER_MODE", "bool", "0",
        "Developer mode",
        "Shows the tools for building applications on top of Wavr: the provider "
@@ -302,6 +321,19 @@ class SettingsStore:
                 f"{key} changes what Wavr is exposed to — it needs an explicit "
                 f"acknowledgement (consent='{CONSENT_PHRASE}')")
         val = coerce(spec, value)
+        # A prerequisite that is not met is refused HERE, where somebody can
+        # read the refusal — not at the next start, where the only surface that
+        # could undo it is inside the process that failed to come up.
+        if spec.requires and val == "1":
+            for needed in spec.requires:
+                if str(self.effective(needed).get("value") or "").strip().lower() \
+                        not in _TRUE:
+                    other = SPECS_BY_KEY.get(needed)
+                    raise SettingsError(
+                        f"{spec.label!r} needs "
+                        f"{(other.label if other else needed)!r} to be on "
+                        f"first. Turn that on and save it, then come back to "
+                        f"this one.")
         with self._lock:
             self._conn.execute(
                 "INSERT INTO settings (key, value, updated_ts) VALUES (?, ?, ?)"

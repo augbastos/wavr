@@ -132,7 +132,16 @@ def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
     `admin_deps` (loopback-root-only) wrap discovered/observe/confirm/list/unpair;
     `linkback_deps` (require_central) wrap link-back only. Both FAIL CLOSED if
     omitted/empty -- see `_admin_deps_not_wired` / `_linkback_deps_not_wired` --
-    rather than the old `None -> []` (open) default."""
+    rather than the old `None -> []` (open) default.
+
+    `self_base_url` takes a plain string OR a zero-arg provider. app.py passes a
+    provider because the scheme in our own address is only knowable from a
+    connection, and this router is built at startup. It used to be a hardcoded
+    `https://`, which is what a peer was told to dial even on the launchers that
+    serve plain HTTP."""
+
+    def _self_base_url() -> str:
+        return self_base_url() if callable(self_base_url) else self_base_url
     router = APIRouter()
     admin_deps = list(admin_deps) if admin_deps else [Depends(_admin_deps_not_wired)]
     linkback_deps = list(linkback_deps) if linkback_deps else [Depends(_linkback_deps_not_wired)]
@@ -173,6 +182,24 @@ def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
         # The operator has (via /observe) confirmed peer_fingerprint matches the value
         # on B's screen and typed B's on-screen code. peer_fingerprint is PINNED on
         # every outbound call below -- I1 verifies it before any credential is sent.
+        #
+        # OUR OWN socket first. A peer link is a mutual exchange of `central`
+        # tokens -- the widest credential this product mints -- and the reverse
+        # leg hands the other Core an address to dial us back on. If we are not
+        # serving TLS, that address is plain HTTP, and the peer's own
+        # `_require_lan_https` correctly refuses it. Refusing here instead means
+        # the operator reads why: the message below names OUR launcher, where
+        # the fix is, rather than "peer_base_url must use https", which points
+        # at the other Core's address and is not the problem. Nothing has been
+        # minted or sent at this point.
+        if urlsplit(_self_base_url()).scheme != "https":
+            raise HTTPException(
+                status_code=409,
+                detail="This Core is serving plain HTTP, so it cannot join a "
+                       "peer mesh: the two Cores exchange admin credentials, "
+                       "and they would cross the network in clear. Start it "
+                       "with `python -m wavr.serve` (the launcher that turns "
+                       "on TLS) rather than uvicorn directly.")
         _validate_peer_url(peer_base_url, local_ip)   # §D SSRF guard before any dial
 
         # -- Forward leg: A redeems B's code over the pinned channel, receiving OUR
@@ -204,7 +231,7 @@ def build_peers_admin_router(peer_store, pairing, device_store, cfg, self_name,
         try:
             await asyncio.to_thread(
                 post_json, peer_base_url, "/api/peers/link-back",
-                {"token": b_token_for_a, "base_url": self_base_url,
+                {"token": b_token_for_a, "base_url": _self_base_url(),
                  "fingerprint": fp_self, "name": self_name},
                 our_token_for_them, peer_fingerprint)   # auth A->B as central + pinned
         except PeerClientError:

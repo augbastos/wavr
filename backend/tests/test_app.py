@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from wavr.app import create_app
+from wavr.housemap import SAMPLE_MAP
 from wavr.storage import Storage
 from wavr.hub import Hub
 from wavr.fusion import FusionEngine
@@ -33,6 +34,20 @@ def build_client(client=None, device_meta=None, health_check=None, health_resolv
     )
     kwargs = {"client": client} if client is not None else {}
     return TestClient(app, **kwargs)
+
+
+def _write_sample_map(tmp_path, monkeypatch):
+    """Point WAVR_HOUSE_MAP at a real plan with rooms in it.
+
+    `SAMPLE_MAP` is the three-room plan that used to be the product's fallback.
+    It is a FIXTURE now, not a default, so a test that needs rooms writes it
+    instead of relying on a missing file to conjure them.
+    """
+    import json
+    p = tmp_path / "house.json"
+    p.write_text(json.dumps(SAMPLE_MAP), encoding="utf-8")
+    monkeypatch.setenv("WAVR_HOUSE_MAP", str(p))
+    return p
 
 
 def test_history_returns_roomstate_list():
@@ -205,11 +220,14 @@ def test_bad_host_header_returns_400():
 
 
 def test_get_house_returns_rooms(tmp_path, monkeypatch):
-    # F1: WAVR_HOUSE_MAP now defaults to a cwd-relative "house.json"; without pinning
-    # it, this test would read a dev's REAL repo-root house.json (whose rooms need not
-    # include "sala"). Point at a nonexistent tmp file so load_house_map deterministically
-    # falls back to DEFAULT_MAP (which has "sala") -- mirrors the sibling test below.
-    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nonexistent.json"))
+    # WRITE the sample plan rather than pointing at nothing.
+    #
+    # This used to name a nonexistent file, because the fallback was a
+    # three-room house and that was a cheap way to get "sala". The fallback is
+    # empty now (a fresh install has no rooms), so a missing file gets a plan
+    # with nothing in it and the assertion below has nothing to find. What this
+    # test means is "a plan with rooms in it", so it says so.
+    _write_sample_map(tmp_path, monkeypatch)
     with build_client() as client:
         r = client.get("/api/house")
         assert r.status_code == 200
@@ -271,8 +289,17 @@ def test_status_shape_and_no_secrets():
         r = client.get("/api/status")
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"version", "sources", "features", "house", "internet", "availability"}
+        assert set(body) == {"version", "sources", "features", "house",
+                             "internet", "availability", "space"}
         assert body["version"] == __version__
+
+        # `space` is WHICH Space this is, and nothing more. It rides this
+        # payload because it is the only one a paired companion can read
+        # (presence:read), and a phone attached to two Cores otherwise shows a
+        # room map with no statement of which home it belongs to. The people
+        # list and the Core topology stay behind the admin gate on /api/space,
+        # so the projection is name and kind or null -- never more.
+        assert body["space"] is None or set(body["space"]) == {"name", "kind"}
 
         assert isinstance(body["sources"], list) and body["sources"]
         for s in body["sources"]:
@@ -406,11 +433,9 @@ def test_status_features_reflect_config_defaults(monkeypatch):
 
 
 def test_status_house_counts_match_default_map(tmp_path, monkeypatch):
-    # F1: WAVR_HOUSE_MAP now defaults to a cwd-relative "house.json", so unsetting the
-    # env would read/create ./house.json in the repo root (cwd-dependent, and would
-    # clobber a dev's real map). Point at a nonexistent tmp file so load_house_map
-    # deterministically falls back to DEFAULT_MAP (1 floor, 3 rooms).
-    monkeypatch.setenv("WAVR_HOUSE_MAP", str(tmp_path / "nonexistent.json"))
+    # The sample plan, written out. See the sibling test above: the fallback
+    # no longer supplies rooms, and this asserts a room COUNT.
+    _write_sample_map(tmp_path, monkeypatch)
     with build_client() as client:
         # `people` is the additive live house count; None here because the demo/sim
         # camera does not emit a per-source count (only real camera/mmwave do).
@@ -798,15 +823,34 @@ def _nodes_app(tmp_path, monkeypatch, multidevice="1", nodes="1"):
         storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
 
 
-def test_nodes_enabled_requires_multidevice(tmp_path, monkeypatch):
-    # Prerequisite validation (mirrors peers_enabled's fail-fast in test_peers.py):
-    # a node is a LAN device that needs multidevice's LAN bind + local TLS.
+def test_nodes_enabled_without_multidevice_degrades_instead_of_dying(
+        tmp_path, monkeypatch, served_paths):
+    """A node is a LAN device that needs multidevice's LAN bind and local TLS,
+    so its routers must NOT be mounted without it. That has not changed.
+
+    What changed is the cost of saying so. This asserted `RuntimeError`, and
+    "Accept sensor nodes" is a switch on the Settings screen — so an operator
+    who turned it on without "Let other devices connect" had a Core that
+    refused to start, and the only screen that could undo it is served by the
+    process that no longer starts. A UI-writable setting must never be able to
+    brick the Core.
+
+    `settings_store` refuses the write now, which stops it happening; this is
+    the recovery for an install that already has the bad pair on disk.
+    """
     monkeypatch.setenv("WAVR_NODES_ENABLED", "1")
     monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
     monkeypatch.setenv("WAVR_DB", str(tmp_path / "x-nodes.db"))
-    with pytest.raises(RuntimeError, match="requires WAVR_MULTIDEVICE"):
-        create_app(sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
-                   storage=Storage(":memory:"), camera_store=CameraStore(":memory:"))
+    app = create_app(sources=[("sim", lambda: SimulatedSource(interval=1.0), False)],
+                     storage=Storage(":memory:"),
+                     camera_store=CameraStore(":memory:"))
+    # `served_paths`, not `app.routes`: this is a NEGATIVE assertion, and
+    # for a while it was passing against a list that could not contain the
+    # thing it was looking for. It would have gone on passing if the
+    # multidevice prerequisite had stopped being enforced entirely.
+    paths = served_paths(app)
+    assert not any(p.startswith("/api/nodes") for p in paths), sorted(
+        p for p in paths if p.startswith("/api/nodes"))
 
 
 def test_nodes_routes_absent_by_default():

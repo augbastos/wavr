@@ -64,10 +64,13 @@ load-bearing access control, same as before.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Body, HTTPException
 
 from wavr.data.deviceclass import display_hostname
 from wavr.device_meta import DeviceMeta, normalize_mac
+from wavr.discovery_inbox import KIND_DEVICE_NEW
 from wavr.netinventory_service import NetworkInventoryService
 
 
@@ -204,8 +207,31 @@ def build_inventory_router(service: NetworkInventoryService,
                             name_deps=None, dhcp_monitor=None,
                             gateway_monitor=None, known_store=None,
                             intrusion_log=None, fall_log=None,
-                            intrusion_house_loud=False) -> APIRouter:
+                            intrusion_house_loud=False,
+                            discovery_inbox=None) -> APIRouter:
     router = APIRouter()
+
+    def _answered_elsewhere(macs):
+        """A device just became known, so the inbox stops asking about it.
+
+        "New devices" and the Discoveries inbox ask the same question from two
+        producers, and answering one used to leave the other asking: the feed
+        stops re-observing a known device, but a row already pending merely
+        stops being refreshed and sat there for the fourteen-day prune window —
+        behind a count badge.
+
+        Best-effort on purpose. Marking a device known is the operation; the
+        inbox tidy-up is a consequence, and a store hiccup here must not fail
+        the answer the person actually gave.
+        """
+        if discovery_inbox is None:
+            return
+        for mac in macs:
+            try:
+                discovery_inbox.resolve(KIND_DEVICE_NEW, mac)
+            except Exception:                              # noqa: BLE001
+                logging.debug("could not resolve discovery for %s", mac,
+                              exc_info=True)
 
     @router.get("/api/inventory")
     async def inventory():
@@ -256,6 +282,11 @@ def build_inventory_router(service: NetworkInventoryService,
             # apply_known_change's docstring) -- the KnownStore write above
             # already makes it authoritative for the NEXT scan regardless.
             service.apply_known_change(mac_norm, known)
+            # Only on "yes, mine". Un-marking a device is the person saying they
+            # do NOT recognise it, which is a reason for the inbox to ask, not
+            # to stop.
+            if known:
+                _answered_elsewhere([mac_norm])
             return entry
 
         @router.post("/api/inventory/known/bulk", dependencies=list(name_deps or []))
@@ -272,6 +303,7 @@ def build_inventory_router(service: NetworkInventoryService,
                 return {"marked": 0}
             known_store.set_known_many(unknown, True)
             service.apply_known_change_many(unknown, True)
+            _answered_elsewhere(unknown)
             return {"marked": len(unknown)}
 
     return router

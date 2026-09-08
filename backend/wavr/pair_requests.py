@@ -33,6 +33,7 @@ code.
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,10 @@ MAX_PENDING_PER_IP = 3
 _MAX_NAME_LEN = 64
 _MAX_PLATFORM_LEN = 32
 _MAX_FP_LEN = 128
+# An opaque, client-hashed per-device string (a hex digest in practice).
+# Bounded like every other companion-supplied field here so a hostile caller
+# cannot park an unbounded blob in memory.
+_MAX_DEVICE_KEY_LEN = 200
 
 # Bluetooth-SSP-style numeric comparison (fix design 2026-07-11): the ONLY
 # per-approval anchor before this was the Core's own cert_fingerprint, which
@@ -89,6 +94,14 @@ class _PendingPairRequest:
     status: str = "pending"           # "pending" | "approved" | "denied"
     device_id: str | None = None      # set on approve
     token: str | None = None          # set on approve; delivered only via poll()
+    # Opaque, client-hashed "this is the same phone as last time". Carried to
+    # the mint on approve so that pairing retires this device's earlier
+    # credentials instead of stacking another live key to the home. Declared
+    # last, with a default, because every field above it has none. Deliberately
+    # NOT serialized by to_dict(): the operator's approve screen has no use for
+    # it, and a value whose whole job is to identify a phone does not need to
+    # travel anywhere it is not read.
+    device_key: str | None = None
     compare_code: str = ""            # per-request numeric-comparison anchor
                                        # (Bluetooth SSP style) -- see
                                        # _mint_compare_code(). Returned to the
@@ -145,7 +158,8 @@ class PairApprovalManager:
     # -- companion-facing (unauth, in-subnet-bounded by app.py) ------------
     def create(self, requester_name: str, source_ip: str | None = None,
                platform: str | None = None,
-               reported_fp: str | None = None) -> tuple[str, str]:
+               reported_fp: str | None = None,
+               device_key: str | None = None) -> tuple[str, str]:
         """Open a PENDING request and return `(request_id, compare_code)`.
         Mints no token. Raises ValueError for an empty/whitespace-only name
         (caller -> 400). `compare_code` is minted unique among the
@@ -158,6 +172,10 @@ class PairApprovalManager:
             raise ValueError("requester_name is required")
         platform_v = (platform or "").strip()[:_MAX_PLATFORM_LEN] or None
         fp_v = (reported_fp or "").strip()[:_MAX_FP_LEN] or None
+        # Bounded like every other companion-supplied string here. None (an
+        # older app, a browser, any caller that predates this) means no
+        # matching and no revocation -- exactly as this flow behaved before.
+        key_v = (device_key or "").strip()[:_MAX_DEVICE_KEY_LEN] or None
         now = self._now()
         self._purge_expired(now)
         key = source_ip or ""
@@ -173,7 +191,7 @@ class PairApprovalManager:
             compare_code = _mint_compare_code()
         self._requests[request_id] = _PendingPairRequest(
             request_id=request_id, requester_name=name, platform=platform_v,
-            source_ip=source_ip, reported_fp=fp_v,
+            source_ip=source_ip, reported_fp=fp_v, device_key=key_v,
             created_at=now, expires_at=now + timedelta(seconds=self._request_ttl),
             compare_code=compare_code,
         )
@@ -227,7 +245,35 @@ class PairApprovalManager:
             # encode both operands: a non-ASCII operator-typed confirm_code would
             # otherwise raise TypeError -> uncaught 500 instead of a clean no-match.
             return None
-        device_id, token = self._store.add(rec.requester_name, role)
+        if rec.device_key:
+            device_id, token = self._store.add(rec.requester_name, role,
+                                               device_key=rec.device_key)
+        else:
+            # Byte-identical to the call this flow has always made, for every
+            # store double and every client that sends no key.
+            device_id, token = self._store.add(rec.requester_name, role)
+        # Retire what this same phone held before -- AFTER the new credential
+        # exists, never before. Revoking first and then failing to mint would
+        # lock somebody out of their own home with no way back in. A failure
+        # here leaves a stale row, which is untidy; failing the approval over
+        # it would be a lockout.
+        if rec.device_key:
+            aposentar = getattr(self._store, "supersede_same_device", None)
+            if callable(aposentar):
+                try:
+                    retirados = aposentar(rec.device_key, device_id) or []
+                    if retirados:
+                        logging.info(
+                            "pairing: %d earlier credential(s) for this same "
+                            "device retired: %s", len(retirados),
+                            ", ".join(retirados))
+                except Exception:      # noqa: BLE001
+                    logging.warning("pairing: could not retire this device's "
+                                    "previous credentials", exc_info=True)
+            else:
+                logging.warning("pairing: this store cannot retire a device's "
+                                "earlier credentials; duplicates will "
+                                "accumulate")
         rec.status = "approved"
         rec.device_id = device_id
         rec.token = token

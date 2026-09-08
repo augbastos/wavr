@@ -116,6 +116,25 @@ def test_app_bundle_matches_manifest_hash_and_excludes_vendor():
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
             names = set(tar.getnames())
         assert "index.html" in names
+        # EVERY module the shell loads, not just index.html.
+        #
+        # `"index.html" in names` went on passing while the bundle stopped
+        # being the application. Before the shell was modularised, index.html
+        # carried 783 KB of inline script and those five files WERE the app;
+        # afterwards the tarball was a 349 KB shell plus a service worker
+        # naming 44 files that were not in the archive. A companion applying
+        # that update gets chrome that renders and does nothing — and the
+        # assertion above still passes, which is exactly why this one is here.
+        import re
+        from pathlib import Path
+        shell = (Path(__file__).resolve().parents[2] / "frontend"
+                 / "index.html").read_text(encoding="utf-8")
+        wanted = {f"js/{n}" for n in
+                  re.findall(r'<script src="js/([a-z0-9.-]+)"', shell)}
+        assert wanted, "no module tags found; this assertion would prove nothing"
+        assert wanted <= names, (
+            f"the shell loads these and the OTA bundle does not carry them: "
+            f"{sorted(wanted - names)[:8]}")
         # Hard exclusions: never the frozen vendor payload, and -- structurally,
         # since these files don't even live under frontend/ -- never the mobile
         # shim/lib/native code that holds the pin.

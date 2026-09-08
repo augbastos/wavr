@@ -27,6 +27,7 @@ import binascii
 import hashlib
 import ipaddress
 import os
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -307,3 +308,121 @@ def _import_x509():
             "pip install -e backend[tls]"
         ) from exc
     return x509
+
+
+# ---------------------------------------------------------------------------
+# What the socket is ACTUALLY speaking
+# ---------------------------------------------------------------------------
+#
+# `WAVR_MULTIDEVICE` is a feature flag, not a socket. `serve.py` turns TLS on
+# when it is set -- but serve.py is NOT the only launcher, as its own docstring
+# says: `backend/Dockerfile` and `scripts/wavr.ps1` run `uvicorn wavr.app:app`
+# directly, and neither of those can ever be HTTPS. So on any install that runs
+# one of them with the flag set in `.env` -- which is the documented way to turn
+# the flag on -- the product used to:
+#
+#   * report `features.tls: true` on a plain-HTTP socket;
+#   * print `https://<lan-ip>:<port>` as the address to open, which no browser
+#     can connect to;
+#   * put that same unreachable `https://` URL inside the pairing QR; and,
+#     worst of the four,
+#   * walk the operator through comparing a certificate fingerprint against a
+#     certificate nobody was serving.
+#
+# The last one is not a cosmetic error. A verification ceremony with nothing
+# behind it is worse than no ceremony, because the operator finishes it
+# believing they checked something. The fingerprint came off a file in
+# `~/.wavr/`, which survives on disk long after the process that generated it
+# stopped serving TLS, so "there is a cert" was never evidence that "this
+# connection is encrypted".
+#
+# ASGI already carries the answer. uvicorn sets `scope["scheme"]` to "https"
+# exactly when the connection it accepted was TLS (and to whatever
+# `X-Forwarded-Proto` says when it sits behind a proxy that terminates TLS --
+# which is also the truth from the phone's point of view, because the phone's
+# leg IS the encrypted one). Reading it there means the claim is derived from
+# the connection instead of guessed from configuration, and there is exactly
+# one place that decides.
+
+
+# The scheme of the connection being served RIGHT NOW.
+#
+# `app.state` alone would be a leak between requests, and not a theoretical one:
+# uvicorn rewrites the scheme from `X-Forwarded-Proto` only for peers in
+# `forwarded_allow_ips` (127.0.0.1 by default), so a Core behind a loopback
+# proxy that terminates TLS sees https for proxied requests and http for direct
+# LAN ones, in the same process, alternating. One shared field hands a reader
+# whatever somebody else's last request happened to set.
+#
+# A ContextVar is set for the duration of each request, so a caller inside a
+# handler gets ITS OWN connection's answer -- including the zero-arg providers,
+# which run inside the handler and therefore inside the same context. Sync
+# endpoints run through `run_in_threadpool`, which copies the context, so they
+# see it too. `app.state` stays as the last resort for a read that happens
+# outside any request.
+_current_scheme: ContextVar[str] = ContextVar("wavr_served_scheme", default="")
+
+
+def _normalise(scheme) -> str:
+    if scheme in ("https", "wss"):
+        return "https"
+    if scheme in ("http", "ws"):
+        return "http"
+    return ""
+
+
+class SchemeRecorder:
+    """Records the scheme of the connections this app answers.
+
+    A pure-ASGI wrapper rather than a `BaseHTTPMiddleware`: it has to see
+    WebSocket scopes too (a `wss://` connection is the same evidence as an
+    `https://` one), and it must not add a request/response hop to a streaming
+    route just to read one string.
+
+    Installed by `create_app()`, so it is present on every app any entry point
+    builds -- including the ones tests build -- rather than only on the one
+    launcher that happens to configure TLS.
+    """
+
+    def __init__(self, app, state) -> None:
+        self._app = app
+        self._state = state
+
+    async def __call__(self, scope, receive, send) -> None:
+        scheme = _normalise(scope.get("scheme"))
+        if not scheme:
+            await self._app(scope, receive, send)
+            return
+        self._state.served_scheme = scheme
+        token = _current_scheme.set(scheme)
+        try:
+            await self._app(scope, receive, send)
+        finally:
+            _current_scheme.reset(token)
+
+
+def served_scheme(state) -> str:
+    """`https` or `http` -- what this Core is serving, per the connection.
+
+    This request's connection first; the last one seen only as a fallback for a
+    read outside any request.
+
+    `http` until a connection has actually proved otherwise. Failing to the
+    weaker claim is the whole point: every caller here is composing something
+    an operator will act on, and over-claiming encryption is the failure this
+    function exists to prevent. Under-claiming costs a wrong-looking URL on a
+    screen nobody can be reading yet, because reading it requires a request.
+    """
+    return (_current_scheme.get()
+            or _normalise(getattr(state, "served_scheme", ""))
+            or "http")
+
+
+def serving_tls(state) -> bool:
+    """Is the connection this Core is answering actually encrypted?
+
+    The gate on every claim that only means something under TLS: the
+    `features.tls` receipt, and the certificate fingerprint the pairing screen
+    asks the operator to compare by hand.
+    """
+    return served_scheme(state) == "https"

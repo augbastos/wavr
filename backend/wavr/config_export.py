@@ -359,9 +359,52 @@ def _config_shape(config: dict) -> dict:
     }
 
 
+def _space_fingerprint(space) -> "str | None":
+    """A stable, one-way fingerprint of the Space — never the Space itself.
+
+    `space_id` is not a label: `api_space.join_space` accepts it as the exact
+    credential a second Core presents to join this Space (see
+    `backend/wavr/api_space.py`), so it belongs on the same list as a token or
+    a password, not on the same list as a room name. A supporter comparing two
+    diagnostic bundles from the same household still needs SOME way to tell
+    they are looking at the same install; a one-way hash gives them that
+    without handing back the value the hash was made from.
+
+    Returns `None` — never an empty string a caller could mistake for a real,
+    absent fingerprint — when there is no Space to fingerprint at all.
+    """
+    sid = str((space or {}).get("space_id") or "")
+    if not sid:
+        return None
+    return "sp_" + hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]
+
+
+def _node_health(nodes) -> dict:
+    """Node counts, by state and by modality — never a node's name.
+
+    The same reasoning as `_config_shape`, applied to nodes specifically: a
+    node's operator-given name is exactly the kind of free text that already
+    carried a person's name once, in an anchor, before this module's own
+    "shape, not content" rule existed (see `diagnostic_bundle`'s docstring). A
+    supporter diagnosing "half my sensors dropped off" needs the counts, not
+    which one is called "Ana's room".
+    """
+    rows = list(nodes or ())
+    by_state: dict[str, int] = {}
+    by_modality: dict[str, int] = {}
+    for n in rows:
+        if not isinstance(n, dict):
+            continue
+        state = str(n.get("state") or "unknown")
+        modality = str(n.get("modality") or "unknown")
+        by_state[state] = by_state.get(state, 0) + 1
+        by_modality[modality] = by_modality.get(modality, 0) + 1
+    return {"count": len(rows), "by_state": by_state, "by_modality": by_modality}
+
+
 def diagnostic_bundle(*, config=None, coverage=(), providers=None,
                       source_health=(), clocks=None, recent_events=(),
-                      version="", platform="", now=None) -> dict:
+                      version="", platform="", space=None, now=None) -> dict:
     """What Wavr can see, packaged for somebody trying to help.
 
     The health of every sensor and provider, and the recent SEMANTIC events —
@@ -386,6 +429,12 @@ def diagnostic_bundle(*, config=None, coverage=(), providers=None,
     many cameras, how many rooms, which providers — not the household's floor
     plan. So the shape travels and the content does not, and the note is now
     true of the file it is printed inside.
+
+    `space` is the RAW space row (the one `export_config` is also handed, and
+    the one it deliberately does not forward — see its own docstring), passed
+    here separately so this function can turn `space_id` into a fingerprint
+    without ever putting the id itself in the output. See
+    `_space_fingerprint`.
     """
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     rows = list(recent_events or ())[-MAX_BUNDLE_ROWS:]
@@ -394,10 +443,15 @@ def diagnostic_bundle(*, config=None, coverage=(), providers=None,
         "generated_at": stamp,
         "wavr_version": version,
         "platform": platform,
+        # A one-way hash, never the Space's own join credential. See
+        # `_space_fingerprint`.
+        "space_fingerprint": _space_fingerprint(space),
         # Shape, never content. See the docstring: the promise on this file is
         # "no coordinates, nobody's name", and it has to be true of the file
         # rather than true of an intention.
         "config_shape": _config_shape(config or {}),
+        # Counts, never a node's own name — same rule as `config_shape`.
+        "nodes": _node_health((config or {}).get("nodes")),
         "coverage": [dict(c) for c in coverage or ()],
         "providers": providers or {},
         "source_health": [dict(h) for h in source_health or ()],
