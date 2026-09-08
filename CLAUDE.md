@@ -7,9 +7,17 @@ invariants below are load-bearing, not style.
 
 ## Read first
 - `PRODUCT.md` — what Wavr is and its design principles
-- `docs/ROADMAP.md` — current spec letters (A, B2, F2, F3…)
-- `docs/adr/0002-privacy-boundaries-ram-only.md` — THE privacy contract
+- `docs/WAVR-PROTOCOL.md` — the wire contract (transport, auth, roles, pairing, nodes)
+- `docs/FRONTEND-MODULES.md` — where every frontend module lives and why the order is pinned
+- `docs/adr/0002-privacy-boundaries-ram-only.md` — THE privacy contract, **with its own
+  amendments section**: invariants 1 and 7 were superseded on purpose (see ADR-0006 below)
+- `docs/adr/0006-authenticated-lan-access.md` — the opt-in that relaxes loopback-only
 - `docs/adr/0007-desktop-shell.md` — Tauri desktop architecture
+- `docs/seams.md` — the extension seams (sub-plans B/C/…)
+
+There is **no roadmap document**. `docs/ROADMAP.md` was deleted; several ADRs and the odd
+module docstring still cite it and its spec letters (A, B2, F2, F3…). Those references are
+dead — don't go looking, and don't recreate the file to satisfy one.
 
 ## Verified commands
 ```powershell
@@ -21,8 +29,15 @@ powershell scripts/wavr-desktop.ps1                        # zero-Rust launcher 
 ```
 
 ## Invariants (never violate)
-- API is **loopback-only**: 127.0.0.1 bind + peer check + Host allowlist +
-  X-Wavr-Local CSRF header — hard-coded by design (ADR-0002), never made configurable.
+- API is **loopback-only by default**, and LAN access is one explicit opt-in, never a
+  silent one. Unset `WAVR_MULTIDEVICE` = the original invariant: 127.0.0.1 bind, peer
+  check, Host allowlist, X-Wavr-Local CSRF header, and any non-loopback caller gets 403
+  in code — so it holds even under `--host 0.0.0.0`. Set it (ADR-0006, which explicitly
+  supersedes ADR-0002 invariant 1) and `serve.py` binds `WAVR_BIND` over local-TLS
+  HTTPS/WSS and a same-/24 peer presenting a valid per-device token is admitted, capped
+  by its person's current role. Loopback is always `root`. Peers and nodes REQUIRE
+  multidevice and `app.py` refuses to start otherwise. What must never happen is the
+  default drifting, or a second path to the LAN that is not this flag.
 - Cameras boot **OFF** every process start; enable is runtime-only, never persisted.
 - Camera frames and pose keypoints are **never written to disk** — only derived
   signals (occupancy/confidence/explanation) persist.

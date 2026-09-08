@@ -10,8 +10,8 @@ Wavr speaks MCP over **two** transports with **deliberately different capability
 
 | Transport | Reach | Tools | Auth |
 |-----------|-------|-------|------|
-| **stdio** | Local, same box only | **Full, gated** (4 read + `call_ha_service`, DEFAULT-OFF) | Host spawns the process; loopback-only by construction |
-| **HTTP** (`/mcp`) | LAN, paired peers | **Read-only** (the 4 read tools; `call_ha_service` is absent, not just disabled) | Paired token (`Authorization: Bearer`) + pinned self-signed cert |
+| **stdio** | Local, same box only | **Full, gated** (13 read + `call_ha_service`, DEFAULT-OFF) | Host spawns the process; loopback-only by construction |
+| **HTTP** (`/mcp`) | LAN, paired peers | **Read-only** (all 13 read tools; `call_ha_service` is absent, not just disabled) | Paired token (`Authorization: Bearer`) + pinned self-signed cert |
 
 The honest one-liner: **stdio = local, full (gated) control; HTTP = LAN-paired, read-only.**
 Control (`call_ha_service`) is reachable ONLY over stdio and ONLY when explicitly enabled —
@@ -38,7 +38,9 @@ a public interface.
    a clear transport error rather than fabricating an empty house.
 2. The `[mcp]` extra is installed (`mcp>=1.27`). It is a **lazy** dependency: `import wavr.mcp`
    never needs it — only running the server does.
-   Install: `<repo>\.venv\Scripts\python -m pip install -e "backend[mcp]"`
+   Install: `%WAVR%\.venv\Scripts\python -m pip install -e "backend[mcp]"`
+
+   ( is wherever you cloned this repository.)
 
 ### Connect Claude Code (editable install / local dev)
 
@@ -52,7 +54,7 @@ claude mcp add wavr -- wavr-mcp
 Or without an editable install, spawn the module directly (PYTHONPATH lets it resolve from any cwd):
 
 ```
-claude mcp add wavr --env PYTHONPATH=<repo>\backend -- <repo>\.venv\Scripts\python.exe -m wavr.mcp_serve
+claude mcp add wavr --env PYTHONPATH=%WAVR%\backend -- %WAVR%\.venv\Scripts\python.exe -m wavr.mcp_serve
 ```
 
 Then in a Claude Code session, `/mcp` lists the `wavr` server and its tools. Ask e.g.
@@ -114,7 +116,7 @@ LAN mode is on AND the `mcp-http` connector is enabled.
    interface with a self-signed cert (auto-generated at `~/.wavr/cert.pem`):
    ```
    set WAVR_MULTIDEVICE=1
-   <repo>\.venv\Scripts\python.exe -m wavr.serve
+   %WAVR%\.venv\Scripts\python.exe -m wavr.serve
    ```
    Without `WAVR_MULTIDEVICE`, the app binds `127.0.0.1` only and `/mcp` is not mounted (404).
 2. The `[mcp]` and `[tls]` extras installed (`pip install -e "backend[mcp,tls]"`).
@@ -136,9 +138,21 @@ and `GET /api/connectors`.
 1. **Operator** mints a one-time pairing code (gated to loopback/central), which also returns the
    cert fingerprint for out-of-band verification:
    ```
-   POST /api/pair-code   { "role": "user" }
+   POST /api/pair-code   { "role": "agent" }
    -> { "code": "<one-time, ~2-min>", "cert_fingerprint": "<sha256>" }
    ```
+   **`agent`, not `user`.** This step used to say `user`, and `user` is the one
+   role whose default scopes do NOT include `mcp` — so every request, including
+   `initialize`, came back `403 {"detail":"missing scope: mcp"}`. The only role
+   that reached `/mcp` was `central`, which is simultaneously admin over the
+   whole HTTP API, so following this page as written meant handing an AI agent
+   a credential that can read your cameras, export your Space and revoke other
+   devices.
+
+   `agent` carries `mcp` and nothing else. It is bounded a second time by the
+   tool-scope axis described at the end of this document, so a fresh agent
+   credential reaches occupancy and the Space model and has to be widened
+   deliberately for anything more. It belongs to no person — omit `person_id`.
 2. **Client** redeems the code (reachable by an in-subnet peer without a token — that is the point
    of pairing, bounded by the one-time code):
    ```
@@ -163,52 +177,65 @@ claude mcp add wavr-lan https://<wavr-lan-ip>:<WAVR_PORT>/mcp \
 
 The client must be **on the same /24 subnet** — out-of-subnet peers are 403'd before the token is
 even looked up. `/mcp` also enforces an Origin allowlist (DNS-rebind defence) and per-peer
-rate-limiting. Over HTTP you get the **4 read tools only**; `call_ha_service` is absent from
-`list_tools`.
+rate-limiting. Over HTTP you get **the read tools only** — all 13 of them; `call_ha_service` is
+absent from `list_tools`. What an `agent` credential may actually *call* is narrower again, and
+the Tools table below says which.
 
 ---
 
 ## Tools
 
-| Tool | Kind | stdio | HTTP | Description |
-|------|------|:---:|:---:|-------------|
-| `list_rooms` | read | ✓ | ✓ | Every room Wavr senses, with `occupied` + `confidence`. |
-| `get_room_context` | read | ✓ | ✓ | Full state for one room incl. explainable `sources` + `explanation`. **Strips `vitals`, `targets`, `identities`** — no per-person biometric/positional data. |
-| `get_house_map` | read | ✓ | ✓ | The house map / floor plan (room geometry only). |
-| `get_ha_entities` | read | ✓ | ✓ | Home Assistant's own entities (`entity_id`/`state`/`friendly_name`/`domain`). `[]` when HA is unconfigured. **Note:** HA entity names may name people/devices (e.g. `person.*`, `device_tracker.*`). |
-| `get_space_context` | read | ✓† | ✓ | What this Space is and how it's doing right now: its name, every room's occupancy + confidence, and Core health. The one call to start with. **Default agent grant.** |
-| `explain_room_state` | read | ✓ | ✓ | Why Wavr believes what it believes about one room — same field allowlist as `get_room_context`, reshaped around the evidence. **Default agent grant.** |
-| `get_sensor_coverage` | read | ✓ | ✓ | Which rooms have a sensor reporting on them and which have none — a room with no coverage is not an empty room. **Default agent grant.** |
-| `get_core_health` | read | ✓† | ✓ | Which Core is authoritative for this Space and whether it's answering. **Default agent grant.** |
-| `get_device_context` | read | ✓† | ✓ | What job each paired device does for this Space and what it can sense — no device name, no person, no address. **Not** in the default agent grant (same tier as the LAN inventory/alerts/occupancy-history/HA-entity tools above): needs an explicit `Device.tool_scopes` grant. |
-| `call_ha_service` | control | ✓ (gated, DEFAULT-OFF) | ✗ (never registered) | Ask HA to run one service on one entity. |
+Thirteen read tools, plus the one control tool. The **grant** column is the
+`agent`-only scoping axis explained under the table; a ✗ there means an operator
+has to widen that device's `Device.tool_scopes` before the tool can be called at
+all, even though it is registered on both transports.
 
-**† Registered on stdio, but not fully wired there yet.** The stdio bridge
-(`wavr-mcp` / `backend/wavr/mcp_serve.py`) does not currently pass these three
-tools a Space data source. `get_core_health` and `get_device_context` degrade
-*honestly* — `{"available": false}` — same as any other not-wired optional
-tool. `get_space_context` does **not** degrade as cleanly: with no Space
-source wired, it reports `"This Core has not been set up yet — it has no
-Space"` even on an instance that has a real, configured Space — a known gap
-in the stdio bridge specifically, not a "this is intentionally disabled"
-shape. All three are fully wired over the HTTP transport (`/mcp`), which does
-receive the Space model's data sources. Use HTTP (or the app's own `GET
-/api/space/*` routes) for these three until the stdio bridge is updated.
+| Tool | Kind | stdio | HTTP | Grant | Description |
+|------|------|:---:|:---:|:---:|-------------|
+| `list_rooms` | read | ✓ | ✓ | ✓ | Every room Wavr senses, with `occupied` + `confidence`. |
+| `get_room_context` | read | ✓ | ✓ | ✓ | Full state for one room incl. explainable `sources` + `explanation`. **Strips `vitals`, `targets`, `identities`** — no per-person biometric/positional data. |
+| `explain_room_state` | read | ✓ | ✓ | ✓ | Why Wavr believes what it believes about one room — same field allowlist as `get_room_context`, reshaped around the evidence. |
+| `get_space_context` | read | ✓ | ✓ | ✓ | What this Space is and how it's doing right now: its name, every room's occupancy + confidence, and Core health. The one call to start with. |
+| `get_core_health` | read | ✓ | ✓ | ✓ | Which Core is authoritative for this Space and whether it's answering. Drops `base_url` and `cert_fingerprint`. |
+| `get_house_status` | read | ✓ | ✓ | ✓ | The composed "is everything OK at home" verdict — the network layer (rogue device / rogue DHCP / gateway identity) fused with the physical one (intrusion / fall-suspected / occupancy anomaly). Each reason is layer/kind/severity/ts only: the free-text caption is dropped, because it can embed live network identifiers. `window_minutes` moves the network-alert recency window. |
+| `get_sensor_coverage` | read | ✓† | ✓ | ✓ | Which rooms have a sensor reporting on them and which have none — a room with no coverage is not an empty room, and a room whose sensor is quiet is not a room with no sensor. |
+| `get_house_map` | read | ✓ | ✓ | ✗ | **Not the floor plan you edit.** Its own stricter projection: floor `id`/`level` and room `id` + polygon, and nothing else — never a floor/room/zone name, note or label, never walls, features or backdrop. Still an explicit grant, because a room `id` encodes the room's name in every real `house.json` and the polygon is the annotated plan. |
+| `get_ha_entities` | read | ✓ | ✓ | ✗ | Home Assistant's own entities (`entity_id`/`state`/`friendly_name`/`domain`). `[]` when HA is unconfigured. Never minimized, and HA entity names routinely name people and devices (`person.*`, `device_tracker.*`) — which is why it is grant-only. |
+| `get_network_inventory` | read | ✓ | ✓ | ✗ | Every device Wavr currently sees on the LAN: ip/vendor/device_type/known, plus make/model/os/is_gateway when known. Never mac/name/hostname/ports/timestamps. Reads the last scan; never starts one. |
+| `get_alerts` | read | ✓ | ✓ | ✗ | Active alerts as kind/severity/room/ts only — never the headcount or a gateway/rogue MAC, IP, vendor or hostname. |
+| `query_occupancy_history` | read | ✓ | ✓ | ✗ | The house's occupancy memory over the trailing `hours` (clamped to 24 for an agent), optionally one room, plus that room's hourly baseline and whether now is unusual for this hour. Room-level only — no geometry, no identity. `enabled: false` when `WAVR_OCCUPANCY_LOG` is off. |
+| `get_device_context` | read | ✓ | ✓ | ✗ | What job each paired device does for this Space and what it can sense — no device name, no person, no address. A per-device census even so, which is why it sits with the tools above rather than with the Space tools. |
+| `call_ha_service` | control | ✓ (gated, DEFAULT-OFF) | ✗ (never registered) | ✗ | Ask HA to run one service on one entity. |
 
-**"Default agent grant"** refers to a second, independent scoping axis (Wavr
-Pass, `auth.effective_tool_scopes`) that applies ONLY to the `agent` role —
-root/central/user get every tool the transport exposes regardless. An `agent`
-device gets `list_rooms`/`get_room_context`/`get_house_status` plus the four
-Space tools marked above by default; `get_device_context` (like
-`get_network_inventory`/`get_alerts`/`query_occupancy_history`/
-`get_ha_entities`) needs an operator to explicitly widen that device's
-`Device.tool_scopes` first.
+**† Registered on stdio, but not wired there.** The stdio bridge (`wavr-mcp` /
+`backend/wavr/mcp_serve.py`) passes no coverage source, so `get_sensor_coverage`
+degrades *honestly* over stdio — `{"available": false, "note": "This Wavr build
+cannot enumerate its sensors."}` — rather than answering the weaker
+live-state question, which cannot tell an unplugged radar from a room nobody
+ever sensed. It is fully wired over HTTP (`/mcp`); the app's own
+`GET /api/coverage` is the other way to reach it. The Space tools carried this
+mark while they were unwired and no longer do: `mcp_serve.make_server` passes
+`space_fn`/`cores_fn`/`people_count_fn`/`space_devices_fn` today.
+
+**"Grant"** is a second, independent scoping axis (Wavr Pass,
+`auth.effective_tool_scopes`, `AGENT_DEFAULT_TOOL_SCOPE`) that applies ONLY to
+the `agent` role — root and central get every tool the transport exposes
+regardless. (`user` does NOT: it has no `mcp` scope at all, so it never reaches
+the transport. This sentence used to list it, which is part of why step 2 said
+to mint one.) A fresh `agent` credential gets the seven current-state tools
+marked ✓ and nothing else. The six marked ✗ are the household crown jewels —
+the floor plan, HA's own entity names, the LAN census, alert metadata, the
+occupancy timeline and the device census — and each needs an operator to widen
+that device's `Device.tool_scopes` deliberately, the same opt-in discipline
+`call_ha_service` already needs. `AGENT_READ_TOOL_SCOPE` grants all thirteen at
+once; a hand-picked subset is usually the better answer.
 
 ## Guarantees
 
-- **Read-only by construction (both transports).** The four read tools never mutate state, toggle/
-  create a source, install anything, or reach off the local box. `call_ha_service` is the only
-  mutating tool and is stdio-only + default-OFF.
+- **Read-only by construction (both transports).** None of the thirteen read tools mutates state,
+  toggles/creates a source, installs anything, or reaches off the local box — `get_network_inventory`
+  reads the last scan rather than starting one, and `get_alerts` reads alerts rather than raising
+  them. `call_ha_service` is the only mutating tool and is stdio-only + default-OFF.
 - **Local-only.** All traffic is loopback (to the running app) or LAN (to the user's own HA, or —
   over the HTTP transport — from a paired LAN peer). No cloud, no new external egress.
 - **Privacy survives the bridge.** `/api/state` carries full RoomState (incl. vitals/targets) over

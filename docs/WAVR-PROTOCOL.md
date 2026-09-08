@@ -215,11 +215,34 @@ subnet-bounded (never open to the public internet, never open off-LAN):
   `/api/nodes/telemetry`, `/api/nodes/heartbeat`, `/api/nodes/reactivate`.
 - The static shell (so an unpaired companion can load the pairing screen):
   `/`, `/index.html`, `/measure.html`, `/manifest.webmanifest`, `/sw.js`,
-  `/icon.svg`, and everything under `/vendor/`.
+  `/icon.svg`, `/sdk/javascript/wavr.js`, and everything under `/vendor/`,
+  `/experiences/` and `/js/`.
+
+  `/js/` is the shell's own script modules — one page split across files, not a
+  second surface — and it is a PREFIX rather than an enumerated list on purpose:
+  a service worker precaches the shell with `Cache.addAll`, which is
+  all-or-nothing, so a single module the page loads and the exemption omits does
+  not cost one script, it costs offline launch entirely. The route behind the
+  prefix accepts only a bare lowercase `*.js` name resolving to a direct child of
+  the shell's script directory, so widening the exemption does not widen what can
+  be read. `/experiences/` and the SDK file they import are the same class of
+  thing: markup and script, no data, no action.
+
+  Every path and prefix in this bullet MUST be exempt from the `X-Wavr-Local`
+  CSRF header as well as from the token, and that is not a convenience. A browser NAVIGATING to a URL — an
+  address typed in, a bookmark, a QR code, a `<script src>` — sends no custom
+  request header, and no page-side code has run yet to add one. Gating the page
+  on a header the act of opening it cannot carry makes it impossible to open,
+  which is the single thing it exists for. The header stays mandatory on every
+  API and action path, which is where CSRF is actually a risk.
 
 A Core implementation **MUST NOT** add a new unauthenticated exemption without
-equally strong bounding (one-time code + rate limit, or a genuinely non-sensitive
-static asset) — every existing exemption follows exactly that shape.
+bounding at least as strong as one of the four shapes above: a short-lived
+rate-limited one-time code, a high-entropy capability the requester was handed
+plus per-source-IP rate limiting, a distinct credential space the handler itself
+verifies, or a genuinely non-sensitive static asset that serves no data and
+performs no action. Every existing exemption is one of those four, and each is
+still bounded by `in_subnet` regardless.
 
 ### 4.3 Roles and scopes
 

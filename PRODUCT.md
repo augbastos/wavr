@@ -68,7 +68,7 @@ Technical-trustworthy. Precise, calm, legible — a serious measurement instrume
 1. **Explain, don't just display** — every state shows its evidence (per-modality breakdown, confidence, explanation string).
 2. **Privacy is visible** — the mode label (real vs demo) is always on screen; the demo mode declares itself fake.
 3. **Instrument calm** — data changes constantly; the UI must not flicker, shout, or animate for its own sake.
-4. **Light footprint** — single static HTML file, no build step, no frameworks; must stay fast on any machine.
+4. **Light footprint** — a static HTML shell plus plain `<script>` modules in `frontend/js/`; no build step, no bundler, no frameworks. Must stay fast on any machine, and readable by opening the file.
 
 ## Accessibility & Inclusion
 

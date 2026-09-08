@@ -23,11 +23,13 @@ POST /api/providers/<provider_id>/observations
 ```
 
 A provider must be **registered** first, and the registration is what makes the
-declaration enforceable:
+declaration enforceable. Registering is local + admin; posting is not (see
+`wavr/api_provider_ingest.py`):
 
 ```
 PUT /api/providers/external/acme_rtls
-{"label": "Acme RTLS", "reach": "lan", "modality": "ble", "ceiling": "room"}
+{"label": "Acme RTLS", "reach": "lan", "modality": "ble", "ceiling": "room",
+ "device_id": "<the adapter's paired device_id>"}
 ```
 
 `reach` has no default. A provider that does not say how far it reaches cannot be
@@ -37,6 +39,17 @@ comfortable — is a privacy failure that nobody notices.
 `ceiling` is capped against what the declared modality can support in `fusion`. A
 declaration may lower a ceiling and never raise one, so an adapter cannot buy
 `position` by asking for it.
+
+`device_id` names **the one device that may speak for this provider**, and this
+example omitted it — so an integrator who followed the page exactly registered a
+provider bound to nobody, and every observation their adapter posted came back
+`403`. That is not a bug in the gate. `presence:write` is held by every paired
+phone and by `guest`, so without a bound device one external provider would let
+any of them post fabricated occupancy for any room in the house; a provider with
+nothing bound therefore accepts loopback only, and the 403 says so in words.
+
+Pair the adapter first (`POST /api/pair` → `device_id`, `token`), then register
+the provider naming that `device_id`. Re-register to bind a different one.
 
 **Why this shape rather than four vendor adapters.** Every enterprise positioning
 API listed below is behind a partner agreement. An adapter written against a
@@ -82,10 +95,19 @@ HA keeps its own clock, so `last_changed` goes through `wavr/timebase.py`.
 
 ### OpenXR runtimes · `openxr`
 
-**Identity, fully.** `XR_EXT_spatial_persistence` gives a stable `XrUuid` per
-anchor, and Wavr maps those onto its own anchors. A headset recognising its own
-anchor can ask what that place is called and what Wavr knows about the room —
-no geometry, no alignment, working on the first run.
+> **No endpoint yet.** What exists is the SOLVER and the parser
+> (`wavr/openxr.py`, `wavr/spatial_align.py`), with tests. There is no route
+> that accepts an OpenXR entity, no route that solves an alignment, and no SDK
+> method — so nothing on this page can be called from a headset today. This
+> section described it as built, and a developer following it went looking for
+> an endpoint that has never existed. The design below is what the modules
+> implement, and what the routes will expose.
+
+**Identity.** `XR_EXT_spatial_persistence` gives a stable `XrUuid` per anchor,
+and Wavr's mapping turns those into its own anchors. A headset recognising its
+own anchor can then ask what that place is called and what Wavr knows about the
+room — no geometry, no alignment. The mapping is implemented and tested; the
+route that would let a headset present a UUID is not.
 
 **Coordinates, once aligned.** OpenXR's `LOCAL` origin is wherever the session
 started, so a transform is *solved* from at least two anchors both systems can
@@ -96,8 +118,15 @@ unknown; Wavr refuses rather than rendering a room at an arbitrary angle.
 **and per application** — so those UUIDs are namespaced by app in Wavr's mappings.
 Two apps using the same UUID mean two different places.
 
-**Blocked:** runtime validation against a real headset. Everything above is tested
-against fixtures; nothing has run on hardware.
+**Blocked:** the HTTP surface, and then runtime validation against a real
+headset. Everything above is tested against fixtures; no route reaches it and
+nothing has run on hardware.
+
+⚠️ One rule stated above is NOT enforced anywhere yet: `openxr.provider_id`
+namespaces UUIDs per application, and `POST /api/anchors/{id}/bind` accepts an
+arbitrary `provider_id` string. Whatever route eventually accepts an OpenXR
+binding has to route it through that function, or two applications sharing a
+UUID become one place.
 
 ### Any positioning system, through the generic contract
 
@@ -144,14 +173,17 @@ honest state rather than a gap to be filled by guessing.
 
 If you hold credentials for one, the integration is:
 
-1. `PUT /api/providers/external/<id>` with the reach and ceiling that vendor
-   genuinely supports.
-2. A translator that reads their stream and posts Wavr-shaped observations.
-3. Pair it as a device with `presence:write` — an adapter reports, it does not
-   administer.
+1. Pair the translator as a device with `presence:write` — an adapter reports,
+   it does not administer. Keep the `device_id` you get back.
+2. `PUT /api/providers/external/<id>` with the reach and ceiling that vendor
+   genuinely supports, **and that `device_id`**. Without it the provider is
+   bound to nobody and accepts loopback only, so the translator gets 403.
+3. A translator that reads their stream and posts Wavr-shaped observations.
 
-Step 3 matters. A credential that could also re-register its own provider could
-declare itself `position`-capable and start asserting coordinates.
+Step 1 matters in both directions. A credential that could also re-register its
+own provider could declare itself `position`-capable and start asserting
+coordinates — and a provider that named no device at all would let every paired
+phone in the house post occupancy through it.
 
 ---
 
@@ -167,9 +199,12 @@ the provider contract. `sdk/javascript`, `sdk/python`, `dev.wavr.sdk`.
 
 Its own row, because the split is unusual.
 
-**Core side: built and tested.** Nearby Interaction readings parse into evidence,
-ARKit anchors map onto Wavr anchors, and the alignment uses the same solver as
-OpenXR. `wavr/apple.py`.
+**Core side: the parser and the solver are built and tested; there is no
+endpoint.** Nearby Interaction readings parse into evidence, ARKit anchors map
+onto Wavr anchors, and the alignment uses the same solver as OpenXR
+(`wavr/apple.py`). Nothing imports that module outside its own tests, so as
+with OpenXR above there is no route to call and no SDK method — the iOS side
+has nothing to talk to yet.
 
 Two rules that shape it:
 

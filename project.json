@@ -1,0 +1,143 @@
+{
+  "$comment": "A machine-readable orientation to this repository, written for a language model reading it cold. Prose lives in README.md and PRODUCT.md; this file is the map. Keep it accurate or delete it — a stale map is worse than none.",
+  "schema_version": 1,
+  "generated_on": "2026-09-08",
+
+  "project": {
+    "name": "Wavr",
+    "one_line": "Local-first spatial presence: turns a home network plus whatever sensors you own into a live, explainable map of who is in which room.",
+    "problem": "Knowing who is home, room by room, normally means renting that understanding from someone else's cloud. Wavr does the same sensing on hardware the owner controls, and keeps the data there.",
+    "license": "AGPL-3.0-or-later, with a commercial dual license available",
+    "visibility": "private",
+    "maturity": "early; used by one person on one household's devices",
+    "primary_language": "Python",
+    "languages": ["Python", "JavaScript", "Kotlin", "Rust", "C++"]
+  },
+
+  "core_idea": {
+    "unit_of_truth": "RoomState",
+    "fields": ["room", "occupied", "confidence", "per-source evidence", "timestamp"],
+    "fusion_rule": "confidence = strength of the best present evidence = trust weight x the source's own confidence x freshness decay",
+    "why_not_averaging": "Averaging lets several weak, agreeing sources manufacture certainty. Taking the strongest single piece of evidence means a confident answer always has one nameable reason behind it.",
+    "explainability": "Every source's own reading is surfaced next to the fused number rather than silently arbitrated. The user can always ask why."
+  },
+
+  "invariants": {
+    "$comment": "These are enforced in code and covered by tests. A change that breaks one is a product decision, not a refactor.",
+    "loopback_only_by_default": "The base install never opens a LAN socket. Peer check + Host allowlist + CSRF header.",
+    "cameras_boot_off": "Frames live in RAM only, are never written to disk, and never leave the machine.",
+    "derived_state_only": "Only occupancy, confidence and timestamps are stored or published. Never frames, never raw position targets, never credentials.",
+    "egress_is_opt_in": "Every path off the machine (LAN multi-device, MQTT, the MCP control tool, the narrator) is default-OFF and individually switched on.",
+    "no_telemetry": "No analytics, no telemetry SDK, no account. The frontend makes zero external requests.",
+    "credentials_never_echoed": "Tokens and keys are never logged, returned, or printed."
+  },
+
+  "surfaces": [
+    {
+      "name": "backend",
+      "path": "backend/",
+      "what": "The fusion engine and the HTTP/WS API. FastAPI on Python 3.11.",
+      "entry_points": ["python -m wavr.serve", "python -m wavr.status", "python -m wavr.mcp_serve"],
+      "notes": "No mandatory heavy dependencies. torch/cv2, pyserial, paho, bleak, cryptography and genai are lazy optional extras."
+    },
+    {
+      "name": "frontend",
+      "path": "frontend/",
+      "what": "The dashboard. Vanilla JS, no bundler: a static index.html shell plus classic scripts in frontend/js/ loaded in a pinned order.",
+      "notes": "Top-level declarations cross <script> boundaries but hoisting does not, so the order in index.html is load-bearing. three.js is vendored same-origin. Opened off localhost it self-switches to a simulator and says so on screen."
+    },
+    {
+      "name": "desktop",
+      "path": "desktop/",
+      "what": "Tauri v2 shell (Rust) that hosts the dashboard and supervises a PyInstaller onefile sidecar of the backend.",
+      "notes": "The machine running it is the 'central'. The sidecar is confined to a Windows Job Object so a killed shell cannot leave an orphan Core holding the port."
+    },
+    {
+      "name": "mobile",
+      "path": "mobile/ (a git worktree of this repository)",
+      "what": "Android companion, Capacitor shell plus native Kotlin plugins. Pairs to a central over certificate-pinned TLS.",
+      "notes": "Discovery uses NsdManager rather than an in-process mDNS browse, because a phone VPN routes multicast into its tunnel and an in-app browse never reaches the LAN."
+    },
+    {
+      "name": "core-launcher",
+      "path": "core-launcher/",
+      "what": "Android home-launcher app that turns a dedicated phone into an always-on hub: ambient panel, mDNS advertisement, kiosk.",
+      "notes": "Advertises on the LAN only while its own page load succeeds, so the network is never invited to a Core that is not serving."
+    },
+    {
+      "name": "firmware",
+      "path": "firmware/",
+      "what": "ESP32 sensor nodes: MQTT, OTA, enrolment and revocation."
+    },
+    {
+      "name": "site",
+      "path": "site/",
+      "what": "The public-facing website. Not deployed."
+    }
+  ],
+
+  "sensing_modalities": [
+    { "name": "network", "how": "ARP, DHCP, mDNS, SSDP, NetBIOS, SNMP — device presence inferred from the LAN itself", "hardware": "none" },
+    { "name": "bluetooth", "how": "BLE proximity with RSSI and confidence decay", "hardware": "a BLE adapter" },
+    { "name": "camera", "how": "RTSP/ONVIF plus person detection; frames stay in RAM", "hardware": "an IP camera" },
+    { "name": "mmwave", "how": "radar presence and micro-motion", "hardware": "an mmWave module" },
+    { "name": "wifi_csi", "how": "channel-state sensing", "hardware": "a supported radio" },
+    { "name": "uwb", "how": "ultra-wideband ranging", "hardware": "UWB anchors" }
+  ],
+
+  "vocabulary": {
+    "$comment": "Words this project uses on purpose. docs/VOCABULARY.md is the authority; several are admin-only and must never appear in an end-user screen.",
+    "Space": "The place being watched — a home, an office, a shop. Has people and rooms.",
+    "Core": "The machine that thinks: runs fusion and holds the database. ADMIN WORD — never shown to a household user.",
+    "Node": "A sensor board that reports to a Core. ADMIN WORD — never shown to a household user.",
+    "Client": "A device that only views. A phone, a tablet, a browser.",
+    "central": "A credential role meaning 'may administer'. Distinct from being a Core, which is a device function.",
+    "RoomState": "The one answer per room: occupied, how sure, and why."
+  },
+
+  "how_to_run": {
+    "backend_dev": "cd backend && pip install -e \".[dev]\" && cd .. && python -m wavr.serve",
+    "tests": "cd backend && pytest -q",
+    "test_notes": "Every hardware path is mock-tested, so the whole suite runs with no devices attached. Browser tests use Playwright.",
+    "multi_device": "Off by default. Set WAVR_MULTIDEVICE=1 or turn it on in Settings; it changes what the process is exposed to, so it is a deliberate, separate step.",
+    "mcp": "python -m wavr.mcp_serve over stdio, or the HTTP transport. Read-only by default; Home Assistant control is a separate opt-in, gated tool."
+  },
+
+  "conventions": {
+    "code_language": "English — code, comments, commit messages and documentation, always.",
+    "tests_are_named_as_sentences": "A test file is called what it guarantees, e.g. test_the_screen_never_invents_a_house.py, and its docstring says what failure it exists to prevent.",
+    "a_guarantee_needs_a_producer": "The dominant defect class in this repository is a check that works with nothing on the other side producing what it checks. When adding a guarantee, verify the producing half exists and is called.",
+    "measure_dont_guess": "Vague symptoms ('it feels slow', 'it doesn't find it') have specific causes. A wrong hypothesis costs more than the measurement would have.",
+    "no_machine_details": "This repository never describes the maintainer's personal hardware — model, CPU, GPU, RAM, monitor count or exact OS. The allowed form is 'tested on one machine'."
+  },
+
+  "where_to_look": {
+    "product_definition": "PRODUCT.md",
+    "decisions_and_tradeoffs": "docs/adr/",
+    "protocol": "docs/WAVR-PROTOCOL.md",
+    "vocabulary": "docs/VOCABULARY.md",
+    "frontend_module_order": "docs/FRONTEND-MODULES.md",
+    "install_routes": "docs/INSTALL.md",
+    "lan_discovery_problems": "docs/network-fixes/",
+    "fusion_engine": "backend/wavr/fusion.py",
+    "recognition_and_precedence": "backend/wavr/recog.py",
+    "device_credentials": "backend/wavr/devices.py",
+    "pairing": "backend/wavr/pairing.py and backend/wavr/pair_requests.py",
+    "http_api": "backend/wavr/app.py and backend/wavr/api_*.py",
+    "geometry_and_rooms": "backend/wavr/housemap.py"
+  },
+
+  "known_gaps": [
+    "The Android Core's embedded-engine build (ADR-0010) is specified but unexercised; the phone hub in use runs the same Python engine in a container beside the launcher.",
+    "Radar and UWB have code paths and mock tests but little time on real hardware.",
+    "The mobile companion's first-run screens are hardcoded English; the dashboard itself is translated.",
+    "The website is written but not deployed."
+  ],
+
+  "not_true_of_this_project": {
+    "$comment": "Stated explicitly because a reader — human or model — may otherwise assume the usual.",
+    "no_users_or_customers": "There are no users beyond the maintainer, no customers, no paying installations, and no production deployment.",
+    "no_uptime_or_scale_claims": "No availability, install-count or scale figure in this repository is a measurement of real-world usage.",
+    "not_a_medical_device": "Vitals-adjacent sensing is presence and motion only. It diagnoses nothing and must never be described as health monitoring (ADR-0003)."
+  }
+}

@@ -52,7 +52,16 @@ has known limits — safe on a **trusted home LAN**:
   prompt:** because the cert is self-signed (no public CA — there's zero cloud by
   design), the companion will warn on first connect; accept/trust it once and pin it.
   (If you launch the old way, `python -m uvicorn wavr.app:app --host ...`, there is no
-  TLS — use `wavr.serve` so the cert is applied.)
+  TLS — use `wavr.serve` so the cert is applied. `backend/Dockerfile` and
+  `scripts/wavr.ps1` are that old way.)
+- **`WAVR_MULTIDEVICE` does not mean TLS is on.** The flag asks for LAN access;
+  only `wavr.serve` acts on the TLS half of it. Wavr therefore reports what the
+  connection you are on is actually doing, not what the flag asked for: on a
+  plain-HTTP socket `features.tls` is `false`, every address it hands you (the
+  setup screen, the pairing QR, a guest pass) is `http://`, and no certificate
+  fingerprint is offered — there is no certificate warning on a plain-HTTP page,
+  so there would be nothing to compare it against. Linking two Cores is refused
+  outright on that socket, because the two sides exchange admin credentials.
 - **Pairing window is an open door.** `/api/pair` is reachable by any in-subnet peer
   (that's how onboarding works). It's protected by an 8-digit one-time code + a
   brute-force rate-limit, but keep pairing windows short and pair when you're watching.

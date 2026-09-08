@@ -30,6 +30,18 @@ jobs:
   # Its own job because it needs a downloaded browser, and because the failure it
   # exists to catch is invisible to the suite above: a panel that renders empty,
   # or a page the Core refuses to serve to a browser at all. Both have happened.
+  #
+  # FOUR modules need a browser, and this job named only the first for as long as
+  # the other three existed — so the offline cold launch, the 3D landing view and
+  # the tray's deep links ran NOWHERE. Their browser cases skip themselves in the
+  # job above (no playwright there, on purpose) and they were never selected
+  # here, which is the quietest way for a test to stop existing.
+  #
+  # One step each rather than one pytest run, for two reasons: a red check then
+  # names the surface that broke without anybody opening the log, and
+  # `test_offline_launch.py` gets a process to itself — it installs a service
+  # worker and cuts the network at the browser, which is not a neutral starting
+  # point for whatever would run next to it.
   browser:
     runs-on: ubuntu-latest
     steps:
@@ -42,12 +54,55 @@ jobs:
           pip install -e "backend[dev]"
           pip install playwright
           python -m playwright install --with-deps chromium
-      # `-p no:randomly` is not needed and `--no-header` keeps the log short.
-      # The suite SKIPS itself when chromium is missing, so a green here with a
-      # skip count means this step failed to install a browser — check the count,
-      # not just the colour.
-      - name: Run the browser suite
+      # Every module below SKIPS itself when chromium is missing. That is right
+      # on a laptop and a false green here: all-skipped and all-passed are the
+      # same colour, and the note that used to sit here asked the reader to check
+      # a skip count instead. Launch the browser first and fail the job if it
+      # does not, so the configuration problem is red rather than green.
+      - name: Prove chromium is really installed
+        run: >-
+          python -c "from playwright.sync_api import sync_playwright;
+          p = sync_playwright().start(); b = p.chromium.launch();
+          print('chromium', b.version); b.close(); p.stop()"
+      # `-q` keeps the log to the summary line; `-rs` still names anything that
+      # skipped, which is the number worth reading when one of these goes quiet.
+      - name: The dashboard and the reference pages
         run: python -m pytest backend/tests/test_browser_ui.py -q -rs
+      - name: The 3D landing view loads three.js
+        run: python -m pytest backend/tests/test_three_d_view.py -q -rs
+      # Its two static cross-file checks also run in the job above, which has no
+      # playwright; the three browser cases only ever run here.
+      - name: Deep links from the tray land somewhere
+        run: python -m pytest backend/tests/test_deep_links.py -q -rs
+      - name: Cold launch with the network cut
+        run: python -m pytest backend/tests/test_offline_launch.py -q -rs
+
+  # Does the SUITE hold the guarantees the code states? `scripts/check_guarantees.py`
+  # deletes each guard on purpose and requires a test to fail. It was written, it
+  # passed, and then it ran nowhere — so between one person remembering to run it
+  # and the next, a guarantee could stop being held with nothing saying so. That
+  # is the same class of gap the script exists to find.
+  #
+  # Its own job, and never a step of another one: it MUTATES source files, so a
+  # test run sharing the checkout fails for reasons that have nothing to do with
+  # its own code. A separate job is a separate checkout on a separate runner,
+  # which is exactly the isolation the script's docstring asks for.
+  #
+  # It shells out to pytest once per guarantee with a narrowed `-k`, so it takes
+  # minutes rather than the twenty a full suite would. The timeout is a stop for
+  # a hung subprocess, not a budget.
+  guarantees:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (the script runs pytest with this same interpreter)
+        run: pip install -e "backend[dev]"
+      - name: Break each guarantee on purpose and require the suite to notice
+        run: python scripts/check_guarantees.py
 
   # The SDKs are separate jobs rather than steps of the one above, because they
   # are separate artefacts. The Python SDK deliberately does NOT depend on the
