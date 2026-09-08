@@ -1030,11 +1030,47 @@ def test_the_updates_tile_says_how_THIS_install_updates(page, core):
     assert page.script_errors == [], page.script_errors
 
 
+def _baixar_o_pacote(page, core):
+    """Click the button and return the download, or fail saying WHY.
+
+    `expect_download` times out with "waiting for event download", which is the
+    one thing already obvious. Meanwhile the page is displaying the actual
+    diagnosis: `wireBundleDownload` does not download at all when
+    `/api/diagnostics/bundle` answers badly, and it writes the reason into
+    `#backupFb` — a 500 means the bundle failed its own credential-leak check,
+    anything else means the control could not get local admin access.
+
+    Throwing that sentence away cost two rounds of measuring the wrong thing:
+    the four routes the bundle awaits (fast — about six seconds), then the
+    pairing state (irrelevant — the route stays 200 through it). The product
+    knew, and the test was not reading.
+    """
+    from playwright.sync_api import TimeoutError as PWTimeout
+    try:
+        with page.expect_download(timeout=30000) as dl:
+            page.locator("#exportBundleBtn").click()
+        return dl.value
+    except PWTimeout:
+        fb = page.locator("#backupFb")
+        disse = (fb.inner_text().strip() if fb.count() else "")
+        estado = page.evaluate("""async () => {
+          try {
+            const r = await fetch('/api/diagnostics/bundle',
+                                  { headers: { 'X-Wavr-Local': '1' } });
+            return r.status + ' ' + (await r.text()).slice(0, 200);
+          } catch (e) { return 'fetch threw: ' + e; }
+        }""")
+        pytest.fail(
+            "the bundle button produced no file.\n"
+            f"  the page says   : {disse!r}\n"
+            f"  the route answers: {estado}\n"
+            f"  script errors    : {page.script_errors}")
+
+
 def test_the_diagnostic_bundle_downloads(page, core):
     open_settings(page, core)
-    with page.expect_download(timeout=30000) as dl:
-        page.locator("#exportBundleBtn").click()
-    assert dl.value.suggested_filename.endswith(".json")
+    baixado = _baixar_o_pacote(page, core)
+    assert baixado.suggested_filename.endswith(".json")
 
 
 def test_the_diagnostic_bundle_is_a_real_file_a_person_can_read(page, core):
@@ -1047,9 +1083,8 @@ def test_the_diagnostic_bundle_is_a_real_file_a_person_can_read(page, core):
     empty satisfies "it downloads" and helps nobody tomorrow.
     """
     open_settings(page, core)
-    with page.expect_download(timeout=30000) as dl:
-        page.locator("#exportBundleBtn").click()
-    saved = json.loads(Path(dl.value.path()).read_text(encoding="utf-8"))
+    baixado = _baixar_o_pacote(page, core)
+    saved = json.loads(Path(baixado.path()).read_text(encoding="utf-8"))
 
     # What was already there.
     assert saved["wavr_version"]
