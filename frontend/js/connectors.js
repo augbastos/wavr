@@ -58,8 +58,24 @@ async function renderConnectors(){
   const fb = document.getElementById("connFb");
 
   function directionWord(dir){ return WavrT(dir === "inbound" ? "Reads in" : "Sends out"); }
-  // Egress honesty: an outbound connector whose scope does NOT start with "local" leaves the box.
-  function isEgress(c){ return c.direction === "outbound" && !/^local/i.test(c.scope || ""); }
+  // Egress honesty: an outbound connector whose declared REACH is internet or
+  // cloud leaves your Space.
+  //
+  // This used to read the human `scope` SENTENCE and ask whether it started
+  // with the word "local" — a privacy classification derived from copy, and
+  // there were two copies of the rule, one here and one in
+  // `_is_egress_connector`, so rewording a sentence could move this screen and
+  // not the Privacy screen. `reach` is the vocabulary `providers.py` already
+  // owns (local / lan / internet / cloud) and every descriptor now declares
+  // it; `scope` goes back to being only the sentence a person reads.
+  //
+  // A descriptor with no reach counts as leaving. An unstated reach must never
+  // resolve to the reassuring answer.
+  function isEgress(c){
+    if(c.direction !== "outbound") return false;
+    const r = String(c.reach || "").toLowerCase();
+    return r !== "local" && r !== "lan";
+  }
 
   // Fix #4 (bare connector cards): never render a card with no "what this does" line.
   // Prefers a server-provided plain-language `description` field if the descriptor ever

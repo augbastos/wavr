@@ -170,7 +170,7 @@
   "known_gaps": [
     "The Android Core's EMBEDDED-engine build (ADR-0010) is specified and not exercised. What was physically tested on 2026-09-08 is a different topology: the core-launcher app running as the device's home screen, with the ordinary Python backend beside it in a Debian container. That hub serves the current dashboard over the LAN and restarts unattended after a reboot; the embedded build remains untested.",
     "Radar (mmWave) and UWB have code paths and mock tests but little time on real hardware. Mock-tested is not hardware-tested.",
-    "The companion's first-run screens are hardcoded English; the dashboard itself carries the translation markers and switches language.",
+    "The companion's screens are routed through the dashboard's translator and carry Portuguese, but nothing has yet driven them in Portuguese on a real handset — the language was verified by the catalogue guards and by reading, not by using the app in it.",
     "The website exists in `site/` and is deliberately not deployed.",
     "Several files are large enough to be real architectural debt — `backend/wavr/app.py`, `desktop/src-tauri/src/main.rs`, the Core launcher's MainActivity. Recorded rather than split, because splitting to lower a line count is a refactor looking for a reason."
   ],

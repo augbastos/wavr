@@ -65,6 +65,28 @@ environments, make the skip loud and specific about what is missing.
 - No new mandatory dependency without a reason the lazy-extras pattern cannot
   cover.
 
+### What enforces this, and what does not
+
+Nothing on the server side stops a red change reaching `master`. Branch
+protection and rulesets both answer `403 — Upgrade to GitHub Pro or make this
+repository public` on this account, so the branch cannot be protected while the
+repository is private. That is stated here rather than papered over: assume
+`master` is writable, and treat the checks as something you read rather than
+something that stops you.
+
+What the repository does enforce:
+
+- `tests` and `scpe` run on every pull request, with no path filter, so the six
+  test jobs and the disclosure check always have a verdict on the head commit.
+  `docker` and `install-matrix` are path-filtered and legitimately produce no
+  check run for changes outside their paths.
+- `tests` also runs on every push to `master`, so a red `master` is visible
+  within minutes even though nothing prevented it.
+- The maintenance auto-merge workflow refuses to merge while ANY check on that
+  exact head SHA is unfinished or not green — it excludes only itself, and a
+  path-filtered workflow that produced no check run counts as inapplicable
+  rather than as a failure.
+
 ## Good first contributions
 
 A new `SensorSource` — a Zigbee occupancy sensor, another BLE beacon type, a

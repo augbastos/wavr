@@ -23,6 +23,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from wavr.connector_store import BUILTIN_IDS
+from wavr.providers import (REACH_CLOUD, REACH_INTERNET,
+                            REACH_LAN, REACH_LOCAL)
 
 
 def _deps_not_wired() -> None:
@@ -37,6 +39,33 @@ def _deps_not_wired() -> None:
                         detail="connector write routes have no auth gate wired")
 
 
+# The `outbound-*` prefixes every generic registration already writes are a
+# taxonomy that has been hiding inside the prose. Read here rather than parsed
+# at the point of use, so there is one place that knows and one place to change
+# when a new kind of reach appears.
+#
+# Anything unrecognised resolves to CLOUD, the most exposed. A connector that
+# does not say how far it reaches must never resolve to the reassuring answer —
+# the same rule `providers.describe` enforces by refusing to build at all.
+_PREFIXO_ALCANCE = {
+    "local": REACH_LOCAL,
+    "lan": REACH_LAN,
+    "outbound-cloud": REACH_CLOUD,
+    "outbound-notify": REACH_CLOUD,
+    "outbound-enrich": REACH_INTERNET,
+    "outbound-lookup": REACH_INTERNET,
+    "outbound-location": REACH_CLOUD,
+}
+
+
+def _reach_from_scope(scope: str | None) -> str:
+    texto = str(scope or "").strip().lower()
+    for prefixo, alcance in _PREFIXO_ALCANCE.items():
+        if texto.startswith(prefixo):
+            return alcance
+    return REACH_CLOUD
+
+
 def _generic_descriptor(row: dict) -> dict:
     """Shape a kind='generic' store row as a connector descriptor. `active` is the
     full gate (enabled==1); the registry IS the enforcing gate for generics -- there
@@ -47,6 +76,7 @@ def _generic_descriptor(row: dict) -> dict:
         "id": row["id"],
         "kind": "generic",
         "direction": "outbound",
+        "reach": _reach_from_scope(row["scope"]),
         "label": row["label"],
         "available": True,
         "active": on,
