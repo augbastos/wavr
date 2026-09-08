@@ -116,6 +116,8 @@ from wavr.connector_store import ConnectorStore
 # GET /api/connectors serves -- a second copy of that shape would drift, and
 # the drift would be an egress row that one screen shows and another does not.
 from wavr.api_connectors import _generic_descriptor as generic_connector_descriptor
+from wavr.providers import (REACH_CLOUD, REACH_LAN, REACH_LOCAL,
+                            REACH_INTERNET, REACH_ORDER)
 from wavr.api_connectors import build_connectors_router
 from wavr.connectors.notify.telegram import make_telegram_send
 from wavr.connectors.notify.digest import compose_digest, send_digest
@@ -749,10 +751,34 @@ def _probe_mcast_viability(own_ip: str, duration: float = 4.0):
 # A descriptor with no scope counts as egress. An unknown reach must read as
 # "leaves", never as "stays": that is the only direction a privacy claim is
 # allowed to be wrong in.
+def _connector_reach(descriptor) -> str:
+    """How far this connector reaches, in the product's own vocabulary.
+
+    `providers.py` defined that vocabulary — local / lan / internet / cloud —
+    and refuses to build a provider descriptor without one. Connectors are the
+    other half of the same question and had their own answer: a prefix match on
+    the human `scope` sentence.
+
+    An unstated reach resolves to CLOUD, the most exposed. The one direction
+    these screens must never be wrong in is under-reporting, so a connector
+    that forgets to say is treated as if it says everything.
+    """
+    declarado = str(descriptor.get("reach") or "").lower()
+    if declarado in REACH_ORDER:
+        return declarado
+    return REACH_CLOUD
+
+
 def _is_egress_connector(descriptor) -> bool:
+    """Does anything about this house leave the local network through here?
+
+    Read from the declared `reach`, not from the sentence beside it. The
+    sentence is written for a person and gets rewritten; a rewrite must not be
+    able to change what the privacy screen reports.
+    """
     if descriptor.get("direction") != "outbound":
         return False
-    return not str(descriptor.get("scope") or "").lower().startswith("local")
+    return _connector_reach(descriptor) in (REACH_INTERNET, REACH_CLOUD)
 
 
 # The connectors whose own sending code re-reads the System-tab egress master
@@ -4132,6 +4158,40 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         narr_scope = ("local, zero egress" if narr_provider == "ollama"
                       else f"outbound-cloud: {narr_provider}")
         ha_configured = bool(cfg.ha_url and cfg.ha_token)
+
+        def _ha_reach() -> str:
+            """Where the Home Assistant traffic actually goes.
+
+            Read from the configured URL, because that is the only thing that
+            knows. Home Assistant on a private address is a box in the same
+            house; Home Assistant behind a remote URL is a third party, and
+            calling both of them "local HA (LAN)" — which the prose did — makes
+            the second one invisible on the screen that exists to show it.
+
+            Unconfigured reads LAN: nothing is going anywhere yet, and the
+            row's own `available` flag already says it is not usable.
+            """
+            import ipaddress
+            from urllib.parse import urlparse
+            if not cfg.ha_url:
+                return REACH_LAN
+            try:
+                host = urlparse(cfg.ha_url).hostname or ""
+            except ValueError:
+                return REACH_CLOUD
+            if host in ("localhost", "127.0.0.1", "::1"):
+                return REACH_LOCAL
+            try:
+                ip = ipaddress.ip_address(host)
+            except ValueError:
+                # A NAME. `homeassistant.local` is mDNS and stays in the house;
+                # anything else is resolved by somebody, somewhere, and this
+                # cannot know where without a lookup it must not perform.
+                return REACH_LAN if host.endswith(".local") else REACH_CLOUD
+            if ip.is_loopback:
+                return REACH_LOCAL
+            return REACH_LAN if (ip.is_private or ip.is_link_local) else REACH_CLOUD
+
         haimp_env = cfg.ha_import and ha_configured
         hactl_env = cfg.mcp_control and ha_configured
 
@@ -4163,6 +4223,9 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
 
         return [
             {"id": "narrator", "kind": "builtin", "direction": "outbound",
+             # An engine on this machine reaches nowhere; any other engine is a
+             # third party receiving a sentence about this home.
+             "reach": (REACH_LOCAL if narr_provider == "ollama" else REACH_CLOUD),
              "label": "LLM Narrator", "available": narr_available,
              "active": narr_active, "suppressed": _connectors.is_suppressed("narrator"),
              "override": _connectors.override("narrator"), "env_active": narr_env,
@@ -4170,6 +4233,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
              "enforcement": "registry-overlay", "scope": narr_scope,
              "env_flag": "WAVR_NARRATE_ENABLED"},
             {"id": "ha-import", "kind": "builtin", "direction": "inbound",
+             "reach": _ha_reach(),
              "label": "Home Assistant Import", "available": ha_configured,
              "active": haimp_active, "suppressed": _connectors.is_suppressed("ha-import"),
              "override": _connectors.override("ha-import"), "env_active": haimp_env,
@@ -4177,12 +4241,17 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
              "enforcement": "registry-overlay", "scope": "local HA registry (LAN)",
              "env_flag": "WAVR_HA_IMPORT"},
             {"id": "ha-control", "kind": "builtin", "direction": "outbound",
+             # Derived from the CONFIGURED ADDRESS, not from the sentence.
+             # Home Assistant in the hallway is `lan`; Home Assistant behind a
+             # remote URL is `cloud`, because that is where the command goes.
+             "reach": _ha_reach(),
              "label": "Home Assistant Control", "available": ha_configured,
              "active": hactl_env, "suppressed": False,
              "override": None, "env_active": hactl_env, "needs": None,
              "enforcement": "env", "scope": "outbound-control: local HA (LAN)",
              "env_flag": "WAVR_MCP_CONTROL"},
             {"id": "mcp-read", "kind": "builtin", "direction": "inbound",
+             "reach": REACH_LOCAL,
              "label": "MCP Server (read-only)", "available": True,
              "active": False, "suppressed": False,
              "override": None, "env_active": False, "needs": None,
@@ -4192,6 +4261,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # when the mount is actually wired (multidevice ON + [mcp] extra). DEFAULT-OFF;
             # registry-overlay so the toggle is a real per-request enable/kill-switch.
             {"id": "mcp-http", "kind": "builtin", "direction": "inbound",
+             "reach": REACH_LAN,
              "label": "MCP Server (HTTP, read-only)",
              "available": _mcp_http_route is not None,
              "active": mcph_active, "suppressed": _connectors.is_suppressed("mcp-http"),
@@ -4209,6 +4279,7 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # MAC-redacted doctor reports off the LAN when a diagnosis finds a problem.
             # DEFAULT OFF — with the toggle off (and no manual tap) nothing ever leaves.
             {"id": "diagnostics", "kind": "builtin", "direction": "outbound",
+             "reach": REACH_CLOUD,
              "label": "Diagnostics reporting", "available": diag_available,
              "active": diag_active, "suppressed": _connectors.is_suppressed("diagnostics"),
              "override": _connectors.override("diagnostics"), "env_active": False,

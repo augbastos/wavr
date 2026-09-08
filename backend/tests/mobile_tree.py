@@ -1,54 +1,39 @@
-"""Where the companion app's `mobile/` directory is, without naming a disk.
+"""Where the companion app lives — inside this repository, like everything else.
 
-The phone app lives in a git worktree of this same repository, so several tests
-compare a file here against a file there — the role the Core advertises against
-the roles the phone accepts, the strings the Core reserves against the strings
-the phone shows, and so on. Those comparisons are the only thing standing
-between two implementations of one decision drifting apart.
+Several tests compare a file here against a file in the phone app: the role the
+Core advertises against the roles the phone accepts, the words the Core reserves
+against the words the phone shows, the pairing body the Core reads against the
+one the phone sends. Those comparisons are the only thing standing between two
+implementations of one decision drifting apart, and they have caught real
+drift — a phone that discarded the Core's own advertisement because it accepted
+one spelling of `role`, and a pairing path that never sent the device key.
 
-Five of those tests used to carry the worktree's absolute path written into the
-file. That made every one of them true on exactly one computer and skipped
-everywhere else — and in a quiet summary an all-skipped run and an all-passed
-run are the same colour, so the guarantee they describe held nowhere.
+They used to look for `mobile/` in a git worktree, by absolute path. That made
+them true on one computer and skipped everywhere else, and in a quiet summary a
+skipped run and a passing one are the same colour. `mobile/` is now part of the
+repository, so this resolves relative to it and a missing directory is a broken
+checkout rather than a reason to quietly pass.
 
-Git already knows where its own worktrees are. So it is asked, rather than told.
-`WAVR_MOBILE_DIR` overrides for a checkout arranged some other way.
+`WAVR_MOBILE_DIR` still overrides, for a checkout arranged some other way.
 """
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]
 
 
-def _candidatos() -> list[Path]:
-    vindos: list[Path] = []
+def mobile_dir() -> Path:
+    """The companion app's `mobile/` directory. Raises if it is not there."""
     env = os.environ.get("WAVR_MOBILE_DIR", "").strip()
-    if env:
-        vindos.append(Path(env))
-    # A checkout that carries `mobile/` in the tree itself.
-    vindos.append(RAIZ / "mobile")
-    try:
-        saida = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=str(RAIZ), capture_output=True, text=True, timeout=20).stdout
-    except Exception:      # noqa: BLE001 -- no git available; not an error here
-        saida = ""
-    for linha in saida.splitlines():
-        if linha.startswith("worktree "):
-            vindos.append(Path(linha[len("worktree "):].strip()) / "mobile")
-    return vindos
-
-
-def mobile_dir() -> Path | None:
-    """The companion app's `mobile/` directory, or None if it is not checked out.
-
-    Presence is decided by the shim, because the shim is what every caller here
-    ultimately reads or reasons about.
-    """
-    for base in _candidatos():
-        if (base / "src" / "wavr-mobile-shim.js").exists():
-            return base
-    return None
+    base = Path(env) if env else RAIZ / "mobile"
+    marca = base / "src" / "wavr-mobile-shim.js"
+    if not marca.is_file():
+        raise AssertionError(
+            f"the companion app is not in this checkout: expected {marca}.\n"
+            "mobile/ is part of this repository — if it is missing, the "
+            "checkout is incomplete, and skipping these tests would report "
+            "coverage this run does not have."
+        )
+    return base

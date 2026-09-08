@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from wavr.app import create_app
@@ -37,6 +38,19 @@ def _client(**kwargs):
 # --------------------------------------------------------------------------- #
 # Baseline shape + default-OFF posture
 # --------------------------------------------------------------------------- #
+
+@pytest.fixture(autouse=True)
+def _rede_fixa(monkeypatch):
+    """What this machine believes its own address is, pinned.
+
+    `in_subnet` compares a peer against it, so a test that builds a peer on
+    192.168.1.x is asking a question whose answer depends on the network the
+    test happens to run on: it pairs on a 192.168.1.x developer box, and is
+    refused (or refused for the wrong reason) anywhere else. Same idiom as
+    test_app.py and twenty-odd other modules here.
+    """
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+
 
 def test_default_shape_and_all_egress_off(monkeypatch, tmp_path):
     monkeypatch.setenv("WAVR_DB", ":memory:")
@@ -190,12 +204,41 @@ def test_ha_control_egress_requires_both_the_flag_and_a_resolvable_client(monkey
                    if x["channel"] == "Home Assistant control")
         assert row["on"] is False
 
-    # Both present -> on.
+    # Both present, and Home Assistant is IN THE HOUSE (`.local` is mDNS) ->
+    # the control path is live, and nothing leaves the Space by using it. The
+    # tile is titled "What leaves your Space", so this row is off.
+    #
+    # It used to be asserted on. The classification came from the connector's
+    # sentence — "outbound-control: local HA (LAN)" — under a rule that read
+    # "does the sentence begin with the word local", so a Home Assistant in the
+    # hallway was reported as egress. Safe direction to be wrong in, and still
+    # not true.
     monkeypatch.setenv("WAVR_MCP_CONTROL", "true")
     with _client() as c:
         row = next(x for x in c.get("/api/transparency").json()["egress"]
                    if x["channel"] == "Home Assistant control")
-        assert row["on"] is True
+        assert row["on"] is False, (
+            "Home Assistant on the local network is inside the Space; "
+            "switching a light through it leaves nothing")
+
+    # And the half that was missing, which is the one that matters: the SAME
+    # configuration pointed at a remote URL does leave, and has to say so.
+    # Reported identically before this, so the screen could not tell a hub in
+    # the hallway from a hub on the internet.
+    monkeypatch.setenv("WAVR_HA_URL", "https://ha.example.com")
+    with _client() as c:
+        row = next(x for x in c.get("/api/transparency").json()["egress"]
+                   if x["channel"] == "Home Assistant control")
+        assert row["on"] is True, (
+            "Home Assistant reached over the internet is not in your Space, "
+            "and commands to it leave the network")
+
+    # A private address is the ordinary case and reads the same as `.local`.
+    monkeypatch.setenv("WAVR_HA_URL", "http://192.168.1.40:8123")
+    with _client() as c:
+        row = next(x for x in c.get("/api/transparency").json()["egress"]
+                   if x["channel"] == "Home Assistant control")
+        assert row["on"] is False
 
     for v in ("WAVR_MCP_CONTROL", "WAVR_HA_URL", "WAVR_HA_TOKEN"):
         monkeypatch.delenv(v, raising=False)

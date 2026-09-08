@@ -49,6 +49,12 @@ COUNTING_MODALITIES = frozenset({"camera", "mmwave"})
 # NOTE a new counting modality added to COUNTING_MODALITIES defaults to absence-DISTRUST,
 # i.e. it fails toward the phantom, not toward honesty. Decide its absence semantics
 # deliberately; test_trusted_absence_is_a_subset_of_counting enforces the set relation.
+# How far ahead of this Core's clock a source's timestamp may sit before it
+# starts costing the source weight. Two machines a couple of seconds apart is
+# ordinary; a minute is a clock nobody synchronised, and beyond this a future
+# timestamp ages exactly like a past one (see `_fuse`).
+_SKEW_TOLERANCE_S = 5.0
+
 TRUSTED_ABSENCE_MODALITIES = frozenset({"camera"})
 assert TRUSTED_ABSENCE_MODALITIES <= COUNTING_MODALITIES, \
     "TRUSTED_ABSENCE_MODALITIES must be a subset of COUNTING_MODALITIES"
@@ -108,25 +114,34 @@ class FusionEngine:
     This stops a lone weak source (e.g. coarse network) from ever reporting 100% — that
     claim holds, and it is `strength` that delivers it.
 
-    HONEST NOTE on `agreement` (measured, not assumed): it is INERT in production and the
-    fused confidence is, in practice, exactly `strength`. `agreement` is num/den over
-    weight×confidence×decay mass, but EVERY first-party source emits confidence=0.0 when
-    it reports presence=False — so an absent source contributes mass=0 to the numerator
-    AND the denominator, drops out of the ratio entirely, and `agreement` is identically
-    1.0 whenever at least one source is present. Verified: camera(0.9, present) alone,
-    camera(0.9, present) + network(absent), and camera(0.9, present) + network(0.8,
-    present) all fuse to 0.9 — an absent source changes nothing. So there is NO
-    disagreement arbitration here today; no amount of contradicting first-party evidence
-    lowers the number.
+    `agreement` distinguishes THREE things, and the distinction is the whole point:
 
-    That is arguably CORRECT rather than a gap, for the same reason TRUSTED_ABSENCE_
-    MODALITIES exists above: an absent source usually means "I cannot see them" (a still
-    person vanishing from radar, someone outside the camera's FOV), not "nobody is here" —
-    so it should not vote a present room down. It is recorded here so the next reader does
-    not trust a promise the code never kept. Wiring real arbitration would mean deciding
-    which absences are EVIDENCE (the TRUSTED_ABSENCE question) rather than mere silence —
-    a product decision, not a refactor. Each source's own reading still rides in
-    `sources[]`, so a disagreement is SURFACED to the UI, never silently resolved.
+      NO EVIDENCE          nothing is reporting -> confidence 0
+      AGREEING EVIDENCE    agreement 1.0 -> confidence is `strength`
+      CONFLICTING EVIDENCE agreement < 1.0 -> confidence falls below `strength`
+
+    Only a source that can PROVE absence creates conflict. Every first-party source
+    emits confidence=0.0 with presence=False, so on the plain arithmetic an absent
+    source contributes mass=0 to numerator and denominator alike and drops out of the
+    ratio — which was the whole behaviour here for a long time, and `agreement` was
+    identically 1.0 whenever anything was present.
+
+    That default is right for most absences. An absent source usually means "I cannot
+    see them" (a still person vanishing from radar, someone outside the camera's FOV),
+    not "nobody is here", and voting a present room down on it would flicker the room
+    every time somebody sat still.
+
+    But which absences ARE evidence is a question this module already answered, for the
+    count latch: `TRUSTED_ABSENCE_MODALITIES`. A fresh camera presence=False is a look at
+    an empty room; a fresh mmWave presence=False is a dropout. So a fresh dissent from a
+    trusted-absence modality now enters the DENOMINATOR carrying its own trust
+    (weight × decay × reliability, NOT the event's confidence, which is 0.0 by
+    convention) and stays out of the numerator. Two strong sources that disagree no
+    longer read like two strong sources that agree, and a stale camera still asserts
+    nothing.
+
+    Each source's own reading rides in `sources[]` either way, so a disagreement is
+    SURFACED to the UI, never only arithmetic.
 
     Each source's trust is additionally scaled by a freshness decay: full weight
     while the reading is fresh, fading to zero once it is stale, so a source that
@@ -326,7 +341,23 @@ class FusionEngine:
                                 "age_s": None, "health": "invalid_ts",
                                 "count": None})
                 continue
-            age_s = max(0.0, (ref - e_ts).total_seconds())
+            # Age is the DISTANCE from now, not the time SINCE now.
+            #
+            # This was `max(0.0, ref - e_ts)`, which is defensive about the
+            # arithmetic and wrong about the world: it turns every future
+            # timestamp into age zero, and age zero is full weight. A board
+            # whose clock is an hour fast therefore read as "fresh", at full
+            # confidence, for the whole hour — and kept reading that way,
+            # because it kept sending — while the honest camera beside it went
+            # dead after ten minutes. One unsynchronised ESP32 could hold a
+            # room at 0.9 off an observation that was an hour old.
+            #
+            # A timestamp ahead of now is a broken clock, and a broken clock is
+            # as untrustworthy forward as backward. `_SKEW_TOLERANCE_S` keeps
+            # the ordinary second or two between two machines free.
+            atraso = (ref - e_ts).total_seconds()
+            age_s = (max(0.0, -atraso - _SKEW_TOLERANCE_S) if atraso < 0
+                     else atraso)
             decay, health = self._freshness(age_s)
             decays[key] = decay
             event_ts[key] = e_ts
@@ -346,7 +377,27 @@ class FusionEngine:
                     # and dropping the source would be the sensor paying for a
                     # storage fault.
                     rel_factor, rel_reason = 1.0, ""
-            mass = self._weights.get(modality, 0.5) * e.confidence * decay * rel_factor
+            base = self._weights.get(modality, 0.5) * decay * rel_factor
+            mass = base * e.confidence
+            # A DISSENT is a source that can prove absence, is still awake, and
+            # says the room is empty. It carries `base` — its own trust, aged
+            # and scaled — because the wire convention for an absence is
+            # confidence 0.0, so multiplying by the event's confidence would
+            # multiply the dissent away, which is precisely the defect: the
+            # source drops out of the ratio and `agreement` stays 1.0 however
+            # hard it disagrees.
+            #
+            # Only TRUSTED_ABSENCE_MODALITIES qualify, and the reasoning is the
+            # one `counting_live_negative` already uses further down: a fresh
+            # mmWave presence=False is a still person the radar lost, not an
+            # empty room, and voting a present room down on it would flicker
+            # every time somebody sat still. A camera's fresh negative is a
+            # look at the room.
+            dissente = (not e.presence
+                        and decay > 0.0
+                        and modality in TRUSTED_ABSENCE_MODALITIES)
+            if dissente:
+                mass = base
             den += mass
             if e.presence:
                 num += mass

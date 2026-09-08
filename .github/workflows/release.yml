@@ -13,9 +13,18 @@
 #     That is disclosed in the release notes below rather than hidden — an
 #     unsigned binary presented as if it were signed is worse than an unsigned
 #     binary that says so.
-#   * It does not build an Android APK. The Android app lives in a separate
-#     repository and builds through EAS; wiring that here would require pushing
-#     credentials into this public repo.
+#   * It does not build a RELEASABLE Android APK. The companion now lives in
+#     this repository, under `mobile/`, and its sources build here — what it
+#     cannot do is produce a SIGNED one: that needs a keystore, and a keystore
+#     does not belong in a repository. A debug build is buildable from a clean
+#     checkout (`node mobile/scripts/sync-frontend.mjs` then
+#     `npx cap sync android` and `./gradlew assembleDebug`); a signed release
+#     is an owner action on a machine that holds the key.
+#
+#     The old text here said the Android app lived in a separate repository and
+#     built through EAS. That stopped being true the day `mobile/` was merged
+#     into master, and a workflow comment that describes an architecture the
+#     project no longer has is the kind of thing a reader trusts.
 #   * It does not publish to PyPI, Docker Hub or any registry. Publishing to a
 #     namespace is an irreversible, outward-facing act that belongs to the
 #     repository owner, not to a workflow.
@@ -344,6 +353,9 @@ jobs:
 
             ### Not here
 
-            - **Android**: the mobile app builds from a separate repository.
+            - **Android**: the companion lives in `mobile/` in this
+              repository and builds from a clean checkout, but no SIGNED APK is
+              produced here — signing needs a keystore, which does not belong in
+              a repository.
             - **macOS / Linux desktop**: the desktop shell is verified on
               Windows only. Use the source or Docker route on those platforms.

@@ -73,3 +73,9 @@ desktop/src-tauri/binaries/
 desktop/sidecar/dist/
 desktop/sidecar/build/
 *.guarantee-backup
+
+# The dashboard packaged for the phone. Produced by
+# `mobile/scripts/sync-frontend.mjs` from `frontend/`; committing it would
+# mean the repository could no longer tell you whether the source still
+# produces it.
+mobile/www/

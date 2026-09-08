@@ -32,6 +32,11 @@ def core(monkeypatch, tmp_path):
 
     db = str(tmp_path / "wavr.db")
     monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    # `in_subnet` compares the peer against what THIS MACHINE thinks its
+    # own address is, so an unpinned LAN peer makes this test true on a
+    # 192.168.1.x developer box and false (or true for the wrong reason)
+    # anywhere else. Same idiom as test_app.py.
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
     monkeypatch.setenv("WAVR_PEERS_ENABLED", "1")
     monkeypatch.setenv("WAVR_DB", db)
 

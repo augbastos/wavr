@@ -1030,11 +1030,68 @@ def test_the_updates_tile_says_how_THIS_install_updates(page, core):
     assert page.script_errors == [], page.script_errors
 
 
+def _baixar_o_pacote(page, core):
+    """Click the button and return the download, or fail saying WHY.
+
+    `expect_download` times out with "waiting for event download", which is the
+    one thing already obvious. Meanwhile the page is displaying the actual
+    diagnosis: `wireBundleDownload` does not download at all when
+    `/api/diagnostics/bundle` answers badly, and it writes the reason into
+    `#backupFb` — a 500 means the bundle failed its own credential-leak check,
+    anything else means the control could not get local admin access.
+
+    Throwing that sentence away cost two rounds of measuring the wrong thing:
+    the four routes the bundle awaits (fast — about six seconds), then the
+    pairing state (irrelevant — the route stays 200 through it). The product
+    knew, and the test was not reading.
+    """
+    from playwright.sync_api import TimeoutError as PWTimeout
+    try:
+        with page.expect_download(timeout=30000) as dl:
+            page.locator("#exportBundleBtn").click()
+        return dl.value
+    except PWTimeout:
+        fb = page.locator("#backupFb")
+        disse = (fb.inner_text().strip() if fb.count() else "")
+        # All FOUR routes `buildDiagnosticBundle` awaits, each timed, because
+        # the first version of this only asked about the bundle route — and the
+        # answer came back 200 with the page still showing "Loading…", which
+        # narrows it to the other three and does not name one. A diagnosis that
+        # needs a second run is half a diagnosis.
+        estado = page.evaluate("""async () => {
+          const rotas = ['/api/diagnostics/bundle', '/api/runtime',
+                         '/api/health/doctor', '/api/attention'];
+          const linhas = [];
+          for (const rota of rotas) {
+            const t0 = performance.now();
+            try {
+              const c = new AbortController();
+              const morre = setTimeout(() => c.abort(), 25000);
+              const r = await fetch(rota, { headers: { 'X-Wavr-Local': '1' },
+                                            signal: c.signal });
+              clearTimeout(morre);
+              const corpo = await r.text();
+              linhas.push(`${rota} -> ${r.status} in ` +
+                          `${Math.round(performance.now() - t0)}ms ` +
+                          `(${corpo.length} bytes)`);
+            } catch (e) {
+              linhas.push(`${rota} -> ${e.name} after ` +
+                          `${Math.round(performance.now() - t0)}ms`);
+            }
+          }
+          return linhas.join('\\n                     ');
+        }""")
+        pytest.fail(
+            "the bundle button produced no file.\n"
+            f"  the page says      : {disse!r}\n"
+            f"  the routes it awaits: {estado}\n"
+            f"  script errors      : {page.script_errors}")
+
+
 def test_the_diagnostic_bundle_downloads(page, core):
     open_settings(page, core)
-    with page.expect_download(timeout=30000) as dl:
-        page.locator("#exportBundleBtn").click()
-    assert dl.value.suggested_filename.endswith(".json")
+    baixado = _baixar_o_pacote(page, core)
+    assert baixado.suggested_filename.endswith(".json")
 
 
 def test_the_diagnostic_bundle_is_a_real_file_a_person_can_read(page, core):
@@ -1047,9 +1104,8 @@ def test_the_diagnostic_bundle_is_a_real_file_a_person_can_read(page, core):
     empty satisfies "it downloads" and helps nobody tomorrow.
     """
     open_settings(page, core)
-    with page.expect_download(timeout=30000) as dl:
-        page.locator("#exportBundleBtn").click()
-    saved = json.loads(Path(dl.value.path()).read_text(encoding="utf-8"))
+    baixado = _baixar_o_pacote(page, core)
+    saved = json.loads(Path(baixado.path()).read_text(encoding="utf-8"))
 
     # What was already there.
     assert saved["wavr_version"]
@@ -1845,6 +1901,31 @@ def test_a_space_with_no_sensors_says_so_rather_than_looking_healthy(page, big_c
     assert "Empty home" not in summary, summary
 
 
+def _states_that_make_the_panel_speak() -> list[str]:
+    """The renderer's own list, read from the renderer.
+
+    `runtime.js` decides this in one place — `var bad = [...]` inside `tick` —
+    and a test that restates the list is a second producer of the same rule.
+    The two had already drifted: this test used to demand the panel speak in
+    `starting`, which `runtime.js` deliberately keeps quiet, so the first Core
+    that came up slowly would have failed a test for behaving as designed.
+
+    Parsed rather than imported because the rule lives in JavaScript. If the
+    array is ever renamed or restructured this raises instead of quietly
+    returning an empty list, which would turn the check below into "the panel
+    is always quiet" — passing, and meaning nothing.
+    """
+    src = (BACKEND.parent / "frontend" / "js" / "runtime.js").read_text(
+        encoding="utf-8")
+    m = re.search(r"var bad = \[([^\]]*)\];", src)
+    assert m, ("runtime.js no longer declares `var bad = [...]`; this test can "
+               "no longer tell which states are supposed to make the panel "
+               "speak, and must not guess")
+    estados = re.findall(r'"([^"]+)"', m.group(1))
+    assert estados, "the panel's speaking-states list is empty in runtime.js"
+    return estados
+
+
 def test_the_core_panel_stays_quiet_while_healthy_and_speaks_when_not(page, core):
     """A wall panel is read from across a room by somebody who will not walk
     over and inspect it. A beautiful wave over a Core that stopped fusing an
@@ -1852,22 +1933,58 @@ def test_the_core_panel_stays_quiet_while_healthy_and_speaks_when_not(page, core
 
     It is hidden while healthy on purpose: an ambient face that always carries a
     badge has no way to say that something changed.
+
+    ## Why `?core`, and why the container is asserted first
+
+    `#coreRuntime` is INSIDE `#corePanel`, and `#corePanel` carries `hidden` on
+    the ordinary dashboard — the ambient face only exists in Core Panel mode.
+    Opened without `?core`, this element is invisible no matter what the
+    renderer decides, so `is_hidden()` answered True on every run and neither
+    branch of this test could ever fail for the reason it names. It stayed
+    green while the Core reported `healthy` and failed the first time the
+    shared module Core reported `paused` — reporting that the panel said
+    nothing, about a panel that had been told to speak into a hidden container.
+
+    The container assertion below is that missing precondition. The control at
+    the end proves the measurement can still return False.
     """
-    page.goto(f"{core}/?cachebust={time.time()}")
+    page.goto(f"{core}/?core=1&cachebust={time.time()}")
     page.wait_for_selector("#runtimeChip:not([hidden])", timeout=30000)
     page.wait_for_timeout(2500)
 
+    assert not page.locator("#corePanel").is_hidden(), (
+        "the ambient face did not wake, so nothing below is measuring the "
+        "panel — it is measuring a hidden container")
+
     state = page.locator("#runtimeChip").get_attribute("data-state")
     panel = page.locator("#coreRuntime")
-    if state in ("healthy", "starting"):
-        # `starting` is deliberately in the quiet set for the chip but not the
-        # panel — check what the page actually did rather than assuming.
-        pass
-    if state == "healthy":
-        assert panel.is_hidden(), "the panel shouts while everything is fine"
-    else:
+    if state in _states_that_make_the_panel_speak():
         assert not panel.is_hidden(), f"state {state!r} and the panel says nothing"
-        assert panel.text_content().strip()
+        assert panel.text_content().strip(), (
+            f"state {state!r}: the panel is shown and empty, which across a "
+            f"room is the same silence as being hidden")
+    else:
+        assert panel.is_hidden(), (
+            f"state {state!r} needs no attention and the panel shouts anyway; "
+            f"a face that always carries a badge cannot signal a change")
+
+        # The control. Everything above hinges on `is_hidden()` being able to
+        # answer False here, and for a long time it could not: the element was
+        # inside a hidden container and the quiet branch passed for a reason
+        # that had nothing to do with the renderer. Poke the panel open and
+        # take the same reading again.
+        page.evaluate("""() => {
+          const p = document.getElementById('coreRuntime');
+          p.hidden = false; p.textContent = 'control';
+        }""")
+        assert not panel.is_hidden(), (
+            "the panel cannot be seen even when shown, so the quiet branch "
+            "above proves nothing about the renderer")
+        page.evaluate("""() => {
+          const p = document.getElementById('coreRuntime');
+          p.hidden = true; p.textContent = '';
+        }""")
+
     assert page.script_errors == [], page.script_errors
 
 
@@ -3178,3 +3295,4 @@ def test_worth_a_glance_does_not_read_as_a_contradiction_of_needs_attention(page
     assert "decision" in text and ("manage" in text or "needs attention" in text), (
         f"the note does not actually point at the other screen: {text!r}")
     assert page.script_errors == [], page.script_errors
+

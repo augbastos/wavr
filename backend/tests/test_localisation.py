@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.mobile_tree import mobile_dir   # noqa: E402 -- shared lookup
+
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 SHELL = FRONTEND / "index.html"
 # The shell is not the only page the Core serves a person. `measure.html` is a
@@ -46,6 +48,22 @@ if (FRONTEND / "measure.html").exists():
 RUNTIME = FRONTEND / "js" / "i18n.js"
 CONTROL = FRONTEND / "js" / "language.js"
 CATALOGUES = {"pt": FRONTEND / "js" / "locale-pt.js"}
+
+# The companion app draws on the dashboard too. `injectConsentTile` mounts a
+# block INSIDE the sensing tile — the card explaining what this phone sends
+# about you — permanently, on a screen `index.html` has already translated
+# around it. Those sentences are as much a part of the Portuguese product as
+# anything in `frontend/js`, and until this line no check in this file could
+# see them: they matched no markup, no `WavrT(` call and no backend literal,
+# so their four catalogue entries read as dead.
+COMPANION = mobile_dir() / "src" / "wavr-mobile-shim.js"
+
+# The shim's own name for the translator. It cannot simply call `WavrT`: it
+# also draws overlays BEFORE the dashboard exists, where `window.WavrT` is not
+# loaded, and `T()` falls back to the English literal there instead of throwing
+# on a screen a person is looking at. A bare `T` is too generic to scan a whole
+# tree for, so it is honoured in this one named file and asserted to exist.
+COMPANION_CALL = re.compile(r"(?<![A-Za-z0-9_$.])T\(")
 
 
 def _shell() -> str:
@@ -137,6 +155,24 @@ def js_keys() -> set[str]:
         text = f.read_text(encoding="utf-8")
         for m in re.finditer(r'\bWavrT\(', text):
             keys |= _keys_in(_first_argument(text, m.end() - 1))
+    keys |= companion_keys()
+    return {k for k in keys if k}
+
+
+def companion_keys() -> set[str]:
+    """Every string the phone app asks the dashboard's translator for.
+
+    Read exactly like the frontend's, through the same `_first_argument` and
+    `_keys_in`, so a ternary or a `+`-joined pair behaves the same way here as
+    it does there. Only the call token differs, and only because the shim has a
+    reason to wrap the lookup (see `COMPANION_CALL`).
+    """
+    text = COMPANION.read_text(encoding="utf-8")
+    keys: set[str] = set()
+    for m in COMPANION_CALL.finditer(text):
+        keys |= _keys_in(_first_argument(text, m.end() - 1))
+    for m in re.finditer(r'\bWavrT\(', text):
+        keys |= _keys_in(_first_argument(text, m.end() - 1))
     return {k for k in keys if k}
 
 
@@ -376,6 +412,35 @@ def test_the_attention_inbox_is_translated(tag):
         + "\n  ".join(repr(m) for m in missing))
 
 
+def test_the_companion_still_routes_its_copy_through_the_translator():
+    """`companion_keys()` is worth nothing if the thing it scans for is gone.
+
+    A scanner that matches zero call sites returns an empty set and every check
+    downstream passes, which is the quietest way a guarantee dies. So the alias
+    is asserted directly: the shim defines `T()`, `T()` goes through
+    `window.WavrT`, and it is called on real sentences.
+
+    If the helper is ever renamed, this fails with the reason rather than the
+    no-dead-entries rule failing four files away with a list of translations it
+    believes nobody says.
+    """
+    src = COMPANION.read_text(encoding="utf-8")
+    assert "function T(" in src, (
+        f"{COMPANION.name} no longer defines T() — companion_keys() is now "
+        f"scanning for a call that does not exist, and would report the "
+        f"companion as declaring nothing at all")
+    assert "window.WavrT" in src, (
+        "T() no longer reaches the dashboard's translator, so the companion's "
+        "copy renders in English on a Portuguese screen")
+
+    encontrados = companion_keys()
+    assert len(encontrados) >= 4, (
+        f"only {len(encontrados)} strings in {COMPANION.name} are routed "
+        f"through the translator; the block it mounts inside the dashboard's "
+        f"sensing tile had four, and losing them means an English paragraph "
+        f"in the middle of a translated card")
+
+
 @pytest.mark.parametrize("tag", sorted(CATALOGUES))
 def test_every_declared_string_has_a_translation(tag):
     keys, table = declared_keys(), catalogue(tag)
@@ -523,6 +588,31 @@ def _js_string_literals(src: str) -> list[str]:
 def product_strings():
     """Everything the shipped product contains as a string literal."""
     return backend_strings() | module_strings()
+
+
+@pytest.mark.parametrize("tag", sorted(CATALOGUES))
+def test_no_sentence_is_translated_twice(tag):
+    """`{ "a": 1, "a": 2 }` is legal JavaScript and the engine keeps the last.
+
+    Every other check in this file reads the catalogue as a MAPPING — parsed,
+    deduplicated, one value per key — so a second translation of the same
+    sentence is invisible to all of them. It is also invisible to
+    `node --check`. It can only be seen in the source text, which is where this
+    looks.
+
+    Two entries that agree are harmless and two that disagree pick a winner
+    silently, which is the failure worth preventing: somebody edits the copy
+    they can find and the product keeps rendering the one they cannot.
+    """
+    fonte = CATALOGUES[tag].read_text(encoding="utf-8")
+    chaves = re.findall(r'^\s{4}("(?:[^"\\]|\\.)*")\s*:', fonte, re.M)
+    vistas, repetidas = set(), []
+    for k in chaves:
+        (repetidas.append(k) if k in vistas else vistas.add(k))
+    assert not repetidas, (
+        f"{len(repetidas)} {tag} keys appear more than once; JavaScript keeps "
+        f"the LAST and discards the rest without a word:\n  "
+        + "\n  ".join(sorted(set(repetidas))))
 
 
 @pytest.mark.parametrize("tag", sorted(CATALOGUES))

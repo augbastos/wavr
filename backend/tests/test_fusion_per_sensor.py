@@ -72,19 +72,24 @@ def test_two_cameras_that_disagree_both_appear():
     assert by_id["corner-cam"]["presence"] is False, "the dissent is on the record"
 
 
-def test_dissent_is_recorded_even_though_absence_carries_no_mass():
-    """What the per-sensor merge does and does not change.
+def test_a_camera_that_says_empty_now_lowers_the_number_as_well_as_the_record():
+    """The deliberate decision this test was written to force.
 
-    It changes the RECORD: both cameras are in `sources[]`, so a human or an
-    agent can see that one of them says empty. It does not change the NUMBER,
-    and that is the pre-existing design rather than an oversight — every
-    first-party source emits `confidence=0.0` when it reports absence, so a
-    camera saying "empty" contributes zero mass. A camera that fails to see a
-    still person would otherwise be able to argue a room empty, which is the
-    weaker claim.
+    It used to assert the opposite — that a camera saying "empty" changed the
+    RECORD and not the NUMBER — and it said why it was worded that way:
+    "Asserted explicitly so that if absence ever starts carrying weight, this
+    test forces the decision to be deliberate." It went red the moment the
+    change landed, which is the whole reason it was worth writing.
 
-    Asserted explicitly so that if absence ever starts carrying weight, this
-    test forces the decision to be deliberate.
+    The decision: a fresh negative from a modality that CAN prove absence is
+    evidence. Two cameras in one room, one seeing somebody and one seeing an
+    empty room, is a genuinely uncertain situation, and it must not read like
+    two cameras agreeing. The room can still be occupied — a camera with a
+    partial view is a real thing — and `occupied` stays True off the present
+    camera's own count; what falls is the certainty, which is the honest part.
+
+    Only trusted-absence modalities do this. `test_a_radar_dropout_is_not_a_
+    verdict` below holds the other half.
     """
     f = FusionEngine(now_fn=lambda: T0)
     alone = f.update(cam("office", "office-cam", True, conf=0.9))
@@ -93,8 +98,65 @@ def test_dissent_is_recorded_even_though_absence_carries_no_mass():
     f2.update(cam("office", "office-cam", True, conf=0.9))
     disputed = f2.update(cam("office", "corner-cam", False))
 
-    assert disputed.confidence == alone.confidence, "absence carries no mass"
-    assert len(disputed.sources) == 2, "but the disagreement is on the record"
+    assert disputed.confidence < alone.confidence, (
+        f"a camera saying the room is empty left the confidence at "
+        f"{disputed.confidence} — the same as the one camera alone, so the "
+        f"disagreement is in the record and nowhere else")
+    assert disputed.confidence > 0, (
+        "one dissent erased the present camera entirely; a disagreement is "
+        "uncertainty, not proof of an empty room")
+    assert len(disputed.sources) == 2, "and the disagreement is still recorded"
+
+
+def test_a_radar_dropout_is_not_a_verdict():
+    """The other half, and the reason this is not just "absence counts now".
+
+    A person who sits still vanishes from mmWave. If that silence lowered the
+    room's confidence, every quiet evening would look like a disagreement —
+    which is why `TRUSTED_ABSENCE_MODALITIES` exists and why the count latch a
+    hundred lines below already refuses to release on a radar negative.
+
+    So the same shape as the test above, with radar in place of the second
+    camera, must leave the number exactly where it was.
+    """
+    f = FusionEngine(now_fn=lambda: T0)
+    alone = f.update(cam("lounge", "lounge-cam", True, conf=0.9))
+
+    f2 = FusionEngine(now_fn=lambda: T0)
+    f2.update(cam("lounge", "lounge-cam", True, conf=0.9))
+    quieto = f2.update(SensingEvent(
+        room="lounge", modality="mmwave", presence=False, motion=0.0,
+        breathing_bpm=None, heart_bpm=None, confidence=0.0, ts=_at(0),
+        count=None, sensor_id="lounge-radar"))
+
+    assert quieto.confidence == alone.confidence, (
+        f"a radar that stopped seeing a still person moved the confidence to "
+        f"{quieto.confidence}; a dropout is silence, not a claim that the room "
+        f"is empty")
+
+
+def test_a_camera_that_stopped_reporting_asserts_nothing():
+    """Staleness applies to a dissent exactly as it applies to a claim.
+
+    A camera whose last word was "empty" an hour ago is not evidence about the
+    room now, and letting it keep voting would be the freezing-on-a-last-
+    reading failure the freshness decay exists to prevent — just pointed the
+    other way.
+    """
+    UMA_HORA = 3600
+    agora = T0 + timedelta(seconds=UMA_HORA)
+
+    f = FusionEngine(now_fn=lambda: agora)
+    f.update(cam("study", "study-cam-old", False, sec=0))        # an hour ago
+    rs = f.update(cam("study", "study-cam", True, conf=0.9, sec=UMA_HORA))
+
+    f2 = FusionEngine(now_fn=lambda: agora)
+    sozinho = f2.update(cam("study", "study-cam", True, conf=0.9,
+                            sec=UMA_HORA))
+
+    assert rs.confidence == sozinho.confidence, (
+        f"a camera that last spoke an hour ago still lowered the number to "
+        f"{rs.confidence}; a stale source asserts nothing, in either direction")
 
 
 # -- Independent freshness ----------------------------------------------------

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+
+        <!-- WavrSensor: the 1 Hz sample+POST telemetry loop (pinned TLS to the paired
+             central ONLY, via the same PinnedClient trust anchor as WavrNet). dataSync
+             foreground service so streaming survives screen-off/Doze; not exported —
+             only this app's WavrSensorPlugin starts/stops it. -->
+        <service
+            android:name="dev.wavr.mobile.wavrsensor.SensorStreamService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+
+    <!-- Permissions -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- WavrSensor telemetry (all LAN-only; no cloud egress anywhere in the app) -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- OPT-IN ONLY (Wi-Fi identity for sensor mode): declared so the runtime prompt is
+         possible, but requested through exactly one path — WavrSensor.requestPermissions
+         ({wifiIdentity:true}), the sensor wizard's explicit opt-in. Gates ssid/bssid in
+         the LAN telemetry payload; rssi works without it. A viewer/admin-only install
+         never triggers the prompt and never uses location. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- capacitor-zeroconf (mDNS/DNS-SD browse for _wavr._tcp Cores): the plugin acquires a
+         WifiManager.MulticastLock (ZeroConf.java) to receive multicast mDNS packets on Wi-Fi.
+         ACCESS_WIFI_STATE and INTERNET above are already present and cover its other needs. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- WavrScan (QR pairing): the camera is used ONLY on the pairing screen to scan the hub's
+         QR (full cert fingerprint + short-TTL code) via getUserMedia + on-device jsQR decode.
+         Frames are decoded in the WebView and NEVER stored or transmitted (same zero-egress
+         invariant as the rest of the app). required=false so a camera-less device still installs
+         and uses the typed-code fallback. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- WavrBluetooth (READ-ONLY bonded-device enrichment for the admin phone): reads
+         BluetoothAdapter.bondedDevices only — the user's OWN already-paired hardware — to
+         label the Core's identity registry. NEVER scans, discovers, or connects.
+         BLUETOOTH_CONNECT is the single runtime prompt (Android 12 / API 31+); the legacy
+         install-time BLUETOOTH (maxSdkVersion=30) covers the read below API 31.
+         DELIBERATELY NO BLUETOOTH_SCAN and NO ACCESS_FINE/COARSE_LOCATION — the bonded read
+         needs neither, and omitting them keeps the Play Data-Safety form honestly
+         "no data collected, no data shared". -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+</manifest>

@@ -1,6 +1,6 @@
 {
   "name": "wavr-desktop",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Wavr Desktop — a Tauri v2 native shell around the loopback central (ADR-0007)",
   "scripts": {

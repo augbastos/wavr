@@ -29,7 +29,7 @@ on:
       - ".github/workflows/docker.yml"
 
 # A new push to the same ref obsoletes the previous run's verdict (same reasoning as
-# tests.yml). Public repo, so this is about a clean signal, not minutes.
+# tests.yml) — a clean signal, and on a private repository the minutes as well.
 concurrency:
   group: docker-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

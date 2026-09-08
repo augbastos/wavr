@@ -286,7 +286,13 @@
         var worst = (body.findings || []).filter(function (f) {
           return f.state === body.state;
         })[0];
-        panel.textContent = findingWords(worst) || headlineOf(body);
+        //  last, and it is not decoration. A paused Core has no
+        // FINDING (being paused is not a fault) and the Core sends no headline
+        // for it, so both of the first two answer with an empty string — and a
+        // panel that is shown with no text has no height, which is the same
+        // silence as being hidden to the person across the room. This is the
+        // defect this whole panel exists to prevent, in its own renderer.
+        panel.textContent = findingWords(worst) || headlineOf(body) || label(body);
       }
     }
 

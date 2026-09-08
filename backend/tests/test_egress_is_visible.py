@@ -68,20 +68,78 @@ def _store_with(connector_id: str) -> ConnectorStore:
 # The one definition, on its own
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("desc,expected", [
-    ({"direction": "outbound", "scope": "outbound-cloud: gemini"}, True),
-    ({"direction": "outbound", "scope": "local, zero egress"}, False),
-    ({"direction": "outbound", "scope": "LOCAL HA registry"}, False),
-    ({"direction": "inbound", "scope": "outbound-cloud: gemini"}, False),
-    ({"direction": "outbound", "scope": None}, True),
+CASOS = [
+    ({"direction": "outbound", "reach": "cloud"}, True),
+    ({"direction": "outbound", "reach": "internet"}, True),
+    ({"direction": "outbound", "reach": "lan"}, False),
+    ({"direction": "outbound", "reach": "local"}, False),
+    ({"direction": "inbound", "reach": "cloud"}, False),
+    # An unstated reach reads as egress. This is the only direction a privacy
+    # claim may be wrong in, and it is why `providers.describe` refuses to
+    # build a descriptor without one at all.
+    ({"direction": "outbound", "reach": None}, True),
     ({"direction": "outbound"}, True),
+    ({"direction": "outbound", "reach": "LAN"}, False),      # case-insensitive
+    ({"direction": "outbound", "reach": "nonsense"}, True),
     ({}, False),
-])
-def test_the_egress_rule_matches_the_connectors_screen(desc, expected):
-    """`frontend/js/connectors.js`: `direction === "outbound" && !/^local/i`.
-    A missing scope is NOT a local one -- an unknown reach must read as egress,
-    which is the only direction a privacy claim may be wrong in."""
+    # And the sentence beside it is now inert. A connector whose prose begins
+    # with the word "local" but which declares a cloud reach still leaves the
+    # Space — the old rule got this exactly backwards.
+    ({"direction": "outbound", "reach": "cloud",
+      "scope": "local, zero egress"}, True),
+]
+
+
+@pytest.mark.parametrize("desc,expected", CASOS)
+def test_the_egress_rule_reads_the_declared_reach(desc, expected):
+    """One definition, and it is `reach` rather than a prefix on the copy.
+
+    The rule used to be `!/^local/i.test(scope)` — a privacy classification
+    derived from a human sentence, duplicated in the frontend, and wrong for
+    `ha-control`, whose sentence reads "outbound-control: local HA (LAN)" and
+    which was therefore reported as leaving a network it never left.
+    """
     assert _is_egress_connector(desc) is expected
+
+
+def test_the_connectors_screen_applies_the_same_rule():
+    """And this reads the JavaScript, which the old version of this test did
+    not — it restated the frontend's regex in a docstring and then tested only
+    the Python, so the two could drift while it stayed green.
+
+    Executed rather than pattern-matched: the JS is extracted and run through
+    the same cases, so agreement is measured instead of asserted.
+    """
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the JS half cannot be executed")
+
+    fonte = (Path(__file__).resolve().parents[2]
+             / "frontend" / "js" / "connectors.js").read_text(encoding="utf-8")
+    inicio = fonte.index("function isEgress(c){")
+    fim = fonte.index("\n  }", inicio) + 4
+    corpo = fonte[inicio:fim]
+    assert "reach" in corpo, (
+        f"the connectors screen no longer reads `reach`:\n{corpo}")
+
+    programa = (corpo + "\n"
+                + "const casos = " + json.dumps([c for c, _ in CASOS]) + ";\n"
+                + "console.log(JSON.stringify(casos.map(isEgress)));")
+    out = subprocess.run([node, "-e", programa], capture_output=True,
+                         text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    js = json.loads(out.stdout.strip().splitlines()[-1])
+
+    py = [_is_egress_connector(d) for d, _ in CASOS]
+    divergem = [(d, p, j) for (d, _), p, j in zip(CASOS, py, js) if p != j]
+    assert not divergem, (
+        "the Connectors screen and the Privacy screen disagree about what "
+        "leaves your Space:\n  "
+        + "\n  ".join(f"{d} -> python {p}, js {j}" for d, p, j in divergem))
 
 
 # --------------------------------------------------------------------------- #

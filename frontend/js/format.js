@@ -166,3 +166,44 @@
 
   window.WavrFmt = Fmt;
 })();
+
+// --------------------------------------------------------------------------
+// Modality names, in the reader's language.
+//
+// It lives HERE, in the third script the shell loads, because it is called
+// from the ninth and the seventeenth. It used to live in radar.js — the
+// twenty-sixth — so those two threw `modalityLabel is not defined` on every
+// load, and three other callers had each grown a `typeof` guard around it.
+// One producer, ahead of its consumers, beats four workarounds.
+// Every modality the wire can name, in the reader's language,
+// falling back to the raw name for anything not yet mapped.
+// A FUNCTION, not a table, and for the reason `kinds()` and `connDesc()` are
+// functions too: `WavrT` answers in whatever language is active when it is
+// CALLED, and a table built once at parse time would still be in the old
+// language after somebody switches. More importantly the literals live at a
+// `WavrT(...)` call site here, where the catalogue check can see them — inside
+// a table they were invisible, so all seven rendered English in every language.
+// The KEYS are the wire's own modality names and never translate.
+function modalityLabel(name){
+  switch(name){
+    case "wifi_csi": return WavrT("Wi-Fi");
+    case "ruview":   return WavrT("Wi-Fi CSI");
+    case "camera":   return WavrT("Camera");
+    case "network":  return WavrT("Network");
+    case "sim":      return WavrT("Simulated");
+    case "mmwave":   return WavrT("Radar");
+    case "ble":      return WavrT("Bluetooth");
+    // `wavr.nodes.SENSOR_MODALITY` maps a PIR sensor node to modality "pir" and
+    // an unrecognised/generic presence node to "node" — both real wire values
+    // this switch never had a case for, so a PIR node's room-card "why" row
+    // read the raw token "Pir" (capitalize CSS on an un-translated fallback).
+    // Same word discoveries.js already uses for the identical sensor type
+    // ("Motion sensor (PIR)"), and the same word nodes.js already falls back
+    // to for an unnamed node (`WavrT("node")`, translated "sensor") — reusing
+    // both rather than inventing a third spelling of either.
+    case "pir":      return WavrT("Motion sensor (PIR)");
+    case "node":     return WavrT("node");
+    default:         return String(name || "");
+  }
+}
+

@@ -20,6 +20,17 @@ from wavr.storage import Storage
 LOCAL = {"X-Wavr-Local": "1"}
 
 
+@pytest.fixture(autouse=True)
+def _rede_fixa(monkeypatch):
+    """Every test here builds a peer; none of them care which /24 the
+    machine running them is on, and all of them silently did."""
+    # `in_subnet` compares the peer against what THIS MACHINE thinks its
+    # own address is, so an unpinned LAN peer makes this test true on a
+    # 192.168.1.x developer box and false (or true for the wrong reason)
+    # anywhere else. Same idiom as test_app.py.
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
+
+
 def build(client=None, **kw):
     """A Core with every new store in memory, so a Space created by one test
     cannot decide the outcome of the next."""
