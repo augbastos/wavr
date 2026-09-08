@@ -231,6 +231,12 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
     monkeypatch.setenv("WAVR_DB", str(tmp_path / "w.db"))
     monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    # Pin what the Core believes its own address is. `in_subnet` asks whether the
+    # peer shares a /24 with THIS MACHINE, so a test that hardcodes a peer of
+    # 192.168.1.50 passes on a 192.168.1.x developer box and fails on any runner
+    # — which is exactly what happened: every pairing here returned 403 on CI
+    # and the failure surfaced as KeyError: device_id. Same idiom as test_app.py.
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
     app = create_app(sources=[], storage=Storage(":memory:"), hub=Hub(),
                      fusion=FusionEngine(), camera_store=CameraStore(":memory:"),
                      health_resolvers={}, health_check=lambda: True)
