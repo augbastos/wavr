@@ -6,8 +6,8 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0B0E12">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
-<title>Wavr — local, explainable home sensing</title>
-<meta name="description" content="Wavr fuses network, Bluetooth, camera and radar signals into one explainable per-room presence state, running entirely on hardware you own. AGPL-3.0, no cloud, no account.">
+<title>Wavr &mdash; a calm, explainable understanding of your space</title>
+<meta name="description" content="Wavr fuses the network, Bluetooth, camera and radar signals already around you into one explainable presence state per room, running entirely on hardware you own. No cloud, no account, AGPL-3.0.">
 <!-- Fully self-contained: no CDN, no web fonts, no analytics, no external requests. -->
 <link rel="stylesheet" href="assets/wavr.css">
 </head>
@@ -22,11 +22,9 @@
     </a>
     <nav class="site-nav" aria-label="Primary">
       <a href="index.html" aria-current="page">Home</a>
-      <a href="install.html" class="nav-install">Install</a>
-      <a href="compatibility.html">Compatibility</a>
-      <a href="nodes.html">Nodes</a>
+      <a href="how-it-works.html">How it works</a>
       <a href="privacy.html">Privacy</a>
-      <a href="docs.html">Docs</a>
+      <a href="download.html" class="nav-download">Download</a>
       <a href="https://github.com/augbastos/wavr">GitHub</a>
     </nav>
   </div>
@@ -34,122 +32,405 @@
 
 <main id="main">
 
-  <section class="hero wrap">
-    <h1>Connect Wavr to your space and it starts understanding what is there.</h1>
-    <p class="lede">Wavr fuses network scanning, Bluetooth, camera and radar signals into one
-      explainable presence state per room: occupied or not, a confidence score, and the
-      per-modality <em>why</em> behind it. It runs entirely on hardware you already own,
-      whether that's a laptop, a mini PC, or a Raspberry Pi. Nothing leaves the box unless
-      you turn on an optional, clearly-labelled egress.</p>
-    <div class="hero-ctas">
-      <a class="btn btn-primary" href="install.html">Install Wavr</a>
+  <section class="hero wrap-wide">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <h1>One space. Many sensors. A single, explainable answer.</h1>
+        <p class="lede">Your Wi-Fi already knows a little about where people are. So does a
+          camera, or a small radar sensor, if you add one. Wavr is the local software that
+          combines whatever you have into one clear, per-room answer: occupied or not, how
+          sure it is, and why. It runs entirely on hardware you own.</p>
+        <div class="hero-ctas">
+          <a class="btn btn-primary" href="download.html">Download Wavr</a>
+          <a class="btn" href="how-it-works.html">See how it works</a>
+        </div>
+        <p class="hero-note">No cloud, no account, no sign-up. Free and open source,
+          AGPL-3.0-or-later. <a href="https://github.com/augbastos/wavr">Read the source</a>.</p>
+      </div>
+      <div class="hero-shot">
+        <div class="shot-frame" style="--shot-ratio:8/5">
+          <img class="product-shot" src="assets/shots/dashboard-overview.png"
+               alt="The Wavr dashboard for a Space called Maple House: a sidebar, a banner saying one thing needs attention because a radar has stopped reporting, a privacy panel, and the start of a room grid where Living room reads 81 per cent confident with one person, Office says no sensor covers it, and Kitchen reads 81 per cent with two people" width="1600" height="1000">
+          <div class="shot-fallback">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="14" rx="2"/>
+              <circle cx="9" cy="9.5" r="1.6"/>
+              <path d="M3 15l5-4 4 3 4-5 5 6"/>
+            </svg>
+            <span>Dashboard screenshot not captured yet</span>
+          </div>
+        </div>
+        <p class="shot-caption">The real dashboard, not a mockup &mdash; this Space has a
+          radar and a motion sensor in it. A fresh install starts with your rooms and no
+          sensors yet: <a href="download.html#day-one">what day one actually looks
+          like</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- What it is FOR.
+       This section exists because two people read the site cold on the same
+       night — the first person ever to install Wavr, and an independent
+       reviewer — and neither could say what it would do for them. The page
+       explained the mechanism beautifully and never once named an outcome.
+       Every line below maps to a trigger and an action that exist in
+       `backend/wavr/routines.py`; nothing here is aspirational. -->
+  <section class="section wrap" aria-labelledby="forwhat-h">
+    <h2 id="forwhat-h">What you would actually use it for</h2>
+    <p class="section-lede">Wavr answers one question &mdash; is anyone here, where, and how
+      sure are we &mdash; and then lets you act on the answer. Some of these work the day
+      you install it; the rest say what they need.</p>
+
+    <div class="grid" style="margin-top:24px">
+      <div class="tile">
+        <div class="tile-eyebrow">Works day one</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21H14"/><path d="M11 12h9M17 8.5l3.5 3.5-3.5 3.5"/></svg>&ldquo;Did anyone get home?&rdquo;</h3>
+        <p>Wavr recognises the phones and laptops on your own Wi-Fi, so it knows when
+          someone arrives or leaves and can tell you. No camera, no sensor, nothing to
+          buy.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Works day one</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.2 12 4l9 7.2"/><path d="M5.5 10v10h13V10"/><path d="M9.5 20v-5h5v5"/></svg>&ldquo;Is the place empty?&rdquo;</h3>
+        <p>Not &ldquo;the last device disconnected&rdquo; &mdash; actually empty, with a
+          confidence and the evidence behind it. Wavr can tell you when it becomes empty,
+          or when it has been empty since a time you choose.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Works day one</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><path d="M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>&ldquo;What just joined my Wi-Fi?&rdquo;</h3>
+        <p>Wavr keeps a list of what it recognises, and tells you about anything it has
+          never seen before. That is a different question from presence, and the same
+          scan answers both.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Needs a sensor in the room</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.2V12l3.2 1.9"/></svg>&ldquo;Has anyone been in the kitchen today?&rdquo;</h3>
+        <p>Per-room presence, and a &ldquo;nobody has moved in here for a while&rdquo;
+          trigger. This is the shape of checking on someone who lives alone, and it is the
+          reason rooms can be watched without a camera in them.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Needs a sensor in the room</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.3 1.1 2.2h5c0-.9.5-1.7 1.1-2.2A6 6 0 0 0 12 3z"/></svg>Lights that don't switch off on someone sitting still</h3>
+        <p>The usual motion sensor forgets you the moment you stop moving. Wavr holds a
+          room occupied on fused evidence and says how sure it is, so what you automate
+          off it is not guessing.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Needs Home Assistant</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2.5 5 13.5h6l-1 8 8-11h-6l1-8z"/></svg>Make something happen</h3>
+        <p>A rule can call a Home Assistant service when a room fills or empties. That
+          connection is opt-in and starts off; without it, Wavr tells you and does not
+          touch anything.</p>
+      </div>
+    </div>
+
+    <p class="fine-print" style="margin-top:18px">Being told means a message in Wavr, and a
+      Windows notification for the serious ones. Pushing alerts to a phone means pointing
+      Wavr at a notification service, which is off until you do.</p>
+  </section>
+
+  <!-- The layer, not the dashboard.
+       The site listed "MCP for agents" as one tile among four and left it at
+       that, which undersold the part that is least like anything else here: a
+       house's network turned into something a program can ask questions about,
+       locally. Every tool named below exists in `backend/wavr/mcp.py`; the
+       counts are literal. -->
+  <section class="section wrap" aria-labelledby="layer-h">
+    <h2 id="layer-h">Your network, as something a program can ask questions about</h2>
+    <p class="section-lede">A router knows MAC addresses. A camera knows pixels. Neither can
+      answer &ldquo;who is in the kitchen and how sure are you?&rdquo; &mdash; and neither can
+      be asked anything at all by a program you write. Wavr turns the same signals into one
+      local API, and then puts a standard agent interface in front of it.</p>
+
+    <div class="grid" style="margin-top:24px">
+      <div class="tile">
+        <div class="tile-eyebrow">14 tools, 13 of them read-only</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L4 21l1.2-3.6A8.4 8.4 0 1 1 21 11.5z"/><path d="M10 9.4a2.1 2.1 0 1 1 2.7 2c-.6.2-1 .8-1 1.5v.4"/><path d="M11.7 16.2h.01"/></svg>An agent can ask your Space</h3>
+        <p>Wavr ships a Model Context Protocol server, so any MCP client &mdash; your own
+          agent, a local model, an assistant you already use &mdash; can ask: which rooms
+          exist, who is where, why Wavr believes that, what is on the network, where the
+          sensors are blind, what happened earlier today, is the Core healthy.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">One tool, four gates</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8.2 10.5V7.4a3.8 3.8 0 0 1 7.6 0v3.1"/><path d="M12 14.4v2.4"/></svg>And, if you allow it, do something</h3>
+        <p>The fourteenth tool calls a Home Assistant service. It is inert unless you turn
+          control on, it never drives a device directly &mdash; it asks your own Home
+          Assistant to &mdash; and the whole chain is off by default. Read is the normal
+          state; acting is a decision you make once, deliberately.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">On your machine</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4" rx="1"/><path d="M9.5 6V3.6M14.5 6V3.6M9.5 20.4V18M14.5 20.4V18M6 9.5H3.6M6 14.5H3.6M20.4 9.5H18M20.4 14.5H18"/></svg>A model that never leaves the building</h3>
+        <p>Wavr's own assistant can point at a language model running on the same computer.
+          Ask it about your Space in your own words, and the question, the answer and the
+          data all stay on hardware you own. Point it at a cloud provider instead if you
+          prefer &mdash; Wavr says which of the two you chose, every time.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">What the agent is NOT given</div>
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5h17l-6.6 7.6v6.1l-3.8 2v-8.1z"/></svg>Deliberately less than Wavr knows</h3>
+        <p>The network inventory an agent can read is coarse on purpose: a device's vendor
+          and kind, never its MAC, hostname, open ports or when it was first seen. Wavr
+          keeps those; the agent surface does not get them. An integration layer that hands
+          over everything it has is a leak with an API.</p>
+      </div>
+    </div>
+
+
+    <!-- The shape of it, once, instead of another paragraph. Hand-drawn SVG
+         because nothing on this site may be fetched from anywhere. The counts
+         are the real ones: 13 read tools and 1 control tool in mcp.py. -->
+    <figure class="layer-figure">
+      <svg viewBox="0 0 760 200" role="img"
+           aria-labelledby="layer-fig-t" class="layer-diagram">
+        <title id="layer-fig-t">Signals from the network, Bluetooth, a camera and a
+          radar sensor feed one local fusion engine. The engine offers thirteen read-only
+          tools and one gated control tool over MCP, which your own agent or a local model
+          can call. Nothing leaves the network.</title>
+
+        <g class="ld-src">
+          <rect x="8" y="16" width="132" height="30" rx="8"/>
+          <text x="74" y="35">Your Wi-Fi</text>
+          <rect x="8" y="54" width="132" height="30" rx="8"/>
+          <text x="74" y="73">Bluetooth</text>
+          <rect x="8" y="92" width="132" height="30" rx="8"/>
+          <text x="74" y="111">A camera</text>
+          <rect x="8" y="130" width="132" height="30" rx="8"/>
+          <text x="74" y="149">A radar board</text>
+        </g>
+
+        <g class="ld-flow">
+          <path d="M144 31 C 180 31, 190 88, 226 88"/>
+          <path d="M144 69 C 180 69, 195 88, 226 88"/>
+          <path d="M144 107 C 180 107, 195 88, 226 88"/>
+          <path d="M144 145 C 180 145, 190 88, 226 88"/>
+        </g>
+
+        <g class="ld-core">
+          <rect x="228" y="48" width="150" height="80" rx="12"/>
+          <text x="303" y="80" class="ld-strong">Fusion</text>
+          <text x="303" y="102">one answer per room,</text>
+          <text x="303" y="118">with its evidence</text>
+        </g>
+
+        <g class="ld-flow">
+          <path d="M380 74 H 470"/>
+          <path d="M380 104 H 470"/>
+        </g>
+
+        <g class="ld-read">
+          <rect x="472" y="56" width="128" height="34" rx="8"/>
+          <text x="536" y="70" class="ld-strong">13 tools</text>
+          <text x="536" y="84">read only</text>
+        </g>
+        <g class="ld-ctl">
+          <rect x="472" y="96" width="128" height="34" rx="8"/>
+          <text x="536" y="110" class="ld-strong">1 tool</text>
+          <text x="536" y="124">control, gated, off</text>
+        </g>
+
+        <g class="ld-flow"><path d="M602 88 H 646"/></g>
+        <g class="ld-agent">
+          <rect x="648" y="56" width="104" height="64" rx="10"/>
+          <text x="700" y="82">your agent</text>
+          <text x="700" y="100">or a local</text>
+          <text x="700" y="116">model</text>
+        </g>
+
+        <g class="ld-fence">
+          <path d="M4 178 H 756"/>
+          <text x="380" y="196">everything above this line stays on hardware you own</text>
+        </g>
+      </svg>
+    </figure>
+
+    <p class="fine-print" style="margin-top:18px">This is the part that is hardest to
+      demonstrate on a page and easiest to check in the code: the tool list is in
+      <code>backend/wavr/mcp.py</code>, and every gate on the one control tool is named in
+      its own header comment.</p>
+  </section>
+
+  <section class="section wrap" aria-labelledby="transform-h">
+    <h2 id="transform-h">One understanding, instead of five separate guesses</h2>
+    <p class="section-lede">This is the shift Wavr makes. Nothing here needs you to know
+      networking, IoT, or sensor fusion. Just look at the difference.</p>
+
+    <div class="transform-diagram">
+      <div class="transform-panel transform-before">
+        <div class="transform-panel-label">Right now, without Wavr</div>
+        <ul class="signal-scatter">
+          <li class="signal-chip"><strong>Your Wi-Fi router</strong>knows 12 devices are connected</li>
+          <li class="signal-chip"><strong>Your phone</strong>knows it's near an access point</li>
+          <li class="signal-chip"><strong>A camera</strong>knows there's motion in frame</li>
+          <li class="signal-chip"><strong>A radar sensor</strong>knows a shape is 2m away</li>
+          <li class="signal-chip"><strong>Bluetooth</strong>knows a beacon is nearby</li>
+        </ul>
+        <p class="transform-caption">Five isolated hunches. None of them talk to each other, and none of them answer "is anyone in the living room?" on their own.</p>
+      </div>
+
+      <div class="transform-arrow" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14M13 6l6 6-6 6"/>
+        </svg>
+      </div>
+
+      <div class="transform-panel transform-after">
+        <div class="transform-panel-label">With Wavr fusing them</div>
+        <span class="example-flag">Illustrative example, not a live screenshot</span>
+        <div class="tile mock-room">
+          <div class="tile-head">
+            <h3>Living room</h3>
+            <span class="tag tag-ready">Occupied</span>
+          </div>
+          <p class="mock-confidence"><span class="mock-conf-num">92%</span> confidence</p>
+          <ul class="mock-source-list">
+            <li><span>Wi-Fi</span> <span class="mini-tag ok">Agrees</span></li>
+            <li><span>Camera</span> <span class="mini-tag ok">Agrees</span></li>
+            <li><span>Radar</span> <span class="mini-tag ok">Agrees</span></li>
+            <li><span>Bluetooth</span> <span class="mini-tag out">No reading</span></li>
+          </ul>
+        </div>
+        <p class="transform-caption">One answer, with its evidence attached. The reasoning is always one click away, never a black box.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Built around a Space, not just "your house"</h2>
+    <p class="section-lede">Wavr calls the place you set up a <strong>Space</strong>, on
+      purpose. Rooms, presence, devices and confidence all attach to whichever one you're
+      running; the model doesn't assume it's a house.</p>
+    <ul class="space-chip-list" aria-label="Kinds of place a Wavr Space can be">
+      <li>Home</li><li>Apartment</li><li>Office</li><li>Shop</li><li>Restaurant</li>
+      <li>School</li><li>Warehouse</li><li>Hotel room</li>
+    </ul>
+  </section>
+
+  <section class="section wrap" id="privacy-preview">
+    <h2>Privacy is the design, not a settings page</h2>
+    <p class="section-lede">Home and workplace sensing usually means sending a camera feed
+      and network traffic to someone else's cloud. Wavr takes the opposite position: the
+      same sensing techniques, running on a machine you control, with the data staying on
+      it.</p>
+    <div class="grid" style="margin-top:24px">
+      <div class="tile">
+        <div class="tile-eyebrow">Loopback by default</div>
+        <p>The base install never opens a LAN socket. Every path off the box (another
+          device connecting, MQTT to Home Assistant, an AI agent reading state over MCP)
+          is opt-in and starts OFF.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">Cameras boot off</div>
+        <p>Frames live in RAM only, are never written to disk, and never leave the box.
+          Only the derived answer (occupied, confidence, a timestamp) is ever stored.</p>
+      </div>
+      <div class="tile">
+        <!-- "No account" was flattening two different things into one. There is
+             no account WITH ANYBODY — no sign-up, nothing to register. There are
+             very much accounts ON YOUR OWN MACHINE: people with roles, devices
+             with credentials, three independent axes of who may do what. Saying
+             only the first read as "this has no user management", which is both
+             untrue and the opposite of a selling point for whoever administers
+             the network. -->
+        <div class="tile-eyebrow">No account with us. Accounts on your machine.</div>
+        <p>Nothing to sign up for, no analytics SDK, no phone-home &mdash; the dashboard
+          makes zero external requests, and neither does this website. What Wavr does keep
+          is local administration: people with roles (owner, admin, user, guest), each
+          paired device carrying its own credential, and a separate axis for what job a
+          machine does. Demote somebody and their phone loses access on its next request.
+          It is all in a file on your own disk, and no directory anywhere else knows any of
+          those names exist.</p>
+      </div>
+      <div class="tile">
+        <div class="tile-eyebrow">AGPL-3.0-or-later</div>
+        <p>Free and open source. Run a modified version as a network service and the AGPL
+          asks you to publish your changes; a commercial license is available on request.</p>
+      </div>
+    </div>
+    <p style="margin-top:18px"><a href="privacy.html">Read the full privacy model &rarr;</a></p>
+  </section>
+
+  <section class="section wrap" aria-labelledby="honest-h">
+    <h2 id="honest-h">Wavr says "I don't know" when it doesn't</h2>
+    <p class="section-lede">A room is never forced into a false "clear" or "occupied."
+      Wavr distinguishes a confirmed-empty room from one with no coverage at all, a sensor
+      that's gone offline, and a reading it isn't confident about, and shows you which.</p>
+    <ul class="states-legend">
+      <li>
+        <span class="state-swatch is-occupied" aria-hidden="true"></span>
+        <div><h3>Occupied</h3><p>Confident evidence someone's there, with the sources behind it.</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-empty" aria-hidden="true"></span>
+        <div><h3>Confirmed empty</h3><p>Actively monitored right now, and nothing found.</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-offline" aria-hidden="true"></span>
+        <div><h3>Offline</h3><p>A sensor that should be reporting here has stopped. Flagged, not hidden.</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-nocoverage" aria-hidden="true"></span>
+        <div><h3>No coverage</h3><p>Nothing is watching this room at all: a gap, never disguised as "empty."</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-lowconfidence" aria-hidden="true"></span>
+        <div><h3>Low confidence</h3><p>A weak or contradicted reading. Shown as uncertain, not rounded up.</p></div>
+      </li>
+    </ul>
+    <div class="shot-frame" style="--shot-ratio:16/7;margin-top:24px">
+      <img class="product-shot" src="assets/shots/room-states.png"
+           alt="Five Wavr room tiles side by side: three occupied with confidence rings at 81, 81 and 63 per cent, one empty at zero per cent, and one with a dashed border saying no sensor covers this room. The 63 per cent tile carries an amber banner saying the sensors disagree." width="1600" height="700">
+      <div class="shot-fallback">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="14" rx="2"/>
+          <circle cx="9" cy="9.5" r="1.6"/>
+          <path d="M3 15l5-4 4 3 4-5 5 6"/>
+        </svg>
+        <span>Screenshot not captured yet</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>One brain, every screen</h2>
+    <p class="section-lede">Wavr is a small family of surfaces around one local fusion
+      engine. Add the ones you need, over the same authenticated, local-only channel.</p>
+    <div class="grid" style="margin-top:24px">
+      <div class="tile">
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="12.5" rx="1.8"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>Desktop</h3>
+        <p>The full dashboard as a native shell, or straight from source in a browser. The
+          machine that runs it is the "Core" for your Space.</p>
+      </div>
+      <div class="tile">
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.8 18.6h2.4"/></svg>Mobile companion</h3>
+        <p>No app-store app needed. Pair a phone or tablet browser to a Core over local
+          HTTPS and add it to the home screen.</p>
+      </div>
+      <div class="tile">
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.6"/><path d="M10 10h4v4h-4z"/><path d="M9 6V3.5M15 6V3.5M9 20.5V18M15 20.5V18M6 9H3.5M6 15H3.5M20.5 9H18M20.5 15H18"/></svg>Sensor Nodes</h3>
+        <p>A small radar or PIR board that joins Wavr over Wi-Fi with a one-time code. See
+          <a href="how-it-works.html#nodes">how it works</a> for what's built and what's
+          still firmware-only.</p>
+      </div>
+      <div class="tile">
+        <h3><svg class="surface-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4"/><circle cx="12" cy="2.2" r="1.2"/><rect x="4" y="7" width="16" height="11" rx="2.4"/><circle cx="9" cy="12.5" r="1.1"/><circle cx="15" cy="12.5" r="1.1"/><path d="M9.5 15.6h5"/></svg>MCP for agents</h3>
+        <p>A read-only Model Context Protocol server exposes room state to your own agents,
+          with an opt-in, gated Home Assistant control tool.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Ready when you are</h2>
+    <p class="section-lede">Zero hardware needed to try the idea, and a real path to an
+      always-on hub for your Space when you want one.</p>
+    <div class="hero-ctas" style="margin-top:20px">
+      <a class="btn btn-primary" href="download.html">Download Wavr</a>
+      <a class="btn" href="how-it-works.html">How it works</a>
       <a class="btn" href="https://github.com/augbastos/wavr">View source on GitHub</a>
-    </div>
-    <p class="hero-note">There is no hosted demo. Wavr is local-only by design; read the
-      source, or run it yourself against simulated data with
-      <code>python -m wavr.serve</code>, which needs no hardware at all.</p>
-  </section>
-
-  <section class="section">
-    <div class="wrap">
-      <h2>Local-first, on purpose</h2>
-      <p class="section-lede">Home sensing usually means sending your camera feed and network
-        traffic to someone else's cloud. Wavr takes the opposite position: the same sensing
-        techniques, run on a machine you control, with the data staying on it.</p>
-      <div class="grid" style="margin-top:24px">
-        <div class="tile">
-          <div class="tile-eyebrow">Loopback by default</div>
-          <p>The base install never opens a LAN socket. Every path off the box (LAN
-            multi-device, MQTT to Home Assistant, the MCP control tool, the AI narrator) is
-            opt-in and starts OFF.</p>
-        </div>
-        <div class="tile">
-          <div class="tile-eyebrow">Cameras boot off</div>
-          <p>Frames live in RAM only, are never written to disk, and never leave the box. Only
-            derived state (occupancy, confidence, a timestamp) is ever stored or shared.</p>
-        </div>
-        <div class="tile">
-          <div class="tile-eyebrow">No account, no telemetry</div>
-          <p>No sign-up, no analytics SDK, no phone-home. The dashboard makes zero external
-            requests, and this website doesn't either. See <a href="privacy.html">Privacy</a>.</p>
-        </div>
-        <div class="tile">
-          <div class="tile-eyebrow">AGPL-3.0-or-later</div>
-          <p>Free and open source for personal, self-hosted and non-commercial use. Run a
-            modified version as a network service and the AGPL asks you to publish your
-            changes. A commercial license is available from the author on request.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="wrap">
-      <h2>Explainable by construction</h2>
-      <p class="section-lede">Fused confidence equals the best present evidence: trust weight
-        × the source's own confidence × freshness decay, so a single weak source never fakes
-        certainty. Every source's own reading is surfaced, never silently arbitrated.</p>
-      <div class="table-wrap" style="margin-top:20px">
-        <table>
-          <thead>
-            <tr><th>Signal</th><th>What it needs</th><th>Status</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Network scan</td><td>Nothing extra</td><td><span class="tag tag-ready">Works today</span></td></tr>
-            <tr><td>Bluetooth presence</td><td>A host Bluetooth adapter</td><td><span class="tag tag-ready">Works today</span></td></tr>
-            <tr><td>Camera (person detection)</td><td>An RTSP camera or webcam, boots OFF</td><td><span class="tag tag-ready">Works today</span></td></tr>
-            <tr><td>mmWave radar (HLK-LD2450)</td><td>A ~€15 sensor over USB-serial</td><td><span class="tag tag-ready">Works today</span></td></tr>
-            <tr><td>WiFi CSI (ruview)</td><td>A channel-state-info source</td><td><span class="tag tag-planned">Source seam only</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="fine-print" style="margin-top:12px">A room is always shown in one of three
-        honest states: confirmed-empty, offline (a sensor stopped reporting), or no coverage.
-        They're never blended into a false "clear."</p>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="wrap">
-      <h2>One brain, every screen</h2>
-      <p class="section-lede">Wavr is a small family of surfaces around one local fusion
-        engine. Add the ones you need, over the same authenticated, local-only channel.</p>
-      <div class="grid" style="margin-top:24px">
-        <div class="tile">
-          <h3>Desktop</h3>
-          <p>The full dashboard as a native shell, or straight from source in a browser. The
-            machine that runs it is the "Core".</p>
-        </div>
-        <div class="tile">
-          <h3>MCP for agents</h3>
-          <p>A read-only Model Context Protocol server exposes room state and the house map
-            so your own agents can query presence, with an opt-in, gated Home Assistant
-            control tool.</p>
-        </div>
-        <div class="tile">
-          <h3>Mobile companion</h3>
-          <p>No app-store app needed. Pair a phone or tablet browser to a Core over local
-            HTTPS and add it to your home screen.</p>
-        </div>
-        <div class="tile">
-          <h3>Sensor Nodes</h3>
-          <p>A small radar or PIR board that joins Wavr over Wi-Fi with a one-time code. See
-            <a href="nodes.html">Nodes</a> for what's built and what's still firmware-only.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="wrap">
-      <h2>Ready when you are</h2>
-      <p class="section-lede">Zero hardware to try the idea, and a real path to an always-on
-        household hub when you want one.</p>
-      <div class="hero-ctas" style="margin-top:20px">
-        <a class="btn btn-primary" href="install.html">Install Wavr</a>
-        <a class="btn" href="compatibility.html">Check compatibility</a>
-        <a class="btn" href="docs.html">Read the docs</a>
-      </div>
     </div>
   </section>
 
@@ -160,10 +441,10 @@
     <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
       cloud, no telemetry, on this site or in the product.</p>
     <p class="site-footer-links">
-      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
-      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
-      <a href="privacy.html">Privacy</a> ·
-      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> &middot;
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> &middot;
+      <a href="privacy.html">Privacy</a> &middot;
+      <a href="how-it-works.html">How it works</a>
     </p>
   </div>
 </footer>

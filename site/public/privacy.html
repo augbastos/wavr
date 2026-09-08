@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0B0E12">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
-<title>Privacy — Wavr</title>
+<title>Privacy &mdash; Wavr</title>
 <meta name="description" content="What Wavr does and doesn't do with your data, in plain language, plus exactly what this website itself does (and doesn't) read from your browser.">
 <link rel="stylesheet" href="assets/wavr.css">
 </head>
@@ -21,11 +21,9 @@
     </a>
     <nav class="site-nav" aria-label="Primary">
       <a href="index.html">Home</a>
-      <a href="install.html" class="nav-install">Install</a>
-      <a href="compatibility.html">Compatibility</a>
-      <a href="nodes.html">Nodes</a>
+      <a href="how-it-works.html">How it works</a>
       <a href="privacy.html" aria-current="page">Privacy</a>
-      <a href="docs.html">Docs</a>
+      <a href="download.html" class="nav-download">Download</a>
       <a href="https://github.com/augbastos/wavr">GitHub</a>
     </nav>
   </div>
@@ -43,6 +41,67 @@
 
   <section class="section wrap">
     <h2>The product: your home stays yours</h2>
+
+    <figure class="site-figure">
+      <svg viewBox="0 0 760 240" role="img" aria-labelledby="pv-fig-t" class="site-diagram">
+        <title id="pv-fig-t">Cameras, radar, Bluetooth and the network scan feed the fusion
+          engine on your own machine. What is written to disk is only the conclusion: which
+          room, how sure, and when. Frames, raw coordinates and credentials are discarded.
+          Nothing leaves the machine unless you turn on a specific switch, and every one of
+          those switches starts off.</title>
+
+        <g class="ld-src">
+          <rect x="8" y="20" width="126" height="28" rx="8"/><text x="71" y="38">camera frames</text>
+          <rect x="8" y="56" width="126" height="28" rx="8"/><text x="71" y="74">radar points</text>
+          <rect x="8" y="92" width="126" height="28" rx="8"/><text x="71" y="110">Bluetooth</text>
+          <rect x="8" y="128" width="126" height="28" rx="8"/><text x="71" y="146">network scan</text>
+        </g>
+        <g class="ld-flow">
+          <path d="M138 34 C 172 34, 182 88, 216 88"/>
+          <path d="M138 70 C 172 70, 190 88, 216 88"/>
+          <path d="M138 106 C 172 106, 190 88, 216 88"/>
+          <path d="M138 142 C 172 142, 182 88, 216 88"/>
+        </g>
+
+        <g class="ld-core">
+          <rect x="218" y="52" width="146" height="72" rx="12"/>
+          <text x="291" y="80" class="ld-strong">In memory</text>
+          <text x="291" y="100">frames are read</text>
+          <text x="291" y="115">and thrown away</text>
+        </g>
+
+        <g class="ld-flow"><path d="M366 88 H 424"/></g>
+        <g class="ld-read">
+          <rect x="426" y="56" width="152" height="64" rx="10"/>
+          <text x="502" y="78" class="ld-strong">Written to disk</text>
+          <text x="502" y="96">room, confidence,</text>
+          <text x="502" y="111">time. Nothing else.</text>
+        </g>
+
+        <g class="ld-drop">
+          <rect x="426" y="140" width="152" height="60" rx="10"/>
+          <text x="502" y="162" class="ld-strong">Never written</text>
+          <text x="502" y="180">pictures, coordinates,</text>
+          <text x="502" y="194">passwords</text>
+        </g>
+        <g class="ld-flow ld-flow-drop"><path d="M366 96 C 396 96, 396 170, 424 170"/></g>
+
+        <g class="ld-ctl">
+          <rect x="612" y="56" width="140" height="64" rx="10"/>
+          <text x="682" y="78" class="ld-strong">Doors out</text>
+          <text x="682" y="96">one switch each,</text>
+          <text x="682" y="111">all off to begin with</text>
+        </g>
+        <g class="ld-flow"><path d="M580 88 H 610" stroke-dasharray="4 4"/></g>
+
+        <g class="ld-fence">
+          <path d="M4 218 H 756"/>
+          <text x="380" y="234">everything above this line is on hardware you own</text>
+        </g>
+      </svg>
+      <figcaption>The whole argument in one picture. The dashed arrow is the only way
+        anything reaches the outside, and it is a switch you flip.</figcaption>
+    </figure>
     <div class="grid" style="margin-top:16px">
       <div class="tile">
         <div class="tile-eyebrow">Runs where you put it</div>
@@ -85,9 +144,17 @@
     <h2>The website: nothing collected, nothing sent</h2>
     <p class="section-lede">This site is static files. No account, no cookies, no analytics,
       no third-party embeds, no fonts or scripts loaded from anywhere but this same site.</p>
-    <p>The one page that reads anything from your browser is
-      <a href="install.html">Install</a>, to guess which platform to show you first. Here is
-      the complete list of what it reads and what it does with it:</p>
+    <!-- This used to say the reading happened only on Download and Install. It
+         does not: every page loads the same assets/wavr.js, and the platform
+         guess runs on all of them, this one included. Nothing changes about
+         where the reading goes (nowhere) — but the page whose entire value is
+         being exactly right does not get to be approximately right about
+         itself. -->
+    <p><strong>Every page on this site</strong>, including this one, reads a little from
+      your browser as it loads: they all load the same script, and it makes the same
+      platform guess everywhere, even though only <a href="download.html">Download</a> and
+      <a href="install.html">Install</a> ever show you the result. None of it is sent
+      anywhere. Here is the complete list of what is read and what happens to it:</p>
     <div class="table-wrap" style="margin-top:16px">
       <table>
         <thead><tr><th>What it reads</th><th>Why</th><th>Where it goes</th></tr></thead>
@@ -110,6 +177,15 @@
             <td>To check whether a download link exists for your platform yet</td>
             <td>Stays entirely within this site; it's a request to itself, not a third
               party.</td>
+          </tr>
+          <tr>
+            <td><code>window.location.href</code> (the address bar), on
+              <a href="download.html">Download</a> only</td>
+            <td>To draw a QR code that opens this same page on your phone</td>
+            <td>Never sent anywhere. The QR code is generated entirely inside your
+              browser by a small vendored library (<code>assets/qrcode.vendor.js</code>,
+              MIT-licensed, no network calls of its own); on <code>localhost</code> or a
+              local file, the page shows a note instead of a code that couldn't work.</td>
           </tr>
         </tbody>
       </table>
@@ -139,10 +215,10 @@
     <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
       cloud, no telemetry, on this site or in the product.</p>
     <p class="site-footer-links">
-      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
-      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
-      <a href="privacy.html">Privacy</a> ·
-      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> &middot;
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> &middot;
+      <a href="privacy.html">Privacy</a> &middot;
+      <a href="how-it-works.html">How it works</a>
     </p>
   </div>
 </footer>

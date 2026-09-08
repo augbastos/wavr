@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>How it works &mdash; Wavr</title>
+<meta name="description" content="How Wavr fuses network, Bluetooth, camera and radar signals into one explainable per-room state, the honest states it distinguishes, and the surfaces that share one local brain.">
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="how-it-works.html" aria-current="page">How it works</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="download.html" class="nav-download">Download</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>How Wavr works</h1>
+    <p class="lede">One fusion engine turns whatever sensors you have into a per-room
+      state. This page is the mechanics: what feeds it, how it stays honest about
+      uncertainty, and the surfaces that share it.</p>
+  </section>
+
+  <section class="section wrap" id="fusion">
+    <h2>Fusion, not just aggregation</h2>
+    <p class="section-lede">Fused confidence is the best present evidence: trust weight
+      &times; the source's own confidence &times; freshness decay, so one weak, stale source can
+      never fake certainty on its own. Every source's own reading stays visible; nothing
+      is silently arbitrated away.</p>
+
+    <figure class="shot-figure" style="margin:24px 0 0">
+      <img class="product-shot" src="assets/shots/room-explained.png"
+           alt="A bedroom card in Wavr reading 63% Likely, occupied, one person. A banner says the sensors disagree: radar reports occupied, the motion sensor reports empty. Below it, an open Why panel shows radar carrying 100% of the vote and agreeing, and the motion sensor carrying 0% and not agreeing."
+           width="524" height="1122" style="max-width:340px">
+      <figcaption class="shot-caption">One room where the two sensors disagree, with
+        &ldquo;Why?&rdquo; opened. Wavr does not hide the disagreement or average it away:
+        it shows the verdict, who voted which way, and how much each vote counted for.
+        This is a Space with sensors added &mdash; <a href="download.html#day-one">what day
+        one actually looks like</a>.</figcaption>
+    </figure>
+
+    <div class="table-wrap" style="margin-top:20px">
+      <table>
+        <thead>
+          <tr><th>Signal</th><th>What it needs</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Network scan</td><td>Nothing extra</td><td><span class="tag tag-ready">Works today</span></td></tr>
+          <tr><td>Bluetooth presence</td><td>A host Bluetooth adapter</td><td><span class="tag tag-ready">Works today</span></td></tr>
+          <tr><td>Camera (person detection)</td><td>An RTSP camera or webcam, boots OFF</td><td><span class="tag tag-note">From source, not in the installer</span></td></tr>
+          <tr><td>mmWave radar (HLK-LD2450)</td><td>A ~&euro;15 sensor over USB-serial</td><td><span class="tag tag-note">From source, not in the installer</span></td></tr>
+          <tr><td>WiFi CSI (ruview)</td><td>A channel-state-info source</td><td><span class="tag tag-planned">Source seam only</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">Precision is a dial, not a guess. A global sensing level
+      (<strong>Off / Presence / Precise</strong>) controls how far Wavr reaches: Presence
+      stays Space-level from network and Bluetooth alone, while Precise adds camera
+      person-detection for per-room accuracy, at the cost of running a small model on your
+      CPU or GPU. Either way, the confidence and state shown for a room describe exactly
+      what's backing it right now, never rounded up.</p>
+  </section>
+
+  <section class="section wrap" id="states" aria-labelledby="states-h">
+    <h2 id="states-h">Five honest states, never blended into a false "clear"</h2>
+    <p class="section-lede">The easiest way to build a presence system that lies is to
+      collapse every uncertain case into "empty." Wavr keeps them apart on purpose.</p>
+    <ul class="states-legend" style="margin-top:20px">
+      <li>
+        <span class="state-swatch is-occupied" aria-hidden="true"></span>
+        <div><h3>Occupied</h3><p>Enough agreeing evidence to call it: someone is here, with the sources and confidence shown.</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-empty" aria-hidden="true"></span>
+        <div><h3>Confirmed empty</h3><p>A room actively covered right now, checked, and nothing found. That's a different claim from "no coverage."</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-offline" aria-hidden="true"></span>
+        <div><h3>Offline</h3><p>A sensor that's supposed to be reporting here has stopped. Surfaced as a fault, not silently dropped from the picture.</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-nocoverage" aria-hidden="true"></span>
+        <div><h3>No coverage</h3><p>Nothing is watching this room at all. Drawn distinctly (a dashed outline, not a filled tile) so it's never mistaken for "checked and empty."</p></div>
+      </li>
+      <li>
+        <span class="state-swatch is-lowconfidence" aria-hidden="true"></span>
+        <div><h3>Low confidence</h3><p>A weak or contradicted reading is shown as uncertain: flagged with the evidence, never quietly rounded up to a clean answer.</p></div>
+      </li>
+    </ul>
+  </section>
+
+  <section class="section wrap">
+    <h2>One brain, every screen</h2>
+    <p class="section-lede">Every surface below reads from the same local fusion engine
+      over an authenticated, local-only channel; nothing duplicates the sensing logic.</p>
+    <div class="grid" style="margin-top:24px">
+      <div class="tile">
+        <h3>Desktop</h3>
+        <p>The full dashboard, either as a native shell or straight from source in a
+          browser. The machine running it is the "Core" for your Space.</p>
+      </div>
+      <div class="tile">
+        <h3>Mobile companion</h3>
+        <p>No app-store app needed. Pair a phone or tablet browser to a Core over local
+          HTTPS and add it to the home screen for a full-screen view.</p>
+      </div>
+      <div class="tile" id="nodes">
+        <h3>Sensor Nodes</h3>
+        <p>A small radar or PIR board (an ESP32) that joins over Wi-Fi with a one-time
+          code and reports into fusion for one room. Backend built and tested; firmware
+          written but not yet run on real hardware. See <a href="nodes.html">Nodes</a>.</p>
+      </div>
+      <div class="tile">
+        <h3>MCP for agents</h3>
+        <p>A read-only Model Context Protocol server exposes room state and the Space's
+          map so your own agents can query presence, with an opt-in, gated Home Assistant
+          control tool.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <h2>Go deeper</h2>
+    <p class="section-lede">This page is the plain-language mechanics. The detail behind
+      it (hardware tiers, sensor Nodes end to end, and the full documentation set) lives
+      in these pages and in the repository itself.</p>
+    <div class="grid" style="margin-top:16px">
+      <div class="tile">
+        <h3>Compatibility</h3>
+        <p>What each hardware tier gets you, honestly staged.</p>
+        <p><a href="compatibility.html">See compatibility &rarr;</a></p>
+      </div>
+      <div class="tile">
+        <h3>Nodes</h3>
+        <p>Adding a physical radar or motion sensor, end to end.</p>
+        <p><a href="nodes.html">Read Nodes &rarr;</a></p>
+      </div>
+      <div class="tile">
+        <h3>Docs</h3>
+        <p>Architecture decisions, deployment guides, and the wire protocol, on GitHub.</p>
+        <p><a href="docs.html">Browse docs &rarr;</a></p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> &middot;
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> &middot;
+      <a href="privacy.html">Privacy</a> &middot;
+      <a href="how-it-works.html">How it works</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/wavr.js"></script>
+</body>
+</html>

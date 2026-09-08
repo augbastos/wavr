@@ -17,8 +17,26 @@
   The manifest is editable on the page so you can watch a verdict change while
   you type. Everything is read from a real Core; nothing is mocked.
 
+  ## Localisation
+
+  The same three files the shell loads, in the same order, from the Core that
+  served this page — no build step, no third-party origin. The catalogue key IS
+  the English sentence, so a locale with no entry renders correct English.
+
+  What is deliberately NOT translated: the manifest itself (it is the
+  developer's document), the `warnings` the Core returns about it, and the
+  `reasons`/`fallbacks` beneath each verdict. Those last ones NAME THE ROOM —
+  a household's own word for a place must never enter the translation layer,
+  because it can come back "translated" and because every miss is recorded in
+  `WavrI18n.missing()`, which is an audit surface. The three status verdicts
+  above keep their API spelling in the CSS class and are shown to the reader in
+  their own language.
+
   SPDX-License-Identifier: AGPL-3.0-or-later
 -->
+<script src="../../js/i18n.js"></script>
+<script src="../../js/locale-pt.js"></script>
+<script src="../../js/format.js"></script>
 <style>
   :root {
     --bg: #0f1115; --fg: #e6e8ec; --dim: #9aa1ad; --line: #262b34;
@@ -65,8 +83,8 @@
          padding: 12px 14px; margin-bottom: 16px; }
 </style>
 
-<h1>Capability-aware Experience</h1>
-<p class="sub">One application, three behaviours. The manifest on the left is
+<h1 data-i18n>Capability-aware Experience</h1>
+<p class="sub" data-i18n>One application, three behaviours. The manifest on the left is
 sent to the Core, which answers per room — and the right column renders what
 this experience would actually do in each. Edit the manifest and watch the
 verdicts move.</p>
@@ -74,7 +92,7 @@ verdicts move.</p>
 <div id="err"></div>
 <div class="cols">
   <div>
-    <label for="manifest">Experience manifest</label>
+    <label for="manifest" data-i18n>Experience manifest</label>
     <textarea id="manifest" spellcheck="false"></textarea>
   </div>
   <div class="rooms" id="rooms"></div>
@@ -83,6 +101,8 @@ verdicts move.</p>
 <script type="module">
 import { WavrClient } from "../../sdk/javascript/wavr.js";
 
+// The document a developer edits, not copy. It stays in the API's own spelling
+// in every language, because it is what the API is sent.
 const DEFAULT_MANIFEST = {
   id: "occupancy-display",
   name: "Occupancy Display",
@@ -98,27 +118,58 @@ $("manifest").value = JSON.stringify(DEFAULT_MANIFEST, null, 2);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+/** The verdict, in the reader's language. The CSS class keeps the API spelling.
+ *
+ * Written as a switch over three known values rather than
+ * `WavrT(status.replace(/_/g, " "))`: a status the evaluator adds later would
+ * otherwise be looked up as a key nobody ever declared, and land in
+ * `WavrI18n.missing()` as an untranslatable wire value.
+ */
+function statusLabel(status) {
+  if (status === "FULLY_SUPPORTED") return WavrT("fully supported");
+  if (status === "PARTIALLY_SUPPORTED") return WavrT("partially supported");
+  if (status === "UNSUPPORTED") return WavrT("unsupported");
+  return status;
+}
+
 /**
  * What this experience DOES in a room, given the verdict and the context.
  *
  * The whole point of the file. Note that the fallback text is not invented
  * here — `verdict.fallbacks` is Wavr's own, so the application and the platform
  * cannot end up describing the same degradation two different ways.
+ *
+ * Each branch is a WHOLE sentence with the count as a slot, rather than a
+ * translated headcount glued to a translated tail: Portuguese agrees in number
+ * across exactly the words that would be joined, and a screen's name is device
+ * data that only ever travels in a `{slot}`.
  */
 function behaviour(verdict, ctx) {
   if (verdict.status === "UNSUPPORTED") {
-    return `<p class="render">Nothing shown here.</p>`;
+    return `<p class="render">${esc(WavrT("Nothing shown here."))}</p>`;
   }
   if (verdict.satisfied.includes("count") && ctx?.occupancyKnown) {
     const n = ctx.occupancy;
     const where = ctx.displays()[0];
-    return `<p class="render"><strong>${n} ${n === 1 ? "person" : "people"}</strong>`
-      + (where ? ` — on ${esc(where.name)}` : " — no screen here, so on your phone")
-      + `</p>`;
+    const line = where
+      ? WavrT("{n} person is here, shown on {screen}.|{n} people are here, shown on {screen}.",
+              // `label`, not `name`. A context device has never carried a
+              // `name`: `experience.py` builds `{device_id, label, display}`
+              // and deliberately LABELS it ("living screen", "screen 2")
+              // instead of passing through whatever the operator typed.
+              // Reading the field that does not exist put a literal `undefined`
+              // into this sentence, on the one page that exists to show an
+              // integrator how to read a room.
+              { n, screen: where.label })
+      : WavrT("{n} person is here. There is no screen in this room, so it goes to your phone."
+            + "|{n} people are here. There is no screen in this room, so it goes to your phone.",
+              { n });
+    return `<p class="render"><strong>${esc(line)}</strong></p>`;
   }
   // Partial: presence without a count. The fallback Wavr named.
   const occupied = ctx?.occupied === true;
-  return `<p class="render"><strong>${occupied ? "Someone is here" : "Nobody detected"}</strong></p>`;
+  return `<p class="render"><strong>${esc(occupied
+    ? WavrT("Someone is here") : WavrT("Nobody detected"))}</strong></p>`;
 }
 
 async function evaluate() {
@@ -126,7 +177,8 @@ async function evaluate() {
   try {
     manifest = JSON.parse($("manifest").value);
   } catch (e) {
-    $("err").innerHTML = `<div class="err">That is not valid JSON: ${esc(e.message)}</div>`;
+    $("err").innerHTML = `<div class="err">${esc(
+      WavrT("That is not valid JSON: {reason}", { reason: e.message }))}</div>`;
     return;
   }
 
@@ -137,14 +189,16 @@ async function evaluate() {
       wavr.context(),
     ]);
   } catch (e) {
-    $("err").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    $("err").innerHTML = `<div class="err">${esc(
+      WavrT("The Core could not answer: {reason}", { reason: e.message }))}</div>`;
     return;
   }
 
   if (result.warnings?.length) {
     // Warnings are about the DOCUMENT, not the house — a scope the manifest
     // forgot will produce a 403 in the field even though every verdict looks
-    // fine, so they are shown even when nothing else is wrong.
+    // fine, so they are shown even when nothing else is wrong. Shown verbatim:
+    // they quote the developer's own manifest back at them.
     $("err").innerHTML = `<div class="err">${result.warnings.map(esc).join("<br>")}</div>`;
   } else if (result.error) {
     $("err").innerHTML = `<div class="err">${esc(result.error)}</div>`;
@@ -156,7 +210,7 @@ async function evaluate() {
   const byRoom = Object.fromEntries(contexts.map((c) => [c.room, c]));
   $("rooms").innerHTML = (result.verdicts || []).map((v) => `
     <div class="verdict ${esc(v.status)}">
-      <h2>${esc(v.room)} <span class="tag">${esc(v.status.replace(/_/g, " "))}</span></h2>
+      <h2>${esc(v.room)} <span class="tag">${esc(statusLabel(v.status))}</span></h2>
       ${behaviour(v, byRoom[v.room])}
       ${(v.reasons?.length || v.fallbacks?.length)
         ? `<ul class="why">${[...(v.reasons || []), ...(v.fallbacks || [])]
@@ -175,7 +229,9 @@ $("manifest").addEventListener("input", () => {
   try {
     await wavr.connect();
   } catch (e) {
-    $("err").innerHTML = `<div class="err">${esc(e.message)} — is the Core running?</div>`;
+    $("err").innerHTML = `<div class="err">${esc(
+      WavrT("Could not connect: {reason}. Is the Core running?",
+            { reason: e.message }))}</div>`;
     return;
   }
   await evaluate();

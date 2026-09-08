@@ -13,8 +13,30 @@
   application can actually know. Read the source of `render()` — it is the whole
   contract in about forty lines.
 
+  ## Localisation
+
+  The same three files the shell loads, in the same order, fetched from the Core
+  that served this page — no build step and no third-party origin. The catalogue
+  key IS the English sentence, so a locale with no entry for a line renders
+  correct English rather than an identifier.
+
+  Two kinds of text on this page are deliberately NOT translated, and both are
+  load-bearing:
+
+    * capability ids (`presence`, `count`, …) and `precision` are the literal
+      values `ctx.can("presence")` is called with. A developer reading this page
+      is matching them against their own code; a translated pill would be a
+      different string from the one the API takes.
+    * `limitations` are composed by the Core and each one NAMES THE ROOM. A
+      household's own word for a place must never enter the translation layer:
+      it can come back "translated", and every miss is recorded in
+      `WavrI18n.missing()`, which is an audit surface.
+
   SPDX-License-Identifier: AGPL-3.0-or-later
 -->
+<script src="../../js/i18n.js"></script>
+<script src="../../js/locale-pt.js"></script>
+<script src="../../js/format.js"></script>
 <style>
   :root {
     --bg: #0f1115; --fg: #e6e8ec; --dim: #9aa1ad; --line: #262b34;
@@ -72,8 +94,8 @@
   .banner.err { border-color: #f87171; color: #f87171; }
 </style>
 
-<h1>Spatial Web Experience</h1>
-<p class="sub" id="sub">Connecting…</p>
+<h1 data-i18n>Spatial Web Experience</h1>
+<p class="sub" id="sub" data-i18n>Connecting…</p>
 <div id="banner"></div>
 <div class="grid" id="rooms"></div>
 <div id="log"></div>
@@ -81,12 +103,26 @@
 <script type="module">
 import { WavrClient, WavrError, ERROR_AUTH } from "../../sdk/javascript/wavr.js";
 
+// The capability ids the SDK takes, verbatim. See the note at the top of the
+// file: these are arguments to `ctx.can(...)`, not prose.
 const CAPS = ["presence", "count", "position", "anchors", "display", "audio"];
 const wavr = new WavrClient();          // same origin: this page is served by the Core
 const $ = (id) => document.getElementById(id);
 
+/** Write text an element's markup no longer owns.
+ *
+ * Dropping `data-i18n` first matters: the element's English is marked so it
+ * reads correctly before this script runs, and a later `WavrI18n.apply()`
+ * would otherwise put that English back over whatever we wrote — including,
+ * for `#sub`, the household's own name for their Space.
+ */
+function setText(el, text) {
+  el.removeAttribute("data-i18n");
+  el.textContent = text;
+}
+
 function banner(text, kind = "") {
-  $("banner").innerHTML = text ? `<div class="banner ${kind}">${text}</div>` : "";
+  $("banner").innerHTML = text ? `<div class="banner ${kind}">${esc(text)}</div>` : "";
 }
 
 /**
@@ -104,19 +140,32 @@ function render(rooms) {
 
     const occupied = ctx.occupied === true;
     const state = ctx.occupied === null
-      ? "not observed"
-      : occupied ? "someone is here" : "empty";
+      ? WavrT("not observed")
+      : occupied ? WavrT("someone is here") : WavrT("empty");
 
     // The count line, and the reason this page exists. `occupancyKnown` false is
     // NOT zero people — it is nobody counting, and saying "0" would be inventing
     // a fact about somebody's home.
     const count = ctx.occupancyKnown
-      ? `${ctx.occupancy} ${ctx.occupancy === 1 ? "person" : "people"}`
-      : "no headcount available here";
+      ? WavrT("{n} person|{n} people", { n: ctx.occupancy })
+      : WavrT("no headcount available here");
+
+    // A middot-separated LIST of independent facts, not a sentence assembled
+    // from fragments — each item is whole on its own, and each plural is
+    // selected inside its own string.
+    const meta = [
+      WavrT("precision {level}", { level: ctx.precision }),
+      WavrT("confidence {percent}", {
+        percent: WavrFmt.number(ctx.confidence,
+                                { style: "percent", maximumFractionDigits: 0 }),
+      }),
+      WavrT("{n} anchor|{n} anchors", { n: ctx.anchors.length }),
+      WavrT("{n} screen|{n} screens", { n: ctx.displays().length }),
+    ].join(" · ");
 
     el.innerHTML = `
       <h2>${esc(ctx.room)}
-        <span class="state ${occupied ? "occupied" : ""}">${state}</span></h2>
+        <span class="state ${occupied ? "occupied" : ""}">${esc(state)}</span></h2>
       <div class="state">${esc(count)}</div>
       <div class="caps">${CAPS.map((c) =>
         `<span class="cap ${ctx.can(c) ? "on" : ""}">${c}</span>`).join("")}</div>
@@ -124,12 +173,7 @@ function render(rooms) {
         ? `<ul class="limits">${ctx.limitations.map((l) =>
             `<li>${esc(l)}</li>`).join("")}</ul>`
         : ""}
-      <div class="meta">
-        precision ${esc(ctx.precision)} ·
-        confidence ${Math.round(ctx.confidence * 100)}% ·
-        ${ctx.anchors.length} anchor${ctx.anchors.length === 1 ? "" : "s"} ·
-        ${ctx.displays().length} screen${ctx.displays().length === 1 ? "" : "s"}
-      </div>`;
+      <div class="meta">${esc(meta)}</div>`;
     $("rooms").appendChild(el);
   }
 }
@@ -150,7 +194,9 @@ async function refresh() {
   try {
     render(await wavr.context());
   } catch (err) {
-    banner(`Could not read the Space: ${esc(err.message)}`, "err");
+    // `err.message` is not translated: it is the Core's own words, and it can
+    // carry a room's name.
+    banner(WavrT("Could not read the Space: {reason}", { reason: err.message }), "err");
   }
 }
 
@@ -158,21 +204,30 @@ async function refresh() {
   try {
     await wavr.connect();
   } catch (err) {
-    const hint = err instanceof WavrError && err.kind === ERROR_AUTH
-      ? "This page needs to be opened from the Core itself, or with a paired credential."
-      : "Is the Core running?";
-    banner(`${esc(err.message)} — ${hint}`, "err");
-    $("sub").textContent = "Not connected.";
+    // Two whole sentences rather than one built from a translated tail: which
+    // hint applies changes the whole line, and Portuguese agrees around the
+    // words that would be joined.
+    banner(err instanceof WavrError && err.kind === ERROR_AUTH
+      ? WavrT("Could not connect: {reason}. This page has to be opened from the Core "
+            + "itself, or with a paired credential.", { reason: err.message })
+      : WavrT("Could not connect: {reason}. Is the Core running?",
+              { reason: err.message }), "err");
+    setText($("sub"), WavrT("Not connected."));
     return;
   }
 
-  $("sub").textContent =
-    `${wavr.space?.name || "this Space"} · protocol v${wavr.protocolVersion}`;
+  // The Space's name is the household's own word for their home. It goes into
+  // a {slot}; it is never looked up in the catalogue.
+  setText($("sub"), wavr.space?.name
+    ? WavrT("{space} · protocol v{version}",
+            { space: wavr.space.name, version: wavr.protocolVersion })
+    : WavrT("This Space · protocol v{version}", { version: wavr.protocolVersion }));
+
   if (wavr.protocolAhead) {
     // Surfaced, not fatal. See the SDK's module docstring: refusing would break
     // every application the day somebody updates their Core.
-    banner("This Core speaks a newer contract than this page was written "
-         + "against. Everything below is still read from known fields.");
+    banner(WavrT("This Core speaks a newer contract than this page was written "
+               + "against. Everything below is still read from known fields."));
   }
 
   await refresh();
@@ -181,13 +236,18 @@ async function refresh() {
   // resumes from the last event seen, so a dropped link costs latency and not
   // a missed change.
   wavr.subscribe((ev) => {
+    // A log RECORD, not a sentence: an event id the API defines, the room's own
+    // name, and a clock reading. The time goes through `WavrFmt` rather than
+    // being sliced out of the ISO string, which was fixed at UTC and at a
+    // 24-hour clock for every reader.
     log(`<b>${esc(ev.event)}</b> ${esc(ev.room)} `
-      + `<span>${esc(ev.at.slice(11, 19))}</span>`);
+      + `<span>${esc(WavrFmt.time(ev.at, { hour: "2-digit", minute: "2-digit",
+                                           second: "2-digit" }))}</span>`);
     refresh();
   }, {
-    onError: (e) => log(`<b>stream</b> ${esc(e.message)}`),
+    onError: (e) => log(esc(WavrT("stream error: {reason}", { reason: e.message }))),
   });
 
-  log("<b>connected</b> — waiting for something to change");
+  log(esc(WavrT("Connected. Waiting for something to change.")));
 })();
 </script>

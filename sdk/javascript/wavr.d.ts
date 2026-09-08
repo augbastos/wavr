@@ -67,13 +67,27 @@ export interface Anchor {
 
 export interface ContextDevice {
   device_id: string;
-  name: string;
+  /**
+   * Derived from what the device can DO and where it is — "living room screen
+   * 2" — never the pairing name, which is typed by whoever paired it and is
+   * very often a person's. Enough to ask "Continue on which?", and it tells an
+   * experience nothing about whose phone it is.
+   *
+   * This was declared as `name`, which the Core has never served: the field is
+   * `label` in `experience._visible_devices`. TypeScript therefore promised a
+   * string on every device and delivered `undefined` on all of them, and the
+   * capability-aware reference page rendered "on undefined".
+   */
+  label: string;
   functions: string[];
   /** Tristate. `null` means the device never said — which is NOT "no screen". */
   display: boolean | null;
   audio: boolean | null;
   uwb: boolean | null;
 }
+
+/** Where a piece of evidence comes from, without identifying the equipment. */
+export type SensorSource = "wavr" | "home_assistant" | "external" | "simulated";
 
 export interface ContextSensor {
   /**
@@ -87,7 +101,7 @@ export interface ContextSensor {
   health: "ok" | "offline" | "disabled" | "unknown";
   precision_level: Precision;
   /** Where this evidence comes from, without identifying the equipment. */
-  source: "wavr" | "home_assistant" | "external" | "simulated";
+  source: SensorSource;
   /**
    * A boolean rather than a prefix you have to remember to parse. Simulated
    * evidence is never indistinguishable from real evidence, and a guarantee a
@@ -129,15 +143,42 @@ export interface SpatialEvent {
     | "sensor.online";
   room: string;
   at: string;
+  /** The contract version, stamped on every frame rather than published only at
+   * a discovery endpoint a consumer may never fetch. */
+  v?: number;
   occupied?: boolean;
+  /** On `room.occupancy_changed`: how sure Wavr is that the room is occupied.
+   * Distinct from `precision`, which bounds granularity. */
+  confidence?: number | null;
   count?: number | null;
   count_known?: boolean;
   previous?: unknown;
   precision?: Precision;
   how_to_improve?: string;
-  sensor_id?: string;
+  /**
+   * On `sensor.offline` / `sensor.online`: the sensor, described rather than
+   * named. Derived exactly as `ContextSensor.label` is — the stream never
+   * carries a `sensor_id`, which in this codebase is very often the name an
+   * operator typed for their own camera.
+   *
+   * Stable for the life of the stream, so an `offline` and the `online` that
+   * follows it name the same sensor identically. It is a display name, not a
+   * join key: a context response numbers its own census, so "camera 1" in an
+   * event and "camera 1" in a context are not promised to be the same camera.
+   */
+  label?: string;
   modality?: string;
-  sensors?: Array<{ sensor_id: string; says: "occupied" | "empty" }>;
+  source?: SensorSource;
+  simulated?: boolean;
+  /** On `room.sensors_disagree` / `room.sensors_agree`: who says what, with the
+   * same derived description as above. */
+  sensors?: Array<{
+    label: string;
+    modality: string;
+    source: SensorSource;
+    simulated: boolean;
+    says: "occupied" | "empty";
+  }>;
 }
 
 export interface Subscription {
@@ -172,7 +213,9 @@ export interface Verdict {
 
 export interface SessionTarget {
   device_id: string;
-  name: string;
+  /** Derived the same way, and for the same reason, as `ContextDevice.label`
+   * — `experience_session` builds it and never accepts one from the caller. */
+  label: string;
   /** What this device can be handed. Only capabilities it SAID it has. */
   can: Array<"display" | "audio">;
 }

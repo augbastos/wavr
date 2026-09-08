@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0E12">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>Download Wavr</title>
+<meta name="description" content="Get Wavr running: one computer keeps the Core alive for your Space, your phone or tablet connects to it with no app to install. Honest pre-release, checksums included.">
+<link rel="stylesheet" href="assets/wavr.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="index.html">
+      <img class="brand-mark" src="assets/icon.svg" alt="" width="28" height="28">
+      <span class="brand-name">Wavr</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="how-it-works.html">How it works</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="download.html" class="nav-download" aria-current="page">Download</a>
+      <a href="https://github.com/augbastos/wavr">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero wrap">
+    <h1>Get Wavr running</h1>
+    <p class="lede">One computer keeps the Core alive for your Space. Your phone, a
+      tablet, or another laptop can then just connect to it, no separate install needed
+      on those.</p>
+    <p id="dl-release-status" class="release-badge">Checking the current release&hellip;</p>
+    <p id="dl-detect-line" class="dl-detect">Checking your browser for a platform hint&hellip;</p>
+    <!-- The download buttons below are built from the release manifest by
+         assets/wavr.js, so with scripting off there are none. The old note here
+         said "both options below work without it", which was simply untrue: the
+         page offered nothing at all. These two links are the whole download,
+         written out plainly. -->
+    <noscript>
+      <p class="phase-note">JavaScript is off, so this page can't detect your
+        platform or build the download list. Here are the two files directly:</p>
+      <ul class="phase-note">
+        <li><a href="/download/Wavr-Setup-Windows.exe">Wavr for Windows
+          (Wavr-Setup-Windows.exe)</a> &mdash; start here</li>
+        <li><a href="/download/Wavr-Android.apk">Wavr for Android
+          (Wavr-Android.apk)</a> &mdash; for your phone or tablet, after Windows</li>
+      </ul>
+      <p class="phase-note">Both are unsigned pre-release builds; the warnings
+        further down this page apply to them.</p>
+    </noscript>
+  </section>
+
+  <section class="wrap" aria-labelledby="dl-recommended-heading">
+    <h2 id="dl-recommended-heading" class="sr-only">Recommended for you</h2>
+    <div id="dl-recommended" hidden></div>
+  </section>
+
+  <section class="wrap" style="margin-top:8px">
+    <details id="dl-all-platforms" open>
+      <summary>All downloads</summary>
+      <div class="dl-cards" style="margin-top:14px">
+
+      <article id="dl-card-windows" class="tile dl-card">
+        <div class="dl-card-top">
+          <h2>Wavr for Windows</h2>
+          <span class="tag tag-ready">Recommended</span>
+        </div>
+        <p class="lede">Start here. This computer keeps Wavr running for your Space and
+          lets your phone and other devices connect to it. It installs like any other
+          Windows program &mdash; there is nothing to set up first.</p>
+        <div class="dl-warning">
+          <strong>Before you run it:</strong> this is an early, unsigned build. Windows
+          will show a blue "Windows protected your PC" screen naming an unrecognized
+          publisher. That's expected: click <strong>More info</strong>, then
+          <strong>Run anyway</strong>.
+        </div>
+        <div class="release-slot" data-product="windows-installer-exe" data-slim="true" hidden></div>
+        <div class="release-slot" data-product-compact="windows-installer-msi" hidden></div>
+        <p class="dl-unavailable no-release-note" hidden>No Windows build has been published
+          here yet. In the meantime, see
+          <a href="install.html#advanced-windows-script">the developer bootstrap
+          script</a> or <a href="install.html#advanced-source">install from source</a>.</p>
+      </article>
+
+      <article id="dl-card-android" class="tile dl-card">
+        <div class="dl-card-top">
+          <h2>Wavr for Android</h2>
+          <span class="tag tag-ready">Recommended</span>
+        </div>
+        <p class="lede">See and use your Space from your phone or tablet. Install the
+          app, then point it at the computer running Wavr.</p>
+        <div class="release-slot" data-product="android-companion" data-slim="true" hidden></div>
+        <p class="dl-unavailable no-release-note" hidden>No Android build has been published
+          here yet. In the meantime, pair a browser to a Core instead: see
+          <a href="install.html#platform-android">the Android steps on Install</a>.</p>
+        <ol>
+          <li>On the computer running Wavr, open Settings and turn on
+            <strong>"Let other devices connect."</strong></li>
+          <li>Open the app and scan the QR code the computer shows. It carries the
+            address and a fingerprint of that computer, so nothing has to be typed.</li>
+        </ol>
+        <div class="dl-warning">
+          <strong>What you'll see:</strong> Android will ask to allow the install (it
+          isn't from the Play Store) and, once open, the app will ask to trust the
+          connection. Both are expected for a local-only app.
+        </div>
+        <div class="dl-warning">
+          <strong>This APK is debug-signed.</strong> The site says elsewhere that the
+          Windows installer is unsigned; the same is true here, in the Android form of it.
+          It carries the default development signature rather than a release one, which is
+          fine for installing on your own device and means it could never go to the Play
+          Store as it stands.
+        </div>
+        <div class="dl-warning">
+          <strong>The phone app is behind the desktop in this release.</strong> Its
+          dashboard was built from an earlier version of the same code, so some screens
+          look and read differently from the computer's. It connects, pairs and shows
+          your Space correctly &mdash; it is the wording and layout that lag, not the
+          answers. Catching the two up is work in progress, and shipping a phone build
+          nobody had tested would have been the worse trade.
+        </div>
+        <p class="dl-cta"><a class="btn" href="install.html#platform-android">No Android device handy? Pair a browser instead</a></p>
+      </article>
+
+      </div>
+    </details>
+  </section>
+
+  <section class="wrap" style="margin-top:8px" aria-labelledby="after-h" id="after-install">
+    <div class="tile">
+      <h2 id="after-h" style="margin-bottom:6px">After the installer finishes</h2>
+      <p class="section-lede">Most download pages stop at the button. Here is the rest of
+        it, so nothing that happens next is a surprise.</p>
+
+      <ol>
+        <li><strong>Wavr opens by itself.</strong> If it doesn't, it is in the Start menu
+          under Wavr. The window may say it is starting for a few seconds before the real
+          thing appears.</li>
+        <li><strong>It asks what this place is</strong> &mdash; a home, a flat, an office,
+          a shop. It will not assume, and it will not invent rooms you don't have.</li>
+        <li><strong>You give it a name and one room</strong>, whichever room this computer
+          is in. Accents and apostrophes are fine.</li>
+        <li><strong>You land on the dashboard.</strong> That's the install done. Nothing
+          else is required, and nothing has left your network.</li>
+      </ol>
+
+      <h3 style="margin-bottom:4px">The one moment worth knowing about in advance</h3>
+      <p>Later, when you turn on <strong>&ldquo;Let other devices connect&rdquo;</strong>
+        so your phone can reach it, Windows will put up a second window &mdash; a firewall
+        prompt with two checkboxes, <em>private networks</em> and <em>public networks</em>.</p>
+      <p><strong>Tick both, then click Allow access.</strong> Windows labels each Wi-Fi as
+        private or public, and plenty of ordinary home networks are labelled public. If
+        you tick only &ldquo;private&rdquo;, Windows accepts it, the window closes, and
+        everything looks like it worked &mdash; but the permission does not apply to the
+        network you are actually on, and your phone will never find the computer. There is
+        nothing on screen at that point to tell you why.</p>
+      <p>Ticking both does not open Wavr to the internet. It is still only this one
+        program, and still only devices already on your own Wi-Fi.</p>
+
+      <p class="fine-print">Wavr keeps running when you close its window &mdash; look for
+        its icon near the clock. To stop it completely, use Quit from that icon. To remove
+        it, uninstall it from Windows Settings like any other program.</p>
+    </div>
+  </section>
+
+  <section class="wrap" style="margin-top:8px" aria-labelledby="day-one-h" id="day-one">
+    <div class="tile">
+      <h2 id="day-one-h" style="margin-bottom:6px">What day one actually looks like</h2>
+      <p class="section-lede">Screenshots on this site show a Space that has sensors in
+        it. A fresh install does not, and it would be unfair to let you find that out
+        after installing. Here is the honest order of things &mdash; starting with a
+        picture of it.</p>
+
+      <!-- The section that tells the truth in words gets to show it too. Taken
+           from a Core booted from nothing, with no sensors and no staging: the
+           rooms really do all say that, because that is really what happens. -->
+      <figure class="shot-figure" style="margin:20px 0 24px">
+        <img class="product-shot" src="assets/shots/first-run-empty.png"
+             alt="A brand-new Wavr Space called Maple House. The headline reads Nobody here, no presence detected. Four room cards — Living room, Kitchen, Bedroom and Hallway — each say No sensor covers this room, add a camera or a sensor node to cover it. The sensing level is Presence: network and Bluetooth only, no cameras."
+             width="2880" height="1640">
+        <figcaption class="shot-caption">Ten minutes after installing, before you add
+          anything. Every room says the same thing, and that sentence is the product being
+          straight with you rather than a fault to fix.</figcaption>
+      </figure>
+
+      <h3 style="margin-bottom:4px">What this installer can actually sense</h3>
+      <p>Two things, and they are the two that need no hardware you don't already own:
+        <strong>your own Wi-Fi</strong> &mdash; which devices are on it, which it
+        recognises, which it has never seen before, and therefore whether anyone is home
+        at all &mdash; and <strong>Bluetooth</strong>, once you have told it which device
+        belongs to whom. Both work the moment it starts.</p>
+      <p>That answer is about the Space as a whole, not about a room. Your rooms will each
+        say <em>&ldquo;No sensor covers this room&rdquo;</em>, because at that point none
+        of them do. That sentence is Wavr being straight with you, not a fault.</p>
+
+      <h3 style="margin-bottom:4px">What is <em>not</em> inside this installer</h3>
+      <p><strong>Camera person-detection and USB radar are not in it.</strong> The
+        detection model would take the download from about 40&nbsp;MB to over a gigabyte,
+        so it is deliberately left out: the code is all there, but reaching it means
+        installing Wavr from source into your own Python. If you were hoping to point a
+        webcam at a room today, this build will not do that, and it is better that you
+        hear it here than after installing.</p>
+      <p>Everything the site says about cameras &mdash; that no image is ever written to
+        disk, that there is no video storage of any kind, that they start switched off
+        &mdash; stays true of the code. It just isn't reachable from this file.
+        <a href="privacy.html">What Wavr keeps</a>.</p>
+
+      <h3 style="margin-bottom:4px">A small sensor board over Wi-Fi</h3>
+      <p>A radar or motion board would give a room its own presence with no camera in it
+        &mdash; the right answer for a bedroom &mdash; and it joins over Wi-Fi with a
+        one-time code. The Wavr side of that is built and tested. The board's own firmware
+        is written and <strong>has never been run on real hardware</strong>, by anyone. You
+        would be the first; <a href="nodes.html">this is what is involved</a>.</p>
+
+      <h3 style="margin-bottom:4px">Your phone</h3>
+      <p>The Wavr app shows you your Space from anywhere on the same Wi-Fi. In this release it
+        does not sense anything itself &mdash; it is a window onto the Core running on
+        your computer, not another sensor.</p>
+    </div>
+  </section>
+
+  <section class="wrap" style="margin-top:8px">
+    <div class="tile" id="qr-block">
+      <h2 style="margin-bottom:6px">Take this page to your phone</h2>
+      <p class="section-lede">Scan this with your phone's camera to open this exact page
+        there, so you can pick up the steps above from your phone directly.</p>
+      <div class="qr-block">
+        <div class="qr-card" hidden></div>
+        <div class="qr-copy">
+          <p class="qr-note" hidden>This page is open at an address only this computer
+            can reach (<code>localhost</code>, or a local file), so a QR code here
+            wouldn't actually open for your phone. Open this page using the computer's
+            network address instead (ask whoever set up Wavr, or check what address you
+            used to reach it), and the code above will work.</p>
+          <span class="qr-url"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap" style="margin-top:8px;margin-bottom:8px">
+    <details id="advanced-downloads">
+      <summary>Advanced downloads</summary>
+      <div class="disclosure-group">
+
+        <div>
+          <h3 style="margin-bottom:6px">Wavr Core for Android <span class="tag tag-planned">Experimental</span></h3>
+          <p>Turns one phone into the Wavr brain instead of a Windows PC: the same Core,
+            not a reduced copy. <strong>Do not install this today.</strong> This build
+            has no first-run setup screen yet, and nobody has run it on a physical phone
+            long enough to know its battery behavior or how it survives a reboot.</p>
+          <div class="release-slot" data-product="android-core-brain" data-slim="true" hidden></div>
+          <p class="dl-unavailable no-release-note" hidden>Not published here. It's source-only
+            today; see <a href="compatibility.html#android-as-a-core">Compatibility</a>
+            for the full status.</p>
+        </div>
+
+        <details>
+          <summary>Wall-panel / kiosk mode (replaces your home screen)</summary>
+          <div class="dl-danger-note">
+            <strong>This is not a normal app.</strong> It registers itself as that
+            device's home screen (its default launcher), replacing whatever you use
+            today. <strong>Do not install it on your own phone or tablet</strong> &mdash; only
+            on a device you're happy to dedicate to Wavr as a wall panel. To go back,
+            change the default launcher again in Android's own Settings.
+          </div>
+          <p>An always-on ambient panel view, meant for a tablet mounted on a wall
+            rather than a phone you carry around.</p>
+          <div class="release-slot" data-product="android-kiosk" data-slim="true" hidden></div>
+          <p class="dl-unavailable no-release-note" hidden>Not published here. The launcher
+            exists in the repository as a Gradle project; see
+            <a href="compatibility.html#android-kiosk-launcher">Compatibility</a> for
+            its current status.</p>
+        </details>
+
+      </div>
+    </details>
+  </section>
+
+  <section class="section wrap">
+    <h2>Not Windows or Android?</h2>
+    <p class="section-lede">macOS, Linux, Raspberry Pi, Docker, and building from source
+      are all covered on the full install page, including exactly what's field-tested
+      and what isn't yet.</p>
+    <a class="btn" href="install.html">See all downloads and install routes</a>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer-inner">
+    <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
+      cloud, no telemetry, on this site or in the product.</p>
+    <p class="site-footer-links">
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> &middot;
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> &middot;
+      <a href="privacy.html">Privacy</a> &middot;
+      <a href="how-it-works.html">How it works</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/qrcode.vendor.js"></script>
+<script src="assets/wavr.js"></script>
+</body>
+</html>

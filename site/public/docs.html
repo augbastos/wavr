@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0B0E12">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
-<title>Docs — Wavr</title>
+<title>Docs &mdash; Wavr</title>
 <meta name="description" content="An index into Wavr's documentation on GitHub: architecture decisions, deployment guides, the Node onboarding guide, and network fix guides.">
 <link rel="stylesheet" href="assets/wavr.css">
 </head>
@@ -21,11 +21,9 @@
     </a>
     <nav class="site-nav" aria-label="Primary">
       <a href="index.html">Home</a>
-      <a href="install.html" class="nav-install">Install</a>
-      <a href="compatibility.html">Compatibility</a>
-      <a href="nodes.html">Nodes</a>
+      <a href="how-it-works.html">How it works</a>
       <a href="privacy.html">Privacy</a>
-      <a href="docs.html" aria-current="page">Docs</a>
+      <a href="download.html" class="nav-download">Download</a>
       <a href="https://github.com/augbastos/wavr">GitHub</a>
     </nav>
   </div>
@@ -41,6 +39,65 @@
 
   <section class="section wrap">
     <h2>Start here</h2>
+
+    <figure class="site-figure">
+      <svg viewBox="0 0 760 230" role="img" aria-labelledby="dc-fig-t" class="site-diagram">
+        <title id="dc-fig-t">Which document answers which question. What is it and should I
+          care: README and PRODUCT. How do I get it running: INSTALL, deployment, and the
+          multi-device guide. What do I plug into it: the node onboarding guide, camera
+          bring-up, and the hardware reference. Why is it built this way: the architecture
+          decision records.</title>
+
+        <g class="ld-q">
+          <rect x="8" y="14" width="170" height="42" rx="9"/>
+          <text x="93" y="32" class="ld-strong">“What is it?”</text>
+          <text x="93" y="47">before you install anything</text>
+        </g>
+        <g class="ld-flow"><path d="M180 35 H 214"/></g>
+        <g class="ld-doc">
+          <a class="ld-doc-link" href="https://github.com/augbastos/wavr#readme" target="_blank" rel="noopener"><title>README</title><rect x="216" y="14" width="120" height="42" rx="8"/><text x="276" y="40">README</text></a>
+          <a class="ld-doc-link" href="https://github.com/augbastos/wavr/blob/master/PRODUCT.md" target="_blank" rel="noopener"><title>PRODUCT.md</title><rect x="348" y="14" width="140" height="42" rx="8"/><text x="418" y="40">PRODUCT.md</text></a>
+        </g>
+
+        <g class="ld-q">
+          <rect x="8" y="70" width="170" height="42" rx="9"/>
+          <text x="93" y="88" class="ld-strong">“How do I run it?”</text>
+          <text x="93" y="103">on your own machine</text>
+        </g>
+        <g class="ld-flow"><path d="M180 91 H 214"/></g>
+        <g class="ld-doc">
+          <a class="ld-doc-link" href="install.html"><title>INSTALL.md</title><rect x="216" y="70" width="120" height="42" rx="8"/><text x="276" y="96">INSTALL.md</text></a>
+          <a class="ld-doc-link" href="https://github.com/augbastos/wavr/blob/master/docs/deploy/bring-up-and-expansion.md" target="_blank" rel="noopener"><title>Deployment</title><rect x="348" y="70" width="140" height="42" rx="8"/><text x="418" y="96">Deployment</text></a>
+          <a class="ld-doc-link" href="https://github.com/augbastos/wavr/blob/master/docs/deploy/multi-device.md" target="_blank" rel="noopener"><title>Multi-device</title><rect x="500" y="70" width="160" height="42" rx="8"/><text x="580" y="96">Multi-device</text></a>
+        </g>
+
+        <g class="ld-q">
+          <rect x="8" y="126" width="170" height="42" rx="9"/>
+          <text x="93" y="144" class="ld-strong">“What can I plug in?”</text>
+          <text x="93" y="159">sensors and cameras</text>
+        </g>
+        <g class="ld-flow"><path d="M180 147 H 214"/></g>
+        <g class="ld-doc">
+          <a class="ld-doc-link" href="https://github.com/augbastos/wavr/blob/master/docs/NODE-ONBOARDING.md" target="_blank" rel="noopener"><title>Nodes</title><rect x="216" y="126" width="120" height="42" rx="8"/><text x="276" y="152">Nodes</text></a>
+          <a class="ld-doc-link" href="https://github.com/augbastos/wavr/blob/master/docs/deploy/tapo-camera-bringup.md" target="_blank" rel="noopener"><title>Camera bring-up</title><rect x="348" y="126" width="140" height="42" rx="8"/><text x="418" y="152">Camera bring-up</text></a>
+          <a class="ld-doc-link" href="https://github.com/augbastos/wavr/tree/master/docs/network-fixes" target="_blank" rel="noopener"><title>Hardware ref.</title><rect x="500" y="126" width="160" height="42" rx="8"/><text x="580" y="152">Hardware ref.</text></a>
+        </g>
+
+        <g class="ld-q">
+          <rect x="8" y="182" width="170" height="42" rx="9"/>
+          <text x="93" y="200" class="ld-strong">“Why like this?”</text>
+          <text x="93" y="215">the decisions, dated</text>
+        </g>
+        <g class="ld-flow"><path d="M180 203 H 214"/></g>
+        <g class="ld-doc">
+          <!-- The only box that stays on this page: there are eight ADRs and no
+               index for them on GitHub, so pointing at one of the eight would be
+               choosing for the reader. The section below lists all of them. -->
+          <a class="ld-doc-link" href="#adrs"><title>Architecture decision records</title><rect x="216" y="182" width="272" height="42" rx="8"/><text x="352" y="208">Architecture decision records</text></a>
+        </g>
+      </svg>
+      <figcaption>Four questions, and where each one is answered. Start on the left.</figcaption>
+    </figure>
     <div class="grid" style="margin-top:16px">
       <div class="tile">
         <h3>README</h3>
@@ -62,9 +119,13 @@
       <div class="tile">
         <h3>INSTALL.md</h3>
         <p>All four install routes in full, including exactly how each one was verified
-          (or wasn't yet). See also <a href="install.html">the install page</a> on this
-          site.</p>
-        <p><a href="https://github.com/augbastos/wavr/blob/master/docs/INSTALL.md">Read on GitHub</a></p>
+          (or wasn't yet).</p>
+        <!-- "Read on GitHub" pointed at docs/INSTALL.md and returned 404: the
+             public branch is behind the working tree, and that file is not out
+             there yet. A link that 404s is worse than no link — it sends
+             somebody nowhere and lets them assume they mistyped. -->
+        <p><a href="install.html">The install page on this site</a> covers the same
+          ground. <span class="tag tag-note">Not on the public repository yet</span></p>
       </div>
     </div>
   </section>
@@ -91,7 +152,7 @@
     </div>
   </section>
 
-  <section class="section wrap">
+  <section class="section wrap" id="adrs">
     <h2>Architecture decisions (ADRs)</h2>
     <p class="section-lede">Why Wavr is built the way it is, recorded at the time each
       decision was made.</p>
@@ -150,10 +211,10 @@
     <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
       cloud, no telemetry, on this site or in the product.</p>
     <p class="site-footer-links">
-      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
-      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
-      <a href="privacy.html">Privacy</a> ·
-      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> &middot;
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> &middot;
+      <a href="privacy.html">Privacy</a> &middot;
+      <a href="how-it-works.html">How it works</a>
     </p>
   </div>
 </footer>

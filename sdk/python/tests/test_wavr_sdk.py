@@ -20,7 +20,10 @@ from wavr_sdk import (  # noqa: E402
 import urllib.error  # noqa: E402
 
 SPACE = {
-    "protocol_version": 1,
+    # The version the Core actually ships (contracts.py). See the note in
+    # the JavaScript fixture: pinned to 1, this agreed with a stale SDK
+    # constant and hid the bump from both suites.
+    "protocol_version": 2,
     "space": {"space_id": "sp_1", "name": "My Home"},
     "rooms": [
         {"room": "kitchen", "precision": "count", "confidence": 0.8,

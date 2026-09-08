@@ -33,14 +33,32 @@
  * application the day a Core updates; ignoring it would let a field whose
  * meaning changed pass straight through.
  *
- * Zero dependencies, zero build. Works as an ES module and as a classic script
- * (it defines `window.Wavr`). Node 18+ has `fetch` and `WebSocket` built in.
+ * ## How to load it
+ *
+ * Zero dependencies, zero build — but it is an ES MODULE. `import` it, or load
+ * it with `<script type="module">`. It canNOT be loaded as a classic script:
+ * the `export` statements below are a syntax error outside a module, so a plain
+ * `<script src="wavr.js">` fails before one line of it runs.
+ *
+ * This paragraph used to claim both, in a repository whose own frontend is
+ * dozens of classic scripts — which is precisely the reader who would have
+ * tried it and got an empty page with one console error. Documenting the
+ * capability was cheaper than building it and bought nothing: the three
+ * reference experiences here all `import` the file, and making it classic-safe
+ * would mean either dropping the exports they use or shipping a second build,
+ * which is the build step this SDK exists without.
+ *
+ * The `window.Wavr` block at the end is therefore not a fallback. It publishes
+ * the namespace once the module has run, so a page's own classic scripts and
+ * the devtools console can reach the same classes without a second copy.
+ *
+ * Node 18+ has `fetch` and `WebSocket` built in.
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 /** The context/event shape this SDK was written against. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Reconnect backoff. Jittered so a house full of experiences reconnecting after
  * a router reboot does not arrive in lockstep — the same reasoning the Core
@@ -135,9 +153,43 @@ class Subscription {
     this._open();
   }
 
-  _open() {
+  /**
+   * Open the socket, with a ticket when the caller has a token.
+   *
+   * The Core refuses every non-loopback WebSocket that does not carry a
+   * redeemed single-use ticket, and this used to build the URL without one. So
+   * `subscribe()` worked on the Core's own machine and failed on every phone,
+   * tablet and third-party application on the LAN — which is every real
+   * caller. The socket closed with 1008 on each attempt, the retry passed
+   * `null` as the error, `_fail` therefore never ran and the `onError` the
+   * reference pages register never fired: an experience that looked connected
+   * and was permanently stale, with nothing anywhere saying why. All three
+   * shipped reference pages broke exactly this way off-box.
+   *
+   * A ticket is SINGLE-USE, so one is minted per attempt rather than cached —
+   * a reconnect that reuses a spent ticket is refused just like no ticket.
+   *
+   * Async, and it re-checks `_closed` after the await on purpose: an
+   * application that calls `close()` while the mint is in flight must not end
+   * up with a socket afterwards.
+   */
+  async _open() {
     if (this._closed) return;
-    const url = this._client._wsUrl("/ws/events", this._since);
+    let ticket = "";
+    if (this._client.token) {
+      try {
+        const body = await this._client._post("/api/ws-ticket", {});
+        ticket = (body && body.ticket) || "";
+      } catch (err) {
+        // A refused mint is the refusal the socket would have given, arriving
+        // earlier and carrying a reason. Report it and back off rather than
+        // opening a socket that is certain to be closed.
+        this._retry(err);
+        return;
+      }
+    }
+    if (this._closed) return;
+    const url = this._client._wsUrl("/ws/events", this._since, ticket);
     let ws;
     try {
       ws = new WebSocket(url);
@@ -148,8 +200,15 @@ class Subscription {
     this._ws = ws;
     ws.onopen = () => {
       this._attempt = 0;
+      this._everOpened = true;
     };
     ws.onmessage = (msg) => {
+      // A frame arrived, so the connection demonstrably worked, whatever
+      // `onopen` did or did not fire. `_everOpened` decides whether a later
+      // close is an ordinary drop (quiet) or a Core that never let us in
+      // (reported), and inferring it from the handshake alone would misreport
+      // a working stream on any transport that does not raise `onopen`.
+      this._everOpened = true;
       let ev;
       try {
         ev = JSON.parse(msg.data);
@@ -170,12 +229,25 @@ class Subscription {
     };
     ws.onclose = () => {
       this._ws = null;
-      if (!this._closed) this._retry(null);
+      if (this._closed) return;
+      // A close carries no error object, and passing `null` here meant a
+      // socket the Core refuses on every single attempt reported nothing at
+      // all — the loop just went round for ever. A DROPPED connection is
+      // ordinary and stays quiet; never having connected is a configuration
+      // problem the application has to be told about.
+      this._retry(this._everOpened
+        ? null
+        : new WavrError(ERROR_NETWORK,
+                        "the Core closed the event stream without opening it"));
     };
   }
 
   _retry(err) {
-    if (err) this._fail(new WavrError(ERROR_NETWORK, String(err), { cause: err }));
+    if (err) {
+      this._fail(err instanceof WavrError
+        ? err
+        : new WavrError(ERROR_NETWORK, String(err), { cause: err }));
+    }
     this._attempt += 1;
     const wait = backoffMs(this._attempt);
     this._timer = setTimeout(() => this._open(), wait);
@@ -233,10 +305,18 @@ export class WavrClient {
     return h;
   }
 
-  _wsUrl(path, since = "") {
+  /**
+   * The stream URL, with the ticket in the query string.
+   *
+   * A browser cannot put a header on a WebSocket handshake, which is the whole
+   * reason the Core accepts a single-use ticket here instead of the bearer
+   * token every other call carries.
+   */
+  _wsUrl(path, since = "", ticket = "") {
     const base = this.baseUrl.replace(/^http/, "ws");
     const q = new URLSearchParams();
     if (since) q.set("since", since);
+    if (ticket) q.set("ticket", ticket);
     const qs = q.toString();
     return `${base}${path}${qs ? "?" + qs : ""}`;
   }
@@ -316,7 +396,22 @@ export class WavrClient {
     return this._get("/api/experience/context");
   }
 
-  /** Room names in this Space. */
+  /**
+   * Room names in this Space — the rooms on its floor plan.
+   *
+   * Two things this list is not, and an application that assumes either will
+   * misbehave on a real install:
+   *
+   * **It can be empty.** A Core with no floor plan drawn yet has no rooms, so
+   * `rooms()` returns `[]` while the house is being sensed perfectly well.
+   * That is a setup step, not a fault — render it as one.
+   *
+   * **It does not cover every room an event can name.** Wavr's LAN presence is
+   * house-level and reports under a pseudo-room (`casa`) that belongs to no
+   * floor, so it never appears here and `context("casa")` is a 404. Treat a
+   * room from {@link subscribe} as a label to display, and look it up only
+   * through this list.
+   */
   async rooms() {
     const body = await this.spaceContext();
     return (body.rooms || []).map((r) => r.room);
@@ -428,6 +523,11 @@ export class WavrClient {
    * `{ room: "kitchen" }` to receive only that room's events — filtered here
    * rather than at the Core, because the stream is small and a per-subscriber
    * server filter is state the Core would have to keep correct forever.
+   *
+   * An event's `room` is not guaranteed to be one of {@link rooms}: Wavr's
+   * house-level LAN presence reports under a pseudo-room (`casa`) that is on no
+   * floor plan, and `context()` answers 404 for it. Feeding an event's room
+   * straight back into `context()` therefore has to handle `ERROR_NOT_FOUND`.
    */
   subscribe(handler, { room = "", since = "", onError = null } = {}) {
     const filtered = room
@@ -452,7 +552,9 @@ function _globalFetch() {
   );
 }
 
-// Classic-script use, matching the frontend's own zero-build idiom.
+// The namespace, published for a page's classic scripts and for the devtools
+// console once this module has run. NOT a classic-script entry point — see the
+// loading note at the top: `export` above makes that impossible in one file.
 if (typeof window !== "undefined") {
   window.Wavr = {
     WavrClient,

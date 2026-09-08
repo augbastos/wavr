@@ -13,8 +13,22 @@
   external runtime's id to it, resolves it back, and shows the experience
   reacting when that anchor's room becomes occupied.
 
+  ## Localisation
+
+  The same three files the shell loads, in the same order, from the Core that
+  served this page — no build step, no third-party origin. The catalogue key IS
+  the English sentence, so a locale with no entry renders correct English.
+
+  Anchor names, room names and provider ids are the household's and the
+  developer's own words. They only ever travel as `{slot}` values: a name looked
+  up in the catalogue can come back "translated", and every miss is recorded in
+  `WavrI18n.missing()`, which is an audit surface.
+
   SPDX-License-Identifier: AGPL-3.0-or-later
 -->
+<script src="../../js/i18n.js"></script>
+<script src="../../js/locale-pt.js"></script>
+<script src="../../js/format.js"></script>
 <style>
   :root {
     --bg: #0f1115; --fg: #e6e8ec; --dim: #9aa1ad; --line: #262b34;
@@ -55,27 +69,28 @@
   .empty { color: var(--dim); }
 </style>
 
-<h1>Spatial Anchor Demo</h1>
-<p class="sub">An anchor is a name for a place. It does not need coordinates, and
-it certainly does not need a headset — <em>the kitchen counter</em> is complete
-as it stands. Create one below; it persists in the Space and any application can
+<h1 data-i18n>Spatial Anchor Demo</h1>
+<p class="sub" data-i18n>An anchor is a name for a place. It does not need coordinates, and
+it certainly does not need a headset — the kitchen counter is complete as it
+stands. Create one below; it persists in the Space and any application can
 resolve it. When a room with an anchor becomes occupied, this page reacts.</p>
 
 <div id="msg"></div>
 
 <form id="new">
   <div class="field">
-    <label for="name">Anchor name</label>
-    <input id="name" placeholder="Kitchen counter" required>
+    <label for="name" data-i18n>Anchor name</label>
+    <input id="name" placeholder="Kitchen counter"
+           data-i18n-attr="placeholder:Kitchen counter" required>
   </div>
   <div class="field">
-    <label for="room">Room</label>
+    <label for="room" data-i18n>Room</label>
     <select id="room"></select>
   </div>
-  <button type="submit">Create</button>
+  <button type="submit" data-i18n>Create</button>
 </form>
 
-<ul id="list"><li class="empty">Loading…</li></ul>
+<ul id="list"><li class="empty" data-i18n>Loading…</li></ul>
 
 <script type="module">
 import { WavrClient } from "../../sdk/javascript/wavr.js";
@@ -96,7 +111,8 @@ async function refresh() {
   occupiedByRoom = Object.fromEntries(contexts.map((c) => [c.room, c.occupied]));
 
   if (!anchors.length) {
-    $("list").innerHTML = `<li class="empty">No anchors yet. Create one above.</li>`;
+    $("list").innerHTML =
+      `<li class="empty">${esc(WavrT("No anchors yet. Create one above."))}</li>`;
     return;
   }
 
@@ -105,24 +121,38 @@ async function refresh() {
     // Three states, not two. `null` means nothing is watching that room, and
     // rendering it the same as "empty" would be the exact lie the platform is
     // built to avoid — so it gets its own words.
+    //
+    // Each state is a WHOLE sentence carrying the room's name in a {slot},
+    // rather than a translated fragment glued to the name with a dash:
+    // Portuguese agrees around the words that would be joined, and the
+    // household's own word for a place must never become a catalogue key.
     const state = occupiedByRoom[a.room] === null || occupiedByRoom[a.room] === undefined
-      ? "nothing is watching this room"
-      : here ? "someone is here now" : "room is empty";
+      ? WavrT("Nothing is watching {room}.", { room: a.room })
+      : here ? WavrT("Someone is in {room} right now.", { room: a.room })
+             : WavrT("{room} is empty.", { room: a.room });
     const place = a.positioned
-      ? `${a.x?.toFixed(2)} × ${a.y?.toFixed(2)} m from the room corner`
-      : "logical anchor — no coordinates, and none needed";
+      ? WavrT("{x} × {y} m from the room corner", {
+          x: WavrFmt.number(a.x, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          y: WavrFmt.number(a.y, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        })
+      : WavrT("logical anchor — no coordinates, and none needed");
+    // A middot-separated LIST of independent facts, not one sentence built from
+    // pieces. The provider ids are the developer's own strings.
     const bound = (a.mappings || []).length
-      ? ` · bound to ${a.mappings.map((m) => esc(m.provider_id)).join(", ")}`
+      ? " · " + WavrT("bound to {providers}",
+                      { providers: a.mappings.map((m) => m.provider_id).join(", ") })
       : "";
     return `
       <li class="${here ? "live" : ""}">
         <div>
           <div class="name">${esc(a.name)}</div>
-          <div class="detail ${here ? "here" : ""}">${esc(a.room)} — ${esc(state)}</div>
-          <div class="detail">${esc(place)}${bound}
-            ${a.orphaned ? `<span class="orphan">· its room no longer exists</span>` : ""}</div>
+          <div class="detail ${here ? "here" : ""}">${esc(state)}</div>
+          <div class="detail">${esc(place + bound)}
+            ${a.orphaned
+              ? `<span class="orphan">· ${esc(WavrT("its room no longer exists"))}</span>`
+              : ""}</div>
         </div>
-        <button data-bind="${esc(a.anchor_id)}">Bind an external id</button>
+        <button data-bind="${esc(a.anchor_id)}">${esc(WavrT("Bind an external id"))}</button>
       </li>`;
   }).join("");
 
@@ -147,11 +177,17 @@ async function bind(anchorId) {
       headers: { "Content-Type": "application/json", "X-Wavr-Local": "1" },
       body: JSON.stringify({ provider_id: "demo-runtime", external_id: externalId }),
     });
-    if (!res.ok) throw new Error(`the Core refused the binding (${res.status})`);
+    if (!res.ok) {
+      throw new Error(WavrT("The Core refused the binding (code {code}).",
+                            { code: res.status }));
+    }
     const found = await wavr.resolveAnchor("demo-runtime", externalId);
-    say(`Bound ${externalId} — resolving it returns `
-      + `${found.length} anchor${found.length === 1 ? "" : "s"}: `
-      + `${found.map((a) => a.name).join(", ")}. No pose was stored.`);
+    // One sentence, both plural forms written out, every value a slot — the
+    // anchor names are the household's.
+    say(WavrT(
+      "Bound {id}. Resolving it returns {n} anchor: {names}. No pose was stored."
+      + "|Bound {id}. Resolving it returns {n} anchors: {names}. No pose was stored.",
+      { id: externalId, n: found.length, names: found.map((a) => a.name).join(", ") }));
     await refresh();
   } catch (e) {
     say(e.message, true);
@@ -168,7 +204,9 @@ $("new").addEventListener("submit", async (ev) => {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `the Core refused it (${res.status})`);
+      // `body.detail` is the Core's own sentence and is shown verbatim.
+      throw new Error(body.detail
+        || WavrT("The Core refused it (code {code}).", { code: res.status }));
     }
     $("name").value = "";
     say("");
@@ -187,7 +225,8 @@ $("new").addEventListener("submit", async (ev) => {
     // React to the house, not just to our own writes.
     wavr.subscribe(() => refresh());
   } catch (e) {
-    say(`${e.message} — is the Core running, and is this page served by it?`, true);
+    say(WavrT("Could not connect: {reason}. Is the Core running, and is this page served "
+            + "by it?", { reason: e.message }), true);
     $("list").innerHTML = "";
   }
 })();

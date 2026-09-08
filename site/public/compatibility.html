@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0B0E12">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1216'/%3E%3Cpath d='M3 10c1.5-4 2.5-4 4 0s2.5 4 4 0 2-3 2-3' stroke='%233db54a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
-<title>Compatibility — Wavr</title>
+<title>Compatibility &mdash; Wavr</title>
 <meta name="description" content="What Wavr needs at each tier: a plain laptop for network presence, extra hardware for cameras and radar, and a dedicated box for an always-on Core.">
 <link rel="stylesheet" href="assets/wavr.css">
 </head>
@@ -21,11 +21,9 @@
     </a>
     <nav class="site-nav" aria-label="Primary">
       <a href="index.html">Home</a>
-      <a href="install.html" class="nav-install">Install</a>
-      <a href="compatibility.html" aria-current="page">Compatibility</a>
-      <a href="nodes.html">Nodes</a>
+      <a href="how-it-works.html">How it works</a>
       <a href="privacy.html">Privacy</a>
-      <a href="docs.html">Docs</a>
+      <a href="download.html" class="nav-download">Download</a>
       <a href="https://github.com/augbastos/wavr">GitHub</a>
     </nav>
   </div>
@@ -41,22 +39,64 @@
 
   <section class="section wrap">
     <h2>Tier 1 &mdash; runs today, no extra hardware</h2>
+
+    <figure class="site-figure">
+      <svg viewBox="0 0 760 210" role="img" aria-labelledby="ct-fig-t" class="site-diagram">
+        <title id="ct-fig-t">Three tiers, each one adding to the one before it. Tier one is
+          a computer you already own, sensing over Wi-Fi and Bluetooth. Tier two adds a
+          camera, a radar board or a sensor node. Tier three is a small machine left on all
+          the time, so the dashboard is a bookmark instead of something you start by hand.
+          Nothing above tier one is required.</title>
+
+        <g class="ld-step ld-step-1">
+          <rect x="8" y="118" width="238" height="78" rx="12"/>
+          <text x="127" y="144" class="ld-strong">Tier 1 — what you have</text>
+          <text x="127" y="163">a laptop or desktop</text>
+          <text x="127" y="180">Wi-Fi + Bluetooth sensing</text>
+        </g>
+        <g class="ld-step ld-step-2">
+          <rect x="260" y="76" width="238" height="120" rx="12"/>
+          <text x="379" y="102" class="ld-strong">Tier 2 — plus a sensor</text>
+          <text x="379" y="121">a camera, a €15 radar board,</text>
+          <text x="379" y="138">or an ESP32 node per room</text>
+          <text x="379" y="163">each one is independent;</text>
+          <text x="379" y="180">turn on the ones you have</text>
+        </g>
+        <g class="ld-step ld-step-3">
+          <rect x="512" y="34" width="240" height="162" rx="12"/>
+          <text x="632" y="60" class="ld-strong">Tier 3 — always on</text>
+          <text x="632" y="79">a Raspberry Pi, a mini PC,</text>
+          <text x="632" y="96">or an old phone</text>
+          <text x="632" y="121">same code, left running,</text>
+          <text x="632" y="138">so the dashboard is</text>
+          <text x="632" y="155">a bookmark</text>
+        </g>
+      </svg>
+      <figcaption>Each step contains the one before it. Most people never leave the first.</figcaption>
+    </figure>
     <p class="section-lede">Any Windows, macOS or Linux machine. Windows needs nothing else
       installed; macOS and Linux need Python 3.11 or newer.</p>
     <div class="table-wrap" style="margin-top:16px">
       <table>
         <thead><tr><th>Platform</th><th>Status</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td>Windows 10/11</td><td><span class="tag tag-ready">Supported</span></td><td>Real installer, no Python needed (unsigned; SmartScreen will warn). <span class="tag tag-note">Not published yet</span>; see <a href="install.html">Install</a>.</td></tr>
-          <tr><td>macOS</td><td><span class="tag tag-ready">Supported</span></td><td>Run from source with <code>python3</code>; no packaged installer yet.</td></tr>
-          <tr><td>Linux (desktop, laptop, or Raspberry Pi)</td><td><span class="tag tag-ready">Supported</span></td><td>One-command install script (<span class="tag tag-note">not yet run on real hardware</span>); Docker also works.</td></tr>
+          <!-- "Not published yet" used to sit in this cell. It is a static tag
+               on a page with no release slot, so nothing ever updated it, while
+               the Download page has been handing out a working Windows
+               installer. Two pages, opposite answers to "can I get this". -->
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="11" rx="1.6"/><path d="M2 19h20M9.5 16v3M14.5 16v3"/></svg>Windows 10/11</td><td><span class="tag tag-ready">Supported</span></td><td>A real installer, unsigned &mdash; SmartScreen warns once. <a href="download.html">Download it here</a>.</td></tr>
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="11" rx="1.6"/><path d="M2 19h20M9.5 16v3M14.5 16v3"/></svg>macOS</td><td><span class="tag tag-ready">Supported</span></td><td>Run from source with <code>python3</code>; no packaged installer yet.</td></tr>
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1.6"/><rect x="8.5" y="10" width="7" height="5" rx="1"/><path d="M7 6V4M10 6V4M13 6V4M16 6V4M4 20h16"/></svg>Linux (desktop, laptop, or Raspberry Pi)</td><td><span class="tag tag-ready">Supported</span></td><td>One-command install script (<span class="tag tag-note">not yet run on real hardware</span>); Docker also works.</td></tr>
         </tbody>
       </table>
     </div>
     <p style="margin-top:14px">At this tier, network scanning and Bluetooth presence work
-      with nothing plugged in beyond what the machine already has. This is the fusion
-      engine's floor, not a stripped-down mode: it's the same <code>FusionEngine</code> every
-      other tier uses, just fed fewer sources.</p>
+      with nothing plugged in beyond what the machine already has. Bluetooth has one
+      condition worth knowing in advance: it only starts contributing once you have told
+      Wavr which device belongs to whom, so on a brand-new Space the network scan is doing
+      all of the work until you register something. This is the fusion engine's floor, not
+      a stripped-down mode: it's the same <code>FusionEngine</code> every other tier uses,
+      just fed fewer sources.</p>
   </section>
 
   <section class="section wrap">
@@ -67,11 +107,11 @@
       <table>
         <thead><tr><th>Source</th><th>Hardware needed</th><th>Status</th></tr></thead>
         <tbody>
-          <tr><td>Bluetooth presence</td><td>A host Bluetooth adapter (most laptops have one)</td><td><span class="tag tag-ready">Works today</span></td></tr>
-          <tr><td>Camera person-detection</td><td>An RTSP camera or a webcam, plus a CPU/GPU able to run a small YOLO model</td><td><span class="tag tag-ready">Works today</span> (boots OFF)</td></tr>
-          <tr><td>mmWave radar</td><td>An HLK-LD2450 (~€15) over USB-serial, direct to the machine</td><td><span class="tag tag-ready">Works today</span></td></tr>
-          <tr><td>Remote radar/PIR sensor node</td><td>An ESP32 + sensor, over Wi-Fi</td><td><span class="tag tag-note">Backend built; firmware not yet run on real hardware</span>, see <a href="nodes.html">Nodes</a></td></tr>
-          <tr><td>WiFi CSI (ruview)</td><td>A channel-state-info source</td><td><span class="tag tag-planned">Source seam only</span></td></tr>
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="11" rx="1.6"/><path d="M2 19h20M9.5 16v3M14.5 16v3"/></svg>Bluetooth presence</td><td>A host Bluetooth adapter (most laptops have one)</td><td><span class="tag tag-ready">Works today</span></td></tr>
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.8 7.6h11.4v8.8H2.8z" rx="1.5"/><path d="M14.2 11.2 21.2 7.6v8.8l-7-3.6z"/></svg>Camera person-detection</td><td>An RTSP camera or a webcam, plus a CPU/GPU able to run a small YOLO model</td><td><span class="tag tag-note">From source, not in the installer</span> (and boots OFF)</td></tr>
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20a8 8 0 1 1 8-8"/><path d="M12 20a8 8 0 0 0 8-8" stroke-dasharray="2 3"/><circle cx="12" cy="12" r="2"/><path d="M12 12 19 6"/></svg>mmWave radar</td><td>An HLK-LD2450 (~&euro;15) over USB-serial, direct to the machine</td><td><span class="tag tag-note">From source, not in the installer</span></td></tr>
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1.6"/><rect x="8.5" y="10" width="7" height="5" rx="1"/><path d="M7 6V4M10 6V4M13 6V4M16 6V4M4 20h16"/></svg>Remote radar/PIR sensor node</td><td>An ESP32 + sensor, over Wi-Fi</td><td><span class="tag tag-note">Backend built; firmware not yet run on real hardware</span>, see <a href="nodes.html">Nodes</a></td></tr>
+          <tr><td><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20a8 8 0 1 1 8-8"/><path d="M12 20a8 8 0 0 0 8-8" stroke-dasharray="2 3"/><circle cx="12" cy="12" r="2"/><path d="M12 12 19 6"/></svg>WiFi CSI (ruview)</td><td>A channel-state-info source</td><td><span class="tag tag-planned">Source seam only</span></td></tr>
         </tbody>
       </table>
     </div>
@@ -83,7 +123,7 @@
       dashboard is a bookmark instead of something you start by hand.</p>
     <div class="grid" style="margin-top:16px">
       <div class="tile">
-        <h3>Raspberry Pi / mini PC</h3>
+        <h3><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1.6"/><rect x="8.5" y="10" width="7" height="5" rx="1"/><path d="M7 6V4M10 6V4M13 6V4M16 6V4M4 20h16"/></svg>Raspberry Pi / mini PC</h3>
         <p>Recommended: the Linux install script (<code>install.sh</code>), which can offer
           a <code>systemd</code> autostart unit so the dashboard survives a reboot. Already
           run everything in Docker, or managing a NAS? <code>./scripts/wavr-docker.sh up</code>
@@ -91,14 +131,14 @@
           tunnel). See <a href="install.html">Install</a>.</p>
       </div>
       <div class="tile">
-        <h3>A GPU-equipped box</h3>
+        <h3><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="7" width="19" height="10" rx="1.6"/><circle cx="8" cy="12" r="2.4"/><circle cx="15.5" cy="12" r="2.4"/><path d="M5 17v3M19 17v3"/></svg>A GPU-equipped box</h3>
         <p>For camera detection at scale, a machine with a GPU runs the YOLO model far more
           comfortably than a Pi's CPU. The base Docker image is lean (no camera/GPU
           dependencies); the GPU variant is a documented follow-up, not shipped as a
           ready image yet.</p>
       </div>
       <div class="tile">
-        <h3>Windows Docker Desktop</h3>
+        <h3><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8 20.5 7v10L12 21.2 3.5 17V7z"/><path d="M3.5 7 12 11.4 20.5 7"/><path d="M12 11.4V21"/></svg>Windows Docker Desktop</h3>
         <p><span class="tag tag-note">Not the appliance path</span> Docker Desktop's network
           model doesn't support <code>network_mode: host</code> the way Linux does. On
           Windows, use the <a href="install.html">Windows installer</a> instead and save
@@ -113,29 +153,33 @@
       the Core itself &mdash; see the last card.</p>
     <div class="grid" style="margin-top:16px">
       <div class="tile">
-        <h3>Android</h3>
+        <h3><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.6 18.7h2.8"/></svg>Android</h3>
         <p><span class="tag tag-ready">Works today</span> Pair a browser to a Core over
-          local HTTPS; no Play Store app required. See <a href="install.html">Install</a>.</p>
+          local HTTPS, no install required, or install the companion app from
+          <a href="download.html">Download</a> for a full-screen, app-like view without
+          the "Add to Home Screen" step.</p>
       </div>
       <div class="tile">
-        <h3>iOS / iPadOS</h3>
+        <h3><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="2.5" width="15" height="19" rx="2"/><path d="M10.5 18.7h3"/></svg>iOS / iPadOS</h3>
         <p><span class="tag tag-ready">Works today</span> Same route via Safari, "Add to
           Home Screen" for a full-screen view.</p>
       </div>
-      <div class="tile">
-        <h3>Android kiosk launcher</h3>
+      <div class="tile" id="android-kiosk-launcher">
+        <h3><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="2.5" width="15" height="19" rx="2"/><path d="M10.5 18.7h3"/></svg>Android kiosk launcher</h3>
         <p><span class="tag tag-planned">Source only, unsigned, experimental</span> An
           always-on ambient panel launcher exists in the repo as a Gradle project. It hasn't
           been signed for general use; treat it as a reference for now.</p>
       </div>
-      <div class="tile">
-        <h3>Android as a Core</h3>
+      <div class="tile" id="android-as-a-core">
+        <h3><svg class="kit-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.6 18.7h2.8"/></svg>Android as a Core</h3>
         <p><span class="tag tag-planned">Source only, unsigned</span> The same Gradle
           project builds a second app that embeds CPython and runs the real Core on the
           phone &mdash; not a reduced copy, the same code the desktop runs. It builds and
           the Core answers, but <strong>it has never been run on a physical handset</strong>:
-          battery behaviour, surviving Doze overnight and restarting after a reboot are all
-          unmeasured. No Play Store release.</p>
+          it has no first-run setup screen yet, and battery behaviour, surviving Doze
+          overnight and restarting after a reboot are all unmeasured. No Play Store
+          release; do not install it today. See <a href="download.html">Download</a> for
+          the current build status.</p>
       </div>
     </div>
   </section>
@@ -165,10 +209,10 @@
     <p>Wavr is free and open source, AGPL-3.0-or-later. Local-only by design: no account, no
       cloud, no telemetry, on this site or in the product.</p>
     <p class="site-footer-links">
-      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> ·
-      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> ·
-      <a href="privacy.html">Privacy</a> ·
-      <a href="docs.html">Docs</a>
+      <a href="https://github.com/augbastos/wavr">Source on GitHub</a> &middot;
+      <a href="https://github.com/augbastos/wavr/blob/master/LICENSE">License</a> &middot;
+      <a href="privacy.html">Privacy</a> &middot;
+      <a href="how-it-works.html">How it works</a>
     </p>
   </div>
 </footer>

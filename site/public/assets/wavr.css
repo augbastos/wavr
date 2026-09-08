@@ -16,12 +16,21 @@
   --accent-soft:rgba(61,181,74,.14);
   --warn-soft:rgba(232,161,58,.14);
   --danger-soft:rgba(232,114,106,.14);
-  --radius:12px;
-  --content-w:920px;
+  --dim-soft:rgba(154,164,173,.08);
+  --info:#62a6da; --info-soft:rgba(98,166,218,.14);
+  --attention:#e76423; --attention-soft:rgba(231,100,35,.14);
+  --radius:12px; --radius-sm:8px; --radius-pill:999px;
+  --content-w:920px; --content-w-wide:1080px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 *, *::before, *::after{ box-sizing:border-box; }
+/* A handful of components below set their own `display` (flex/grid) at the
+   same specificity as the UA stylesheet's `[hidden]{display:none}` rule,
+   which lets author CSS win and leaves an empty box on screen even though
+   `hidden` is set (found via screenshot on .qr-card, not just DOM state) —
+   this restores `hidden` as an absolute override everywhere on the site. */
+[hidden]{ display:none !important; }
 html{ color-scheme:dark; -webkit-text-size-adjust:100%; overflow-x:hidden; }
 
 body{
@@ -220,6 +229,225 @@ tbody{ background:var(--elevated); }
 .notfound{ padding-block:80px; text-align:center; }
 .notfound h1{ font-size:clamp(2.2rem,8vw,3.4rem); }
 
+/* ==========================================================================
+   Home page: hero screenshot, the transformation diagram, Space chips,
+   honest-states legend. Added for the pre-first-user-test rebuild.
+   ========================================================================== */
+
+.wrap-wide{ max-width:var(--content-w-wide); margin-inline:auto; padding-inline:20px; }
+
+/* ---- Hero with a real product screenshot ---- */
+.hero-grid{
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:40px; align-items:center;
+}
+.hero-grid .hero-copy{ min-width:0; }
+.hero-grid .hero-shot{ min-width:0; }
+.hero-grid .hero h1{ max-width:none; }
+
+/* ---- Screenshot frame: reserves its own space so a missing shot never
+   collapses or shifts the layout, and degrades to an honest placeholder
+   drawn in the exact "no coverage" dashed style the product itself uses
+   for a sensor with nothing watching it. ---- */
+.shot-frame{
+  position:relative; border-radius:var(--radius); overflow:hidden;
+  background:var(--surface); border:1px solid var(--line);
+  aspect-ratio:var(--shot-ratio, 16/10);
+}
+.shot-frame img{
+  width:100%; height:100%; object-fit:contain; background:var(--elevated);
+}
+.shot-frame .shot-fallback{
+  position:absolute; inset:0; display:none; flex-direction:column; align-items:center;
+  justify-content:center; gap:10px; text-align:center; padding:20px;
+  background:var(--dim-soft); border:1px dashed var(--line-strong);
+}
+.shot-frame .shot-fallback svg{ width:30px; height:30px; stroke:var(--dim); flex:none; }
+.shot-frame .shot-fallback span{ color:var(--dim); font-size:.82rem; max-width:26ch; }
+.shot-frame.shot-frame--missing img{ display:none; }
+.shot-frame.shot-frame--missing .shot-fallback{ display:flex; }
+.shot-caption{ margin-top:10px; font-size:.8rem; color:var(--dim); }
+/* One tall screenshot standing next to its explanation, rather than the wide
+   16:10 frame above. No fixed aspect ratio here on purpose: this image is a
+   single room card, and letterboxing a card into a landscape box is worse than
+   letting it be the shape it actually is. */
+.shot-figure{ margin:0; display:flex; flex-direction:column; align-items:flex-start; }
+.shot-figure img{
+  display:block; height:auto; border-radius:var(--radius);
+  border:1px solid var(--line); background:var(--elevated);
+}
+.shot-figure .shot-caption{ max-width:62ch; }
+.shot-eyebrow{
+  display:inline-block; font-size:.72rem; font-weight:650; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--dim); margin-bottom:10px;
+}
+
+/* ---- The transformation: isolated signals -> one explainable state ---- */
+.transform-diagram{
+  display:grid; grid-template-columns:1fr auto 1fr; gap:22px; align-items:center;
+  margin-top:30px;
+}
+.transform-panel{ min-width:0; }
+.transform-panel-label{
+  font-size:.72rem; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--dim); margin-bottom:14px;
+}
+.transform-arrow{ display:flex; align-items:center; justify-content:center; color:var(--dim); }
+.transform-arrow svg{ width:26px; height:26px; }
+
+.signal-scatter{ list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:10px; }
+.signal-chip{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:10px 12px; font-size:.82rem; color:var(--dim); max-width:210px;
+}
+.signal-chip strong{ display:block; color:var(--text); font-weight:650; margin-bottom:2px; }
+.signal-chip:nth-child(1){ transform:rotate(-1.4deg); }
+.signal-chip:nth-child(2){ transform:rotate(1deg); }
+.signal-chip:nth-child(3){ transform:rotate(-.6deg); }
+.signal-chip:nth-child(4){ transform:rotate(1.6deg); }
+.signal-chip:nth-child(5){ transform:rotate(-1deg); }
+@media (prefers-reduced-motion:reduce){ .signal-chip{ transform:none !important; } }
+
+.transform-caption{ margin-top:14px; font-size:.85rem; color:var(--dim); }
+
+/* Illustrative mock of the fused room state — built from the SAME tile/tag
+   vocabulary the product uses, explicitly labelled as an example so it's
+   never mistaken for a live screenshot. */
+.mock-room{ border-color:rgba(61,181,74,.35); background:#161d24; }
+.mock-room .tile-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+.mock-room h3{ margin:0; font-size:1rem; }
+.mock-confidence{ display:flex; align-items:baseline; gap:8px; margin:0 0 12px; }
+.mock-conf-num{ font-size:1.6rem; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
+.mock-source-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; font-size:.85rem; }
+.mock-source-list li{ display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--dim); }
+.mock-source-list li span:first-child{ color:var(--text); }
+.mini-tag{
+  font-size:.68rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+  padding:2px 8px; border-radius:var(--radius-pill); border:1px solid var(--line);
+  color:var(--dim); background:var(--elevated); white-space:nowrap;
+}
+.mini-tag.ok{ color:var(--accent); border-color:rgba(61,181,74,.4); background:var(--accent-soft); }
+.mini-tag.out{ color:var(--dim); }
+.example-flag{
+  display:inline-flex; align-items:center; gap:6px; font-size:.72rem; font-weight:650;
+  color:var(--dim); background:var(--elevated); border:1px solid var(--line);
+  border-radius:var(--radius-pill); padding:3px 10px; margin-bottom:12px;
+}
+
+/* ---- "A Space, not just a house" ---- */
+.space-chip-list{
+  list-style:none; margin:20px 0 0; padding:0; display:flex; flex-wrap:wrap; gap:10px;
+}
+.space-chip-list li{
+  background:var(--elevated); border:1px solid var(--line-strong); border-radius:var(--radius-pill);
+  padding:8px 16px; font-size:.88rem; font-weight:600; color:var(--text);
+}
+
+/* ---- Honest states legend (reuses the product's own room-state colors) ---- */
+.states-legend{
+  list-style:none; margin:22px 0 0; padding:0;
+  display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+}
+.states-legend li{ display:flex; gap:12px; align-items:flex-start; }
+.state-swatch{
+  flex:none; width:22px; height:22px; border-radius:6px; margin-top:2px;
+  border:2px solid var(--dim);
+}
+.state-swatch.is-occupied{ background:var(--accent-soft); border-color:var(--accent); }
+.state-swatch.is-empty{ background:var(--elevated-2); border-color:var(--line-strong); border-style:solid; }
+.state-swatch.is-offline{ background:var(--warn-soft); border-color:var(--warn); border-style:dashed; }
+.state-swatch.is-nocoverage{ background:transparent; border-color:var(--dim); border-style:dashed; }
+.state-swatch.is-lowconfidence{ background:var(--dim-soft); border-color:var(--dim); border-style:dashed; }
+.states-legend h3{ font-size:.92rem; margin:0 0 2px; }
+.states-legend p{ margin:0; font-size:.84rem; color:var(--dim); }
+
+/* ==========================================================================
+   Download page
+   ========================================================================== */
+
+.dl-detect{
+  color:var(--dim); font-size:.86rem; margin:16px 0 0; font-variant-numeric:tabular-nums;
+}
+.dl-cards{ display:grid; gap:20px; grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:26px; }
+.dl-card{ display:flex; flex-direction:column; }
+.dl-card-top{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.dl-card h2{ font-size:1.15rem; margin:0; }
+.dl-card .lede{ color:var(--dim); font-size:.92rem; margin:0 0 14px; }
+.dl-card ol,.dl-card ul{ font-size:.88rem; color:var(--dim); margin:0 0 14px; }
+.dl-card ol li,.dl-card ul li{ margin-bottom:4px; }
+.dl-warning{
+  background:var(--elevated); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:12px 14px; font-size:.84rem; color:var(--dim); margin:0 0 14px;
+}
+.dl-warning strong{ color:var(--text); }
+.dl-cta{ margin-top:auto; }
+.dl-meta{ margin-top:10px; font-size:.78rem; color:var(--dim); font-variant-numeric:tabular-nums; }
+.dl-unavailable{
+  font-size:.86rem; color:var(--dim); background:var(--elevated);
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px 14px;
+}
+
+/* Take-to-phone QR */
+.qr-block{
+  display:flex; gap:24px; align-items:center; flex-wrap:wrap; margin-top:20px;
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:20px;
+}
+.qr-card{
+  flex:none; width:148px; height:148px; background:#fff; border-radius:var(--radius-sm);
+  display:flex; align-items:center; justify-content:center; padding:8px;
+}
+.qr-card svg{ width:100%; height:100%; display:block; }
+.qr-copy{ flex:1; min-width:220px; }
+.qr-url{
+  display:block; margin-top:10px; font-family:var(--mono); font-size:.8rem; color:var(--dim);
+  word-break:break-all;
+}
+.qr-note{
+  background:var(--elevated); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:12px 14px; color:var(--dim); font-size:.86rem;
+}
+
+/* Advanced-downloads warning tone for the wall-panel launcher — deliberately
+   a stronger, warn-colored callout so it can't be mistaken for a normal
+   download while still being calm rather than alarming. */
+.dl-danger-note{
+  background:var(--warn-soft); border:1px solid rgba(232,161,58,.4); border-radius:var(--radius-sm);
+  padding:12px 14px; font-size:.86rem; color:var(--text); margin:10px 0 14px;
+}
+.dl-danger-note strong{ color:var(--warn); }
+details details{ margin-top:12px; background:var(--elevated); }
+details details summary{ font-size:.92rem; }
+
+/* Short pill (initial "checking…" state, before JS resolves what to say). */
+.release-badge{
+  display:inline-flex; align-items:center; gap:6px; font-size:.7rem; font-weight:700;
+  letter-spacing:.05em; text-transform:uppercase; padding:3px 10px; border-radius:var(--radius-pill);
+  border:1px solid rgba(232,161,58,.4); color:var(--warn); background:var(--warn-soft);
+}
+/* Full-sentence release status (the manifest's own honest note, or a plain
+   fallback) — a calm line, not a shouting all-caps badge. */
+.release-note{
+  display:block; font-size:.86rem; color:var(--warn); margin-top:10px; max-width:56ch;
+}
+
+/* ---------------------------------- Medium screens (tablets) ---------------------------------- */
+@media (max-width:900px){
+  .hero-grid{ grid-template-columns:1fr; gap:28px; }
+  /* The screenshot does NOT come first here, though it used to.
+     Image-first is a fine mobile pattern when the image is one legible thing.
+     This one is a whole dashboard: at phone width it is a grey thumbnail
+     nobody can read, and it pushed the product's name and its one sentence
+     below the fold. Somebody arriving from the QR code met an unreadable
+     picture before being told what they were looking at. Copy first, proof
+     underneath. */
+  .dl-cards{ grid-template-columns:1fr; }
+}
+
+@media (max-width:780px){
+  .transform-diagram{ grid-template-columns:1fr; }
+  .transform-arrow{ transform:rotate(90deg); margin:0 auto; }
+}
+
 /* ---------------------------------- Small screens ---------------------------------- */
 @media (max-width:640px){
   .site-header-inner{ gap:10px 14px; }
@@ -229,4 +457,91 @@ tbody{ background:var(--elevated); }
   .section{ padding-block:32px; }
   table{ min-width:0; }
   th,td{ padding:9px 10px; font-size:.86rem; }
+  .qr-block{ flex-direction:column; text-align:center; }
+  .qr-copy{ min-width:0; }
 }
+
+/* Surface icons, drawn inline. Nothing on this site may fetch anything, so an
+   icon font or a CDN sprite is out; four hand-drawn glyphs cost less than
+   either would. Generic on purpose -- a Windows logo on a card called "Desktop"
+   would claim the Core is a Windows program, and it runs on three platforms. */
+.surface-icon{
+  width:20px; height:20px; flex:none; color:var(--accent);
+  vertical-align:-3px; margin-right:8px;
+}
+
+/* --------------------------- The layer diagram ---------------------------- */
+/* Hand-drawn, inline, self-contained: this site fetches nothing. Text sits in
+   the SVG so it scales with the drawing and stays selectable and translatable;
+   the <title> carries the whole thing in a sentence for anybody who cannot see
+   it, which is the only version some readers will get. */
+/* Scrolls rather than shrinks. At 390px a 760-wide drawing would render its
+   11px labels at about five pixels: present, technically, and unreadable. The
+   site already does this for wide tables (.table-wrap); a diagram is the same
+   problem. */
+.layer-figure{ margin:24px 0 0; overflow-x:auto; }
+.layer-diagram{ width:100%; min-width:660px; height:auto; display:block; }
+.layer-diagram text{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:11px; fill:var(--dim); text-anchor:middle;
+}
+.layer-diagram .ld-strong{ fill:var(--text); font-weight:650; font-size:12px; }
+.layer-diagram rect{ fill:var(--surface); stroke:var(--line-strong); stroke-width:1; }
+.layer-diagram .ld-core rect{ fill:var(--elevated); stroke:var(--accent); }
+.layer-diagram .ld-read rect{ stroke:var(--accent); fill:var(--accent-soft); }
+.layer-diagram .ld-ctl  rect{ stroke:var(--warn);   fill:var(--warn-soft); }
+.layer-diagram .ld-agent rect{ fill:var(--elevated); }
+.layer-diagram .ld-flow path{ stroke:var(--line-strong); stroke-width:1.4; fill:none; }
+.layer-diagram .ld-fence path{ stroke:var(--accent); stroke-width:1; stroke-dasharray:5 5; }
+.layer-diagram .ld-fence text{ fill:var(--accent); font-size:10.5px; }
+
+/* ------------------- Figures on the inner pages -------------------------- */
+/* The same drawing vocabulary as the layer diagram on the home page, reused
+   rather than reinvented: four pages had exactly one image each -- the mark in
+   the header -- and every one of them makes an argument that is easier to see
+   than to read. Hand-drawn and inline, because this site fetches nothing. */
+.site-figure{ margin:22px 0 0; }
+.site-figure figcaption{ margin-top:10px; font-size:.86rem; color:var(--dim); }
+.site-diagram{ width:100%; height:auto; display:block; }
+.site-diagram text{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:11px; fill:var(--dim); text-anchor:middle;
+}
+.site-diagram .ld-strong{ fill:var(--text); font-weight:650; font-size:12px; }
+.site-diagram rect{ fill:var(--surface); stroke:var(--line-strong); stroke-width:1; }
+.site-diagram .ld-core rect{ fill:var(--elevated); stroke:var(--accent); }
+.site-diagram .ld-read rect{ stroke:var(--accent); fill:var(--accent-soft); }
+.site-diagram .ld-ctl  rect{ stroke:var(--warn); fill:var(--warn-soft); stroke-dasharray:4 3; }
+.site-diagram .ld-drop rect{ stroke:var(--line); fill:transparent; stroke-dasharray:3 4; }
+.site-diagram .ld-drop text{ fill:var(--dim); }
+.site-diagram .ld-flow path{ stroke:var(--line-strong); stroke-width:1.4; fill:none; }
+.site-diagram .ld-flow-drop path{ stroke:var(--line); stroke-dasharray:3 4; }
+.site-diagram .ld-fence path{ stroke:var(--accent); stroke-width:1; stroke-dasharray:5 5; }
+.site-diagram .ld-fence text{ fill:var(--accent); font-size:10.5px; }
+/* The tiers, and the enrolment steps, get progressively stronger so the ladder
+   reads as a ladder without a caption saying so. */
+.site-diagram .ld-step-1 rect{ fill:var(--surface); }
+.site-diagram .ld-step-2 rect{ fill:var(--elevated); }
+.site-diagram .ld-step-3 rect{ fill:var(--elevated); stroke:var(--accent); }
+.site-diagram .ld-kill rect{ fill:transparent; stroke:var(--warn); stroke-dasharray:5 4; }
+.site-diagram .ld-kill text{ fill:var(--warn); }
+.site-diagram .ld-q rect{ fill:var(--elevated); stroke:var(--line-strong); }
+.site-diagram .ld-doc rect{ fill:var(--surface); }
+
+/* A glyph in a table cell and on a card heading. Shapes, never third-party
+   marks: the reader is asking "does the thing I own count?", and a picture of
+   the thing answers that better than a logo would. */
+.kit-icon{ width:17px; height:17px; flex:none; color:var(--dim);
+  vertical-align:-3px; margin-right:8px; }
+h3 > .kit-icon{ width:19px; height:19px; vertical-align:-3px; color:var(--accent); }
+
+/* The document map on the Docs page is made of links, not labels. A drawing of
+   filenames on a page whose only job is to lead to those files should lead to
+   them. The hover is the same green the rest of the site uses for "this is a
+   way through". */
+.ld-doc-link{ cursor:pointer; }
+.ld-doc-link rect{ transition:stroke .12s ease, fill .12s ease; }
+.ld-doc-link:hover rect, .ld-doc-link:focus-visible rect{
+  stroke:var(--accent); fill:var(--elevated); }
+.ld-doc-link:hover text, .ld-doc-link:focus-visible text{ fill:var(--text); }
+.ld-doc-link:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }

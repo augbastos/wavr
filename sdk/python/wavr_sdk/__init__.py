@@ -54,7 +54,7 @@ __all__ = [
 ]
 
 #: The context and event shape this SDK was written against.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # Reconnect backoff, jittered so a machine running several tools does not have
 # them all reconnect in lockstep after a Core restart.

@@ -10,7 +10,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import vm from "node:vm";
 
 import {
   ERROR_AUTH,
@@ -40,7 +43,11 @@ function fakeFetch(routes, log = []) {
 }
 
 const SPACE_CONTEXT = {
-  protocol_version: 1,
+  // The version the Core ACTUALLY ships (contracts.py:
+  // experience_context). Pinned to 1 while the Core moved to 2, this
+  // fixture agreed with a stale SDK constant and the pair of them
+  // hid the bump from every test here.
+  protocol_version: 2,
   space: { space_id: "sp_1", name: "My Home" },
   rooms: [
     {
@@ -379,4 +386,149 @@ test("closing a session uses DELETE", async () => {
   const w = client({ "/api/experience/sessions/ses_1": { closed: true } }, log);
   await w.closeSession("ses_1");
   assert.equal(log[0].method, "DELETE");
+});
+
+// -- The ticket, which is what makes the stream work off the Core's own box ----
+
+test("subscribe mints a ticket and puts it in the socket URL", async () => {
+  // The Core refuses every non-loopback WebSocket without a redeemed
+  // single-use ticket. Without this the SDK worked on the machine running the
+  // Core and failed on every phone, tablet and third-party app on the LAN —
+  // silently, because the close carried no error and the retry loop reported
+  // nothing.
+  globalThis.WebSocket = FakeSocket;
+  const log = [];
+  const w = new WavrClient({
+    baseUrl: "http://core.test:8000",
+    token: "tok-abc",
+    fetch: fakeFetch({ "/api/ws-ticket": { ticket: "tkt-1" } }, log),
+  });
+  const sub = w.subscribe(() => {});
+  await new Promise((r) => setTimeout(r, 50));
+  assert.match(FakeSocket.last.url, /ticket=tkt-1/, FakeSocket.last.url);
+  assert.ok(log.some((l) => l.path === "/api/ws-ticket"),
+    `the ticket was never minted: ${JSON.stringify(log)}`);
+  sub.close();
+});
+
+test("a ticket is minted again on every reconnect", async () => {
+  // Tickets are SINGLE-USE. Caching one makes the second attempt fail exactly
+  // like sending none, which is the bug this whole path exists to fix — and
+  // it would only show up after the first network blip.
+  globalThis.WebSocket = FakeSocket;
+  let n = 0;
+  const w = new WavrClient({
+    baseUrl: "http://core.test:8000",
+    token: "tok-abc",
+    fetch: async (url) => {
+      n += 1;
+      return {
+        ok: true, status: 200,
+        json: async () => ({ ticket: `tkt-${n}` }),
+      };
+    },
+  });
+  const sub = w.subscribe(() => {});
+  await new Promise((r) => setTimeout(r, 50));
+  assert.match(FakeSocket.last.url, /ticket=tkt-1/);
+  FakeSocket.last.drop();
+  await new Promise((r) => setTimeout(r, 900));
+  assert.match(FakeSocket.last.url, /ticket=tkt-2/,
+    "the reconnect reused a spent ticket");
+  sub.close();
+});
+
+test("a Core that never lets the socket open tells the application", async () => {
+  // The silent half of the bug. `onclose` passed `null`, so `_fail` never ran
+  // and `onError` never fired: an experience that looked connected, was
+  // permanently stale, and said nothing anywhere. A DROPPED connection stays
+  // quiet — that is ordinary — but never having connected is a configuration
+  // problem the application has to hear about.
+  //
+  // A standalone class rather than a FakeSocket subclass: FakeSocket queues an
+  // `onopen`, and a socket that opens is precisely the case this is NOT about.
+  class Refusing {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 1;
+      Refusing.last = this;
+      queueMicrotask(() => this.onclose && this.onclose());
+    }
+    close() { this.readyState = 3; }
+  }
+  globalThis.WebSocket = Refusing;
+  const errors = [];
+  const w = client({});
+  const sub = w.subscribe(() => {}, { onError: (e) => errors.push(e) });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(errors.length >= 1,
+    "a socket refused on every attempt reported nothing to the application");
+  assert.match(String(errors[0].message), /without opening/);
+  sub.close();
+  globalThis.WebSocket = FakeSocket;
+});
+
+// -- The file may not describe a way of loading it that does not work ---------
+
+const SOURCE = readFileSync(fileURLToPath(new URL("./wavr.js", import.meta.url)), "utf8");
+
+/** Whether the file would parse in a plain `<script src="...">`. */
+function loadsAsClassicScript() {
+  try {
+    new vm.Script(SOURCE, { filename: "wavr.js" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("the header does not promise classic-script loading the file cannot do", () => {
+  // It did, for a while, in a repository whose own frontend is dozens of
+  // classic scripts — so the one reader most likely to try it got a blank page
+  // and one console error. `export` is a syntax error outside a module, and no
+  // single file can be both without a build step this SDK exists without.
+  const header = SOURCE.slice(0, SOURCE.indexOf("*/"));
+  if (!loadsAsClassicScript()) {
+    assert.doesNotMatch(
+      header,
+      /works? (?:both )?as [^.]*classic script/i,
+      "the header offers classic-script loading, and the file will not parse as one",
+    );
+    assert.match(
+      header,
+      /(?:can ?not|cannot) be loaded as a classic script/i,
+      "the header should say outright that a plain <script src> will not work",
+    );
+    assert.match(header, /ES MODULE/, "and say what it IS, not only what it is not");
+  }
+});
+
+test("the namespace block still runs, which is the reason it is there", async () => {
+  // Not a classic-script fallback — the module has to have run for this to
+  // happen at all. It is there so a page's own classic scripts and the devtools
+  // console reach the same classes without a second copy of the file.
+  const had = "window" in globalThis;
+  const before = globalThis.window;
+  globalThis.window = {};
+  try {
+    const fresh = await import(`./wavr.js?namespace=${Date.now()}`);
+    assert.equal(globalThis.window.Wavr.WavrClient, fresh.WavrClient);
+    assert.equal(globalThis.window.Wavr.PROTOCOL_VERSION, fresh.PROTOCOL_VERSION);
+  } finally {
+    if (had) globalThis.window = before;
+    else delete globalThis.window;
+  }
+});
+
+test("a subscription with no token opens without a ticket", async () => {
+  // Loopback needs none, and minting one requires a bearer the caller does not
+  // have. The SDK must not turn "no token" into a failed mint.
+  globalThis.WebSocket = FakeSocket;
+  const log = [];
+  const w = client({}, log);
+  const sub = w.subscribe(() => {});
+  await new Promise((r) => setTimeout(r, 50));
+  assert.doesNotMatch(FakeSocket.last.url, /ticket=/);
+  assert.ok(!log.some((l) => l.path === "/api/ws-ticket"));
+  sub.close();
 });

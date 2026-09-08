@@ -38,6 +38,18 @@ other run is importing, so the other run fails for reasons that have nothing to
 do with the code under it. That has already happened once here, and the failures
 looked real enough to chase.
 
+CI runs it as `guarantees` in `.github/workflows/tests.yml` — its own job, for
+exactly that reason: a separate job is a separate checkout on a separate runner,
+which is the isolation this needs. It ran nowhere at all until then, so between
+one person remembering to run it and the next, a guarantee could stop being held
+without anything saying so.
+
+## What counts as held
+
+A guarantee is HELD when the narrowed run FAILS with the guard removed. A run
+that ERRORS holds nothing — see `run` for the version of this that got it
+backwards.
+
 ## Adding a guarantee
 
 Add a `Guarantee` below. `find` must match exactly once: a pattern matching zero
@@ -62,6 +74,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 BACKUP_SUFFIX = ".guarantee-backup"
+
+# The three verdicts a check can reach. ERROR is not a near miss and not a soft
+# UNHELD: it means the run produced no evidence either way, which is the one
+# outcome that must never be reported as a guarantee holding. See `run`.
+HELD, UNHELD, ERROR = "HELD", "UNHELD", "ERROR"
 
 
 @dataclass(frozen=True)
@@ -131,29 +148,128 @@ GUARANTEES = (
         r'\1    yield from ((r, str(r.get("sensor_id") or ""), "wavr") for r in rows)\n',
         "experience",
     ),
+    Guarantee(
+        "erase_never_setup",
+        "\"Delete what Wavr learned\" never deletes what a person set up.",
+        "wavr/data_erasure.py",
+        r'DEFAULT_OBSERVATIONS: tuple\[str, \.\.\.\] = \(\n',
+        'DEFAULT_OBSERVATIONS: tuple[str, ...] = (\n    "cameras",\n',
+        "erasure",
+    ),
+    Guarantee(
+        "space_projection",
+        "A paired phone learns the Space's name and kind, and nothing else.",
+        "wavr/app.py",
+        r'return \{"name": d\.get\("name"\), "kind": d\.get\("kind"\)\}',
+        "return d",
+        "space_identity or status_shape",
+    ),
+    Guarantee(
+        "silence_is_not_ok",
+        "A house nothing is watching is never reported as fine.",
+        "wavr/house_status.py",
+        r'blind = sources_checked is not None and not sources_checked',
+        "blind = False",
+        "house_status",
+    ),
+    Guarantee(
+        "tls_claim_is_the_socket",
+        "Encryption is never claimed on a connection that is not encrypted.",
+        "wavr/tls.py",
+        r'return \(_current_scheme\.get\(\)',
+        'return "https"  # broken on purpose\n    return (_current_scheme.get()',
+        "tls_claim or multidevice or owner",
+    ),
+    Guarantee(
+        "the_switch_opens_the_network",
+        "\"Let other devices connect\" actually lets other devices connect.",
+        "wavr/config.py",
+        r'return "0\.0\.0\.0" if multidevice else "127\.0\.0\.1"',
+        'return "127.0.0.1"',
+        "letting_devices or onboarding",
+    ),
+    Guarantee(
+        "an_advertised_address_answers",
+        "An address handed to another device is one the socket is actually on.",
+        "wavr/app.py",
+        r'return _local_ip if serves_the_lan\(cfg\.bind_host\) else "127\.0\.0\.1"',
+        "return _local_ip",
+        "letting_devices",
+    ),
+    Guarantee(
+        "no_ceremony_without_a_certificate",
+        "A fingerprint compare is never staged against a certificate nobody serves.",
+        "wavr/tls.py",
+        r'return served_scheme\(state\) == "https"',
+        "return True",
+        "tls_claim or multidevice or owner or pair",
+    ),
 )
 
 
-def run(g: Guarantee) -> bool:
-    """True when the suite CATCHES the break, which is the passing outcome."""
+def run(g: Guarantee) -> str:
+    """`HELD`, `UNHELD` or `ERROR` for one guarantee.
+
+    ## An errored run is evidence of nothing
+
+    The verdict used to be `"failed" in last or " error" in last.lower()`, and
+    the second half of that scored a COLLAPSED run as a guarantee being held.
+    Break an import — which is one of the more likely ways to break a guard by
+    accident — and every test in the file errors during collection, pytest's
+    last line says "1 error", and the check reported HELD. The one state in
+    which nothing whatsoever is being verified was the state that read as
+    strongest.
+
+    So the verdict comes from pytest's exit code, which is defined:
+
+        0  everything passed        nothing noticed the break   -> UNHELD
+        1  tests failed             the suite caught it         -> HELD
+        2  interrupted              no verdict was produced     -> ERROR
+        5  no tests ran             the `tests` expression is stale -> ERROR
+
+    ...and "N errors" in the summary is an ERROR even standing next to a
+    failure: a run that half-collapsed cannot tell us which half the failure
+    came from.
+
+    ## Bytes, not text, and why that is not pedantry
+
+    This edits source files, so "put it back exactly" is the whole safety
+    story. The first version read and wrote with `read_text`/`write_text(
+    newline="\\n")`, which silently rewrites a CRLF file to LF from end to
+    end — and then verified the restore with `read_text`, which normalises
+    newlines and therefore compares EQUAL to the file it just converted. The
+    check that existed to catch a bad restore was structurally incapable of
+    seeing this one, and 83 of the 143 files in `backend/wavr` are CRLF, two
+    of them named below.
+
+    So: bytes throughout, the file's own newline convention preserved, and the
+    restore compared byte-for-byte.
+    """
     path = BACKEND / g.path
-    original = path.read_text(encoding="utf-8")
-    broken, n = re.subn(g.find, g.replace, original, count=1)
+    raw = path.read_bytes()
+    crlf = b"\r\n" in raw
+    flat = raw.decode("utf-8").replace("\r\n", "\n") if crlf \
+        else raw.decode("utf-8")
+
+    broken, n = re.subn(g.find, g.replace, flat, count=1)
     if n != 1:
         print(f"  ERROR    {g.name}: pattern matched {n} times, expected 1 — "
               f"the guard moved and this check is stale")
-        return False
+        return ERROR
+
+    def to_bytes(text: str) -> bytes:
+        return (text.replace("\n", "\r\n") if crlf else text).encode("utf-8")
 
     # Written and verified BEFORE the source is touched, so there is never a
     # moment where the only copy of this file is the mutated one.
     backup = path.with_suffix(path.suffix + BACKUP_SUFFIX)
-    backup.write_text(original, encoding="utf-8", newline="\n")
-    if backup.read_text(encoding="utf-8") != original:
+    backup.write_bytes(raw)
+    if backup.read_bytes() != raw:
         print(f"  ERROR    {g.name}: could not write a verified backup, skipped")
         backup.unlink(missing_ok=True)
-        return False
+        return ERROR
 
-    path.write_text(broken, encoding="utf-8", newline="\n")
+    path.write_bytes(to_bytes(broken))
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "tests", "-q",
@@ -161,20 +277,30 @@ def run(g: Guarantee) -> bool:
             cwd=BACKEND, capture_output=True, text=True)
         last = (proc.stdout.strip().splitlines() or ["(no output)"])[-1]
     finally:
-        path.write_text(original, encoding="utf-8", newline="\n")
-        if path.read_text(encoding="utf-8") == original:
+        path.write_bytes(raw)
+        if path.read_bytes() == raw:
             backup.unlink(missing_ok=True)
         else:
             print(f"  !! RESTORE FAILED for {path}. The original is at {backup} "
                   f"— put it back before doing anything else.")
 
-    caught = "failed" in last or " error" in last.lower()
+    errored = (proc.returncode not in (0, 1)
+               or re.search(r"\b\d+ errors?\b", last) is not None)
+    if errored:
+        print(f"  ERROR    {g.name}: the run produced no verdict "
+              f"(pytest exit {proc.returncode})")
+        print(f"           {last[:100]}")
+        print("           ^ a run that errors has not tested the guarantee. "
+              "Fix the run before reading this as held or unheld.")
+        return ERROR
+
+    caught = re.search(r"\b\d+ failed\b", last) is not None
     print(f"  {'HELD  ' if caught else 'UNHELD'}   {g.name}: {g.claim}")
     print(f"           {last[:100]}")
     if not caught:
         print("           ^ nothing failed with the guard removed. The code is "
               "correct; the SUITE is not holding it there.")
-    return caught
+    return HELD if caught else UNHELD
 
 
 def main() -> int:
@@ -201,11 +327,19 @@ def main() -> int:
     print(f"Breaking {len(chosen)} guarantee(s) on purpose. Each file is backed "
           f"up first and restored afterwards.\n")
     results = [run(g) for g in chosen]
-    unheld = [g.name for g, ok in zip(chosen, results) if not ok]
+    unheld = [g.name for g, r in zip(chosen, results) if r == UNHELD]
+    errored = [g.name for g, r in zip(chosen, results) if r == ERROR]
     print()
+    if errored:
+        print(f"{len(errored)} check(s) produced NO VERDICT: "
+              f"{', '.join(errored)}")
+        print("A check that errors is not a guarantee that held — it is a "
+              "check that did not run. Deal with these first: while one is "
+              "erroring, nothing here knows whether its guarantee is held.")
     if unheld:
         print(f"{len(unheld)} guarantee(s) NOT held by the suite: "
               f"{', '.join(unheld)}")
+    if errored or unheld:
         return 1
     print("Every guarantee checked is held by a test that fails without it.")
     return 0
