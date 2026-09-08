@@ -49,6 +49,12 @@ COUNTING_MODALITIES = frozenset({"camera", "mmwave"})
 # NOTE a new counting modality added to COUNTING_MODALITIES defaults to absence-DISTRUST,
 # i.e. it fails toward the phantom, not toward honesty. Decide its absence semantics
 # deliberately; test_trusted_absence_is_a_subset_of_counting enforces the set relation.
+# How far ahead of this Core's clock a source's timestamp may sit before it
+# starts costing the source weight. Two machines a couple of seconds apart is
+# ordinary; a minute is a clock nobody synchronised, and beyond this a future
+# timestamp ages exactly like a past one (see `_fuse`).
+_SKEW_TOLERANCE_S = 5.0
+
 TRUSTED_ABSENCE_MODALITIES = frozenset({"camera"})
 assert TRUSTED_ABSENCE_MODALITIES <= COUNTING_MODALITIES, \
     "TRUSTED_ABSENCE_MODALITIES must be a subset of COUNTING_MODALITIES"
@@ -335,7 +341,23 @@ class FusionEngine:
                                 "age_s": None, "health": "invalid_ts",
                                 "count": None})
                 continue
-            age_s = max(0.0, (ref - e_ts).total_seconds())
+            # Age is the DISTANCE from now, not the time SINCE now.
+            #
+            # This was `max(0.0, ref - e_ts)`, which is defensive about the
+            # arithmetic and wrong about the world: it turns every future
+            # timestamp into age zero, and age zero is full weight. A board
+            # whose clock is an hour fast therefore read as "fresh", at full
+            # confidence, for the whole hour — and kept reading that way,
+            # because it kept sending — while the honest camera beside it went
+            # dead after ten minutes. One unsynchronised ESP32 could hold a
+            # room at 0.9 off an observation that was an hour old.
+            #
+            # A timestamp ahead of now is a broken clock, and a broken clock is
+            # as untrustworthy forward as backward. `_SKEW_TOLERANCE_S` keeps
+            # the ordinary second or two between two machines free.
+            atraso = (ref - e_ts).total_seconds()
+            age_s = (max(0.0, -atraso - _SKEW_TOLERANCE_S) if atraso < 0
+                     else atraso)
             decay, health = self._freshness(age_s)
             decays[key] = decay
             event_ts[key] = e_ts
