@@ -494,11 +494,13 @@ from tests.mobile_tree import mobile_dir as _mobile   # onde o app do celular es
 
 
 _BASE = _mobile()
-_SHIM = _BASE / "src" / "wavr-mobile-shim.js" if _BASE else None
-_PLUGIN = _BASE / "plugins" / "wavr-net" / "WavrNetPlugin.kt" if _BASE else None
+_SHIM = _BASE / "src" / "wavr-mobile-shim.js"
+_PLUGIN = _BASE / "plugins" / "wavr-net" / "WavrNetPlugin.kt"
 
-_precisa_do_mobile = pytest.mark.skipif(
-    _BASE is None, reason="the mobile worktree is not checked out here")
+# No skip: `mobile/` is part of this repository. If it is missing the checkout
+# is broken, and `mobile_dir()` says so instead of letting the run look green.
+def _precisa_do_mobile(f):
+    return f
 
 
 def _sem_comentarios(js: str) -> str:

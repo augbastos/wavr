@@ -2465,5 +2465,11 @@
     "alerts: cannot check": "alertas: não dá para checar",
     "Optional. It becomes the first room on your floor plan — you can draw the rest later, or skip this and start with an empty map.": "Opcional. Vira o primeiro cômodo da sua planta — você desenha o resto depois, ou pula e começa com um mapa vazio.",
     "Which room is this machine in?": "Em que cômodo esta máquina está?",
+    // O companion monta estas DENTRO do painel, entao ficavam como
+    // o unico paragrafo em ingles no meio de uma tela traduzida.
+    "This device — what it sends": "Este aparelho — o que ele manda",
+    "The level above is how much of your home Wavr senses. This is what THIS device sends about you.": "O nível acima é o quanto da sua casa o Wavr percebe. Isto é o que ESTE aparelho manda sobre você.",
+    "Tap to reduce · hold to turn off": "Toque para reduzir · segure para desligar",
+    "Right now this device shares nothing — it's turned off.": "Agora este aparelho não compartilha nada — está desligado.",
   });
 })();

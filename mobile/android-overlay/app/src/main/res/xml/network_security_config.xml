@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Wavr Mobile — Android network security config.
+
+  WHERE THIS APPLIES (and where it deliberately does NOT):
+  The WebView loads ONLY the bundled app from https://localhost (see
+  capacitor.config.ts androidScheme: 'https'). The WebView makes NO direct network
+  calls to the user's LAN central. EVERY request/socket to the central goes through
+  the native WavrNet OkHttp client, which enforces its OWN certificate pinning:
+  an X509TrustManager that trusts EXACTLY the one SHA-256 leaf fingerprint captured
+  at pairing — never trust-all, never the Android system trust store as a fallback.
+
+  OkHttp does its TLS validation independently of this file, so the central's
+  self-signed pin lives in WavrNet's TrustManager, NOT here. This config therefore
+  makes the WebView's own posture explicit and auditable for Play review:
+
+    - cleartextTrafficPermitted = false  -> no plaintext HTTP anywhere in the app.
+    - trust-anchors = system ONLY         -> the WebView does NOT trust user-installed
+                                             CAs, so a user-added MitM CA cannot
+                                             intercept the (nonexistent) WebView TLS.
+    - NO <domain-config>, NO trust-anchor exception, NO <debug-overrides>, NO added
+      CA for the central. We never widen trust here to make pinning "work" — pinning
+      is done in WavrNet, and this file must never weaken it.
+
+  Referenced from AndroidManifest.xml <application android:networkSecurityConfig=
+  "@xml/network_security_config" android:usesCleartextTraffic="false">.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- System CAs only. User-added CAs are intentionally excluded (hardening).
+                 This governs the WebView; it does not affect WavrNet's pinned OkHttp. -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

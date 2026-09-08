@@ -44,7 +44,7 @@ from tests.mobile_tree import mobile_dir   # noqa: E402 -- shared lookup
 
 _MOBILE = mobile_dir()
 LIB_CANDIDATES = [
-    (_MOBILE / "src" / "wavr-lib.js") if _MOBILE else Path("nao-existe"),
+    _MOBILE / "src" / "wavr-lib.js",
     RAIZ / "mobile" / "src" / "wavr-lib.js",
 ]
 

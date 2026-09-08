@@ -23,8 +23,23 @@ jobs:
           python-version: "3.11"
       - name: Install (base + dev only — camera/mmwave/mqtt/genai stay lazy)
         run: pip install -e "backend[dev]"
+      # `mobile/www` is the dashboard packaged for the phone, produced from
+      # `frontend/` by a script that needs nothing but Node. Without it six
+      # tests skip with "not built in this checkout" — and this packaging step
+      # has broken twice in one week without anyone noticing, once shipping an
+      # app with none of the dashboard's modules and once injecting the native
+      # bridge into an HTML comment. Build it, so those six actually run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Package the dashboard for the phone
+        run: node mobile/scripts/sync-frontend.mjs
       - name: Run suite
         run: python -m pytest backend/tests -q
+      # The companion's own unit tests. No npm install: they use node:test and
+      # require the shared lib directly.
+      - name: Companion unit tests
+        run: node --test mobile/test/*.test.js
 
   # The dashboard and the reference pages, in a real browser against a real Core.
   # Its own job because it needs a downloaded browser, and because the failure it

@@ -48,7 +48,7 @@ from tests.mobile_tree import mobile_dir   # noqa: E402 -- shared lookup
 
 _MOBILE = mobile_dir()
 WWW_CANDIDATES = [
-    (_MOBILE / "www") if _MOBILE else Path("nao-existe"),
+    _MOBILE / "www",
     Path(__file__).resolve().parents[2] / "mobile" / "www",
 ]
 

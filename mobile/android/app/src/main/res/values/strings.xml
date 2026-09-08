@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Wavr</string>
+    <string name="title_activity_main">Wavr</string>
+    <string name="package_name">dev.wavr.mobile</string>
+    <string name="custom_url_scheme">dev.wavr.mobile</string>
+</resources>
