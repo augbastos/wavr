@@ -2,7 +2,6 @@
   "$comment": "A machine-readable orientation to this repository, written for a language model reading it cold. Prose lives in README.md and PRODUCT.md; this file is the map. Keep it accurate or delete it — a stale map is worse than none.",
   "schema_version": 1,
   "generated_on": "2026-09-08",
-
   "project": {
     "name": "Wavr",
     "one_line": "Local-first spatial presence: turns a home network plus whatever sensors you own into a live, explainable map of who is in which room.",
@@ -11,17 +10,29 @@
     "visibility": "private",
     "maturity": "early; used by one person on one household's devices",
     "primary_language": "Python",
-    "languages": ["Python", "JavaScript", "Kotlin", "Rust", "C++"]
+    "languages": [
+      "Python",
+      "JavaScript",
+      "Kotlin",
+      "Rust",
+      "C++"
+    ],
+    "version": "0.4.0",
+    "version_source_of_truth": "VERSION at the repository root; backend/tests/test_the_version_is_one_number.py fails the build when any surface disagrees."
   },
-
   "core_idea": {
     "unit_of_truth": "RoomState",
-    "fields": ["room", "occupied", "confidence", "per-source evidence", "timestamp"],
+    "fields": [
+      "room",
+      "occupied",
+      "confidence",
+      "per-source evidence",
+      "timestamp"
+    ],
     "fusion_rule": "confidence = strength of the best present evidence = trust weight x the source's own confidence x freshness decay",
     "why_not_averaging": "Averaging lets several weak, agreeing sources manufacture certainty. Taking the strongest single piece of evidence means a confident answer always has one nameable reason behind it.",
     "explainability": "Every source's own reading is surfaced next to the fused number rather than silently arbitrated. The user can always ask why."
   },
-
   "invariants": {
     "$comment": "These are enforced in code and covered by tests. A change that breaks one is a product decision, not a refactor.",
     "loopback_only_by_default": "The base install never opens a LAN socket. Peer check + Host allowlist + CSRF header.",
@@ -31,13 +42,16 @@
     "no_telemetry": "No analytics, no telemetry SDK, no account. The frontend makes zero external requests.",
     "credentials_never_echoed": "Tokens and keys are never logged, returned, or printed."
   },
-
   "surfaces": [
     {
       "name": "backend",
       "path": "backend/",
       "what": "The fusion engine and the HTTP/WS API. FastAPI on Python 3.11.",
-      "entry_points": ["python -m wavr.serve", "python -m wavr.status", "python -m wavr.mcp_serve"],
+      "entry_points": [
+        "python -m wavr.serve",
+        "python -m wavr.status",
+        "python -m wavr.mcp_serve"
+      ],
       "notes": "No mandatory heavy dependencies. torch/cv2, pyserial, paho, bleak, cryptography and genai are lazy optional extras."
     },
     {
@@ -54,15 +68,15 @@
     },
     {
       "name": "mobile",
-      "path": "mobile/ (a git worktree of this repository)",
+      "path": "mobile/",
       "what": "Android companion, Capacitor shell plus native Kotlin plugins. Pairs to a central over certificate-pinned TLS.",
-      "notes": "Discovery uses NsdManager rather than an in-process mDNS browse, because a phone VPN routes multicast into its tunnel and an in-app browse never reaches the LAN."
+      "notes": "Discovery uses Android's NsdManager rather than an in-process mDNS browse, because a phone VPN routes multicast into its tunnel and an in-app browse never reaches the LAN. Pairing sends a salted hash of ANDROID_ID so re-pairing retires this device's earlier credentials instead of stacking another live key. `mobile/www/` is BUILD OUTPUT, produced from `frontend/` by `mobile/scripts/sync-frontend.mjs`; the vendored `mobile/vendor/jsqr.js` reads the pairing QR and is phone-only source."
     },
     {
       "name": "core-launcher",
       "path": "core-launcher/",
       "what": "Android home-launcher app that turns a dedicated phone into an always-on hub: ambient panel, mDNS advertisement, kiosk.",
-      "notes": "Advertises on the LAN only while its own page load succeeds, so the network is never invited to a Core that is not serving."
+      "notes": "Advertises `_wavr._tcp` on the LAN only while its own kiosk page load succeeds, so the network is never invited to a Core that is not serving. Ran on a physical handset on 2026-09-08."
     },
     {
       "name": "firmware",
@@ -75,16 +89,38 @@
       "what": "The public-facing website. Not deployed."
     }
   ],
-
   "sensing_modalities": [
-    { "name": "network", "how": "ARP, DHCP, mDNS, SSDP, NetBIOS, SNMP — device presence inferred from the LAN itself", "hardware": "none" },
-    { "name": "bluetooth", "how": "BLE proximity with RSSI and confidence decay", "hardware": "a BLE adapter" },
-    { "name": "camera", "how": "RTSP/ONVIF plus person detection; frames stay in RAM", "hardware": "an IP camera" },
-    { "name": "mmwave", "how": "radar presence and micro-motion", "hardware": "an mmWave module" },
-    { "name": "wifi_csi", "how": "channel-state sensing", "hardware": "a supported radio" },
-    { "name": "uwb", "how": "ultra-wideband ranging", "hardware": "UWB anchors" }
+    {
+      "name": "network",
+      "how": "ARP, DHCP, mDNS, SSDP, NetBIOS, SNMP — device presence inferred from the LAN itself",
+      "hardware": "none"
+    },
+    {
+      "name": "bluetooth",
+      "how": "BLE proximity with RSSI and confidence decay",
+      "hardware": "a BLE adapter"
+    },
+    {
+      "name": "camera",
+      "how": "RTSP/ONVIF plus person detection; frames stay in RAM",
+      "hardware": "an IP camera"
+    },
+    {
+      "name": "mmwave",
+      "how": "radar presence and micro-motion",
+      "hardware": "an mmWave module"
+    },
+    {
+      "name": "wifi_csi",
+      "how": "channel-state sensing",
+      "hardware": "a supported radio"
+    },
+    {
+      "name": "uwb",
+      "how": "ultra-wideband ranging",
+      "hardware": "UWB anchors"
+    }
   ],
-
   "vocabulary": {
     "$comment": "Words this project uses on purpose. docs/VOCABULARY.md is the authority; several are admin-only and must never appear in an end-user screen.",
     "Space": "The place being watched — a home, an office, a shop. Has people and rooms.",
@@ -94,15 +130,14 @@
     "central": "A credential role meaning 'may administer'. Distinct from being a Core, which is a device function.",
     "RoomState": "The one answer per room: occupied, how sure, and why."
   },
-
   "how_to_run": {
     "backend_dev": "cd backend && pip install -e \".[dev]\" && cd .. && python -m wavr.serve",
     "tests": "cd backend && pytest -q",
-    "test_notes": "Every hardware path is mock-tested, so the whole suite runs with no devices attached. Browser tests use Playwright.",
+    "test_notes": "Every hardware path is mock-tested, so the whole suite runs with no devices attached. Browser tests use Playwright. The cross-language checks that compare the Core against the companion read `mobile/` from this repository and FAIL rather than skip if it is missing — a skipped guarantee reports coverage the run does not have.",
     "multi_device": "Off by default. Set WAVR_MULTIDEVICE=1 or turn it on in Settings; it changes what the process is exposed to, so it is a deliberate, separate step.",
-    "mcp": "python -m wavr.mcp_serve over stdio, or the HTTP transport. Read-only by default; Home Assistant control is a separate opt-in, gated tool."
+    "mcp": "python -m wavr.mcp_serve over stdio, or the HTTP transport. Read-only by default; Home Assistant control is a separate opt-in, gated tool.",
+    "mobile": "node mobile/scripts/sync-frontend.mjs   # packages frontend/ into mobile/www/\nnode --test mobile/test/*.test.js       # companion unit tests, no npm needed\ncd mobile && npx cap sync android && (cd android && ./gradlew assembleDebug)"
   },
-
   "conventions": {
     "code_language": "English — code, comments, commit messages and documentation, always.",
     "tests_are_named_as_sentences": "A test file is called what it guarantees, e.g. test_the_screen_never_invents_a_house.py, and its docstring says what failure it exists to prevent.",
@@ -110,7 +145,6 @@
     "measure_dont_guess": "Vague symptoms ('it feels slow', 'it doesn't find it') have specific causes. A wrong hypothesis costs more than the measurement would have.",
     "no_machine_details": "This repository never describes the maintainer's personal hardware — model, CPU, GPU, RAM, monitor count or exact OS. The allowed form is 'tested on one machine'."
   },
-
   "where_to_look": {
     "product_definition": "PRODUCT.md",
     "decisions_and_tradeoffs": "docs/adr/",
@@ -122,18 +156,24 @@
     "fusion_engine": "backend/wavr/fusion.py",
     "recognition_and_precedence": "backend/wavr/recog.py",
     "device_credentials": "backend/wavr/devices.py",
-    "pairing": "backend/wavr/pairing.py and backend/wavr/pair_requests.py",
-    "http_api": "backend/wavr/app.py and backend/wavr/api_*.py",
-    "geometry_and_rooms": "backend/wavr/housemap.py"
+    "geometry_and_rooms": "backend/wavr/housemap.py",
+    "companion_shim": "mobile/src/wavr-mobile-shim.js",
+    "companion_native": "mobile/plugins/wavr-net/WavrNetPlugin.kt",
+    "companion_packaging": "mobile/scripts/sync-frontend.mjs",
+    "core_launcher_activity": "core-launcher/app/src/main/java/dev/wavr/core/MainActivity.kt",
+    "version_source_of_truth": "VERSION",
+    "pairing_codes": "backend/wavr/pairing.py",
+    "pairing_approve_on_the_core": "backend/wavr/pair_requests.py",
+    "http_app": "backend/wavr/app.py",
+    "http_device_routes": "backend/wavr/api_devices.py"
   },
-
   "known_gaps": [
-    "The Android Core's embedded-engine build (ADR-0010) is specified but unexercised; the phone hub in use runs the same Python engine in a container beside the launcher.",
-    "Radar and UWB have code paths and mock tests but little time on real hardware.",
-    "The mobile companion's first-run screens are hardcoded English; the dashboard itself is translated.",
-    "The website is written but not deployed."
+    "The Android Core's EMBEDDED-engine build (ADR-0010) is specified and not exercised. What was physically tested on 2026-09-08 is a different topology: the core-launcher app running as the device's home screen, with the ordinary Python backend beside it in a Debian container. That hub serves the current dashboard over the LAN and restarts unattended after a reboot; the embedded build remains untested.",
+    "Radar (mmWave) and UWB have code paths and mock tests but little time on real hardware. Mock-tested is not hardware-tested.",
+    "The companion's first-run screens are hardcoded English; the dashboard itself carries the translation markers and switches language.",
+    "The website exists in `site/` and is deliberately not deployed.",
+    "Several files are large enough to be real architectural debt — `backend/wavr/app.py`, `desktop/src-tauri/src/main.rs`, the Core launcher's MainActivity. Recorded rather than split, because splitting to lower a line count is a refactor looking for a reason."
   ],
-
   "not_true_of_this_project": {
     "$comment": "Stated explicitly because a reader — human or model — may otherwise assume the usual.",
     "no_users_or_customers": "There are no users beyond the maintainer, no customers, no paying installations, and no production deployment.",

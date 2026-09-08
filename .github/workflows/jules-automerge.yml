@@ -123,7 +123,47 @@ jobs:
             fi
           fi
 
-          echo "PR #$pr cleared"
+          # INTEGRITY GATE 5 - every OTHER check on this exact commit has to have
+          # finished, and finished well. This workflow is woken by "tests", and
+          # "tests" is merely the workflow that usually finishes first: `docker`
+          # and `install-matrix` run on the same head and can still be running,
+          # or already red, at this moment. Merging on one green answer while
+          # two are outstanding is not a gate, it is a race that usually wins.
+          #
+          # Absence is not failure. A path-filtered workflow that genuinely did
+          # not apply to these files produces no check run at all, and demanding
+          # one would deadlock every PR that does not touch its paths. Only
+          # checks that EXIST are judged.
+          #
+          # This job is excluded by name: it is in progress by definition, being
+          # the thing asking the question.
+          runs=$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs" \
+                   --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' \
+                 | grep -v '^auto-merge maintenance' || true)
+
+          if [ -z "$runs" ]; then
+            echo "no check runs on $HEAD_SHA - refusing to merge on silence"
+            exit 0
+          fi
+
+          pendentes=$(printf '%s\n' "$runs" | awk -F'\t' '$2 != "completed"')
+          if [ -n "$pendentes" ]; then
+            echo "checks still running on $HEAD_SHA - this pass does not merge:"
+            printf '%s\n' "$pendentes" | sed 's/^/  /'
+            exit 0
+          fi
+
+          # `skipped` and `neutral` are legitimate outcomes for a job that had
+          # nothing to do. Everything else that is not `success` is a stop.
+          ruins=$(printf '%s\n' "$runs" \
+                  | awk -F'\t' '$3 != "success" && $3 != "skipped" && $3 != "neutral"')
+          if [ -n "$ruins" ]; then
+            echo "a check on $HEAD_SHA did not pass - a human decides:"
+            printf '%s\n' "$ruins" | sed 's/^/  /'
+            exit 0
+          fi
+
+          echo "PR #$pr cleared - all $(printf '%s\n' "$runs" | wc -l) checks on $HEAD_SHA are green"
           echo "pr=$pr" >> "$GITHUB_OUTPUT"
 
       - name: Merge
@@ -137,4 +177,4 @@ jobs:
           set -euo pipefail
           gh pr merge "$PR" --repo "$REPO" --squash --delete-branch
           gh pr comment "$PR" --repo "$REPO" --body \
-            "Merged automatically: the test suite passed on this branch and the change cleared the integrity gates (own agent, same repo, bounded size, no test deleted, no workflow change beyond a pin move)."
+            "Merged automatically: every check on this commit finished green and the change cleared the integrity gates (own agent, same repo, bounded size, no test deleted, no workflow change beyond a pin move)."

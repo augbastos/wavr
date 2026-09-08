@@ -8,11 +8,13 @@ live, explainable map of your space, running entirely on hardware you own.**
 
 ![Wavr — live per-room presence on a 3D map of your own home, fused from network, Bluetooth and camera, running on your local network](docs/hero.gif)
 
-Every room gets one answer: **occupied or not, how sure, and why**. The *why* is not decoration — each
-sensing modality's own reading stays visible underneath the fused score, so one weak signal can never
-quietly claim certainty. You draw the floor plan; Wavr fills it in.
+Every room gets one answer, and **"I don't know" is one of them**: occupied, empty, or not covered by
+any sensor — with a confidence and the reasoning underneath. Each modality's own reading stays visible
+below the fused score, so one weak signal can never quietly claim certainty, and a room nothing watches
+says so instead of reporting empty. You draw the floor plan; Wavr fills it in.
 
-No account. No cloud. No telemetry. Nothing leaves the machine unless you flip a labelled switch.
+No account. No telemetry. No cloud is required for anything Wavr does — the only paths off the
+machine are individually switched on, and the AI narrator can point at a model running on the same box.
 
 ---
 
@@ -22,7 +24,7 @@ No account. No cloud. No telemetry. Nothing leaves the machine unless you flip a
 |---|---|
 | **Explainable presence** | One confidence per room, from the best present evidence: trust weight × the source's own confidence × freshness decay. Every source's reading stays readable underneath. |
 | **Built for agents** | A read-only MCP server (stdio + HTTP) hands `RoomState` and the house map to your own agents as structured context. Home Assistant control is a separate, opt-in, default-OFF tool. |
-| **Local by construction** | Loopback-only out of the box. Cameras boot OFF and frames never touch disk. Credentials are never logged, echoed or sent anywhere. |
+| **Local by construction** | Loopback-only out of the box. Cameras boot OFF and frames never touch disk. A credential goes only where the authentication protocol needs it — never into a log, a response body, or a screen. |
 | **You are the admin** | You draw the rooms, switch every sensor on and off, and decide what — if anything — is ever shared. |
 
 **Try it with nothing installed:** open `frontend/index.html` in a browser. Off localhost the dashboard
@@ -74,11 +76,11 @@ what you need; add more later.
 
 | Surface | What it is |
 |---|---|
-| **Dashboard** | The web UI. Zero build step: a static shell plus classic scripts, opens from a file. |
-| **Desktop** | The same dashboard as a native Tauri app. The machine running it is the *central*. |
-| **Mobile** | An Android companion that pairs to a central over certificate-pinned TLS. |
-| **Core** | An always-on appliance that *is* the hub — ambient panel, mDNS discovery, kiosk launcher. A Pi or mini PC is the usual host; it also runs on a dedicated Android phone. |
-| **MCP** | Read-only presence for your own agents, over stdio or HTTP. |
+| **Dashboard** | [`frontend/`](frontend/) — the web UI. Zero build step: a static shell plus classic scripts, opens from a file. |
+| **Desktop** | [`desktop/`](desktop/) — the same dashboard as a native Tauri app. The machine running it is the *central*. |
+| **Mobile** | [`mobile/`](mobile/) — an Android companion that pairs to a central over certificate-pinned TLS. Discovery goes through Android's own resolver, so it still finds the hub with a VPN running. |
+| **Core** | [`core-launcher/`](core-launcher/) — an always-on appliance that *is* the hub: ambient panel, mDNS discovery, kiosk launcher. A Pi or mini PC is the usual host; it also runs on a dedicated Android phone. |
+| **MCP** | [`backend/wavr/mcp_serve.py`](backend/wavr/) — read-only presence for your own agents, over stdio or HTTP. |
 
 ![One brain, every screen — the same open core as a web dashboard, a Tauri desktop app, a certificate-pinned Android companion, and the always-on Core hub](docs/img/card-platforms.png)
 
@@ -97,8 +99,11 @@ Constraints the code holds, not intentions:
   LAN socket.
 - **Cameras boot OFF.** Frames live in RAM, are never written to disk, never leave the machine. Position
   targets are live-only — never stored, never published.
-- **Only derived state is ever stored or published** — occupancy, confidence, timestamp. Never frames,
-  never raw targets, never credentials.
+- **Raw sensing is never stored or published.** What leaves the sensing layer is the derived
+  observation — occupancy, confidence, timestamp — never a frame, never a raw position, never the
+  evidence itself. Wavr does of course keep its own configuration: your rooms, your devices, your
+  pairings, your settings. That is the difference between a product that remembers your home's shape
+  and one that keeps a recording of it.
 - **Every path off the box is opt-in and default-OFF** — LAN multi-device, MQTT to Home Assistant, the
   MCP control tool, the narrator. Turn none on and Wavr is an island.
 - **Even the narrator can stay local.** Point it at Ollama or any loopback OpenAI-compatible server and
@@ -127,8 +132,13 @@ vendored same-origin, installable as a PWA.
 Hardware paths are mock-tested, so the whole suite runs with no devices attached:
 
 ```bash
-cd backend && pytest -q
+cd backend && pytest -q                   # everything, no hardware needed
+node mobile/scripts/sync-frontend.mjs     # packages the dashboard for the phone
+node --test mobile/test/*.test.js         # the companion's own tests
 ```
+
+Every surface above is in this repository. Nothing here needs a second checkout,
+another branch or a git worktree to build or read.
 
 ---
 
@@ -188,6 +198,10 @@ Two house rules worth knowing before you write code:
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE). Free for personal, self-hosted and non-commercial use. Network use counts
-as distribution: run a modified Wavr as a service and your changes go with it. A commercial / dual
-license — to use Wavr without the network-copyleft obligation — is available; open an issue to ask.
+[AGPL-3.0-or-later](LICENSE). Commercial use is permitted, on the AGPL's terms — it is a copyleft
+licence, not a non-commercial one. The obligation that matters in practice: if you modify Wavr and let
+people interact with it over a network, those users are entitled to the modified source. Running it
+unmodified, or modifying it privately without offering it to anyone, triggers nothing.
+
+A separate commercial licence is available for anyone who needs terms without that obligation — open an
+issue to ask.
