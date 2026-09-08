@@ -33,6 +33,18 @@ AQUI = Path(__file__).resolve().parent
 PAR_LAN = re.compile(
     r"""client\s*=\s*\(\s*["'](\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})["']""")
 
+# And the shape that got past the first version of this check: the peer as a
+# module constant, `LAN = ("192.168.1.50", 4444)`, used as `client=LAN`.
+#
+# That hole mattered. `test_node_enrollment_e2e.py` is written exactly that
+# way, it was the ONE file in the six this check named that was already failing
+# on CI for this reason, and the only reason it appeared at all was an
+# unrelated inline `8.8.8.8` further down. A guard that finds the real defect
+# by accident is a guard that will miss the next one.
+CONSTANTE_LAN = re.compile(
+    r"""^\s*[A-Z_][A-Z0-9_]*\s*=\s*\(\s*["'](\d{1,3}(?:\.\d{1,3}){3})["']""",
+    re.M)
+
 LOOPBACK = re.compile(r"^(127\.|0\.0\.0\.0$)")
 
 # Any of these means the file has decided what the Core's own address is.
@@ -41,6 +53,54 @@ FIXA_O_IP = (
     "host_subnet",          # passed explicitly to auth helpers
     "in_subnet",            # the file is testing the predicate itself
 )
+
+
+def _codigo(fonte: str) -> str:
+    """What the file DOES, with what it says about itself removed.
+
+    Proved necessary by a mutation, and that is what mutations are for.
+    Deleting the pin from `test_node_enrollment_e2e` left this check GREEN,
+    because the comment explaining the pin still contained the word
+    `in_subnet` — so the guard was satisfied by prose describing a line that
+    was no longer there. `test_localisation` learned the same lesson about
+    catalogue entries kept alive by a comment, and answers it the same way.
+
+    Parsed rather than tokenised, and the distinction matters here: the pin is
+    written `monkeypatch.setattr("wavr.app._local_ipv4", …)`, so the evidence
+    IS a string literal and dropping every string would break the check
+    outright. What has to go is the subset of strings that are prose about the
+    code — docstrings — plus the comments, which `ast` never sees at all.
+
+    A file that will not parse is returned whole. Refusing to judge it would be
+    the quieter failure, and this file exists because quiet failures are the
+    problem.
+    """
+    import ast
+    try:
+        arvore = ast.parse(fonte)
+    except SyntaxError:
+        return fonte
+
+    docstrings = set()
+    for no in ast.walk(arvore):
+        if isinstance(no, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                           ast.AsyncFunctionDef)):
+            corpo = getattr(no, "body", None)
+            if (corpo and isinstance(corpo[0], ast.Expr)
+                    and isinstance(corpo[0].value, ast.Constant)
+                    and isinstance(corpo[0].value.value, str)):
+                docstrings.add(id(corpo[0].value))
+
+    pedacos = []
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Name):
+            pedacos.append(no.id)
+        elif isinstance(no, ast.Attribute):
+            pedacos.append(no.attr)
+        elif isinstance(no, ast.Constant) and isinstance(no.value, str):
+            if id(no) not in docstrings:
+                pedacos.append(no.value)
+    return " ".join(pedacos)
 
 
 def _arquivos():
@@ -54,11 +114,15 @@ def test_a_lan_peer_is_always_paired_with_a_pinned_local_address():
     culpados = []
     for p in _arquivos():
         fonte = io.open(p, encoding="utf-8", errors="replace").read()
-        pares = [m.group(1) for m in PAR_LAN.finditer(fonte)
-                 if not LOOPBACK.match(m.group(1))]
+        achados = [m.group(1) for m in PAR_LAN.finditer(fonte)]
+        # A constant only counts when the file actually hands it to a client;
+        # a bare address in a fixture's config is not a peer.
+        if re.search(r"client\s*=\s*[A-Z_][A-Z0-9_]*\b", fonte):
+            achados += [m.group(1) for m in CONSTANTE_LAN.finditer(fonte)]
+        pares = [a for a in achados if not LOOPBACK.match(a)]
         if not pares:
             continue
-        if any(marca in fonte for marca in FIXA_O_IP):
+        if any(marca in _codigo(fonte) for marca in FIXA_O_IP):
             continue
         culpados.append(f"{p.name}: peer {sorted(set(pares))[0]} with nothing "
                         f"pinning the Core's own address")

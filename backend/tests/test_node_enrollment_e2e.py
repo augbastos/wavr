@@ -37,6 +37,11 @@ def core(monkeypatch, tmp_path):
 
     db = str(tmp_path / "wavr.db")
     monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    # The board announces itself from LAN, above. `in_subnet` compares
+    # that against what THIS MACHINE thinks its own address is, so on any
+    # runner outside 192.168.1.x the join was refused and the test read
+    # the refusal as a missing `node_id`. Same idiom as test_app.py.
+    monkeypatch.setattr("wavr.app._local_ipv4", lambda: "192.168.1.1")
     monkeypatch.setenv("WAVR_NODES_ENABLED", "1")
     monkeypatch.setenv("WAVR_DB", db)
 
