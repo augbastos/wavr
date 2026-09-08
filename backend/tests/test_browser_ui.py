@@ -1053,18 +1053,39 @@ def _baixar_o_pacote(page, core):
     except PWTimeout:
         fb = page.locator("#backupFb")
         disse = (fb.inner_text().strip() if fb.count() else "")
+        # All FOUR routes `buildDiagnosticBundle` awaits, each timed, because
+        # the first version of this only asked about the bundle route — and the
+        # answer came back 200 with the page still showing "Loading…", which
+        # narrows it to the other three and does not name one. A diagnosis that
+        # needs a second run is half a diagnosis.
         estado = page.evaluate("""async () => {
-          try {
-            const r = await fetch('/api/diagnostics/bundle',
-                                  { headers: { 'X-Wavr-Local': '1' } });
-            return r.status + ' ' + (await r.text()).slice(0, 200);
-          } catch (e) { return 'fetch threw: ' + e; }
+          const rotas = ['/api/diagnostics/bundle', '/api/runtime',
+                         '/api/health/doctor', '/api/attention'];
+          const linhas = [];
+          for (const rota of rotas) {
+            const t0 = performance.now();
+            try {
+              const c = new AbortController();
+              const morre = setTimeout(() => c.abort(), 25000);
+              const r = await fetch(rota, { headers: { 'X-Wavr-Local': '1' },
+                                            signal: c.signal });
+              clearTimeout(morre);
+              const corpo = await r.text();
+              linhas.push(`${rota} -> ${r.status} in ` +
+                          `${Math.round(performance.now() - t0)}ms ` +
+                          `(${corpo.length} bytes)`);
+            } catch (e) {
+              linhas.push(`${rota} -> ${e.name} after ` +
+                          `${Math.round(performance.now() - t0)}ms`);
+            }
+          }
+          return linhas.join('\\n                     ');
         }""")
         pytest.fail(
             "the bundle button produced no file.\n"
-            f"  the page says   : {disse!r}\n"
-            f"  the route answers: {estado}\n"
-            f"  script errors    : {page.script_errors}")
+            f"  the page says      : {disse!r}\n"
+            f"  the routes it awaits: {estado}\n"
+            f"  script errors      : {page.script_errors}")
 
 
 def test_the_diagnostic_bundle_downloads(page, core):
