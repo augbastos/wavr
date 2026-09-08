@@ -157,16 +157,28 @@
   // Complement (ii) — What's-New release notes, shown once per version change BEFORE the dashboard and
   // re-readable later from This-device. PUBLIC-facing copy (ships EN). `version` is compared against the
   // dismissed K_SEEN_VERSION; bump it + edit `notes` on each release. Purely local, no network.
-  var WHATS_NEW = {
-    version: "1.4",
-    title: "What's new",
-    notes: [
-      "See at a glance whether this is an Admin or Member device.",
-      "Your home's sensing level now shows here, read-only — set how much THIS device shares from the same card.",
-      "A quick connection check tells you if this device and your hub are talking.",
-      "Clearer help: tap the ? on any screen, then tap a control to see what it does."
-    ]
-  };
+  // A FUNCTION, not a table, and the reason is the language.
+  //
+  // As an object literal these sentences were evaluated while this file was
+  // being parsed — which happens in <head>, before `js/i18n.js` has run and
+  // before any catalogue exists. `T()` would have taken its English fallback
+  // there and frozen it for the life of the page, including after the reader
+  // changed language. Rebuilt per call, it is always in the current one.
+  //
+  // `version` stays a literal: it is compared against the dismissed
+  // K_SEEN_VERSION and is not language.
+  function whatsNew(){
+    return {
+      version: "1.4",
+      title: T("What's new"),
+      notes: [
+        T("See at a glance whether this is an Admin or Member device."),
+        T("Your home's sensing level now shows here, read-only — set how much THIS device shares from the same card."),
+        T("A quick connection check tells you if this device and your hub are talking."),
+        T("Clearer help: tap the ? on any screen, then tap a control to see what it does.")
+      ]
+    };
+  }
 
   // FIX-E3(b): durable-write helper for the PAIR / RE-PIN paths. Resolves only once every write of the
   // pairing state has committed; rejects if ANY write fails, so the caller surfaces a save error and
@@ -519,10 +531,16 @@
       }
       var name = String(person != null ? person : (_presenceLabel || "")).trim();
       var n = status.devices.length;
-      var ask = "Add " + n + " Bluetooth device" + (n === 1 ? "" : "s") + " paired to this phone to Wavr" +
-                (name ? " as “" + name + "”" : "") + "?\n\n" +
-                "This adds their names so your home can recognise them. It does NOT track live location. " +
-                "You can remove them any time on your hub.";
+      // Pluralised through the catalogue's own `a|b` form rather than by
+      // gluing an "s" on, which only works in English.
+      var quantos = T("{n} Bluetooth device|{n} Bluetooth devices", { n: n });
+      var ask = (name
+                 ? T("Add {what} paired to this phone to Wavr as “{name}”?",
+                     { what: quantos, name: name })
+                 : T("Add {what} paired to this phone to Wavr?", { what: quantos }))
+                + "\n\n"
+                + T("This adds their names so your home can recognise them. It does NOT track live location. " +
+                    "You can remove them any time on your hub.");
       var ok = false; try{ ok = window.confirm(ask); }catch(_){ ok = false; }
       if(!ok) return { added: 0, skipped: n, cancelled: true };
       if(!_token || !_base) return { added: 0, skipped: n, state: "not-paired" };
@@ -731,7 +749,7 @@
     // never intercepts it. Security screens (mismatch/reVerify) only gain EXPLANATION this way — never a
     // bypass. NOT VERIFIED on-device: #tipPop z-index vs this overlay (bump #tipPop if a tip is occluded).
     var helpBtn = el("button", "wavrm-help", "?"); helpBtn.type = "button";
-    helpBtn.setAttribute("aria-label", "Help — explain the controls on this screen");
+    helpBtn.setAttribute("aria-label", T("Help — explain the controls on this screen"));
     helpBtn.onclick = function(){ try{ var hb = document.getElementById("helpModeBtn"); if(hb) hb.click(); }catch(_){} };
     card.appendChild(helpBtn);
     overlay.appendChild(card);
@@ -790,14 +808,14 @@
   var _coreWatchActive = false;
   function showChooseCore(){
     var card = ensureOverlay("chooseCore");
-    card.appendChild(el("h2", "wavrm-h", "Find your Wavr hub"));
-    var sub = el("p", "wavrm-sub", "Looking for hubs on your Wi-Fi…"); card.appendChild(sub);
+    card.appendChild(el("h2", "wavrm-h", T("Find your Wavr hub")));
+    var sub = el("p", "wavrm-sub", T("Looking for hubs on your Wi-Fi…")); card.appendChild(sub);
     var spin = el("div", "wavrm-spin", ""); card.appendChild(spin);
     var list = el("div", "wavrm-field"); card.appendChild(list);
 
     // Manual entry is always a LAST-RESORT secondary, never a co-equal primary.
     function appendManual(label){
-      var m = el("button", "wavrm-btn ghost", label || "Enter address manually"); m.type = "button";
+      var m = el("button", "wavrm-btn ghost", label || T("Enter address manually")); m.type = "button";
       m.onclick = function(){ stopCoreWatch(); showSetup(); };
       card.appendChild(m);
     }
@@ -820,8 +838,8 @@
 
     if(!zeroconfAvailable()){
       try{ spin.remove(); }catch(_){}
-      sub.textContent = "Automatic discovery isn't available on this device.";
-      appendManual("Enter address manually");
+      sub.textContent = T("Automatic discovery isn't available on this device.");
+      appendManual(T("Enter address manually"));
       return;
     }
 
@@ -835,13 +853,13 @@
       clearTimeout(noHubTimer);
       try{ spin.remove(); }catch(_){}
       if(found.length === 1){
-        sub.textContent = "Found your Wavr hub.";
+        sub.textContent = T("Found your Wavr hub.");
         list.appendChild(coreRow(found[0]));
-        appendManual("Enter a different address");
+        appendManual(T("Enter a different address"));
       } else {
-        sub.textContent = "Choose your Wavr hub.";
+        sub.textContent = T("Choose your Wavr hub.");
         found.forEach(function(core){ list.appendChild(coreRow(core)); });
-        appendManual("Enter address manually");
+        appendManual(T("Enter address manually"));
       }
     }
     function onFound(svc){
@@ -876,13 +894,13 @@
       // reports that much and no more — an app cannot read a VPN's routing
       // table, so this names a likely cause and never asserts one.
       var aviso = el("p", "wavrm-sub",
-        "Nothing answered on this Wi-Fi. Your hub can be running and reachable " +
-        "and still not be found this way.");
+        T("Nothing answered on this Wi-Fi. Your hub can be running and reachable " +
+        "and still not be found this way."));
       card.appendChild(aviso);
-      var again = el("button", "wavrm-btn", "Search again"); again.type = "button";
+      var again = el("button", "wavrm-btn", T("Search again")); again.type = "button";
       again.onclick = function(){ showChooseCore(); };
       card.appendChild(again);
-      appendManual("Enter address manually");
+      appendManual(T("Enter address manually"));
 
       var net = (window.Capacitor && window.Capacitor.Plugins &&
                  window.Capacitor.Plugins.WavrNet);
@@ -890,9 +908,9 @@
         Promise.resolve(net.networkFacts()).then(function(f){
           if(!f || !f.known || !f.vpnActive) return;
           var vpn = el("p", "wavrm-sub",
-            "A VPN is on. VPNs usually capture the discovery traffic Wavr uses " +
+            T("A VPN is on. VPNs usually capture the discovery traffic Wavr uses " +
             "to find a hub, even when the hub itself is reachable. Turn the VPN " +
-            "off and search again — or enter the address, which works either way.");
+            "off and search again — or enter the address, which works either way."));
           card.insertBefore(vpn, again);
         }).catch(function(){ /* unknown stays unsaid */ });
       }
@@ -902,8 +920,8 @@
       clearTimeout(noHubTimer); clearTimeout(decideTimer);
       if(settled) return; settled = true;
       try{ spin.remove(); }catch(_){}
-      sub.textContent = "Couldn't search for hubs on this network.";
-      appendManual("Enter address manually");
+      sub.textContent = T("Couldn't search for hubs on this network.");
+      appendManual(T("Enter address manually"));
     });
   }
   // Only "resolved" events carry a usable address (jmdns fires "added" before resolution completes);
@@ -1002,25 +1020,25 @@
   // ----- Screen 1: setup (IP:port). No camera in Phase 1. -----
   function showSetup(){
     var card = ensureOverlay("setup");
-    card.appendChild(el("h2", "wavrm-h", "Connect to your Wavr hub"));
+    card.appendChild(el("h2", "wavrm-h", T("Connect to your Wavr hub")));
     card.appendChild(el("p", "wavrm-sub",
-      "Enter the address shown on the hub's own dashboard, under Settings, Pair device."));
-    var f1 = el("label", "wavrm-field"); f1.appendChild(el("span", "wavrm-lab", "Hub IP address"));
+      T("Enter the address shown on the hub's own dashboard, under Settings, Pair device.")));
+    var f1 = el("label", "wavrm-field"); f1.appendChild(el("span", "wavrm-lab", T("Hub IP address")));
     var ip = el("input", "wavrm-input"); ip.type = "text"; ip.inputMode = "decimal";
-    ip.autocomplete = "off"; ip.placeholder = "192.168.1.50"; ip.setAttribute("aria-label", "hub IP address");
+    ip.autocomplete = "off"; ip.placeholder = "192.168.1.50"; ip.setAttribute("aria-label", T("hub IP address"));
     f1.appendChild(ip); card.appendChild(f1);
-    var f2 = el("label", "wavrm-field"); f2.appendChild(el("span", "wavrm-lab", "Port"));
+    var f2 = el("label", "wavrm-field"); f2.appendChild(el("span", "wavrm-lab", T("Port")));
     var port = el("input", "wavrm-input"); port.type = "text"; port.inputMode = "numeric";
-    port.value = "8000"; port.setAttribute("aria-label", "port");
+    port.value = "8000"; port.setAttribute("aria-label", T("port"));
     f2.appendChild(port); card.appendChild(f2);
     if(_base){ var m = /^https?:\/\/([^:/]+)(?::(\d+))?/i.exec(_base); if(m){ ip.value = m[1]; if(m[2]) port.value = m[2]; } }
     var msg = el("p", "wavrm-msg", "");
-    var btn = el("button", "wavrm-btn", "Continue"); btn.type = "button";
-    btn.setAttribute("data-tip", "Saves the hub address and moves on to verifying its certificate.");
+    var btn = el("button", "wavrm-btn", T("Continue")); btn.type = "button";
+    btn.setAttribute("data-tip", T("Saves the hub address and moves on to verifying its certificate."));
     btn.onclick = function(){
       var host = (ip.value || "").trim(), p = (port.value || "").trim() || "8000";
-      if(!isHost(host)){ msg.className = "wavrm-msg err"; msg.textContent = "Enter a valid IP address."; return; }
-      if(!isPort(p)){ msg.className = "wavrm-msg err"; msg.textContent = "Enter a valid port (1 to 65535)."; return; }
+      if(!isHost(host)){ msg.className = "wavrm-msg err"; msg.textContent = T("Enter a valid IP address."); return; }
+      if(!isPort(p)){ msg.className = "wavrm-msg err"; msg.textContent = T("Enter a valid port (1 to 65535)."); return; }
       _base = "https://" + host + ":" + p;
       showScanPair();   // QR scan primary; the typed 6-digit path stays reachable from inside showScanPair
     };
@@ -1044,28 +1062,28 @@
   // only and 403s a LAN phone, so this typed-verify6 flow could never complete — it was removed from the UI.
   function showVerify(){
     var card = ensureOverlay("verify");
-    card.appendChild(el("h2", "wavrm-h", "Verify your hub"));
+    card.appendChild(el("h2", "wavrm-h", T("Verify your hub")));
     card.appendChild(el("p", "wavrm-sub",
-      "Your Wavr hub shows a 6-digit code on its own screen (open Settings, then Pair device). " +
-      "Type that code below so this phone can confirm it is really talking to your hub."));
+      T("Your Wavr hub shows a 6-digit code on its own screen (open Settings, then Pair device). " +
+      "Type that code below so this phone can confirm it is really talking to your hub.")));
     card.appendChild(el("p", "wavrm-warn",
-      "Only use the code shown on the hub's own screen. If the codes never match, stop — " +
-      "someone may be intercepting your network."));
+      T("Only use the code shown on the hub's own screen. If the codes never match, stop — " +
+      "someone may be intercepting your network.")));
 
     var f = el("label", "wavrm-field");
-    f.appendChild(el("span", "wavrm-lab", "Enter the 6-digit code shown on your hub"));
+    f.appendChild(el("span", "wavrm-lab", T("Enter the 6-digit code shown on your hub")));
     var codeIn = el("input", "wavrm-input"); codeIn.type = "text";
     codeIn.inputMode = "numeric"; codeIn.setAttribute("inputmode", "numeric");
     codeIn.setAttribute("pattern", "[0-9]*"); codeIn.autocomplete = "off"; codeIn.spellcheck = false;
     codeIn.maxLength = 6; codeIn.placeholder = "000000";
-    codeIn.setAttribute("aria-label", "6-digit code shown on your hub");
+    codeIn.setAttribute("aria-label", T("6-digit code shown on your hub"));
     f.appendChild(codeIn); card.appendChild(f);
 
     // The presence label is NOT collected here -- it is collected once at showRequestPairing() (Gate B),
     // right after this pin. This screen is purely the out-of-band certificate compare.
-    var pinBtn = el("button", "wavrm-btn", "Verify & connect"); pinBtn.type = "button"; pinBtn.disabled = true;
-    pinBtn.setAttribute("data-tip", "Trusts this hub. Enabled only when the 6-digit code you typed matches the one derived from the hub's own certificate.");
-    var backBtn = el("button", "wavrm-btn ghost", "Back"); backBtn.type = "button";
+    var pinBtn = el("button", "wavrm-btn", T("Verify & connect")); pinBtn.type = "button"; pinBtn.disabled = true;
+    pinBtn.setAttribute("data-tip", T("Trusts this hub. Enabled only when the 6-digit code you typed matches the one derived from the hub's own certificate."));
+    var backBtn = el("button", "wavrm-btn ghost", T("Back")); backBtn.type = "button";
     var msg = el("p", "wavrm-msg", "");
 
     // fp = PROBED cert fingerprint (anchor). pairCode = short-TTL rotating code (closure only; NEVER
@@ -1077,10 +1095,10 @@
     function deriveExpect(){
       if(deriving || expect6 || !fp || pairCode == null) return;
       var p = computeVerify6(fp, pairCode);
-      if(!p){ msg.className = "wavrm-msg err"; msg.textContent = "This device can't verify securely. Update the app."; return; }
+      if(!p){ msg.className = "wavrm-msg err"; msg.textContent = T("This device can't verify securely. Update the app."); return; }
       deriving = true;
       p.then(function(v){ expect6 = v; deriving = false; recompute(); },
-             function(){ deriving = false; msg.className = "wavrm-msg err"; msg.textContent = "Couldn't verify the code. Try again."; });
+             function(){ deriving = false; msg.className = "wavrm-msg err"; msg.textContent = T("Couldn't verify the code. Try again."); });
     }
     codeIn.oninput = function(){
       recompute();
@@ -1088,7 +1106,7 @@
       // the only way forward is a code that actually derives from the probed cert.
       if(expect6 && typed().length === 6 && typed() !== expect6){
         msg.className = "wavrm-msg err";
-        msg.textContent = "That code doesn't match your hub. Re-check the hub's screen. If it never matches, someone may be intercepting your network — stop.";
+        msg.textContent = T("That code doesn't match your hub. Re-check the hub's screen. If it never matches, someone may be intercepting your network — stop.");
       } else if(msg.className === "wavrm-msg err" && (typed().length < 6)){
         msg.textContent = ""; msg.className = "wavrm-msg";
       }
@@ -1098,7 +1116,7 @@
       if(!fp || !expect6 || typed() !== expect6) return;   // defence in depth: never pin without a derived match
       _pinnedFp = fp;                                       // anchor = the PROBED cert, never a body value
       _coreName = _pendingCoreName || _base;                // Task 6: friendly Core name (mDNS pick or base)
-      pinBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Saving…";
+      pinBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = T("Saving…");
       Promise.all([ persistPairing(_base, fp, null),
                     secureSet(K_CORE_NAME, _coreName) ]).then(function(){
         // Gate A done (cert pinned via the out-of-band 6-digit derivation). Gate B (authorization) is the
@@ -1107,7 +1125,7 @@
       }, function(){
         _pinnedFp = null;                                    // durable write failed: do NOT pretend paired
         msg.className = "wavrm-msg err";
-        msg.textContent = "Couldn't save the pairing securely. Try again.";
+        msg.textContent = T("Couldn't save the pairing securely. Try again.");
         recompute();
       });
     };
@@ -1116,7 +1134,7 @@
     // Back-to-discovery: a discovery user who reached verify by picking a hub must not be stranded at the
     // manual-IP setup screen (plain Back goes there). Offer a second ghost path straight back to the list.
     if(zeroconfAvailable()){
-      var discBtn = el("button", "wavrm-btn ghost", "Back to hub list"); discBtn.type = "button";
+      var discBtn = el("button", "wavrm-btn ghost", T("Back to hub list")); discBtn.type = "button";
       discBtn.onclick = function(){ showChooseCore(); };
       card.appendChild(discBtn);
     }
@@ -1128,16 +1146,16 @@
     // stored or transmitted; still under the isNative guard; ships only after an egress sign-off.
 
     if(!WavrNet || typeof WavrNet.probe !== "function"){
-      msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available."; return;
+      msg.className = "wavrm-msg err"; msg.textContent = T("Native networking is not available."); return;
     }
     // 1) Probe the cert -> PROBED fingerprint. Never rendered as hex; used only inside the derivation.
     WavrNet.probe({ url: _base }).then(function(r){
       fp = (r && r.fingerprint) || null;
-      if(!fp){ msg.className = "wavrm-msg err"; msg.textContent = "The hub presented no certificate. Check the address."; return; }
+      if(!fp){ msg.className = "wavrm-msg err"; msg.textContent = T("The hub presented no certificate. Check the address."); return; }
       deriveExpect();
     }).catch(function(){
       msg.className = "wavrm-msg err";
-      msg.textContent = "Could not reach " + _base + ". Check the address and that the hub is on.";
+      msg.textContent = T("Could not reach {hub}. Check the address and that the hub is on.", { hub: _base });
     });
     // 2) Fetch the hub's short-TTL rotating pair_code over the (still-unverified) pinned transport. body.verify6
     // and body.cert_fingerprint are IGNORED as anchors (a MitM controls the body); we derive locally from the
@@ -1150,12 +1168,12 @@
       return res.json();
     }).then(function(body){
       pairCode = body && body.code;                          // rotating short-TTL code; closure only
-      if(pairCode == null || pairCode === ""){ msg.className = "wavrm-msg err"; msg.textContent = "Your hub didn't return a pairing code. Try again."; return; }
+      if(pairCode == null || pairCode === ""){ msg.className = "wavrm-msg err"; msg.textContent = T("Your hub didn't return a pairing code. Try again."); return; }
       deriveExpect();
     }).catch(function(err){
       if(err && err.code === "PIN_MISMATCH") return;         // no pin yet, but keep the discipline
       msg.className = "wavrm-msg err";
-      msg.textContent = "Couldn't get a code from " + _base + ". Check the hub is on and try again.";
+      msg.textContent = T("Couldn't get a code from {hub}. Check the hub is on and try again.", { hub: _base });
     });
   }
 
@@ -1195,27 +1213,27 @@
   // its /api/pair-code fetch is admin/loopback-only (403 for a LAN phone), so it was a dead, misleading path.
   function showScanPair(){
     var card = ensureOverlay("scanPair");
-    card.appendChild(el("h2", "wavrm-h", "Scan your hub's QR"));
+    card.appendChild(el("h2", "wavrm-h", T("Scan your hub's QR")));
     card.appendChild(el("p", "wavrm-sub",
-      "On your Wavr hub, open Settings then Devices to show its pairing QR. Enter your name, then point the camera at it."));
+      T("On your Wavr hub, open Settings then Devices to show its pairing QR. Enter your name, then point the camera at it.")));
     var f = el("label", "wavrm-field");
-    f.appendChild(el("span", "wavrm-lab", "Your name on this device (shown as your presence at home)"));
+    f.appendChild(el("span", "wavrm-lab", T("Your name on this device (shown as your presence at home)")));
     var nameIn = el("input", "wavrm-input"); nameIn.type = "text"; nameIn.autocomplete = "off";
-    nameIn.maxLength = 48; nameIn.placeholder = "e.g., Augusto"; nameIn.value = _presenceLabel || "";
-    nameIn.setAttribute("aria-label", "your name on this device");
+    nameIn.maxLength = 48; nameIn.placeholder = T("e.g., Alex"); nameIn.value = _presenceLabel || "";
+    nameIn.setAttribute("aria-label", T("your name on this device"));
     f.appendChild(nameIn); card.appendChild(f);
     var msg = el("p", "wavrm-msg", "");
-    var scanBtn = el("button", "wavrm-btn", "Open camera to scan"); scanBtn.type = "button";
-    scanBtn.setAttribute("data-tip", "Scans the hub's QR: pins its full certificate and pairs, no typing.");
+    var scanBtn = el("button", "wavrm-btn", T("Open camera to scan")); scanBtn.type = "button";
+    scanBtn.setAttribute("data-tip", T("Scans the hub's QR: pins its full certificate and pairs, no typing."));
     scanBtn.onclick = function(){
       var name = (nameIn.value || "").trim();
-      if(!name){ msg.className = "wavrm-msg err"; msg.textContent = "Enter your name on this device."; return; }
+      if(!name){ msg.className = "wavrm-msg err"; msg.textContent = T("Enter your name on this device."); return; }
       _presenceLabel = name;
       secureSet(K_PRESENCE_LABEL, name).catch(function(){});   // best-effort; display-only, not a credential
       startCameraScan(name);
     };
     card.appendChild(scanBtn);
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ if(zeroconfAvailable()){ showChooseCore(); } else { showSetup(); } };
     card.appendChild(back);
     card.appendChild(msg);
@@ -1226,13 +1244,13 @@
   // onScannedPayload. Always tears the stream down (cancel, success, or error) -> no camera left running.
   function startCameraScan(name){
     var card = ensureOverlay("cameraScan");
-    card.appendChild(el("h2", "wavrm-h", "Point at the hub's QR"));
+    card.appendChild(el("h2", "wavrm-h", T("Point at the hub's QR")));
     var video = document.createElement("video");
     video.setAttribute("playsinline", ""); video.muted = true; video.autoplay = true;
     video.style.width = "100%"; video.style.maxWidth = "320px"; video.style.aspectRatio = "1 / 1";
     video.style.objectFit = "cover"; video.style.borderRadius = "14px"; video.style.background = "#000";
     card.appendChild(video);
-    var msg = el("p", "wavrm-msg", "Looking for the QR…");
+    var msg = el("p", "wavrm-msg", T("Looking for the QR…"));
     var canvas = document.createElement("canvas");
     var ctx = canvas.getContext("2d", { willReadFrequently: true });
     var stream = null, raf = 0, done = false, jsQRfn = null;
@@ -1241,11 +1259,11 @@
       if(raf){ try{ cancelAnimationFrame(raf); }catch(_){} raf = 0; }
       if(stream){ try{ stream.getTracks().forEach(function(t){ t.stop(); }); }catch(_){} stream = null; }
     }
-    var cancel = el("button", "wavrm-btn ghost", "Cancel"); cancel.type = "button";
+    var cancel = el("button", "wavrm-btn ghost", T("Cancel")); cancel.type = "button";
     cancel.onclick = function(){ stop(); showScanPair(); };
     card.appendChild(cancel); card.appendChild(msg);
     if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
-      msg.className = "wavrm-msg err"; msg.textContent = "This device can't open a camera to scan the pairing QR."; return;
+      msg.className = "wavrm-msg err"; msg.textContent = T("This device can't open a camera to scan the pairing QR."); return;
     }
     // Two failures, two sentences. They used to share one `catch`, so a decoder
     // that would not load was reported as "Couldn't open the camera. Check no
@@ -1286,15 +1304,15 @@
       if(carregandoLeitor){
         // Nothing was asked of the camera. Say that, and offer the way through
         // that still works — the typed code needs no decoder and no camera.
-        msg.textContent = "This build is missing the QR decoder, so scanning "
+        msg.textContent = T("This build is missing the QR decoder, so scanning "
           + "cannot work here. Nothing is wrong with your camera. Go back and "
-          + "type the code instead.";
+          + "type the code instead.");
       } else {
-        msg.textContent = denied
+        msg.textContent = T(denied
           ? "Camera access is off. Allow the camera for Wavr, then go back and scan again."
-          : "Couldn't open the camera. Check no other app is using it, then go back and scan again.";
+          : "Couldn't open the camera. Check no other app is using it, then go back and scan again.");
       }
-      var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+      var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
       back.onclick = function(){ showScanPair(); }; card.appendChild(back);
     });
   }
@@ -1306,29 +1324,29 @@
     var p = null;
     try{ p = JSON.parse(text); }catch(_){}
     if(!p || !p.fp || p.c == null || p.c === ""){
-      scanHardFail("That QR isn't a Wavr pairing code. Open Settings then Devices on your hub and scan the QR shown there.", name, true);
+      scanHardFail(T("That QR isn't a Wavr pairing code. Open Settings then Devices on your hub and scan the QR shown there."), name, true);
       return;
     }
     var qrFp = String(p.fp), code = String(p.c);
     var card = ensureOverlay("scanVerify");
     card.appendChild(el("div", "wavrm-spin", ""));
-    card.appendChild(el("h2", "wavrm-h", "Checking the hub…"));
-    var msg = el("p", "wavrm-msg", "Matching the hub's certificate…"); card.appendChild(msg);
+    card.appendChild(el("h2", "wavrm-h", T("Checking the hub…")));
+    var msg = el("p", "wavrm-msg", T("Matching the hub's certificate…")); card.appendChild(msg);
     if(!WavrNet || typeof WavrNet.probe !== "function"){
-      msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available."; return;
+      msg.className = "wavrm-msg err"; msg.textContent = T("Native networking is not available."); return;
     }
     // Probe the ACTUAL cert at _base (the mDNS / manually chosen hub) and require it to EQUAL the scanned
     // full fingerprint. A LAN MitM presents a different cert -> normHex mismatch -> hard stop, never pin.
     WavrNet.probe({ url: _base }).then(function(r){
       var probed = (r && r.fingerprint) || null;
-      if(!probed){ scanHardFail("The hub presented no certificate. Check you picked the right hub.", name, false); return; }
+      if(!probed){ scanHardFail(T("The hub presented no certificate. Check you picked the right hub."), name, false); return; }
       if(normHex(probed) !== normHex(qrFp)){
-        scanHardFail("The hub's certificate does NOT match the QR. Stop — someone may be intercepting your network. If it keeps happening, pair on your home Wi-Fi.", name, false);
+        scanHardFail(T("The hub's certificate does NOT match the QR. Stop — someone may be intercepting your network. If it keeps happening, pair on your home Wi-Fi."), name, false);
         return;
       }
       _pinnedFp = probed;                                    // anchor == the scanned full fp (machine-verified)
       _coreName = _pendingCoreName || _base;
-      msg.className = "wavrm-msg"; msg.textContent = "Codes match. Connecting…";
+      msg.className = "wavrm-msg"; msg.textContent = T("Codes match. Connecting…");
       // Persist the pin, then redeem the code over the PINNED transport (netFetch uses _pinnedFp). 403 =
       // the code rotated/expired -> scan a fresh QR. A cert swap now hard-fails via PIN_MISMATCH.
       persistPairing(_base, probed, null).then(function(){
@@ -1345,33 +1363,33 @@
         return res.json();
       }).then(function(body){
         var token = body && body.token, deviceId = body && body.device_id;
-        if(!token){ scanHardFail("The hub accepted the code but sent no token. Scan a fresh QR.", name, false); return; }
+        if(!token){ scanHardFail(T("The hub accepted the code but sent no token. Scan a fresh QR."), name, false); return; }
         persistPairing(_base, probed, token).then(function(){
           _token = token;                                    // sync cache; the reload re-reads it from Keystore
           try{ onPaired({ device_id: deviceId }); }catch(_){}
-          showConnecting("Connecting to " + (_coreName || "your home") + "…");
+          showConnecting(T("Connecting to {hub}…", { hub: _coreName || T("your home") }));
           try{ location.reload(); }catch(_){}                // reboot straight into the dashboard viewer
         }, function(){
           _pinnedFp = null;                                  // durable write failed: do NOT pretend paired
-          scanHardFail("Couldn't save the pairing securely. Try again.", name, false);
+          scanHardFail(T("Couldn't save the pairing securely. Try again."), name, false);
         });
       }).catch(function(err){
         if(err && err.code === "PIN_MISMATCH") return;       // netFetch already raised the hard-fail card
-        scanHardFail("Couldn't finish pairing at " + (_coreName || _base) + ". The code may have expired — scan a fresh QR.", name, false);
+        scanHardFail(T("Couldn't finish pairing at {hub}. The code may have expired — scan a fresh QR.", { hub: _coreName || _base }), name, false);
       });
     }).catch(function(){
-      scanHardFail("Couldn't reach the hub. Check it's on and you're on the same Wi-Fi, then scan again.", name, false);
+      scanHardFail(T("Couldn't reach the hub. Check it's on and you're on the same Wi-Fi, then scan again."), name, false);
     });
   }
 
   function scanHardFail(text, name, isBadQr){
     var card = ensureOverlay("scanFail");
-    card.appendChild(el("h2", "wavrm-h", isBadQr ? "That isn't a Wavr QR" : "Pairing stopped"));
+    card.appendChild(el("h2", "wavrm-h", T(isBadQr ? "That isn't a Wavr QR" : "Pairing stopped")));
     card.appendChild(el("p", isBadQr ? "wavrm-sub" : "wavrm-warn", text));
-    var retry = el("button", "wavrm-btn", "Scan again"); retry.type = "button";
+    var retry = el("button", "wavrm-btn", T("Scan again")); retry.type = "button";
     retry.onclick = function(){ startCameraScan(name); };
     card.appendChild(retry);
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ showScanPair(); };
     card.appendChild(back);
   }
@@ -1380,7 +1398,7 @@
   function showConnecting(text){
     var card = ensureOverlay("connecting");
     card.appendChild(el("div", "wavrm-spin", ""));
-    card.appendChild(el("p", "wavrm-sub", text || "Connecting to your home…"));
+    card.appendChild(el("p", "wavrm-sub", text || T("Connecting to your home…")));
   }
 
   // ================= APPROVE-ON-CORE PAIRING (Gate B: authorization) =================
@@ -1397,26 +1415,26 @@
   // ----- Screen 3: ask the hub to approve this device (PRIMARY; replaces the 8-digit entry) -----
   function showRequestPairing(){
     var card = ensureOverlay("requestPairing");   // ensureOverlay() cancels any prior poll
-    card.appendChild(el("h2", "wavrm-h", "Ask your hub to let this device in"));
+    card.appendChild(el("h2", "wavrm-h", T("Ask your hub to let this device in")));
     card.appendChild(el("p", "wavrm-sub",
-      "The hub's owner will see this request on the hub's own screen and tap Approve. No code to type."));
+      T("The hub's owner will see this request on the hub's own screen and tap Approve. No code to type.")));
     var f = el("label", "wavrm-field");
-    f.appendChild(el("span", "wavrm-lab", "Your name on this device (shown as your presence at home)"));
+    f.appendChild(el("span", "wavrm-lab", T("Your name on this device (shown as your presence at home)")));
     var nameIn = el("input", "wavrm-input"); nameIn.type = "text"; nameIn.autocomplete = "off";
     nameIn.maxLength = 48;   // display label only; textContent + JSON.stringify keep it injection-safe
-    nameIn.placeholder = "e.g., Augusto"; nameIn.value = _presenceLabel || "";
-    nameIn.setAttribute("aria-label", "your name on this device");
+    nameIn.placeholder = T("e.g., Alex"); nameIn.value = _presenceLabel || "";
+    nameIn.setAttribute("aria-label", T("your name on this device"));
     f.appendChild(nameIn); card.appendChild(f);
     var msg = el("p", "wavrm-msg", "");
-    var askBtn = el("button", "wavrm-btn", "Ask to connect"); askBtn.type = "button";
-    askBtn.setAttribute("data-tip", "Sends a request to your hub. Its owner approves it on the hub's own screen — no code to type.");
+    var askBtn = el("button", "wavrm-btn", T("Ask to connect")); askBtn.type = "button";
+    askBtn.setAttribute("data-tip", T("Sends a request to your hub. Its owner approves it on the hub's own screen — no code to type."));
     askBtn.onclick = function(){
       var name = (nameIn.value || "").trim();
-      if(!name){ msg.className = "wavrm-msg err"; msg.textContent = "Enter your name on this device."; return; }
+      if(!name){ msg.className = "wavrm-msg err"; msg.textContent = T("Enter your name on this device."); return; }
       if(!WavrNet || typeof WavrNet.request !== "function"){
-        msg.className = "wavrm-msg err"; msg.textContent = "Native networking is not available."; return;
+        msg.className = "wavrm-msg err"; msg.textContent = T("Native networking is not available."); return;
       }
-      askBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Contacting your hub…";
+      askBtn.disabled = true; msg.className = "wavrm-msg"; msg.textContent = T("Contacting your hub…");
       _presenceLabel = name;
       secureSet(K_PRESENCE_LABEL, name).catch(function(){});   // best-effort; display-only, not a credential
       // POST over the PINNED transport (netFetch uses _pinnedFp set by showVerify). A cert swap since the
@@ -1445,14 +1463,14 @@
       }).catch(function(err){
         if(err && err.code === "PIN_MISMATCH") return;             // hard-fail card already raised by netFetch
         askBtn.disabled = false; msg.className = "wavrm-msg err";
-        msg.textContent = "Couldn't reach " + _base + ". Check the hub is on and try again.";
+        msg.textContent = T("Couldn't reach {hub}. Check the hub is on and try again.", { hub: _base });
       });
     };
     card.appendChild(askBtn);
-    var fb = el("button", "wavrm-btn ghost", "Enter an 8-digit code instead"); fb.type = "button";
+    var fb = el("button", "wavrm-btn ghost", T("Enter an 8-digit code instead")); fb.type = "button";
     fb.onclick = function(){ revealCodeEntry(); hideOverlay(); };   // fallback: index.html's #companionPair
     card.appendChild(fb);
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ showChooseCore(); };
     card.appendChild(back);
     card.appendChild(msg);
@@ -1466,44 +1484,44 @@
     var started = Date.now();
     var TTL_MS = 180000;   // mirrors backend REQUEST_TTL (180s); client-side hard stop so we never hang
     card.appendChild(el("div", "wavrm-spin", ""));
-    card.appendChild(el("h2", "wavrm-h", "Approve this device on your Wavr hub"));
+    card.appendChild(el("h2", "wavrm-h", T("Approve this device on your Wavr hub")));
     card.appendChild(el("p", "wavrm-sub",
-      "On your Wavr hub's screen you'll see a request from “" + name + "”. Check the number below " +
-      "matches the one shown on the hub, then tap Approve there."));
+      T("On your Wavr hub's screen you'll see a request from “{name}”. Check the number below " +
+        "matches the one shown on the hub, then tap Approve there.", { name: name })));
     // PRIMARY match target: the per-request number the operator compares to pick THIS request out of any
     // racing ones. Numeric string -> fpBlock uses textContent (XSS-safe). Never logged, never persisted.
-    card.appendChild(el("span", "wavrm-lab", "Confirmation number — check it matches your Wavr hub's screen"));
+    card.appendChild(el("span", "wavrm-lab", T("Confirmation number — check it matches your Wavr hub's screen")));
     card.appendChild(fpBlock(compareCode || "——————"));
     // SECONDARY transport-MitM check: the pinned/probed cert fingerprint (the hub shows the same value).
-    card.appendChild(el("span", "wavrm-lab", "This device's certificate fingerprint"));
+    card.appendChild(el("span", "wavrm-lab", T("This device's certificate fingerprint")));
     card.appendChild(fpBlock(fpDisplay(_pinnedFp)));   // the pinned/probed cert; the hub shows the same value
     card.appendChild(el("p", "wavrm-warn",
-      "If the hub shows a different number or fingerprint, someone may be intercepting your network. Tap Deny on the hub."));
-    var msg = el("p", "wavrm-msg", "Waiting for approval…");
+      T("If the hub shows a different number or fingerprint, someone may be intercepting your network. Tap Deny on the hub.")));
+    var msg = el("p", "wavrm-msg", T("Waiting for approval…"));
     card.appendChild(msg);
-    var fb = el("button", "wavrm-btn ghost", "Enter an 8-digit code instead"); fb.type = "button";
+    var fb = el("button", "wavrm-btn ghost", T("Enter an 8-digit code instead")); fb.type = "button";
     fb.onclick = function(){ revealCodeEntry(); hideOverlay(); };
     card.appendChild(fb);
-    var cancel = el("button", "wavrm-btn ghost", "Cancel"); cancel.type = "button";
+    var cancel = el("button", "wavrm-btn ghost", T("Cancel")); cancel.type = "button";
     cancel.onclick = function(){ showRequestPairing(); };
     card.appendChild(cancel);
 
     function onApproved(body){
       stopPairPoll();   // no further polls; commit exactly once
       var token = body && body.token, deviceId = body && body.device_id;
-      if(!token){ msg.className = "wavrm-msg err"; msg.textContent = "The hub approved but sent no token. Try again."; return; }
-      msg.className = "wavrm-msg"; msg.textContent = "Approved. Saving…";
+      if(!token){ msg.className = "wavrm-msg err"; msg.textContent = T("The hub approved but sent no token. Try again."); return; }
+      msg.className = "wavrm-msg"; msg.textContent = T("Approved. Saving…");
       // Persist base+fp+token atomically (fp already pinned at showVerify; the re-write is idempotent). The
       // token is never rendered/logged. onPaired captures our device_id. A durable-write FAILURE surfaces an
       // error and does NOT pretend paired (mirrors showVerify / showReVerify).
       persistPairing(_base, _pinnedFp, token).then(function(){
         _token = token;                                     // sync cache; the reload re-reads it from Keystore
         try{ onPaired({ device_id: deviceId }); }catch(_){}
-        showConnecting("Connecting to " + (_coreName || "your home") + "…");
+        showConnecting(T("Connecting to {hub}…", { hub: _coreName || T("your home") }));
         try{ location.reload(); }catch(_){}                 // reboot straight into the dashboard viewer
       }, function(){
         msg.className = "wavrm-msg err";
-        msg.textContent = "Couldn't save the pairing securely. Try again.";   // Cancel -> Ask to connect retries
+        msg.textContent = T("Couldn't save the pairing securely. Try again.");   // Cancel -> Ask to connect retries
       });
     }
     function handle(res){
@@ -1541,14 +1559,14 @@
   // ----- Screen 5: the hub declined (operator tapped Deny). Never hangs -- always an actionable exit. -----
   function showDeclined(){
     var card = ensureOverlay("declined");
-    card.appendChild(el("h2", "wavrm-h", "Your hub declined this device"));
+    card.appendChild(el("h2", "wavrm-h", T("Your hub declined this device")));
     card.appendChild(el("p", "wavrm-sub",
-      "The request was denied on the hub. If that wasn't expected, check you asked the right person, then " +
-      "try again."));
-    var again = el("button", "wavrm-btn", "Ask again"); again.type = "button";
+      T("The request was denied on the hub. If that wasn't expected, check you asked the right person, then " +
+      "try again.")));
+    var again = el("button", "wavrm-btn", T("Ask again")); again.type = "button";
     again.onclick = function(){ showRequestPairing(); };
     card.appendChild(again);
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ showChooseCore(); };
     card.appendChild(back);
   }
@@ -1556,17 +1574,17 @@
   // ----- Screen 6: timed out (no approval within the TTL, or the hub stopped answering). -----
   function showTimedOut(networkFailed){
     var card = ensureOverlay("timedOut");
-    card.appendChild(el("h2", "wavrm-h", "The request timed out"));
-    card.appendChild(el("p", "wavrm-sub", networkFailed
+    card.appendChild(el("h2", "wavrm-h", T("The request timed out")));
+    card.appendChild(el("p", "wavrm-sub", T(networkFailed
       ? "We couldn't reach your hub while waiting. Check it's on and on the same Wi-Fi, then try again."
-      : "No one approved this device in time (about three minutes). You can ask again."));
-    var again = el("button", "wavrm-btn", "Ask again"); again.type = "button";
+      : "No one approved this device in time (about three minutes). You can ask again.")));
+    var again = el("button", "wavrm-btn", T("Ask again")); again.type = "button";
     again.onclick = function(){ showRequestPairing(); };
     card.appendChild(again);
-    var fb = el("button", "wavrm-btn ghost", "Enter an 8-digit code instead"); fb.type = "button";
+    var fb = el("button", "wavrm-btn ghost", T("Enter an 8-digit code instead")); fb.type = "button";
     fb.onclick = function(){ revealCodeEntry(); hideOverlay(); };
     card.appendChild(fb);
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ showChooseCore(); };
     card.appendChild(back);
   }
@@ -1583,15 +1601,15 @@
   }
   function showMismatch(presentedFp){
     var card = ensureOverlay("mismatch"); overlay.className = "danger";
-    card.appendChild(el("h2", "wavrm-h danger", "Certificate changed"));
+    card.appendChild(el("h2", "wavrm-h danger", T("Certificate changed")));
     card.appendChild(el("p", "wavrm-sub",
-      "The certificate presented by your hub no longer matches the one you verified. This can mean the " +
-      "certificate was rotated, or that someone is intercepting your connection. Wavr stopped to keep you safe."));
-    card.appendChild(el("span", "wavrm-lab", "Fingerprint you pinned"));
+      T("The certificate presented by your hub no longer matches the one you verified. This can mean the " +
+      "certificate was rotated, or that someone is intercepting your connection. Wavr stopped to keep you safe.")));
+    card.appendChild(el("span", "wavrm-lab", T("Fingerprint you pinned")));
     card.appendChild(fpBlock(fpDisplay(_pinnedFp)));
-    card.appendChild(el("span", "wavrm-lab", "Fingerprint now presented"));
+    card.appendChild(el("span", "wavrm-lab", T("Fingerprint now presented")));
     card.appendChild(fpBlock(fpDisplay(presentedFp)));
-    var btn = el("button", "wavrm-btn", "Re-verify the certificate"); btn.type = "button";
+    var btn = el("button", "wavrm-btn", T("Re-verify the certificate")); btn.type = "button";
     btn.onclick = function(){ showReVerify(); };
     card.appendChild(btn);
     // Deliberately NO "trust anyway" / "proceed" control.
@@ -1600,25 +1618,25 @@
   // ----- Deliberate re-verify: re-probe, show OLD vs NEW, require the ACTIVE last-6 challenge again. -----
   function showReVerify(){
     var card = ensureOverlay("reverify"); overlay.className = "danger";
-    card.appendChild(el("h2", "wavrm-h", "Re-verify the certificate"));
+    card.appendChild(el("h2", "wavrm-h", T("Re-verify the certificate")));
     card.appendChild(el("p", "wavrm-sub",
-      "Only continue if you can confirm the NEW fingerprint out of band, on your Wavr hub's own " +
-      "dashboard (Settings, Pair device). Compare every character."));
-    card.appendChild(el("span", "wavrm-lab", "Old (pinned)"));
+      T("Only continue if you can confirm the NEW fingerprint out of band, on your Wavr hub's own " +
+      "dashboard (Settings, Pair device). Compare every character.")));
+    card.appendChild(el("span", "wavrm-lab", T("Old (pinned)")));
     card.appendChild(fpBlock(fpDisplay(_pinnedFp)));
-    card.appendChild(el("span", "wavrm-lab", "New (presented now)"));
-    var newEl = fpBlock("reading…"); card.appendChild(newEl);
+    card.appendChild(el("span", "wavrm-lab", T("New (presented now)")));
+    var newEl = fpBlock(T("reading…")); card.appendChild(newEl);
     // FIX-E1: same ACTIVE challenge as first pairing. The typed last-6 is compared to the NEW probed
     // cert's last-6, so a MitM presenting its own cert cannot be re-pinned by a rushed user.
     var f = el("label", "wavrm-field");
     f.appendChild(el("span", "wavrm-lab",
-      "Type the last 6 characters of the new fingerprint shown on your Wavr hub (Settings, Pair device)"));
+      T("Type the last 6 characters of the new fingerprint shown on your Wavr hub (Settings, Pair device)")));
     var codeIn = el("input", "wavrm-input"); codeIn.type = "text"; codeIn.autocomplete = "off";
     codeIn.spellcheck = false; codeIn.autocapitalize = "characters"; codeIn.maxLength = 12;
-    codeIn.placeholder = "3F9A2C"; codeIn.setAttribute("aria-label", "last 6 fingerprint characters");
+    codeIn.placeholder = "3F9A2C"; codeIn.setAttribute("aria-label", T("last 6 fingerprint characters"));
     f.appendChild(codeIn); card.appendChild(f);
-    var repin = el("button", "wavrm-btn", "Re-pin and reconnect"); repin.type = "button"; repin.disabled = true;
-    var cancel = el("button", "wavrm-btn ghost", "Cancel"); cancel.type = "button";
+    var repin = el("button", "wavrm-btn", T("Re-pin and reconnect")); repin.type = "button"; repin.disabled = true;
+    var cancel = el("button", "wavrm-btn ghost", T("Cancel")); cancel.type = "button";
     var msg = el("p", "wavrm-msg", "");
     var newFp = null, expect = "";
     function recompute(){ repin.disabled = !(newFp && expect.length === 6 && normHex(codeIn.value) === expect); }
@@ -1627,26 +1645,26 @@
       if(repin.disabled) return;
       if(!newFp || expect.length !== 6 || normHex(codeIn.value) !== expect) return;   // defence in depth
       var prev = _pinnedFp; _pinnedFp = newFp;
-      repin.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Saving…";
+      repin.disabled = true; msg.className = "wavrm-msg"; msg.textContent = T("Saving…");
       persistPairing(_base, newFp, null).then(function(){
         showConnecting("Reconnecting…"); try{ location.reload(); }catch(_){}
       }, function(){
         _pinnedFp = prev;                                    // durable write failed: keep the trusted pin
         msg.className = "wavrm-msg err";
-        msg.textContent = "Couldn't save the pairing securely. Try again.";
+        msg.textContent = T("Couldn't save the pairing securely. Try again.");
         recompute();
       });
     };
     cancel.onclick = function(){ showMismatch(newFp); };
     card.appendChild(repin); card.appendChild(cancel); card.appendChild(msg);
-    if(!WavrNet || typeof WavrNet.probe !== "function"){ newEl.textContent = "(unavailable)"; return; }
+    if(!WavrNet || typeof WavrNet.probe !== "function"){ newEl.textContent = T("(unavailable)"); return; }
     WavrNet.probe({ url: _base }).then(function(r){
       newFp = (r && r.fingerprint) || null;
       expect = last6(newFp);
-      newEl.textContent = newFp ? fpDisplay(newFp) : "(no certificate presented)";
+      newEl.textContent = newFp ? fpDisplay(newFp) : T("(no certificate presented)");
       recompute();
     }).catch(function(){
-      newEl.textContent = "(unreachable)"; msg.className = "wavrm-msg err"; msg.textContent = "Could not reach the hub.";
+      newEl.textContent = T("(unreachable)"); msg.className = "wavrm-msg err"; msg.textContent = T("Could not reach the hub.");
     });
   }
 
@@ -1668,7 +1686,7 @@
   var _reconnecting = false;
   function connectPinned(onConnected){
     if(!WavrNet || typeof WavrNet.probe !== "function"){ onConnected(); return; }   // no probe -> today's blind handoff
-    showConnecting("Connecting to " + (_coreName || "your home") + "…");
+    showConnecting(T("Connecting to {hub}…", { hub: _coreName || T("your home") }));
     WavrNet.probe({ url: _base }).then(function(r){
       var fp = (r && r.fingerprint) || null;
       if(fp && _pinnedFp && normHex(fp) === normHex(_pinnedFp)){ onConnected(); return; }   // same verified cert -> silent
@@ -1683,7 +1701,7 @@
     if(!zeroconfAvailable() || !WavrNet || typeof WavrNet.probe !== "function"){
       _reconnecting = false; showUnreachable(onConnected); return;
     }
-    showConnecting("Reconnecting to " + (_coreName || "your home") + "…");
+    showConnecting(T("Reconnecting to {hub}…", { hub: _coreName || T("your home") }));
     var done = false, probed = {}, cap = 12;
     function finish(fn){ if(done) return; done = true; _reconnecting = false; clearTimeout(to); stopCoreWatch(); fn(); }
     var to = setTimeout(function(){ finish(function(){ showUnreachable(onConnected); }); }, 8000);
@@ -1712,13 +1730,13 @@
   // house: the overlay stays up with Search again + manual entry so the dead end is always recoverable.
   function showUnreachable(onConnected){
     var card = ensureOverlay("unreachable");
-    card.appendChild(el("h2", "wavrm-h", "Can't reach " + (_coreName || "your hub")));
+    card.appendChild(el("h2", "wavrm-h", T("Can't reach {hub}", { hub: _coreName || T("your hub") })));
     card.appendChild(el("p", "wavrm-sub",
-      "Your Wavr hub isn't answering at its last address, and we couldn't find it on this Wi-Fi. It may " +
-      "be off, on a different network, or its address may have changed."));
-    var again = el("button", "wavrm-btn", "Search again"); again.type = "button";
+      T("Your Wavr hub isn't answering at its last address, and we couldn't find it on this Wi-Fi. It may " +
+      "be off, on a different network, or its address may have changed.")));
+    var again = el("button", "wavrm-btn", T("Search again")); again.type = "button";
     again.onclick = function(){ connectPinned(onConnected); };
-    var manual = el("button", "wavrm-btn ghost", "Enter address manually"); manual.type = "button";
+    var manual = el("button", "wavrm-btn ghost", T("Enter address manually")); manual.type = "button";
     manual.onclick = function(){ showSetup(); };
     card.appendChild(again); card.appendChild(manual);
   }
@@ -1845,17 +1863,19 @@
     var running = isRunning(), lab = stateLabel();
     var sent = (_lastStatus && _lastStatus.sent) || 0, err = (_lastStatus && _lastStatus.err) || 0;
     if(_nodeUi){
-      _nodeUi.state.textContent = lab.toUpperCase();
+      // The class stays the wire value; only the word is translated.
+      _nodeUi.state.textContent = T(lab === "streaming" ? "Streaming"
+                                    : lab === "error" ? "Error" : "Idle").toUpperCase();
       _nodeUi.state.className = "wavrm-node-state " + lab;
-      _nodeUi.sent.textContent = String(sent);
-      _nodeUi.err.textContent = String(err);
-      _nodeUi.btn.textContent = running ? "Stop" : "Start";
+      _nodeUi.counts.textContent = T("sent {sent} · err {err}",
+                                     { sent: sent, err: err });
+      _nodeUi.btn.textContent = T(running ? "Stop" : "Start");
       _nodeUi.btn.className = running ? "wavrm-btn ghost" : "wavrm-btn";
     }
     if(_pillUi){
       _pillUi.dot.style.background = running ? "var(--accent,#3db54a)"
         : (lab === "error" ? "var(--danger,#e8726a)" : "var(--dim,#9AA4AD)");
-      _pillUi.txt.textContent = running ? ("streaming · " + sent) : (lab === "error" ? "sensor error" : "contribute");
+      _pillUi.txt.textContent = running ? T("streaming · {n}", { n: sent }) : T(lab === "error" ? "sensor error" : "contribute");
     }
   }
   // Gate any Start behind the one-time onboarding wizard ("gated before the first Start").
@@ -1869,8 +1889,8 @@
   // routes into the UNCHANGED pinned setup flow. -----
   function showChooser(){
     var card = ensureOverlay("chooser");
-    card.appendChild(el("h2", "wavrm-h", "What will this device do?"));
-    card.appendChild(el("p", "wavrm-sub", "Choose one or more. You'll connect this device to your hub next."));
+    card.appendChild(el("h2", "wavrm-h", T("What will this device do?")));
+    card.appendChild(el("p", "wavrm-sub", T("Choose one or more. You'll connect this device to your hub next.")));
     var sel = { sensor: false, viewer: false, admin: false };
     // The three descriptions are the first sentences anybody reads about this
     // app, on a screen they cannot skip, and two of them were wrong in ways
@@ -1890,9 +1910,9 @@
     // with Access level set to Admin. A viewer code pairs happily and the
     // manage half fails later, somewhere else, with no mention of this screen.
     var opts = [
-      { key: "sensor", primary: true,  h: "Contribute presence",  s: "Use this phone's own sensors to help Wavr tell who is home. It reports to your hub — it does not become one." },
-      { key: "viewer", primary: false, h: "Watch the home",        s: "See live presence and rooms on this device." },
-      { key: "admin",  primary: false, h: "Manage the home",       s: "Edit rooms and settings. On the hub, set Access level to Admin before you generate the code — a viewer code will not do it." }
+      { key: "sensor", primary: true,  h: T("Contribute presence"),  s: T("Use this phone's own sensors to help Wavr tell who is home. It reports to your hub — it does not become one.") },
+      { key: "viewer", primary: false, h: T("Watch the home"),        s: T("See live presence and rooms on this device.") },
+      { key: "admin",  primary: false, h: T("Manage the home"),       s: T("Edit rooms and settings. On the hub, set Access level to Admin before you generate the code — a viewer code will not do it.") }
     ];
     // A build that cannot sense does not offer to sense. Listing it and then
     // refusing later is how somebody ends up on a screen with a disabled
@@ -1900,7 +1920,7 @@
     // the four permission prompts happen BEFORE the refusal.
     opts = opts.filter(function(o){ return o.key !== "sensor" || sensorAvailable(); });
     if(opts.length && !opts.some(function(o){ return o.primary; })) opts[0].primary = true;
-    var cont = el("button", "wavrm-btn", "Continue"); cont.type = "button"; cont.disabled = true;
+    var cont = el("button", "wavrm-btn", T("Continue")); cont.type = "button"; cont.disabled = true;
     var msg = el("p", "wavrm-msg", "");
     function refresh(){ cont.disabled = !(sel.sensor || sel.viewer || sel.admin); }
     opts.forEach(function(o){
@@ -1926,7 +1946,7 @@
         showChooseCore();
       }, function(){
         cont.disabled = false; msg.className = "wavrm-msg err";
-        msg.textContent = "Couldn't save your choice securely. Try again.";
+        msg.textContent = T("Couldn't save your choice securely. Try again.");
       });
     };
     card.appendChild(cont); card.appendChild(msg);
@@ -1938,20 +1958,20 @@
   // caller's flow (node screen, or start for the combo pill). -----
   function showWizard(onDone){
     var steps = [
-      { h: "Allow notifications", s: "Wavr keeps a quiet ongoing notification while this device contributes, so Android lets it run in the background.",
-        cta: "Allow", run: function(){ return callSensor("requestPermissions", {}); } },
-      { h: "Keep Wavr running", s: "Let Wavr run without battery limits, so presence keeps flowing when the screen is off.",
-        cta: "Open battery settings", run: function(){ return callSensor("openBatteryExemption"); } },
-      { h: "Stop the system killing it", s: "Some phones (Samsung, Xiaomi) close background apps. If prompted, allow auto-start for Wavr. You can skip this.",
-        cta: "Open auto-start settings", run: function(){ return callSensor("openOemAutostart"); } },
-      { h: "Wi-Fi presence (optional)", s: "Optionally use Wi-Fi signal to improve presence. This needs location permission and never leaves your home. You can skip.",
-        cta: "Enable Wi-Fi presence", run: function(){ return callSensor("requestPermissions", { wifiIdentity: true }); } }
+      { h: T("Allow notifications"), s: T("Wavr keeps a quiet ongoing notification while this device contributes, so Android lets it run in the background."),
+        cta: T("Allow"), run: function(){ return callSensor("requestPermissions", {}); } },
+      { h: T("Keep Wavr running"), s: T("Let Wavr run without battery limits, so presence keeps flowing when the screen is off."),
+        cta: T("Open battery settings"), run: function(){ return callSensor("openBatteryExemption"); } },
+      { h: T("Stop the system killing it"), s: T("Some phones (Samsung, Xiaomi) close background apps. If prompted, allow auto-start for Wavr. You can skip this."),
+        cta: T("Open auto-start settings"), run: function(){ return callSensor("openOemAutostart"); } },
+      { h: T("Wi-Fi presence (optional)"), s: T("Optionally use Wi-Fi signal to improve presence. This needs location permission and never leaves your home. You can skip."),
+        cta: T("Enable Wi-Fi presence"), run: function(){ return callSensor("requestPermissions", { wifiIdentity: true }); } }
     ];
     var i = 0;
     function render(){
       var st = steps[i];
       var card = ensureOverlay("wizard");
-      card.appendChild(el("p", "wavrm-sub", "Set up " + (i + 1) + " of " + steps.length));
+      card.appendChild(el("p", "wavrm-sub", T("Set up {step} of {total}", { step: i + 1, total: steps.length })));
       card.appendChild(el("h2", "wavrm-h", st.h));
       card.appendChild(el("p", "wavrm-sub", st.s));
       var act = el("button", "wavrm-btn", st.cta); act.type = "button";
@@ -1972,31 +1992,32 @@
   function showNode(){
     ensureSensor();
     var card = ensureOverlay("node");
-    card.appendChild(el("h2", "wavrm-h", "Sensor node"));
+    card.appendChild(el("h2", "wavrm-h", T("Sensor node")));
     card.appendChild(el("p", "wavrm-sub",
-      "This device contributes presence to your home. Nothing leaves your local network."));
-    var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", "Device name"));
+      T("This device contributes presence to your home. Nothing leaves your local network.")));
+    var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", T("Device name")));
     var nameIn = el("input", "wavrm-input"); nameIn.type = "text"; nameIn.autocomplete = "off";
-    nameIn.value = defaultNodeName(); nameIn.setAttribute("aria-label", "device name");
+    nameIn.value = defaultNodeName(); nameIn.setAttribute("aria-label", T("device name"));
     f.appendChild(nameIn); card.appendChild(f);
     var stat = el("div", "wavrm-node-stat");
-    var stateEl = el("span", "wavrm-node-state idle", "IDLE");
+    var stateEl = el("span", "wavrm-node-state idle", T("Idle").toUpperCase());
+    // One sentence with two slots, not two labels with numbers wedged between
+    // them: "sent " and " · err " are fragments no language can reorder, and
+    // the counters are rendered together anyway. `renderSensor` rewrites the
+    // whole line, so the numbers stay live.
     var counts = el("span", "wavrm-node-counts", "");
-    var sentEl = el("b", null, "0"), errEl = el("b", null, "0");
-    counts.appendChild(document.createTextNode("sent ")); counts.appendChild(sentEl);
-    counts.appendChild(document.createTextNode("  ·  err ")); counts.appendChild(errEl);
     stat.appendChild(stateEl); stat.appendChild(counts); card.appendChild(stat);
-    var btn = el("button", "wavrm-btn", "Start"); btn.type = "button";
-    btn.setAttribute("data-tip", "Starts or stops contributing this device's presence to your home.");
-    _nodeUi = { state: stateEl, sent: sentEl, err: errEl, btn: btn };
+    var btn = el("button", "wavrm-btn", T("Start")); btn.type = "button";
+    btn.setAttribute("data-tip", T("Starts or stops contributing this device's presence to your home."));
+    _nodeUi = { state: stateEl, counts: counts, btn: btn };
     if(!sensorAvailable()){
       btn.disabled = true;
       card.appendChild(btn);
       // Says WHY, in words somebody can act on, instead of a dead end. Not an
       // error colour: nothing is broken here, this build simply does not do it.
       card.appendChild(el("p", "wavrm-msg",
-        "This version doesn't use the phone as a sensor. You can still see your "
-        + "Space, pair devices and change what Wavr is allowed to do."));
+        T("This version doesn't use the phone as a sensor. You can still see your "
+        + "Space, pair devices and change what Wavr is allowed to do.")));
     } else {
       btn.onclick = function(){
         if(isRunning()) stopSensor();
@@ -2008,9 +2029,9 @@
     // paired device regardless of role). Same control, registered in _consentUis; the boot cache gives it
     // the right colour immediately. postConsent uses the internal _token (present even though tokenGet
     // hides it from index.html on a sensor-only node).
-    card.appendChild(el("span", "wavrm-lab", "Your consent on this device"));
+    card.appendChild(el("span", "wavrm-lab", T("Your consent on this device")));
     var crow = el("div", "wavrm-node-stat");
-    crow.appendChild(el("span", "wavrm-node-counts", "Tap to reduce · hold to withdraw"));
+    crow.appendChild(el("span", "wavrm-node-counts", T("Tap to reduce · hold to withdraw")));
     crow.appendChild(makeConsentControl().btn);
     card.appendChild(crow);
     renderConsent();
@@ -2029,8 +2050,8 @@
     if(document.getElementById("wavrm-pill")) return;
     var row = document.querySelector(".status-pills"); if(!row) return;
     var b = el("button", "tpill"); b.id = "wavrm-pill"; b.type = "button";
-    b.title = "This device — contribute presence";
-    var dot = el("i", "p-dot"); var txt = el("span", "p-txt", "contribute");
+    b.title = T("This device — contribute presence");
+    var dot = el("i", "p-dot"); var txt = el("span", "p-txt", T("contribute"));
     b.appendChild(dot); b.appendChild(txt);
     b.onclick = function(){
       if(isRunning()) stopSensor();
@@ -2053,18 +2074,36 @@
   // Item 4: labels use the HUB's own sensing vocabulary (Off / Presence / Full, mirroring index.html's
   // TIER_META) so the device-scope control and the home-scope tile read the same. Wire values
   // (green/yellow/red) and the colour mapping are UNCHANGED -- only the human label/tip.
+  //
+  // WORDS OUT, WIRE VALUES IN. `next` and `color` are machinery and stay in
+  // this table. `label` and `tip` moved into `consentWords()` below, for the
+  // same reason `whatsNew()` is a function: an object literal at module level
+  // is built before the catalogue exists, so any translation here would be
+  // English forever, on a phone whose owner set the product to Portuguese.
   var CONSENT = {
-    green:  { next: "yellow", color: "var(--accent,#3db54a)", label: "Full",
-              tip: "Full — Wavr uses this phone's presence and names it at home." },
-    yellow: { next: "red",    color: "var(--warn,#e8a13a)",   label: "Presence",
-              tip: "Presence — present but anonymous; minimal data, no name." },
+    green:  { next: "yellow", color: "var(--accent,#3db54a)" },
+    yellow: { next: "red",    color: "var(--warn,#e8a13a)" },
     // TAP wraps red -> green: a single visible control must be able to RE-ENGAGE, and re-granting one's
     // OWN consent is legitimate. The deliberate 2s-hold is the easy-withdrawal path, so an accidental
     // single tap can only ever step the level (never hold-to-off), and every tap changes colour+label
     // and POSTs -- so a mistaken tap is instantly visible and reversible with another tap.
-    red:    { next: "green",  color: "var(--danger,#e8726a)", label: "Off",
-              tip: "Off — you've left Wavr; this device contributes nothing." }
+    red:    { next: "green",  color: "var(--danger,#e8726a)" }
   };
+  // The same three levels, in words, rebuilt in the language in force right
+  // now. Labels mirror the hub's own sensing vocabulary (Off / Presence /
+  // Full, as in index.html's TIER_META) so the device-scope control and the
+  // home-scope tile read the same in either language.
+  function consentWords(level){
+    if(level === "yellow") return {
+      label: T("Presence"),
+      tip: T("Presence — present but anonymous; minimal data, no name.") };
+    if(level === "red") return {
+      label: T("Off"),
+      tip: T("Off — you've left Wavr; this device contributes nothing.") };
+    return {
+      label: T("Full"),
+      tip: T("Full — Wavr uses this phone's presence and names it at home.") };
+  }
   function normConsent(v){ return (v === "green" || v === "yellow" || v === "red") ? v : "green"; }
 
   var _consentUis = [];        // every rendered consent control (header pill + node-screen copy)
@@ -2110,14 +2149,14 @@
   // that is the only guaranteed-tappable way back in. renderConsent() paints it red immediately.
   function showOut(){
     var card = ensureOverlay("out");
-    card.appendChild(el("h2", "wavrm-h", "You've left Wavr"));
+    card.appendChild(el("h2", "wavrm-h", T("You've left Wavr")));
     card.appendChild(el("p", "wavrm-sub",
-      "This device isn't connected and isn't sharing presence. Tap the control below to re-enter."));
+      T("This device isn't connected and isn't sharing presence. Tap the control below to re-enter.")));
     // Consent-control row, laid out like the sensor-node screen's consent row (a wavrm-node-stat row
     // with a label + makeConsentControl().btn). Tap = re-enter (red wraps to green); hold = stay out.
-    card.appendChild(el("span", "wavrm-lab", "Your consent on this device"));
+    card.appendChild(el("span", "wavrm-lab", T("Your consent on this device")));
     var crow = el("div", "wavrm-node-stat");
-    crow.appendChild(el("span", "wavrm-node-counts", "Tap to re-enter"));
+    crow.appendChild(el("span", "wavrm-node-counts", T("Tap to re-enter")));
     crow.appendChild(makeConsentControl().btn);
     card.appendChild(crow);
     renderConsent();   // paint the control red immediately (matches the current detached level)
@@ -2259,10 +2298,16 @@
     // detached nodes.
     if(document.body){ _consentUis = _consentUis.filter(function(u){ return document.body.contains(u.btn); }); }
     var meta = CONSENT[_consent] || CONSENT.green;
-    var label = meta.label, tip = meta.tip;
+    var palavras = consentWords(_consent);
+    var label = palavras.label, tip = palavras.tip;
     if(_consentPending){
-      if(_consent === "red"){ label = "Off · confirming"; tip = "Withdrawal not yet confirmed by the hub — retrying."; }
-      else { label = meta.label + " · confirming"; tip = meta.tip + " (not yet confirmed by the hub)"; }
+      if(_consent === "red"){
+        label = T("Off · confirming");
+        tip = T("Withdrawal not yet confirmed by the hub — retrying.");
+      } else {
+        label = T("{level} · confirming", { level: palavras.label });
+        tip = T("{tip} (not yet confirmed by the hub)", { tip: palavras.tip });
+      }
     }
     for(var i = 0; i < _consentUis.length; i++){
       var u = _consentUis[i];
@@ -2271,7 +2316,7 @@
       u.txt.textContent = label;
       u.btn.title = tip;
       u.btn.setAttribute("data-tip", tip);   // complement (iv): help mode explains the CURRENT level
-      u.btn.setAttribute("aria-label", "Consent: " + label + ". Tap to reduce, hold two seconds to withdraw.");
+      u.btn.setAttribute("aria-label", T("Consent: {level}. Tap to reduce, hold two seconds to withdraw.", { level: label }));
       u.btn.classList.toggle("pending", !!_consentPending);
     }
     // [A2] Re-paint the registered privacy receipts (tile + details) so the live sentence tracks the level.
@@ -2333,12 +2378,12 @@
   // NOT an index.html edit -- and idempotent.
   var _statusChip = null;
   function statusText(){
-    if(!_attached) return "Out";
-    if(_presenceError) return "Connected · no network presence";
+    if(!_attached) return T("Out");
+    if(_presenceError) return T("Connected · no network presence");
     // FIX-C2: the presence CLAIM copy fires ONLY on a confirmed mac_registered:true. The default/transient/
     // 404 state says a neutral "Connected" that makes NO presence claim the Core hasn't confirmed.
-    if(_presenceConfirmed) return "Connected to " + (_coreName || "your Core") + " as " + (_presenceLabel || "this device");
-    return "Connected";
+    if(_presenceConfirmed) return T("Connected to {hub} as {name}", { hub: _coreName || T("your hub"), name: _presenceLabel || T("this device") });
+    return T("Connected");
   }
   function renderStatusChip(){
     if(_statusChip){ _statusChip.textContent = statusText(); }
@@ -2364,7 +2409,7 @@
   // (role not yet known) hides the pill rather than guessing. Member uses the neutral .tpill (accent is
   // reserved for presence); Admin gets the accent border via .wavrm-role-admin.
   var _roleUi = null;
-  function roleLabel(){ return _role === "central" ? "Admin device" : _role === "user" ? "Member device" : ""; }
+  function roleLabel(){ return _role === "central" ? T("Admin device") : _role === "user" ? T("Member device") : ""; }
   function renderRolePill(){
     if(!_roleUi) return;
     var lab = roleLabel();
@@ -2379,7 +2424,7 @@
     var row = document.querySelector(".status-pills"); if(!row) return;
     if(document.getElementById("wavrm-role")){ renderRolePill(); return; }   // idempotent
     var b = el("button", "tpill"); b.id = "wavrm-role"; b.type = "button";
-    b.setAttribute("data-tip", "Whether this device can manage your home (Admin) or only view it (Member). Set on your hub.");
+    b.setAttribute("data-tip", T("Whether this device can manage your home (Admin) or only view it (Member). Set on your hub."));
     var txt = el("span", "p-txt", "");
     b.appendChild(txt);
     b.onclick = function(){ showRoleInfo(); };
@@ -2389,13 +2434,13 @@
   }
   function showRoleInfo(){
     var card = ensureOverlay("roleInfo");
-    card.appendChild(el("h2", "wavrm-h", roleLabel() || "This device"));
-    card.appendChild(el("p", "wavrm-sub", _role === "central"
+    card.appendChild(el("h2", "wavrm-h", roleLabel() || T("This device")));
+    card.appendChild(el("p", "wavrm-sub", T(_role === "central"
       ? "This is an Admin device: it can view your home AND change settings (rooms, sensing, connectors)."
-      : "This is a Member device: it can view your home, but can't change its settings."));
+      : "This is a Member device: it can view your home, but can't change its settings.")));
     card.appendChild(el("p", "wavrm-sub",
-      "Your access level is set on your hub. To change it, ask the hub's owner to update this device on the hub's own screen. It can't be changed from here."));
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+      T("Your access level is set on your hub. To change it, ask the hub's owner to update this device on the hub's own screen. It can't be changed from here.")));
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ hideOverlay(); };
     card.appendChild(back);
   }
@@ -2405,17 +2450,17 @@
   // the device doesn't actually use. Colour matches the consent level via --consent-color.
   function privacyReceiptText(){
     if(_consent === "red") return T("Right now this device shares nothing — it's turned off.");
-    var who = (_role === "central") ? "As an admin device, it can also change home settings." : "";
+    var who = (_role === "central") ? T("As an admin device, it can also change home settings.") : "";
     if(_consent === "yellow")
-      return "Right now this device shares that someone is home from here — anonymously, with no name. " + who;
+      return T("Right now this device shares that someone is home from here — anonymously, with no name.") + " " + who;
     // Green mirrors statusText's fail-closed tri-state (FIX-C2): the "shares your presence" CLAIM
     // fires ONLY on a hub-confirmed mac_registered:true. Otherwise the device is only SET to share:
     // say so plainly instead of claiming a presence the hub hasn't confirmed.
     if(_presenceConfirmed)
-      return "Right now this device shares your presence at home as “" + (_presenceLabel || "this device") + "”. " + who;
+      return T("Right now this device shares your presence at home as “{name}”.", { name: _presenceLabel || T("this device") }) + " " + who;
     if(_presenceError)
-      return "This device is set to share your presence at home, but your hub can't confirm it — no network presence. " + who;
-    return "This device is set to share your presence at home as “" + (_presenceLabel || "this device") + "” — your hub hasn't confirmed it yet. " + who;
+      return T("This device is set to share your presence at home, but your hub can't confirm it — no network presence.") + " " + who;
+    return T("This device is set to share your presence at home as “{name}” — your hub hasn't confirmed it yet.", { name: _presenceLabel || T("this device") }) + " " + who;
   }
   function injectReceipt(card){
     var p = el("p", "wavrm-receipt", privacyReceiptText());
@@ -2430,7 +2475,7 @@
   // pairing entirely; re-pairing requires the full out-of-band fingerprint verify again.
   function showDetails(){
     var card = ensureOverlay("details");
-    card.appendChild(el("h2", "wavrm-h", "This device"));
+    card.appendChild(el("h2", "wavrm-h", T("This device")));
     // Item 1: overlays cover the header role pill, so restate the role here.
     var rl = roleLabel(); if(rl) card.appendChild(el("p", "wavrm-sub", rl));
     // Complement (iii): the one-glance "what this device shares now" receipt.
@@ -2447,35 +2492,35 @@
     // Ghost: re-open the affirmative contribute chooser DIRECTLY (bypasses the once-only _contribOnboarded
     // gate — safe: its taps only call changeConsent + the idempotent markContribOnboarded). onDone returns
     // here; the "Not now"/red branch still routes to showOut by design (deliberate turn-off).
-    var changeBtn = el("button", "wavrm-btn ghost", "Change what this device does"); changeBtn.type = "button";
-    changeBtn.setAttribute("data-tip", "Re-open the choice of how much this device shares with your home.");
+    var changeBtn = el("button", "wavrm-btn ghost", T("Change what this device does")); changeBtn.type = "button";
+    changeBtn.setAttribute("data-tip", T("Re-open the choice of how much this device shares with your home."));
     changeBtn.onclick = function(){ showContributeOnboarding(function(){ showDetails(); }); };
     card.appendChild(changeBtn);
     renderConsent();   // paint the new control + receipt at their current level
-    var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", "Your name on this device"));
+    var f = el("label", "wavrm-field"); f.appendChild(el("span", "wavrm-lab", T("Your name on this device")));
     var input = el("input", "wavrm-input"); input.type = "text"; input.autocomplete = "off";
     input.maxLength = 48;   // FIX-C3: cap the display label (textContent + JSON.stringify already injection-safe)
-    input.value = _presenceLabel || ""; input.placeholder = "e.g., Augusto";
-    input.setAttribute("aria-label", "your name on this device");
+    input.value = _presenceLabel || ""; input.placeholder = T("e.g., Alex");
+    input.setAttribute("aria-label", T("your name on this device"));
     f.appendChild(input); card.appendChild(f);
     var msg = el("p", "wavrm-msg", "");
-    var save = el("button", "wavrm-btn", "Save name"); save.type = "button";
+    var save = el("button", "wavrm-btn", T("Save name")); save.type = "button";
     save.onclick = function(){
       _presenceLabel = (input.value || "").trim();
-      save.disabled = true; msg.className = "wavrm-msg"; msg.textContent = "Saving…";
+      save.disabled = true; msg.className = "wavrm-msg"; msg.textContent = T("Saving…");
       secureSet(K_PRESENCE_LABEL, _presenceLabel).then(function(){
         renderStatusChip(); reassertPresence(); hideOverlay();
-      }, function(){ save.disabled = false; msg.className = "wavrm-msg err"; msg.textContent = "Couldn't save. Try again."; });
+      }, function(){ save.disabled = false; msg.className = "wavrm-msg err"; msg.textContent = T("Couldn't save. Try again."); });
     };
     card.appendChild(save);
-    card.appendChild(el("p", "wavrm-sub", "Core: " + (_coreName || "—")));
+    card.appendChild(el("p", "wavrm-sub", T("Hub: {name}", { name: _coreName || "—" })));
     // Item 6: a dedicated connection/health check, composed on-device.
-    var health = el("button", "wavrm-btn ghost", "Connection check"); health.type = "button";
-    health.setAttribute("data-tip", "Checks whether this device and your hub are talking — reachability, certificate and presence.");
+    var health = el("button", "wavrm-btn ghost", T("Connection check")); health.type = "button";
+    health.setAttribute("data-tip", T("Checks whether this device and your hub are talking — reachability, certificate and presence."));
     health.onclick = function(){ showHealth(); };
     card.appendChild(health);
     // Complement (ii): the What's-New notes stay re-readable after first dismissal.
-    var wn = el("button", "wavrm-btn ghost", "What's new"); wn.type = "button";
+    var wn = el("button", "wavrm-btn ghost", T("What's new")); wn.type = "button";
     wn.onclick = function(){ showWhatsNew(function(){ showDetails(); }); };
     card.appendChild(wn);
     // The actual wipe -- security-critical, unchanged. Only reached via the explicit "Yes, unpair" confirm.
@@ -2494,14 +2539,14 @@
     }
     // F-UNPAIRCONFIRM: the soft keyboard can shift the overlay so a Save-aimed tap lands on Unpair and
     // instantly wipes the pairing. Require a distinct, on-demand confirm before the wipe ever fires.
-    var unpair = el("button", "wavrm-btn ghost", "Unpair this device"); unpair.type = "button";
-    unpair.setAttribute("data-tip", "Removes this pairing. You'll verify the hub's certificate again before you can reconnect.");
+    var unpair = el("button", "wavrm-btn ghost", T("Unpair this device")); unpair.type = "button";
+    unpair.setAttribute("data-tip", T("Removes this pairing. You'll verify the hub's certificate again before you can reconnect."));
     var confirmPanel = el("div", "wavrm-field");   // hidden until Unpair is tapped; appears below, distinct from Save
     confirmPanel.style.display = "none";
     confirmPanel.appendChild(el("p", "wavrm-warn",
-      "Unpairing removes this device. You'll need to verify the hub's certificate again to re-pair."));
-    var yesUnpair = el("button", "wavrm-btn", "Yes, unpair"); yesUnpair.type = "button";
-    var keepPaired = el("button", "wavrm-btn ghost", "Keep paired"); keepPaired.type = "button";
+      T("Unpairing removes this device. You'll need to verify the hub's certificate again to re-pair.")));
+    var yesUnpair = el("button", "wavrm-btn", T("Yes, unpair")); yesUnpair.type = "button";
+    var keepPaired = el("button", "wavrm-btn ghost", T("Keep paired")); keepPaired.type = "button";
     unpair.onclick = function(){
       unpair.style.display = "none";        // hide the trigger so the confirm sits where nothing was
       confirmPanel.style.display = "";
@@ -2516,7 +2561,7 @@
     };
     confirmPanel.appendChild(yesUnpair); confirmPanel.appendChild(keepPaired);
     card.appendChild(unpair); card.appendChild(confirmPanel);
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ hideOverlay(); };
     card.appendChild(back); card.appendChild(msg);
   }
@@ -2538,26 +2583,26 @@
   function setV(v, text, cls){ if(!v) return; v.textContent = text; v.className = "wavrm-inrow-v" + (cls ? " " + cls : ""); }
   function showHealth(){
     var card = ensureOverlay("health");
-    card.appendChild(el("h2", "wavrm-h", "Connection check"));
+    card.appendChild(el("h2", "wavrm-h", T("Connection check")));
     // RED / detached: calm state, nothing to check (matches the "you turned this off" posture).
     if(!_attached){
-      card.appendChild(el("p", "wavrm-sub", "You've turned this device off, so it isn't connected. Nothing to check. Re-enter from the coloured control to reconnect."));
-      var b0 = el("button", "wavrm-btn ghost", "Back"); b0.type = "button"; b0.onclick = function(){ showDetails(); };
+      card.appendChild(el("p", "wavrm-sub", T("You've turned this device off, so it isn't connected. Nothing to check. Re-enter from the coloured control to reconnect.")));
+      var b0 = el("button", "wavrm-btn ghost", T("Back")); b0.type = "button"; b0.onclick = function(){ showDetails(); };
       card.appendChild(b0); return;
     }
-    card.appendChild(el("p", "wavrm-sub", "How this device and " + (_coreName || "your hub") + " are getting along right now."));
+    card.appendChild(el("p", "wavrm-sub", T("How this device and {hub} are getting along right now.", { hub: _coreName || T("your hub") })));
     var list = el("div", "wavrm-field"); card.appendChild(list);
-    var vReach = hrow(list, "Reachable");
-    var vCert  = hrow(list, "Certificate");
-    var vRtt   = hrow(list, "Round-trip");
-    var vLive  = hrow(list, "Live updates");
-    var vPres  = hrow(list, "Sharing presence");
-    var verdict = el("p", "wavrm-msg", "Checking…"); card.appendChild(verdict);
+    var vReach = hrow(list, T("Reachable"));
+    var vCert  = hrow(list, T("Certificate"));
+    var vRtt   = hrow(list, T("Round-trip"));
+    var vLive  = hrow(list, T("Live updates"));
+    var vPres  = hrow(list, T("Sharing presence"));
+    var verdict = el("p", "wavrm-msg", T("Checking…")); card.appendChild(verdict);
 
     // Presence (already known locally; Core-confirmed only claims presence).
-    if(_presenceError) setV(vPres, "No network presence", "warn");
-    else if(_presenceConfirmed) setV(vPres, "Yes, as " + (_presenceLabel || "this device"), "ok");
-    else setV(vPres, "Not confirmed", "");
+    if(_presenceError) setV(vPres, T("No network presence"), "warn");
+    else if(_presenceConfirmed) setV(vPres, T("Yes, as {name}", { name: _presenceLabel || T("this device") }), "ok");
+    else setV(vPres, T("Not confirmed"), "");
     // WS liveness from index.html's wrapper (may be undefined on an older page -> "unknown").
     try{
       var down = window.__wavrWsDown;
@@ -2567,12 +2612,12 @@
     }catch(_){ setV(vLive, "—", ""); }
 
     function finishVerdict(reachable, certOk, rtt){
-      if(!reachable){ verdict.className = "wavrm-msg err"; verdict.textContent = "Can't reach your hub right now."; return; }
-      if(certOk === false){ verdict.className = "wavrm-msg err"; verdict.textContent = "The hub's certificate doesn't match what you verified."; return; }
+      if(!reachable){ verdict.className = "wavrm-msg err"; verdict.textContent = T("Can't reach your hub right now."); return; }
+      if(certOk === false){ verdict.className = "wavrm-msg err"; verdict.textContent = T("The hub's certificate doesn't match what you verified."); return; }
       if(rtt != null && rtt < 1500 && _attached && !_presenceError){
-        verdict.className = "wavrm-msg"; verdict.textContent = "Your device and the hub are talking. All good.";
+        verdict.className = "wavrm-msg"; verdict.textContent = T("Your device and the hub are talking. All good.");
       } else {
-        verdict.className = "wavrm-msg"; verdict.textContent = "Connected. Some checks are slow or unconfirmed — see above.";
+        verdict.className = "wavrm-msg"; verdict.textContent = T("Connected. Some checks are slow or unconfirmed — see above.");
       }
     }
     // TLS/reachability + pin leg (WavrNet.probe), then RTT via a real authed status read.
@@ -2605,45 +2650,55 @@
     // Admin: a user-invoked "your home's internet" leg against the real /api/health (never automatic --
     // /api/health pings public resolvers, an egress path). Member: honestly deferred to an admin device.
     if(_role === "central"){
-      card.appendChild(el("span", "wavrm-lab", "Your home's internet"));
+      card.appendChild(el("span", "wavrm-lab", T("Your home's internet")));
       var netFb = el("p", "wavrm-msg", "");
-      var chk = el("button", "wavrm-btn ghost", "Check now"); chk.type = "button";
-      chk.setAttribute("data-tip", "Asks your hub to test its internet — this also pings public DNS servers, so it runs only when you tap it.");
+      var chk = el("button", "wavrm-btn ghost", T("Check now")); chk.type = "button";
+      chk.setAttribute("data-tip", T("Asks your hub to test its internet — this also pings public DNS servers, so it runs only when you tap it."));
       chk.onclick = function(){
-        chk.disabled = true; netFb.className = "wavrm-msg"; netFb.textContent = "Checking…";
+        chk.disabled = true; netFb.className = "wavrm-msg"; netFb.textContent = T("Checking…");
         netFetch(_base + "/api/health", { method: "GET", headers: { "Authorization": "Bearer " + _token } })
           .then(function(r){ return (r && r.ok) ? r.json() : null; })
           .then(function(body){
             chk.disabled = false;
-            if(!body){ netFb.className = "wavrm-msg err"; netFb.textContent = "Couldn't run the check."; return; }
+            if(!body){ netFb.className = "wavrm-msg err"; netFb.textContent = T("Couldn't run the check."); return; }
+            // `severity` is a wire value — ok / degraded / down / unknown —
+            // and it was being shown to a person as it arrived, in English,
+            // inside an otherwise translated sentence. Named here so both
+            // halves are the reader's language.
             var sev = body.severity || "unknown";
-            netFb.className = "wavrm-msg"; netFb.textContent = "Home internet: " + sev + ".";
-          }, function(){ chk.disabled = false; netFb.className = "wavrm-msg err"; netFb.textContent = "Couldn't run the check."; });
+            var emPalavras = sev === "ok" ? T("fine")
+                           : sev === "degraded" ? T("struggling")
+                           : sev === "down" ? T("down")
+                           : T("not known");
+            netFb.className = "wavrm-msg";
+            netFb.textContent = T("Home internet: {state}.", { state: emPalavras });
+          }, function(){ chk.disabled = false; netFb.className = "wavrm-msg err"; netFb.textContent = T("Couldn't run the check."); });
       };
       card.appendChild(chk); card.appendChild(netFb);
     } else if(_role === "user"){
-      card.appendChild(el("p", "wavrm-sub", "To check your home's internet, ask an admin device."));
+      card.appendChild(el("p", "wavrm-sub", T("To check your home's internet, ask an admin device.")));
     }
-    var back = el("button", "wavrm-btn ghost", "Back"); back.type = "button";
+    var back = el("button", "wavrm-btn ghost", T("Back")); back.type = "button";
     back.onclick = function(){ showDetails(); };
     card.appendChild(back);
   }
 
   // ================= COMPLEMENT (ii): WHAT'S-NEW CARD (version-gated, re-readable) =================
-  function whatsNewPending(){ return !!(WHATS_NEW && WHATS_NEW.version && _seenVersion !== WHATS_NEW.version); }
+  function whatsNewPending(){ var w = whatsNew(); return !!(w && w.version && _seenVersion !== w.version); }
   function markSeenVersion(){
-    _seenVersion = (WHATS_NEW && WHATS_NEW.version) || "";
+    _seenVersion = whatsNew().version || "";
     secureSet(K_SEEN_VERSION, _seenVersion).catch(function(){});
   }
   // Shown BEFORE the dashboard on a version change; dismiss => don't reshow THAT version. onDone continues
   // to whatever comes next (the contribute gate / the dashboard, or back to details when re-read).
   function showWhatsNew(onDone){
     var card = ensureOverlay("whatsNew");
-    card.appendChild(el("h2", "wavrm-h", (WHATS_NEW && WHATS_NEW.title) || "What's new"));
-    if(WHATS_NEW && WHATS_NEW.version) card.appendChild(el("p", "wavrm-sub", "Version " + WHATS_NEW.version));
-    var notes = (WHATS_NEW && WHATS_NEW.notes) || [];
+    var wn_ = whatsNew();
+    card.appendChild(el("h2", "wavrm-h", wn_.title || T("What's new")));
+    if(wn_.version) card.appendChild(el("p", "wavrm-sub", T("Version {v}", { v: wn_.version })));
+    var notes = wn_.notes || [];
     notes.forEach(function(n){ card.appendChild(el("p", "wavrm-sub", "• " + n)); });
-    var ok = el("button", "wavrm-btn", "Got it"); ok.type = "button";
+    var ok = el("button", "wavrm-btn", T("Got it")); ok.type = "button";
     ok.onclick = function(){ markSeenVersion(); if(typeof onDone === "function") onDone(); };
     card.appendChild(ok);
   }
@@ -2678,10 +2733,10 @@
     var row = document.querySelector(".status-pills"); if(!row) return;
     if(!document.getElementById("wavrm-ota")){
       var b = el("button", "tpill", ""); b.id = "wavrm-ota"; b.type = "button";
-      var dot = el("i", "p-dot"); var txt = el("span", "p-txt", "Update available");
+      var dot = el("i", "p-dot"); var txt = el("span", "p-txt", T("Update available"));
       try{ dot.style.background = "var(--warn,#e8a13a)"; }catch(_){}
       b.appendChild(dot); b.appendChild(txt);
-      b.setAttribute("data-tip", "A newer version of the app screens is ready on your hub. Downloads over your verified, pinned connection and applies on next launch.");
+      b.setAttribute("data-tip", T("A newer version of the app screens is ready on your hub. Downloads over your verified, pinned connection and applies on next launch."));
       b.onclick = function(){ applyOta(manifest); };
       row.appendChild(b);
       _otaUi = b;
@@ -2693,21 +2748,21 @@
     // [G] Guard: the FROZEN download contract needs {url, sha256, size, version}. Missing any field ->
     // do not attempt (a half-formed manifest would only reject with INVALID_ARGS).
     if(!(manifest && manifest.version && manifest.sha256 && manifest.size)){
-      if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Update failed"; _otaUi.disabled = false; }
+      if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = T("Update failed"); _otaUi.disabled = false; }
       return;
     }
     // Resolve the bundle URL to an ABSOLUTE pinned-central URL (manifest.url may be relative or absent).
     // The plugin refuses any host:port other than the stored central's — this only fills the host in.
     var burl = (manifest && manifest.url) || "/api/app/bundle";
     if(burl.charAt(0) === "/") burl = _base + burl;
-    if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Updating…"; _otaUi.disabled = true; }
+    if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = T("Updating…"); _otaUi.disabled = true; }
     Promise.resolve(WavrUpdate.download({ url: burl, sha256: manifest.sha256, size: manifest.size, version: manifest.version }))
       .then(function(){
         return typeof WavrUpdate.apply === "function" ? WavrUpdate.apply({ version: manifest.version }) : null;   // next-launch activation
       }).then(function(){
-        if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Restart to finish"; _otaUi.disabled = false; }
+        if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = T("Restart to finish"); _otaUi.disabled = false; }
       }, function(){
-        if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = "Update failed"; _otaUi.disabled = false; }
+        if(_otaUi){ _otaUi.querySelector(".p-txt").textContent = T("Update failed"); _otaUi.disabled = false; }
       });
   }
 
@@ -2725,20 +2780,20 @@
   // "Not now" tap sets red (which routes to showOut via changeConsent). onDone reveals the dashboard.
   function showContributeOnboarding(onDone){
     var card = ensureOverlay("contribute");
-    card.appendChild(el("h2", "wavrm-h", "Help your home know who's in?"));
+    card.appendChild(el("h2", "wavrm-h", T("Help your home know who's in?")));
     card.appendChild(el("p", "wavrm-sub",
-      "This device can add its presence so your home knows when you're home. You choose how much, and you can change or turn it off anytime."));
-    var cGreen = choiceCard("Help sense who's home", "Wavr uses this phone's presence and names it at home.", true);
-    cGreen.setAttribute("data-tip", "Full participation — your presence counts and is named at home.");
+      T("This device can add its presence so your home knows when you're home. You choose how much, and you can change or turn it off anytime.")));
+    var cGreen = choiceCard(T("Help sense who's home"), T("Wavr uses this phone's presence and names it at home."), true);
+    cGreen.setAttribute("data-tip", T("Full participation — your presence counts and is named at home."));
     cGreen.onclick = function(){ markContribOnboarded(); changeConsent("green"); if(typeof onDone === "function") onDone(); };
-    var cYellow = choiceCard("Stay present but anonymous", "Counted as home, without a name. Minimal data.", false);
-    cYellow.setAttribute("data-tip", "Limited — present but anonymous; minimal data.");
+    var cYellow = choiceCard(T("Stay present but anonymous"), T("Counted as home, without a name. Minimal data."), false);
+    cYellow.setAttribute("data-tip", T("Limited — present but anonymous; minimal data."));
     cYellow.onclick = function(){ markContribOnboarded(); changeConsent("yellow"); if(typeof onDone === "function") onDone(); };
-    var cRed = choiceCard("Not now", "Don't contribute from this device. Turn it on anytime from the control at the top.", false);
-    cRed.setAttribute("data-tip", "Off — this device contributes nothing until you turn it on.");
+    var cRed = choiceCard(T("Not now"), T("Don't contribute from this device. Turn it on anytime from the control at the top."), false);
+    cRed.setAttribute("data-tip", T("Off — this device contributes nothing until you turn it on."));
     cRed.onclick = function(){ markContribOnboarded(); changeConsent("red"); };   // red routes to showOut itself
     card.appendChild(cGreen); card.appendChild(cYellow); card.appendChild(cRed);
-    card.appendChild(el("p", "wavrm-sub", "You can change this anytime — tap the coloured control, or hold it to turn off."));
+    card.appendChild(el("p", "wavrm-sub", T("You can change this anytime — tap the coloured control, or hold it to turn off.")));
   }
 
   // ================= ITEM 2: DEVICE-CONSENT ROW MOUNTED INTO #sensingLevelTile ======================
