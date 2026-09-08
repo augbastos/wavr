@@ -53,6 +53,43 @@ def test_the_backend_package_agrees():
         f"backend says {achado.group(1)}, VERSION says {VERSAO}")
 
 
+
+def test_the_running_package_agrees():
+    """The number a person is actually shown, asked of the package itself.
+
+    Every other check here reads a FILE. `backend/wavr/__init__.py` was not one
+    of the files, so `wavr.__version__` sat at the previous release while
+    `VERSION` and four manifests moved — and `wavr.__version__` is what
+    `config_export` stamps into the diagnostic bundle somebody sends to a
+    person helping them. The check covered the declarations and missed the
+    value.
+
+    Imported rather than parsed, deliberately: parsing the file would test the
+    same string a sixth time, and what matters is what the running product
+    answers when asked.
+    """
+    import wavr
+    assert wavr.__version__ == VERSAO, (
+        f"the backend package reports {wavr.__version__} at runtime and "
+        f"VERSION says {VERSAO}. This is the number in the diagnostic bundle, "
+        f"so a person sending one for help is telling a supporter the wrong "
+        f"release.")
+
+
+def test_the_diagnostic_bundle_carries_that_same_number():
+    """One step further, because the bundle is the surface that was wrong.
+
+    `config_export.diagnostic_bundle` takes the version as an argument, so agreeing
+    with the package is not enough on its own — the caller has to pass the
+    right thing. Asked of the composed bundle rather than of the function.
+    """
+    import wavr
+    from wavr.config_export import diagnostic_bundle
+    pacote = diagnostic_bundle(version=wavr.__version__, platform="test")
+    assert pacote["wavr_version"] == VERSAO, (
+        f"the diagnostic bundle says {pacote['wavr_version']!r}; VERSION says "
+        f"{VERSAO}")
+
 def test_the_desktop_shell_agrees():
     for rel in ("desktop/package.json", "desktop/src-tauri/tauri.conf.json"):
         dados = json.loads(ler(rel))
