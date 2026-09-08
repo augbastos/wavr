@@ -27,8 +27,28 @@
 // Newest entry FIRST. Dates are ISO `YYYY-MM-DD` and are the day the notes were
 // written; a date must never be in the future (the same test checks).
 // ============================================================================
-window.WAVR_APP_VERSION = "0.3.0";
+window.WAVR_APP_VERSION = "0.4.0";
 window.WAVR_WHATS_NEW = [
+  // 0.4.0: what a household can SEE. The connector reach
+  // vocabulary, the pinned test addresses and the offline producer
+  // are real work in this release and are not release notes.
+  { version: "0.4.0", date: "2026-09-08", items: [
+    WavrT("📱 The phone app speaks your language. Every screen in the "
+          + "companion — finding your hub, checking its certificate, choosing "
+          + "what the device does — follows the language you picked, instead of "
+          + "staying in English."),
+    WavrT("🤔 When two sensors disagree about a room, Wavr says it is less "
+          + "sure. A camera that can see the room and reports nobody there now "
+          + "lowers the confidence instead of being recorded and ignored."),
+    WavrT("⏰ A sensor with the wrong clock is no longer believed over one "
+          + "with the right clock. A device whose time is running ahead used to "
+          + "look like the freshest thing in the house for as long as it was "
+          + "wrong."),
+    WavrT("🏠 Home Assistant on your own network is no longer listed as "
+          + "something that leaves it. What leaves your Space is now decided by "
+          + "where a connection actually goes, not by how its description is "
+          + "worded."),
+  ] },
   // 0.3.0 covers everything after 0.2.0: the modularisation of the shell, two
   // languages, the four-destination navigation, and the audit that followed
   // them (`_local/pending-commits/` units 25-28 are the written record). The

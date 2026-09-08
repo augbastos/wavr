@@ -22,7 +22,7 @@ machine are individually switched on, and the AI narrator can point at a model r
 
 |  | |
 |---|---|
-| **Explainable presence** | One confidence per room, from the best present evidence: trust weight × the source's own confidence × freshness decay. Every source's reading stays readable underneath. |
+| **Explainable presence** | One confidence per room, from the best present evidence — trust weight × the source's own confidence × freshness decay — and lowered when something that can actually see the room disagrees. Every source's reading stays readable underneath, agreeing or not. |
 | **Built for agents** | A read-only MCP server (stdio + HTTP) hands `RoomState` and the house map to your own agents as structured context. Home Assistant control is a separate, opt-in, default-OFF tool. |
 | **Local by construction** | Loopback-only out of the box. Cameras boot OFF and frames never touch disk. A credential goes only where the authentication protocol needs it — never into a log, a response body, or a screen. |
 | **You are the admin** | You draw the rooms, switch every sensor on and off, and decide what — if anything — is ever shared. |
