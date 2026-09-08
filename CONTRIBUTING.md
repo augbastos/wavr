@@ -76,10 +76,22 @@ something that stops you.
 
 What the repository does enforce:
 
-- `tests` and `scpe` run on every pull request, with no path filter, so the six
-  test jobs and the disclosure check always have a verdict on the head commit.
-  `docker` and `install-matrix` are path-filtered and legitimately produce no
-  check run for changes outside their paths.
+- `tests` and `scpe` run on every pull request, so the backend suite, the
+  guarantee mutation pass, the three SDK jobs and the disclosure check always
+  have a verdict on the head commit.
+- `browser` is the one exception inside `tests`, and it is SKIPPED rather than
+  absent. A `what-changed` job asks whether the commit touches anything a real
+  Chromium could observe — the served pages, the code that serves them, its own
+  four test modules — and `browser` runs only if it does. It costs eleven
+  minutes, and on a private repository those minutes come out of the account's
+  monthly Actions allowance instead of being discounted away. The gate **fails
+  open**: a first push, a shallow fetch, an unreadable base, anything it cannot
+  work out, and the browser tests run.
+- `docker` and `install-matrix` are path-filtered at the workflow level and
+  legitimately produce no check run for changes outside their paths.
+  `install-matrix` watches `backend/wavr/**` rather than `backend/**`: it
+  starts the backend and waits for `/healthz` on five distributions, so any
+  product change can break it, and a change under `backend/tests/` cannot.
 - `tests` also runs on every push to `master`, so a red `master` is visible
   within minutes even though nothing prevented it.
 - The maintenance auto-merge workflow refuses to merge while ANY check on that
