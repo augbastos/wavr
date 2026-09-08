@@ -6,7 +6,7 @@ server-side; this client only prints what it receives. Wavr never phones home --
 call here is to your own machine.
 
     python -m wavr.doctor                 # queries https://127.0.0.1:8000
-    python -m wavr.doctor --url https://192.168.1.57:8000
+    python -m wavr.doctor --url https://192.168.1.10:8000
 """
 from __future__ import annotations
 

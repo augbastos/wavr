@@ -3,18 +3,22 @@
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
 [![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
-**Your network already knows who is home. Wavr turns that — plus whatever sensors you own — into a
-live, explainable map of your space, running entirely on hardware you own.**
+**Your network already knows which of your devices are home. Wavr turns that — plus whatever sensors
+you own — into a live, explainable map of your space, running entirely on hardware you own.**
 
 ![Wavr — live per-room presence on a 3D map of your own home, fused from network, Bluetooth and camera, running on your local network](docs/hero.gif)
 
-Every room gets one answer, and **"I don't know" is one of them**: occupied, empty, or not covered by
-any sensor — with a confidence and the reasoning underneath. Each modality's own reading stays visible
+Every room gets one answer, and **"I don't know" is more than one of them**: occupied, empty, a sensor
+that is switched off or has stopped answering, or nothing watching at all. The first two carry a
+confidence and the reasoning underneath; the others say which it is, because one is a repair and the
+other is a purchase. Each modality's own reading stays visible
 below the fused score, so one weak signal can never quietly claim certainty, and a room nothing watches
 says so instead of reporting empty. You draw the floor plan; Wavr fills it in.
 
-No account. No telemetry. No cloud is required for anything Wavr does — the only paths off the
-machine are individually switched on, and the AI narrator can point at a model running on the same box.
+No account. No telemetry. No cloud service is required for anything Wavr does — the only paths off
+the machine are individually switched on, and the AI narrator can point at a model running on the same
+box. One exception, named rather than buried: camera person-detection downloads its model weights the
+first time it runs, because they are not vendored here.
 
 ---
 
@@ -27,8 +31,9 @@ machine are individually switched on, and the AI narrator can point at a model r
 | **Local by construction** | Loopback-only out of the box. Cameras boot OFF and frames never touch disk. A credential goes only where the authentication protocol needs it — never into a log, a response body, or a screen. |
 | **You are the admin** | You draw the rooms, switch every sensor on and off, and decide what — if anything — is ever shared. |
 
-**Try it with nothing installed:** open `frontend/index.html` in a browser. Off localhost the dashboard
-switches itself to a built-in simulator, says so on screen, and makes zero network requests.
+**Try it with nothing installed:** open `frontend/index.html` in a browser. Opened from the filesystem
+the dashboard switches itself to a built-in simulator, says so on screen, and makes zero network
+requests.
 
 ![Wavr Command Center — a 3D house map with per-person markers, per-room confidence rings, the Off/Presence/Precise sensing meter, and explainable per-modality fusion](docs/img/demo.png)
 
@@ -46,7 +51,7 @@ what it should become. There is no `.env` to edit — the wizard writes to the d
 screen exposes the rest. Already running an older Wavr? The wizard adopts it: nothing is re-paired, no
 credential reissued, no camera touched.
 
-Headless — a Pi, a server, anything over SSH — there is no tray and no dashboard to answer the one
+Headless — a server, a container, anything over SSH — there is no tray and no dashboard to answer the one
 question that matters, so:
 
 ```console
@@ -78,8 +83,8 @@ what you need; add more later.
 |---|---|
 | **Dashboard** | [`frontend/`](frontend/) — the web UI. Zero build step: a static shell plus classic scripts, opens from a file. |
 | **Desktop** | [`desktop/`](desktop/) — the same dashboard as a native Tauri app. The machine running it is the *central*. |
-| **Mobile** | [`mobile/`](mobile/) — an Android companion that pairs to a central over certificate-pinned TLS. Discovery goes through Android's own resolver, so it still finds the hub with a VPN running. |
-| **Core** | [`core-launcher/`](core-launcher/) — an always-on appliance that *is* the hub: ambient panel, mDNS discovery, kiosk launcher. A Pi or mini PC is the usual host; it also runs on a dedicated Android phone. |
+| **Mobile** | [`mobile/`](mobile/) — an Android companion that pairs to a central over certificate-pinned TLS. Discovery goes through Android's own resolver instead of an in-process mDNS browse, because a phone VPN swallows the app's own multicast query — the failure was measured on a handset with a commercial VPN. |
+| **Core** | [`core-launcher/`](core-launcher/) — an always-on appliance that *is* the hub: ambient panel, mDNS discovery, kiosk launcher. It has run on a dedicated Android phone; a mini PC or Raspberry Pi is a supported install route that has never been exercised on that hardware ([`docs/INSTALL.md`](docs/INSTALL.md)). |
 | **MCP** | [`backend/wavr/mcp_serve.py`](backend/wavr/) — read-only presence for your own agents, over stdio or HTTP. |
 
 ![One brain, every screen — the same open core as a web dashboard, a Tauri desktop app, a certificate-pinned Android companion, and the always-on Core hub](docs/img/card-platforms.png)
@@ -117,7 +122,7 @@ Constraints the code holds, not intentions:
 
 ```mermaid
 flowchart LR
-    S["Sources<br/>network · BLE · camera · mmWave · Wi-Fi CSI · sim"] --> F["Fusion<br/>trust × confidence × freshness"]
+    S["Sources<br/>network · BLE · camera · mmWave · sim"] --> F["Fusion<br/>trust × confidence × freshness"]
     F --> R["RoomState<br/>occupied? · how sure? · why?"]
     R --> D["Dashboard · Desktop · Mobile"]
     R --> DB[("SQLite<br/>derived state only")]
@@ -132,7 +137,7 @@ vendored same-origin, installable as a PWA.
 Hardware paths are mock-tested, so the whole suite runs with no devices attached:
 
 ```bash
-cd backend && pytest -q                   # everything, no hardware needed
+cd backend && pytest -q                   # no hardware needed (browser cases need playwright)
 node mobile/scripts/sync-frontend.mjs     # packages the dashboard for the phone
 node --test mobile/test/*.test.js         # the companion's own tests
 ```
@@ -159,7 +164,7 @@ the understanding back from anyone.
 Early, and honest about it. Everything above ships in this tree with tests. What is **not** done: the
 Android Core's embedded-engine build ([ADR-0010](docs/adr/0010-android-core-runtime.md)) is specified
 but unexercised — the phone hub in use today runs the same Python engine in a container beside the
-launcher. Radar and UWB have code paths and mock tests but little time on real hardware.
+launcher. Radar and UWB have code paths and mock tests; neither has been exercised on real hardware. Wi-Fi CSI is a seam rather than a source — it needs a radio that exposes CSI, and nothing here has one.
 
 This has been used by one person, on one household's worth of devices. Read version numbers
 accordingly.
