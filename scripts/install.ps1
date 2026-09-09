@@ -15,7 +15,7 @@
       * Run from inside a Wavr checkout (this file's own folder, or the current
         directory, has sibling `backend\pyproject.toml` + `frontend\index.html`) ->
         that checkout is installed in place, editable. Nothing is downloaded.
-      * Run standalone (piped, or from an unrelated folder) -> the `master` branch tip
+      * Run standalone (piped, or from an unrelated folder) -> the `main` branch tip
         of $GitUrl is downloaded as a GitHub archive .zip (NOT `git clone`) into
         %LOCALAPPDATA%\Wavr\src and installed editable from there. Archive, not clone,
         on purpose: this repo's `.git` history is ~1.6GB (a past PII scrub), while the
@@ -71,9 +71,10 @@
     standalone (no-local-checkout) path. Must be a github.com https URL today.
 
 .PARAMETER Branch
-    Branch to fetch when running standalone. Default 'master' (this repo's actual
-    default branch -- verified via `git remote show origin`; the CI workflow only
-    triggers on pushes to 'master', not 'main').
+    Branch to fetch when running standalone. Default 'main', which is this
+    repository's default branch and the only branch the CI workflows trigger on.
+    Renamed from 'master'; GitHub keeps redirecting the old name, but nothing here
+    should depend on that redirect.
 
 .PARAMETER InstallBaseUrl
     Where this script is meant to be hosted for the one-line installer
@@ -83,7 +84,7 @@
     YET as of this writing — that page says so itself ("Not live yet"). Purely
     cosmetic here: it only shows up in this script's own "how to re-run me" banner.
     Until it's live, use the raw GitHub URL instead:
-        irm https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.ps1 | iex
+        irm https://raw.githubusercontent.com/augbastos/wavr/main/scripts/install.ps1 | iex
 
 .PARAMETER PythonPath
     Explicit path to a python.exe (>=3.11) to use, skipping auto-detection.
@@ -112,7 +113,7 @@
     starting anything.
 
 .EXAMPLE
-    irm https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.ps1 | iex
+    irm https://raw.githubusercontent.com/augbastos/wavr/main/scripts/install.ps1 | iex
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -DryRun
@@ -124,7 +125,7 @@
 param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Wavr'),
     [string]$GitUrl = 'https://github.com/augbastos/wavr.git',
-    [string]$Branch = 'master',
+    [string]$Branch = 'main',
     [string]$InstallBaseUrl = 'https://wavr.dev',
     [string]$PythonPath = '',
     [string]$Extras = '',

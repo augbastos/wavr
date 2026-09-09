@@ -5,7 +5,7 @@
 # this (site/public/install.html, assets/wavr.js's BOOTSTRAP_DOMAIN) -- but that
 # page marks it "Not live yet" as of this writing. Until it's live, fetch this file
 # straight from GitHub instead:
-#   curl -fsSL https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/augbastos/wavr/main/scripts/install.sh | sh
 #
 # Installs (or upgrades) a standalone Wavr into ~/.local/share/wavr and starts it,
 # without touching any dev venv you may already have in a repo clone. See
@@ -62,7 +62,7 @@ set -eu
 # ---- defaults / flags ---------------------------------------------------------------
 
 WAVR_GIT_URL="https://github.com/augbastos/wavr.git"
-WAVR_BRANCH="${WAVR_BRANCH:-master}"  # this repo's actual default branch (git remote show origin)
+WAVR_BRANCH="${WAVR_BRANCH:-main}"  # this repository's default branch (renamed from master)
 WAVR_DIR="${WAVR_DIR:-$HOME/.local/share/wavr}"
 WAVR_PORT="${WAVR_PORT:-8000}"
 WAVR_EXTRAS=""
@@ -75,7 +75,7 @@ usage() {
 Usage: install.sh [options]
 
   --dir PATH        Install location (default: ~/.local/share/wavr)
-  --branch NAME      Branch to fetch when run standalone (default: master)
+  --branch NAME      Branch to fetch when run standalone (default: main)
   --port N           Backend port (default: 8000, or $WAVR_PORT)
   --extras LIST       Comma-separated pyproject extras, e.g. "camera,mqtt"
                       (see backend/pyproject.toml [project.optional-dependencies])
