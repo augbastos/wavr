@@ -5,6 +5,10 @@
 // Upstream copyright is preserved verbatim below. Used by wavr.js on download.html to render
 // a "take this page to your phone" QR code entirely client-side — no network
 // request, no third-party QR API. See site/README.md for how it's wired in.
+// Body below this line is qrcode-generator 2.0.4 (npm, dist/qrcode.js),
+// byte-identical once line endings are normalised to LF:
+//   sha256 79ec86f82856005b1c887905cfccfcfbec3821ca61c7fd5a952faa5f778f791c
+// ---- end of vendoring banner. Everything below is upstream, verbatim. ----
 //---------------------------------------------------------------------
 //
 // QR Code Generator for JavaScript

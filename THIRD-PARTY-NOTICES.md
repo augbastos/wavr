@@ -18,6 +18,29 @@ packages in `desktop/package.json` and `mobile/package.json`, and the crates in
 `desktop/src-tauri/Cargo.toml` — are resolved by their package managers and are not
 reproduced here. Their licences travel with the packages themselves.
 
+## How the hashes work, and why they are not upstream's
+
+Every hash below covers the **body** of a vendored file — everything after the line
+
+    // ---- end of vendoring banner. Everything below is upstream, verbatim. ----
+
+(or its `*`-prefixed form in a `/* */` banner) — with line endings **normalised to LF**.
+
+Both halves are load-bearing, and both were got wrong before being got right:
+
+- the banner is the one part of these files that upstream did not write, so a hash
+  including it identifies nothing;
+- these copies are stored CRLF, because this tree is mixed and Git rewrites line endings
+  on checkout. A raw-byte hash disagrees with itself between a Windows clone and a Linux
+  one, which is worse than publishing no hash at all.
+
+The end-of-banner marker exists because the obvious boundary was ambiguous: a `//` banner
+closes with a rule of dashes, and these upstream files *open* with an identical rule.
+Counting occurrences silently moved the boundary by one line.
+
+`backend/tests/test_the_vendored_hashes_can_be_checked.py` recomputes all of this and
+fails when the notices, the banners and the bytes drift apart.
+
 ## Summary
 
 | Component | Version | Licence | Full text |
@@ -56,9 +79,10 @@ has been restored above the vendoring note.
 
 - **File:** `mobile/vendor/jsqr.js`
 - **Upstream:** https://github.com/cozmo/jsQR
-- **Version:** the bundle declares none, so the honest identifier is a hash: of the
-  vendored **body** (everything below the added banner), with line endings normalised
-  to LF.
+- **Version:** `jsqr@1.4.0` from npm. The bundle declares no version of its own, so
+  this was established by comparison: its body is byte-identical to that release's
+  `dist/jsQR.js` once line endings are normalised, and differs from both 1.3.0 and
+  1.3.1. The hash is of that body — everything below the end-of-banner marker, LF:
   `sha256 bc40c8a15196236b2314db0856f72ca0b49980cd5413b8c852a7349f5fee0859`
 - **Licence:** Apache-2.0 · SPDX `Apache-2.0` · full text in `mobile/vendor/LICENSE-jsQR`
 - **Copyright:** upstream ships the stock Apache-2.0 text with its
@@ -87,8 +111,19 @@ from upstream rather than reproduced from memory.
 
 ## qrcode-generator
 
-Two copies exist, serving two different surfaces. Both carry the same upstream MIT header
-and copyright line.
+Two copies exist, serving two different surfaces, and they are **two different
+releases** — which was worth finding, because this document previously said they were the
+same release with different line endings. They are not: the dashboard's copy calls
+`fillRect(row * cellSize, col * cellSize, …)` and the site's calls
+`fillRect(col * cellSize, row * cellSize, …)`, an upstream fix that transposes anything
+drawn through `renderTo2dContext`.
+
+That difference does not reach either product — `frontend/js/pairing.js` renders through
+`createDataURL` and `site/public/assets/wavr.js` through `createSvgTag`, so
+`renderTo2dContext` is never called. It is recorded because anyone who switches to that
+API on the dashboard copy needs to know.
+
+Both carry the same upstream MIT header and copyright line.
 
 - **Files:** `frontend/vendor/qrcode.js` (the dashboard), and
   `site/public/assets/qrcode.vendor.js` (the marketing site's download page)
@@ -96,15 +131,15 @@ and copyright line.
   http://www.d-project.com/
 - **Licence:** MIT · SPDX `MIT` · full text in `frontend/vendor/LICENSE-qrcode-generator`
 - **Copyright:** Copyright (c) 2009 Kazuhiko Arase
-- **Versions:**
-  - `site/public/assets/qrcode.vendor.js` — npm `qrcode-generator` v2.0.4 (`dist/qrcode.js`),
-    `sha256 869fd34fde6d32890fbb4267ccb82e3e1fdfa53071948c71ba076e8f44c706aa`
-  - `frontend/vendor/qrcode.js` — the file declares no version, and it is **not**
-    equivalent to the 2.0.4 copy above even after normalising line endings, so it is
-    identified by hash rather than by a number that cannot be checked. Same contract as
-    jsQR: the body below the banner, normalised to LF.
+- **Versions**, both established by byte comparison against the npm tarballs rather
+  than by reading the banner:
+  - `site/public/assets/qrcode.vendor.js` — `qrcode-generator@2.0.4`, `dist/qrcode.js`.
+    `sha256 79ec86f82856005b1c887905cfccfcfbec3821ca61c7fd5a952faa5f778f791c`
+  - `frontend/vendor/qrcode.js` — `qrcode-generator@1.5.2`, `qrcode.js`. The file
+    declares no version; this one is the match, byte for byte.
     `sha256 18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780`
-- **Modified:** no.
+- **Modified:** no. Each hash covers the body below the end-of-banner marker, with line
+  endings normalised to LF.
 - **Used for:** rendering pairing and download QR codes client-side, with no request to a
   third-party QR service.
 
@@ -122,8 +157,11 @@ DENSO WAVE INCORPORATED.
   Ultralytics at first use, under their own terms.
 - The IEEE OUI data and the device heuristics in `backend/wavr/data/` are compiled from
   public registry data and from this project's own observations, not copied from any
-  commercial device-identification product. See `docs/adr/0001` and
-  `docs/adr/0004-defensive-only-reject-offensive.md`.
+  commercial device-identification product. See
+  `docs/adr/0004-defensive-only-reject-offensive.md`. (This previously also cited
+  `docs/adr/0001`, which is about mmWave and says nothing on the subject — a dead
+  reference in a provenance document, which is the one place a reader is entitled to
+  follow a citation and find something.)
 
 ## Reporting an omission
 

@@ -1,9 +1,10 @@
 """A published hash that nobody can reproduce is decoration.
 
-Three vendored bundles declare no version of their own, so THIRD-PARTY-NOTICES.md
-identifies them by SHA-256 instead. That is the honest choice — a number a reader
-can check beats a version number nobody can — but only if the number is actually
-checkable, and the first two attempts at it were not:
+Three vendored bundles declare no version of their own. THIRD-PARTY-NOTICES.md
+names the release each one actually is — established by comparing bytes against
+the npm tarballs — and publishes a SHA-256 that proves it. That is the honest
+choice, but only if the number is actually checkable, and the first attempts at
+it were not:
 
   * the first hash was of the file INCLUDING the provenance banner that had just
     been prepended to it, so anyone verifying got a mismatch with no way to tell
@@ -32,25 +33,38 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 NOTICES = REPO / "THIRD-PARTY-NOTICES.md"
 
-# (file, the byte sequence that closes its banner)
+# The boundary is a marker, not a count.
+#
+# It used to be "the closing rule of the banner", found by counting occurrences.
+# That is ambiguous in the worst possible way: a `//` banner closes with a rule
+# of dashes and these upstream files OPEN with an identical rule, so the
+# boundary moved by one line depending on the file, and one published hash was
+# off by exactly that. A marker string that exists nowhere upstream cannot do
+# that.
+MARKER = b"---- end of vendoring banner. Everything below is upstream, verbatim. ----"
+
 VENDORED = [
-    (Path("mobile/vendor/jsqr.js"), b"*/"),
-    (Path("frontend/vendor/qrcode.js"), b"//" + b"-" * 69),
+    Path("mobile/vendor/jsqr.js"),
+    Path("frontend/vendor/qrcode.js"),
+    Path("site/public/assets/qrcode.vendor.js"),
 ]
 
 
-def _body_after_banner(raw: bytes, terminator: bytes) -> bytes:
-    """Everything after the provenance banner, line endings normalised.
+def _body_after_banner(raw: bytes) -> bytes:
+    """Everything after the end-of-banner marker, line endings normalised.
 
     The banner is the one part of the file this project wrote, so it cannot be
-    inside a hash that claims to identify upstream's bytes.
+    inside a hash that claims to identify upstream's bytes. The LF normalisation
+    is what makes the number the same on a CRLF checkout and an LF one.
     """
-    end = raw.index(terminator) + len(terminator)
-    if terminator.startswith(b"//"):
-        # A `//` banner ends with a rule line, and the file's own upstream header
-        # opens with an identical rule. The banner's closing rule is the SECOND
-        # occurrence, not the first.
-        end = raw.index(terminator, end) + len(terminator)
+    if MARKER not in raw:
+        raise AssertionError(
+            "no end-of-banner marker: the hash below has no defined boundary")
+    end = raw.index(MARKER) + len(MARKER)
+    # A `/* */` banner still has to close after the marker.
+    close = raw.find(b"*/", end, end + 200)
+    if close != -1:
+        end = close + 2
     while end < len(raw) and raw[end] in (13, 10):
         end += 1
     return raw[end:].replace(b"\r\n", b"\n")
@@ -73,7 +87,8 @@ def _published_hashes() -> dict[str, str]:
     found: dict[str, str] = {}
     current: str | None = None
     for line in NOTICES.read_text(encoding="utf-8").splitlines():
-        named = _ANY_PATH.findall(line)
+        named = [n for n in _ANY_PATH.findall(line)
+                 if n in {p.as_posix() for p in VENDORED}]
         if len(named) == 1:
             current = named[0]
         elif len(named) > 1:
@@ -84,13 +99,12 @@ def _published_hashes() -> dict[str, str]:
     return found
 
 
-@pytest.mark.parametrize("relative,terminator", VENDORED,
-                         ids=[p.name for p, _ in VENDORED])
-def test_the_banner_states_the_hash_the_file_actually_has(relative, terminator):
+@pytest.mark.parametrize("relative", VENDORED, ids=[p.name for p in VENDORED])
+def test_the_banner_states_the_hash_the_file_actually_has(relative):
     path = REPO / relative
     assert path.exists(), f"{relative} is vendored code the notices promise exists"
     raw = path.read_bytes()
-    actual = hashlib.sha256(_body_after_banner(raw, terminator)).hexdigest()
+    actual = hashlib.sha256(_body_after_banner(raw)).hexdigest()
 
     head = raw[:4000].decode("utf-8", "replace")
     claimed = re.search(r"sha256 ([0-9a-f]{64})", head)
@@ -103,9 +117,8 @@ def test_the_banner_states_the_hash_the_file_actually_has(relative, terminator):
     )
 
 
-@pytest.mark.parametrize("relative,terminator", VENDORED,
-                         ids=[p.name for p, _ in VENDORED])
-def test_the_notices_agree_with_the_banner(relative, terminator):
+@pytest.mark.parametrize("relative", VENDORED, ids=[p.name for p in VENDORED])
+def test_the_notices_agree_with_the_banner(relative):
     published = _published_hashes()
     key = relative.as_posix()
     assert key in published, (
@@ -113,7 +126,7 @@ def test_the_notices_agree_with_the_banner(relative, terminator):
         f"no version and no hash has no identity at all."
     )
     actual = hashlib.sha256(
-        _body_after_banner((REPO / relative).read_bytes(), terminator)).hexdigest()
+        _body_after_banner((REPO / relative).read_bytes())).hexdigest()
     assert published[key] == actual, (
         f"THIRD-PARTY-NOTICES.md says {published[key]} for {key}; the file hashes "
         f"to {actual}. The notices and the file disagree, and a reader has no way "
@@ -123,7 +136,7 @@ def test_the_notices_agree_with_the_banner(relative, terminator):
 
 def test_every_vendored_bundle_names_its_licence():
     """The reason all of this exists: redistribution carries the notice with it."""
-    for relative, _ in VENDORED:
+    for relative in VENDORED:
         head = (REPO / relative).read_bytes()[:4000].decode("utf-8", "replace")
         assert "SPDX-License-Identifier:" in head, (
             f"{relative} ships inside the product with no SPDX identifier")

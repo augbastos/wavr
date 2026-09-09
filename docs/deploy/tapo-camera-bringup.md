@@ -1,6 +1,14 @@
-# Tapo camera bring-up (C210 / TC40)
+# Tapo camera bring-up (C210, and a warning about the TC40)
 
-Step by step for adding a pair of RTSP cameras as Wavr sources. Everything stays LOCAL:
+> **Check your model against TP-Link's own list first.** TP-Link publishes which
+> Tapo cameras expose RTSP/ONVIF. The **C210 is on it. The TC40 is not** — and
+> that is not a whole series being absent, because other TC-series models are
+> listed. This document previously presented the TC40 as a working continuous
+> RTSP source; that could not be supported from any primary source, so it is
+> stated as an unknown here instead. If you have one, confirm RTSP on the device
+> before planning around it.
+
+Step by step for adding RTSP cameras as Wavr sources. Everything stays LOCAL:
 frames are never stored and never leave the box; cameras always start OFF, and toggling one
 off is a hard RTSP kill-switch.
 
@@ -51,8 +59,8 @@ register **boot-OFF** (safety). For example:
 
 | name        | room    | rtsp_url                                       |
 |-------------|---------|------------------------------------------------|
-| cam_bedroom | bedroom | `rtsp://<user>:<pass>@<C210_ip>:554/stream2`   |
-| cam_yard    | yard    | `rtsp://<user>:<pass>@<TC40_ip>:554/stream2`   |
+| cam_bedroom | bedroom | `rtsp://<user>:<pass>@<camera_ip>:554/stream2` |
+| cam_yard    | yard    | `rtsp://<user>:<pass>@<camera_ip>:554/stream2` |
 
 (The dashboard masks the password when it lists cameras back. `rtsp_url` must start with
 `rtsp://` / `rtsps://` — other schemes are rejected, an SSRF guard added in the audit.)
@@ -65,13 +73,19 @@ register **boot-OFF** (safety). For example:
   camera stops. Closing Wavr returns all of the VRAM to the rest of the machine.
 
 ## Per-camera notes
-- **C210:** standard indoor cam, continuous RTSP + ONVIF — the continuous `CameraSource`
-  model fits it directly. A good first device; start there.
-- **TC40:** **mains-powered (plugged into the wall)**, so it holds a continuous RTSP stream
-  like the C210, with none of the battery clip-push behaviour. Same setup: enable its RTSP
-  camera account and add it. Both are solid continuous sources.
+- **C210:** appears on TP-Link's published RTSP/ONVIF list. Standard indoor cam,
+  continuous stream — the continuous `CameraSource` model fits it directly. A good
+  first device; start there.
+- **TC40:** **not on that list**, and no TP-Link product page for it was reachable
+  while writing this. An earlier version of this file asserted that it is
+  mains-powered and therefore holds a continuous RTSP stream like the C210. Neither
+  half of that was verified. If RTSP does work on your unit the setup is identical;
+  if it does not, no amount of configuration in Wavr will help, because the camera
+  never offers the stream.
 
 ## Config note
-- `WAVR_FUSION_THRESHOLD=0.35` is a defensible setting for a network-only phase, since
-  network alone caps at ~0.4. With a camera contributing real confidence, move it back
+- `WAVR_FUSION_THRESHOLD=0.35` is a defensible setting for a network-only phase.
+  The ~0.4 ceiling for network alone is arithmetic, not a measurement — trust
+  weight times source confidence, the same 0.5 x 0.8 the fusion tests work
+  through in `backend/tests/test_fusion.py`. With a camera contributing real confidence, move it back
   toward the default `0.5` so a single weak signal doesn't over-report occupied.

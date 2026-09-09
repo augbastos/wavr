@@ -44,9 +44,13 @@ now, containerise (the enabler), migrate later.
    WAVR_RUVIEW_URL=ws://localhost:3000/ws/sensing
    WAVR_CAM_CONFIDENCE=0.5
    ```
-2. **Run without admin.** `arp -a`, `ping`, OpenCV/RTSP and YOLO all run as an
-   ordinary user. Confirm nothing asks for elevation. A dedicated account,
-   separate from your everyday one, is better still.
+2. **Run without admin — with one exception worth knowing before Phase 2.**
+   `arp -a`, `ping`, OpenCV/RTSP and YOLO all run as an ordinary user, and a
+   dedicated account separate from your everyday one is better still. The
+   exception is the raw DHCP collector: `AF_PACKET`/`SOCK_RAW` needs `CAP_NET_RAW`
+   on Linux, and the fallback binds UDP/67, a privileged port. On the Linux
+   appliance of Phase 2 that is a capability to grant deliberately
+   (`CAP_NET_RAW`), not a reason to run the whole Core as root.
 3. **Put the cameras on an isolated network now.** Most routers offer a guest
    SSID. Put the cameras there and **block their outbound internet access** at
    the router — a consumer camera phoning home is the privacy leak; cut it. This
@@ -70,27 +74,38 @@ fusion, the dashboard and storage use none. The design scopes this naturally:
   → GPU memory in use.
 - **Close the program** (the process exits) → the driver returns **all** of it.
 
-*Nuance:* while the process lives, the **CUDA context** holds a few hundred MB
-even with every camera off, because the model stays cached in the process
-(`_YOLO_MODEL`, a module global). Two ways out:
+**Turning the last camera off already releases the model.** `CameraSource`
+counts running loops, and when the count reaches zero it calls `release_model()`
+— which drops `_YOLO_MODEL` and `_POSE_MODEL` and calls
+`torch.cuda.empty_cache()` (`backend/wavr/sources/camera.py`). You do not have
+to close the program to get the memory back.
 
-- **The full guarantee is closing the program** — the process dies and
-  everything comes back. This is the recommended path on a shared machine.
-- **Optional, to leave Wavr open without holding memory:** when the LAST camera
-  is switched off, drop the model (`_YOLO_MODEL = None` plus
-  `torch.cuda.empty_cache()`). That recovers most of it without exiting; the
-  residual CUDA context only goes at exit.
+*What closing the program additionally recovers:* the **CUDA context** itself,
+a few hundred MB the driver holds for as long as the process lives, whether or
+not a model is loaded. Nothing short of exiting releases that. So on a machine
+shared with anything else that wants the GPU, closing Wavr is still the complete
+answer; toggling the cameras off is the large part of it.
 
-**Code prerequisites before pointing this at a real camera** — each its own
-small change:
+**The code prerequisites this section used to list are done.** They are kept
+here as a record of what "pointing this at a real camera" actually required,
+each with where it landed — a document that still asks for finished work teaches
+its reader to stop believing it:
 
-- keep-alive in `CameraSource`, so a transient error does not kill the camera
-  (reconnect, the way the CSI source already does);
-- `SourceManager._run` must remove its own task when it finishes — a dead source
-  must never report `active=True`, because the ON/OFF indicator is a safety
-  control;
-- a `threading.Lock` around `_model()` (two concurrent first-detections would
-  otherwise load YOLO twice), and validation that `cam_interval > 0`.
+- **keep-alive in `CameraSource`**, so a transient error does not kill the
+  camera. Done: it reconnects after `reconnect_delay` and reports health while
+  it retries (`sources/camera.py`).
+- **a dead source must never report `active=True`**, because the ON/OFF
+  indicator is a safety control. Done, and more strongly than asked: the
+  `SourceManager` now *supervises* rather than merely reaps — a failed source is
+  restarted with backoff and the health behind the restart is published
+  (`sourcemanager.py`).
+- **a lock around the lazy model load**, so two concurrent first-detections
+  cannot load YOLO twice. Done: `_MODEL_LOCK`, with double-checked locking
+  (`sources/camera.py`).
+- **validation that `cam_interval > 0`.** Done: `WAVR_CAM_INTERVAL` is clamped
+  to a floor and a bad value is logged rather than obeyed (`config.py`). Zero
+  turned the detection loop's sleep into a busy loop, which presents as "the
+  machine got slow" and never as a bad setting.
 
 ---
 
@@ -131,10 +146,15 @@ loopback-only posture as Phase 0.
 
 ### Caveat: Docker Desktop on Windows and macOS
 
-`network_mode: host` does not behave as it does on Linux — Docker Desktop runs
-containers in a VM and host networking is limited. **On Windows, keep running
-`uvicorn` directly** (the Phase 0 way). Docker is the appliance/Linux path;
-elsewhere it is for testing that the image builds, not for running the service.
+Docker's own documentation supports host networking on Docker Desktop 4.34 and
+later, with a stated limit: it works at layer 4, and protocols below TCP/UDP are
+not supported. So "unsupported" would be wrong; "not the same thing as on Linux"
+is the accurate reading, and this repository has **not tested** a `127.0.0.1`
+bind inside a host-networked container on Docker Desktop.
+
+Until somebody does, **on Windows keep running `uvicorn` directly** (the Phase 0
+way). Docker is the appliance/Linux path; elsewhere treat it as a check that the
+image builds, not as the way to run the service.
 
 ### GPU/camera variant (follow-up)
 
@@ -147,10 +167,11 @@ image is considerably larger; treat it as a separate deliverable.
 
 ### Secrets
 
-`.env` is never copied into the image. It is mounted at runtime through
-`env_file` in the compose file, and `.dockerignore` excludes it explicitly from
-the build context, alongside `.venv`, `*.db` and `.git`. No credential ends up
-in any image layer.
+`.env` is never copied into the image. `env_file` in the compose file reads it
+**on the host at start-up** and injects the values as environment variables —
+nothing is mounted — and `.dockerignore` excludes it explicitly from the build
+context, alongside `.venv`, `*.db` and `.git`. No credential ends up in any image
+layer.
 
 After this phase, workstation and appliance run **the same image** — the
 difference is the `.env` and the network.
@@ -162,20 +183,27 @@ difference is the `.env` and the network.
 Extending from presence to position (x/y) and posture, with minimal hardware
 that works from plain Python.
 
-- **Tier R0 — one room, no soldering (~€15-20):** one HLK-LD2450 (~€10-15), a
-  CP2102/CH340 USB-TTL adapter (~€3-5) and four female-female jumpers (5V, GND,
-  TX, RX — note the LD2450 runs its UART at 256000 baud). It plugs straight into
-  the machine: `WAVR_MMWAVE_PORT=COM3`, `WAVR_MMWAVE_ROOM=living`,
+> **On the prices below.** They were rough marketplace figures noted in 2026-07
+> and are deliberately vague, because a precise number with no date and no source
+> becomes a false statement on its own. The manufacturer's own listing for the
+> LD2450 is lower than the range given here. Treat these as "this is a cheap tier
+> or an expensive one", check the current price yourself, and do not quote them.
+
+- **Tier R0 — one room, no soldering (tens of euros):** one HLK-LD2450, a
+  CP2102/CH340 USB-TTL adapter and four female-female jumpers (5V, GND, TX, RX —
+  note the LD2450 runs its UART at 256000 baud). The module speaks **UART/TTL**,
+  not USB, which is what the adapter is for. It then plugs into the machine: `WAVR_MMWAVE_PORT=COM3`, `WAVR_MMWAVE_ROOM=living`,
   `pip install -e backend[mmwave]`, restart, and targets appear on the radar. No
   ESP32, no firmware.
-- **Tier R1 — a remote room (+€6-9 per room):** LD2450 plus a cheap ESP32. The
+- **Tier R1 — a remote room (a few euros more per room):** LD2450 plus a cheap ESP32. The
   TCP/MQTT transport is a new `frames` generator; the class and the parser do
   not change, because that seam already exists.
-- **Tier R2 — the CSI experiment (~€25):** two ESP32-S3 boards. When the CSI
+- **Tier R2 — the CSI experiment:** two ESP32-S3 boards. When the CSI
   frames carry pose/targets, `normalize_ruview` already accepts them. Research,
   not a deliverable.
-- **Tier R3 — posture from cameras you already have (€0):** an RTSP camera,
-  `pip install -e backend[camera]` (~5GB, torch with CUDA) and `pose=True` at
+- **Tier R3 — posture from cameras you already have (no new hardware):** an RTSP
+  camera, `pip install -e backend[camera]` (several GB — it pulls torch) and
+  `pose=True` at
   camera bring-up gives sitting/standing/lying on the radar — without x/y
   position, since the homography is a follow-up.
 
@@ -186,12 +214,14 @@ follow-up once the hardware is in place.
 
 ### Bring-up notes
 
-- **Serial transport for the LD2450 — two known issues, deliberately deferred:**
-  the serial flow has a race between close and read during shutdown (worst case,
-  a frozen event loop on Windows), and the buffer is not persisted between
-  frames. Both are known in the component's protocol. Bring-up **must** include
-  cutting power during streaming, not only the happy read path, so the freeze
-  surfaces before this reaches anything that matters.
+- **Serial transport for the LD2450 — one issue left, and it needs the real
+  device to close.** The frame buffer *is* persisted between reads
+  (`sources/mmwave.py` carries `leftover` across iterations), and the shutdown
+  path closes the port off the event loop (`asyncio.to_thread(s.close)`) so a
+  blocking close cannot freeze the loop. What remains is the race itself: a
+  `read` may still be in flight when the close happens, and no amount of reading
+  the code settles what the driver does then. Bring-up **must** therefore include
+  cutting power mid-stream, not only the happy read path.
 - **Sign-magnitude decode:** the decoding convention follows the ESPHome
   `ld2450` component (x/y/vx/vy). **Confirm against the real device** that the
   bit interpretation is right, especially for negative values and at quadrant
@@ -210,9 +240,11 @@ design. Only occupancy confidence — occupied or not, per room — is stored.
 
 Migration is changing where it runs, not what it is.
 
-- **Hardware:** a small board with an embedded GPU (a Jetson Orin Nano class
-  device, roughly $250-500) removes the conflict of the GPU living in a machine
-  you use for other things. A mini-PC with a GPU works equally well. Either runs
+- **Hardware:** a small board with an embedded GPU — a Jetson Orin Nano class
+  device — removes the conflict of the GPU living in a machine you use for other
+  things. NVIDIA's product pages no longer list a price, and the last figure
+  they published was a 2024 announcement; look it up rather than trusting a
+  number in this file. A mini-PC with a GPU works equally well. Either runs
   the same image as Phase 1.
 - **Network:** a dedicated VLAN for the cameras and the Wavr box; egress
   firewalled; the dashboard reachable only from the trusted LAN. A compromised

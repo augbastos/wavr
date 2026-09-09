@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+
+log = logging.getLogger(__name__)
 
 load_dotenv()  # reads ./.env (git-ignored) if present
 
@@ -364,6 +367,29 @@ def _bind_host() -> str:
     return "0.0.0.0" if multidevice else "127.0.0.1"
 
 
+
+def _at_least(var: str, default: float, floor: float) -> float:
+    """A float from the environment, never below `floor`.
+
+    Every other numeric setting here is `float(os.getenv(...))` and tolerates
+    whatever it is handed. That is fine for a threshold, where a silly value
+    produces a silly answer somebody notices. It is not fine for an interval a
+    loop sleeps on: zero means no sleep at all.
+    """
+    raw = os.getenv(var)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("%s=%r is not a number; using %s", var, raw, default)
+        return default
+    if value < floor:
+        log.warning("%s=%s is below the floor of %s; using the floor", var, value, floor)
+        return floor
+    return value
+
+
 def load_config() -> Config:
     # Network MAC->person map (WAVR_NET_KNOWN, "mac=person" pairs), mirroring the
     # BLE parse below. Computed before Config(...) so its keys can be folded into
@@ -392,7 +418,13 @@ def load_config() -> Config:
         ruview_url=os.getenv("WAVR_RUVIEW_URL", "ws://localhost:3000/ws/sensing"),
         ruview_room=os.getenv("WAVR_RUVIEW_ROOM", "sala"),
         ruview_reconnect=float(os.getenv("WAVR_RUVIEW_RECONNECT", "3.0")),
-        cam_interval=float(os.getenv("WAVR_CAM_INTERVAL", "0.5")),
+        # A camera loop sleeps `cam_interval` between detections. Zero or
+        # negative turns that sleep into a busy loop pinning a core and hammering
+        # the RTSP stream -- and the failure looks like "the machine got slow",
+        # not like a bad setting, because nothing anywhere says the value is
+        # wrong. Clamped to a floor rather than raising, so one typo in a `.env`
+        # cannot stop the Core from starting.
+        cam_interval=_at_least("WAVR_CAM_INTERVAL", 0.5, floor=0.05),
         cam_confidence=float(os.getenv("WAVR_CAM_CONFIDENCE", "0.4")),
         # F3: seconds of consecutive frame-read failure before a camera is reported
         # unhealthy (drives the drift-detection health hook). Default 30s.

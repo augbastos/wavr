@@ -57,6 +57,10 @@ reference — delete the reference instead.
 
 Each of these was run against this tree, not remembered.
 
+Each line is independent and starts from the **repository root** — read as a
+sequence they do not chain, which is how the pytest line came to be written after
+a `cd backend` that made its own path wrong.
+
 ```powershell
 cd backend; pip install -e .[dev]; python -m wavr.serve   # loopback 127.0.0.1:8000
 python -m pytest backend/tests -q                          # full suite; all hardware mocked
@@ -64,6 +68,10 @@ cd desktop; npm run dev                                    # Tauri dev (needs Ru
 powershell scripts/wavr-desktop.ps1                        # zero-Rust launcher (backend + browser)
 python scripts/publication_gate.py                         # pre-publication safety check
 ```
+
+The browser tests inside the suite drive a real Chromium and take the largest
+share of the wall clock. To skip them while iterating, `--ignore` the modules
+that import `playwright`.
 
 `frontend/index.html` opens directly with no build step. Off localhost it self-switches to
 the simulator.
@@ -85,7 +93,10 @@ Optional extras, all lazy on purpose: `dev`, `camera`, `mqtt`, `genai`, `mmwave`
 2. **Cameras boot OFF** on every process start. Enabling is runtime-only and never
    persisted.
 3. **Camera frames and pose keypoints are never written to disk.** Only derived signals —
-   occupancy, confidence, explanation — persist.
+   occupancy, confidence, explanation — persist. Enforced by
+   `backend/tests/test_a_frame_never_reaches_the_disk.py`, which reads the vision path and
+   refuses any call that puts bytes outside the process. It was a sentence with nothing
+   behind it until that test was written.
 4. **Per-person x/y targets and vitals are live-only** over `/ws/live`. Never SQLite, never
    MQTT. No movement history on disk, by decision.
 5. **The off-localhost frontend is a simulator with zero network requests.** Never wire it
@@ -99,9 +110,16 @@ Optional extras, all lazy on purpose: `dev`, `camera`, `mqtt`, `genai`, `mmwave`
 ### Never commit
 
 `wavr.db*`, `.env`, `house.json` (a real floor plan), `local_token`,
-`docs/competitive-analysis/` (real network PII), Android `local.properties`, any keystore.
-All are gitignored. Do not force-add them, and note that `.gitignore` does nothing for a
-file already in the index.
+`docs/competitive-analysis/` (real network PII), `local.properties`, any keystore.
+
+All are gitignored, and `scripts/publication_gate.py` asks git rather than taking the
+sentence's word for it. That check exists because the sentence was **false** when first
+written: `mobile/android/.gitignore` ships the Android Studio template, which comments its
+keystore lines out, and nothing covered the repository root — five of seven paths were
+unprotected. A leaked signing key cannot be un-leaked.
+
+Do not force-add any of them, and note that `.gitignore` does nothing for a file already
+in the index.
 
 ## How work is judged here
 
@@ -113,8 +131,10 @@ this repository.
   sentence, not a guarantee. This is the single most common defect class in this codebase.
 - **A test without a control is an opinion with terminal output.** A test that cannot fail
   for the reason it names proves nothing. Before trusting a green test, break the thing it
-  claims to protect and confirm it goes red. Eight tests here were found to be incapable of
-  failing for their stated reason.
+  claims to protect and confirm it goes red — several tests in this repository were found
+  to be incapable of failing for the reason they named, and `scripts/check_guarantees.py`
+  exists because of them. (This paragraph used to give a count. A number nothing recomputes
+  is the same defect one paragraph further down, so it is gone.)
 - **Local green and clean-checkout red is a real defect**, not an environment quirk. If it
   passes only because of something already on the machine, it does not pass.
 - **Measure, do not guess.** Run the command, read the file, check the actual state.

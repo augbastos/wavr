@@ -13,9 +13,11 @@
  * Self-hosted on purpose: the pairing screen decodes the hub's QR on
  * the device, and a camera frame must never leave it to reach a CDN.
  *
- * The bundle declares no version of its own, so the honest identifier
- * is its hash rather than a number nobody can check. Two things had to
- * be pinned down for that hash to be checkable at all:
+ * The bundle declares no version of its own, but that does not make it
+ * unidentifiable: its body is byte-identical, once line endings are
+ * normalised, to `jsqr@1.4.0` from npm (1.3.0 and 1.3.1 both differ).
+ * The hash below is what proves that, and two things had to be pinned
+ * down for it to be checkable at all:
  *
  *   - it covers the BODY, everything after this banner, because the
  *     banner is the one thing here upstream did not write;
@@ -34,6 +36,7 @@
  *
  * Upstream's bytes are otherwise unmodified. A future update should
  * replace the body whole and recompute the hash above.
+ * ---- end of vendoring banner. Everything below is upstream, verbatim. ----
  */
 (function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
