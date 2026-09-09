@@ -13,7 +13,17 @@
  *     host half masked — identical to diag.py's redact_macs) before storing.
  *   - We deliberately persist NO client IP / UA metadata of our own (Cloudflare's
  *     edge logs are outside this function's control; it stores report+ts only).
- *   - PUBLICATION NOTE. There is no authentication and no rate limit here, and
+ *   - CURRENT STATE: NOT DEPLOYED. This function was taken off the hosted
+ *     project on 2026-09-09, immediately before this repository was published,
+ *     and the endpoint now refuses POST. The code is kept because it is the
+ *     honest answer to "what happens to a diagnostics report" -- a reader can
+ *     see exactly what the receiver did rather than take a promise for it -- and
+ *     because re-deploying is one command once the exposure below is addressed.
+ *
+ *     Nothing depends on it. Wavr runs entirely locally and the connector that
+ *     feeds this is default-OFF.
+ *
+ *   - WHY IT WAS TAKEN OFF. There is no authentication and no rate limit here, and
  *     that was a reasonable trade while the repository holding this URL was
  *     private: the endpoint was known to one person. Publishing the repository
  *     publishes the URL and this file, which makes it an OPEN write path into
