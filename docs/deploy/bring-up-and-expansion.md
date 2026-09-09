@@ -1,137 +1,248 @@
-# Wavr — Bring-up seguro + expansão sem dificuldade
+# Wavr — safe bring-up, and expanding without pain
 
-**Objetivo:** rodar seguro nas condições de hoje (laptop + the GPU) e poder migrar pro appliance dedicado (VLAN) **a qualquer momento sem reescrever nada** — só trocar onde roda.
+**Goal:** run safely on an ordinary workstation today, and be able to move to a
+dedicated appliance on a segmented network **at any time without rewriting
+anything** — only changing where it runs.
 
-## O princípio que garante a expansão fácil
+## The principle that makes expansion cheap
 
-Migrar laptop → appliance tem que ser **mudança de config, não de código**. Isso se sustenta em 4 invariantes que já valem hoje e NÃO podem ser quebrados:
+Moving from a workstation to an appliance has to be a **configuration change,
+not a code change**. That rests on four invariants that hold today and must not
+be broken:
 
-1. **Todo especificidade de deploy vive em env/config** — bind address, URLs de câmera, path do DB, path/threshold do modelo, device de GPU, pesos de fusão. NUNCA hardcode. (O `config.py` já lê tudo de `WAVR_*` — manter assim.)
-2. **O serviço não assume que roda no laptop** — nada de path absoluto do laptop, índice de GPU fixo, ou "localhost" presumido além do bind configurável.
-3. **Os guards de segurança estão no APP** (loopback bind, allowlist de Host, CSRF `X-Wavr-Local`, câmera boot-OFF, kill-switch, storage só-derivado) — viajam com o código pra qualquer box. A segmentação de rede é **aditiva** no appliance.
-4. **Fontes e pesos são config-driven** — adicionar 3ª câmera, ou uma fonte nova (BLE/mmWave), é config + uma classe `SensorSource` nova. O seam já existe (`_default_sources`, `SourceManager.register`). O núcleo não muda.
+1. **Every deployment specific lives in env/config** — bind address, camera
+   URLs, database path, model path and threshold, GPU device, fusion weights.
+   Never hardcoded. (`config.py` already reads all of it from `WAVR_*`; keep it
+   that way.)
+2. **The service does not assume which machine it is on** — no absolute paths
+   from one host, no fixed GPU index, no assumed `localhost` beyond the
+   configurable bind.
+3. **The safety guards live in the APP** — loopback bind, Host allowlist,
+   `X-Wavr-Local` CSRF, cameras boot OFF, kill switch, derived-only storage.
+   They travel with the code to any box. Network segmentation is **additive** on
+   the appliance, never a replacement for them.
+4. **Sources and weights are config-driven** — adding a third camera, or a new
+   modality (BLE, mmWave), is configuration plus one new `SensorSource` class.
+   The seam already exists (`_default_sources`, `SourceManager.register`). The
+   core does not change.
 
-Enquanto esses 4 valerem, expandir é trivial. O resto do plano é: endurecer agora, containerizar (o habilitador), migrar depois.
+While those four hold, expanding is trivial. The rest of this plan is: harden
+now, containerise (the enabler), migrate later.
 
 ---
 
-## Fase 0 — Endurecer o deploy no laptop (funciona hoje)
+## Phase 0 — Harden the workstation deployment (works today)
 
-**Praticidade + segurança básica, sem hardware novo.**
+**Practicality and basic safety, with no new hardware.**
 
-1. **`.env` único como a costura de portabilidade.** Todos os `WAVR_*` num `.env` (já git-ignored; teu padrão `<local>\.env`). Segredos (creds RTSP das Tapo) SÓ aqui, nunca em código/git. Esse arquivo é o que migra pro appliance intacto.
+1. **One `.env` as the portability seam.** Every `WAVR_*` in a single `.env`,
+   already git-ignored. Secrets — RTSP camera credentials, provider API keys —
+   live *only* there, never in code and never in Git. That file is what moves to
+   the appliance intact.
    ```
-   WAVR_NET_MACS=aa:bb:...,cc:dd:...     # device→pessoa
+   WAVR_NET_MACS=aa:bb:...,cc:dd:...     # device -> person
    WAVR_RUVIEW_URL=ws://localhost:3000/ws/sensing
    WAVR_CAM_CONFIDENCE=0.5
    ```
-2. **Rodar sem admin.** `arp -a`, `ping`, cv2/RTSP, YOLO — todos rodam como usuário comum. Confirmar que nada pede elevação. Idealmente um usuário Windows dedicado, separado do teu diário.
-3. **Câmeras numa rede isolada JÁ.** A maioria dos roteadores tem "rede de convidados" (SSID separado). Põe as Tapo lá e **bloqueia o egress de internet delas** no roteador — Tapo phone-home é o vazamento de privacidade; corta. Primeiro passo de segmentação, com hardware que já tens.
-4. **Loopback fica.** Dashboard continua só-loopback; acesso de outro device só via túnel SSH ou, depois, pelo appliance.
-5. **Abrir sob demanda — NÃO serviço sempre-ligado (por causa da VRAM, ver abaixo).** No laptop gamer o modelo certo é: abrir Wavr quando quer vigiar (atalho `.ps1` fixado, ou Tauri depois) → processo sobe; fechar → processo morre → VRAM 100% de volta pros jogos. O serviço sempre-ligado é do **appliance** (Fase 2), onde não há jogo competindo por VRAM.
+2. **Run without admin.** `arp -a`, `ping`, OpenCV/RTSP and YOLO all run as an
+   ordinary user. Confirm nothing asks for elevation. A dedicated account,
+   separate from your everyday one, is better still.
+3. **Put the cameras on an isolated network now.** Most routers offer a guest
+   SSID. Put the cameras there and **block their outbound internet access** at
+   the router — a consumer camera phoning home is the privacy leak; cut it. This
+   is the first step of segmentation, with hardware you already have.
+4. **Loopback stays.** The dashboard remains loopback-only; reaching it from
+   another device goes through an SSH tunnel, or later through the appliance.
+5. **Open on demand rather than an always-on service** — because of GPU memory,
+   see below. On a shared workstation the right model is: open Wavr when you
+   want to watch, the process starts; close it, the process exits and the GPU
+   memory is released in full. The always-on service belongs to the **appliance**
+   (Phase 2), where nothing else is competing for the GPU.
 
-### Ciclo de vida da VRAM (o que tu pediu: usa quando abre, solta quando fecha)
+### GPU memory lifecycle — used when open, released when closed
 
-**Só o YOLO (câmera) usa VRAM.** Scan de rede, WiFi CSI, fusão, dashboard, storage = zero GPU. E o design já escopa isso naturalmente:
+**Only the camera path (YOLO) uses GPU memory.** Network scanning, Wi-Fi CSI,
+fusion, the dashboard and storage use none. The design scopes this naturally:
 
-- **Wavr aberto, câmeras OFF (boot-OFF)** → `_model()` nunca é chamado → **zero VRAM.** Roda presença por rede + CSI enquanto tu joga, sem tocar a GPU.
-- **Liga uma câmera** (toggle consciente) → YOLO carrega na primeira detecção → usa VRAM.
-- **Fecha o programa** (processo sai) → o driver NVIDIA devolve **100% da VRAM** — garantia limpa e confiável pros jogos. É o "fecho e para de ocupar" que tu quer.
+- **Wavr open, cameras OFF (the boot default)** → `_model()` is never called →
+  **zero GPU memory.** Network and CSI presence run with the GPU untouched.
+- **Turn a camera on** (a deliberate toggle) → YOLO loads on the first detection
+  → GPU memory in use.
+- **Close the program** (the process exits) → the driver returns **all** of it.
 
-*Nuance:* enquanto o processo vive, o **contexto CUDA** segura umas centenas de MB mesmo com a câmera desligada — porque o modelo fica em cache no processo (`_YOLO_MODEL` global). Duas saídas:
-- **Garantia total = fechar o programa** (processo morre → tudo volta). É o caminho recomendado pro laptop.
-- **Opcional (deixar Wavr aberto sem segurar VRAM):** ao desligar a ÚLTIMA câmera, descarregar o modelo (`_YOLO_MODEL = None` + `torch.cuda.empty_cache()`) — recupera a maior parte da VRAM sem fechar; o contexto CUDA residual só some no exit. Enhancement pequeno, fazer junto do bring-up de câmera se quiser rodar Wavr o dia todo com câmera on/off sem pesar nos jogos.
+*Nuance:* while the process lives, the **CUDA context** holds a few hundred MB
+even with every camera off, because the model stays cached in the process
+(`_YOLO_MODEL`, a module global). Two ways out:
 
-**Pré-requisitos de código antes de ligar câmera real** (do review final — fazer nesta fase, cada um seu mini-plano SDD):
-- I2: keep-alive na `CameraSource` (erro transitório não mata a câmera; reconnect estilo RuView).
-- I3: `SourceManager._run` remover a própria task ao terminar (source morta não pode reportar `active=True` — o indicador ON/OFF é controle de segurança).
-- `threading.Lock` no `_model()` (YOLO 2x em first-detect concorrente); validar `cam_interval > 0`.
+- **The full guarantee is closing the program** — the process dies and
+  everything comes back. This is the recommended path on a shared machine.
+- **Optional, to leave Wavr open without holding memory:** when the LAST camera
+  is switched off, drop the model (`_YOLO_MODEL = None` plus
+  `torch.cuda.empty_cache()`). That recovers most of it without exiting; the
+  residual CUDA context only goes at exit.
+
+**Code prerequisites before pointing this at a real camera** — each its own
+small change:
+
+- keep-alive in `CameraSource`, so a transient error does not kill the camera
+  (reconnect, the way the CSI source already does);
+- `SourceManager._run` must remove its own task when it finishes — a dead source
+  must never report `active=True`, because the ON/OFF indicator is a safety
+  control;
+- a `threading.Lock` around `_model()` (two concurrent first-detections would
+  otherwise load YOLO twice), and validation that `cam_interval > 0`.
 
 ---
 
-## Fase 1 — Containerizar (O habilitador da expansão)
+## Phase 1 — Containerise (the enabler)
 
-**Isso é o movimento de maior alavancagem pra "expandir a qualquer momento".** Uma vez que o backend é uma imagem Docker + `.env`, migrar pra QUALQUER box = `pull` + copiar `.env` + `docker run`. Mesmo ambiente no laptop e no Jetson — acabou "funciona só na minha máquina".
+**This is the highest-leverage move for "expand at any time".** Once the backend
+is a Docker image plus a `.env`, moving to ANY box is `pull`, copy `.env`,
+`docker run`. The same environment on the workstation and on the appliance —
+"works on my machine" stops being a category.
 
-**Status:** `backend/Dockerfile` + `docker-compose.yml` (raiz) + `.dockerignore` já existem no repo (base lean, sem torch/cv2 — só network/ruview/sim/fusion/rules/away/narration-503). O variant com câmera/GPU é follow-up (ver abaixo).
+**Status:** `backend/Dockerfile`, `docker-compose.yml` and `.dockerignore` are in
+the repository. The base image is lean — no torch, no OpenCV — covering network,
+CSI, simulation, fusion, rules, away and narration. The camera/GPU variant is a
+follow-up, below.
 
-### Build + run (appliance/Linux)
+### Build and run (Linux appliance)
 
 ```bash
-# On the Linux appliance (Jetson/mini-PC):
-cp /path/to/.env .env            # your WAVR_* + GEMINI_API_KEY
-docker compose up -d --build     # builds the lean base image, starts on 127.0.0.1:8000
-# Dashboard from another device on the LAN: SSH tunnel (keeps the loopback guard intact)
-ssh -L 8000:127.0.0.1:8000 user@appliance   # then open http://127.0.0.1:8000 locally
+# On the Linux appliance:
+cp /path/to/.env .env            # your WAVR_* values
+docker compose up -d --build     # lean base image, starts on 127.0.0.1:8000
+# Dashboard from another device on the LAN: SSH tunnel (keeps the loopback guard)
+ssh -L 8000:127.0.0.1:8000 user@appliance   # then open http://127.0.0.1:8000
 ```
 
-### Por que `network_mode: host` + bind `127.0.0.1`
+### Why `network_mode: host` plus a `127.0.0.1` bind
 
-O guard de loopback do app (`_LOOPBACK_HOSTS`, ver `wavr/app.py`) confia no peer real da conexão. Com `network_mode: host` (Linux), o processo dentro do container vê a mesma stack de rede do host — bind em `127.0.0.1:8000` preserva o guard **sem tocar em código**. NÃO usar bind `0.0.0.0` numa bridge network: o gateway Docker apareceria como peer não-loopback e o guard rejeitaria (403) todo request, inclusive os legítimos. Acesso de outro device na LAN é via túnel SSH (`ssh -L`), que mantém a conexão local ao container como loopback — mesma postura "loopback-only" já documentada na Fase 0.
+The app's loopback guard (`_LOOPBACK_HOSTS` in `wavr/app.py`) trusts the real
+peer of the connection. With `network_mode: host` on Linux, the process inside
+the container sees the host's network stack, so binding `127.0.0.1:8000`
+preserves the guard **without touching code**.
 
-### Caveat: Windows (Docker Desktop)
+Do not bind `0.0.0.0` on a bridge network: the Docker gateway would appear as a
+non-loopback peer and the guard would reject every request with 403, including
+the legitimate ones. Reaching it from another device on the LAN goes through an
+SSH tunnel, which keeps the connection to the container local — the same
+loopback-only posture as Phase 0.
 
-No laptop de desenvolvimento (Windows), `network_mode: host` não funciona como no Linux — o Docker Desktop roda os containers numa VM e o host networking é limitado/não suportado da mesma forma. **No Windows, continuar rodando `uvicorn` direto** (o jeito atual, Fase 0) em vez de Docker. Docker é o caminho appliance/Linux (Fase 1+2); no Windows ele só serve pra testar o build da imagem, não pra rodar o serviço long-lived.
+### Caveat: Docker Desktop on Windows and macOS
 
-### Variant GPU/câmera (follow-up)
+`network_mode: host` does not behave as it does on Linux — Docker Desktop runs
+containers in a VM and host networking is limited. **On Windows, keep running
+`uvicorn` directly** (the Phase 0 way). Docker is the appliance/Linux path;
+elsewhere it is for testing that the image builds, not for running the service.
 
-A imagem base é lean (sem torch/cv2) — cobre presença por rede/CSI, mas NÃO detecção por câmera. Para câmera real: build de um variant que instala `pip install -e backend[camera]` sobre uma base `nvidia/cuda` (torch com suporte CUDA), e descomentar o stanza `deploy.resources.reservations.devices` (GPU) no `docker-compose.yml` + instalar `nvidia-container-toolkit` no host (WSL2 no Windows / nativo no Jetson — ver Fase 2). Imagem consideravelmente maior; tratar como entregável separado, não parte do Fase 1 base.
+### GPU/camera variant (follow-up)
 
-### Segredos
+The base image is lean and therefore covers network and CSI presence but **not**
+camera detection. For a real camera: build a variant that installs
+`pip install -e backend[camera]` on top of an `nvidia/cuda` base (torch with CUDA
+support), uncomment the `deploy.resources.reservations.devices` stanza in
+`docker-compose.yml`, and install `nvidia-container-toolkit` on the host. The
+image is considerably larger; treat it as a separate deliverable.
 
-`.env` nunca é copiado pra dentro da imagem — é montado em runtime via `env_file` no compose, e `.dockerignore` exclui `.env` explicitamente do build context (junto de `.venv`, `*.db`, `.git`, `.superpowers`). Nenhuma credencial (RTSP das Tapo, `GEMINI_API_KEY`) chega a ficar em nenhuma layer da imagem.
+### Secrets
 
-Depois desta fase, laptop e appliance rodam **a mesma imagem** — a diferença é só o `.env` e a rede.
+`.env` is never copied into the image. It is mounted at runtime through
+`env_file` in the compose file, and `.dockerignore` excludes it explicitly from
+the build context, alongside `.venv`, `*.db` and `.git`. No credential ends up
+in any image layer.
 
----
-
-## Radar de posição — hardware
-
-**Expandir monitoramento pra posição (x/y) e postura (posição do corpo) usando hardware minimalista e que já funciona com Python puro.**
-
-- **Tier R0 — radar de 1 cômodo, sem solda (~€15-20):** 1× HLK-LD2450 (~€10-15) + adaptador USB-TTL CP2102/CH340 (~€3-5) + 4 jumpers fêmea-fêmea (5V/GND/TX/RX — atenção: LD2450 usa UART 256000 baud). Liga DIRETO no PC: `WAVR_MMWAVE_PORT=COM3`, `WAVR_MMWAVE_ROOM=sala`, `pip install -e backend[mmwave]`, restart → pontos no radar. Zero ESP32, zero firmware.
-- **Tier R1 — cômodo remoto (futuro, +€6-9/cômodo):** LD2450 + ESP32 baratinho; transporte TCP/MQTT é um `frames` generator novo — a classe e o parser NÃO mudam (seam já pronto).
-- **Tier R2 — o experimento CSI (RuView, ~€25):** 2× ESP32-S3; quando os frames do RuView tiverem pose/targets, `normalize_ruview` já os aceita (passthrough pronto). Tratar como pesquisa, não como entregável.
-- **Tier R3 — postura pelas câmeras que JÁ EXISTEM (€0):** Tapo C210 → `pip install -e backend[camera]` (~5GB, torch CUDA) + ligar `pose=True` no bring-up da câmera → "sentado/em pé/deitado" no radar (sem posição x/y — homografia é follow-up).
-
-**Calibração (documentar honesto):** x/y do LD2450 são no frame DO SENSOR (montado na parede, olhando pro cômodo). V1 assume sensor no canto-origem olhando pro +y; offset/rotação por cômodo = follow-up pequeno quando o hardware chegar.
-
-### Notas de bring-up (do review)
-
-- **(a) Transporte serial do LD2450 — dois issues conhecidos deferidos:** O fluxo serial tem uma race condition na close/read durante shutdown (pior caso: freeze do event loop no Windows) e o buffer não é persistido entre frames — ambos conhecidos no protocolo do componente. O bring-up **DEVE incluir teste de desligar a fonte durante streaming** (não só leitura feliz dos dados normais), pra detectar o freeze antes de escalar pra produção.
-- **(b) Decode sign-magnitude:** A convenção de decodificação segue o componente ESPHome `ld2450` (valores x/y/vx/vy). **Confirmar contra o device real** que a interpretação de bits está correta (especialmente quando os valores são negativos ou em boundaries de quarto).
-
-### Privacidade
-
-**Targets (posição x/y) são LIVE-ONLY por decisão:** fluem pelo WebSocket pro dashboard, mas NUNCA são persistidos no SQLite nem publicados no MQTT. Histórico de movimento em disco seria um passivo de privacidade que o Wavr recusa por design — apenas confidência ocupacional (sim/não por cômodo) é armazenada.
-
----
-
-## Fase 2 — Appliance dedicado (quando quiser, sem dor)
-
-**Os 3 eixos no máximo. Migração = trocar onde roda, não o quê.**
-
-- **Hardware:** Jetson Orin Nano (GPU embarcada, YOLO nativo, ~$250-500) — resolve o conflito da GPU estar no laptop. Ou mini-PC + GPU. Roda a MESMA imagem da Fase 1.
-- **Rede:** VLAN dedicada pras câmeras + o box Wavr; egress firewallado; dashboard só da LAN confiável. Mesmo teu laptop comprometido não alcança as câmeras.
-- **Sempre-ligado:** `restart: unless-stopped` → dashboard é um bookmark, zero passo de start. Melhor praticidade possível pra vigilância 24/7.
-- **A migração inteira:** flashar o box → instalar docker + nvidia toolkit → copiar `.env` → `docker compose up -d`. Porque tudo é config, **zero linha de código muda.**
+After this phase, workstation and appliance run **the same image** — the
+difference is the `.env` and the network.
 
 ---
 
-## Por que isso te dá "expansão sem dificuldade"
+## Position radar — hardware
 
-| Quero adicionar... | Custo, dado o design | Toca o núcleo? |
+Extending from presence to position (x/y) and posture, with minimal hardware
+that works from plain Python.
+
+- **Tier R0 — one room, no soldering (~€15-20):** one HLK-LD2450 (~€10-15), a
+  CP2102/CH340 USB-TTL adapter (~€3-5) and four female-female jumpers (5V, GND,
+  TX, RX — note the LD2450 runs its UART at 256000 baud). It plugs straight into
+  the machine: `WAVR_MMWAVE_PORT=COM3`, `WAVR_MMWAVE_ROOM=living`,
+  `pip install -e backend[mmwave]`, restart, and targets appear on the radar. No
+  ESP32, no firmware.
+- **Tier R1 — a remote room (+€6-9 per room):** LD2450 plus a cheap ESP32. The
+  TCP/MQTT transport is a new `frames` generator; the class and the parser do
+  not change, because that seam already exists.
+- **Tier R2 — the CSI experiment (~€25):** two ESP32-S3 boards. When the CSI
+  frames carry pose/targets, `normalize_ruview` already accepts them. Research,
+  not a deliverable.
+- **Tier R3 — posture from cameras you already have (€0):** an RTSP camera,
+  `pip install -e backend[camera]` (~5GB, torch with CUDA) and `pose=True` at
+  camera bring-up gives sitting/standing/lying on the radar — without x/y
+  position, since the homography is a follow-up.
+
+**Calibration, stated honestly:** the LD2450's x/y are in the SENSOR's frame
+(mounted on a wall, looking into the room). V1 assumes the sensor sits at the
+origin corner looking along +y; per-room offset and rotation are a small
+follow-up once the hardware is in place.
+
+### Bring-up notes
+
+- **Serial transport for the LD2450 — two known issues, deliberately deferred:**
+  the serial flow has a race between close and read during shutdown (worst case,
+  a frozen event loop on Windows), and the buffer is not persisted between
+  frames. Both are known in the component's protocol. Bring-up **must** include
+  cutting power during streaming, not only the happy read path, so the freeze
+  surfaces before this reaches anything that matters.
+- **Sign-magnitude decode:** the decoding convention follows the ESPHome
+  `ld2450` component (x/y/vx/vy). **Confirm against the real device** that the
+  bit interpretation is right, especially for negative values and at quadrant
+  boundaries.
+
+### Privacy
+
+**Targets (x/y position) are LIVE-ONLY by decision:** they flow over the
+WebSocket to the dashboard and are never persisted to SQLite nor published to
+MQTT. A movement history on disk would be a privacy liability Wavr refuses by
+design. Only occupancy confidence — occupied or not, per room — is stored.
+
+---
+
+## Phase 2 — A dedicated appliance, when you want one
+
+Migration is changing where it runs, not what it is.
+
+- **Hardware:** a small board with an embedded GPU (a Jetson Orin Nano class
+  device, roughly $250-500) removes the conflict of the GPU living in a machine
+  you use for other things. A mini-PC with a GPU works equally well. Either runs
+  the same image as Phase 1.
+- **Network:** a dedicated VLAN for the cameras and the Wavr box; egress
+  firewalled; the dashboard reachable only from the trusted LAN. A compromised
+  workstation then cannot reach the cameras at all.
+- **Always on:** `restart: unless-stopped`, so the dashboard is a bookmark with
+  no start step.
+- **The whole migration:** flash the box, install Docker and the NVIDIA toolkit,
+  copy `.env`, `docker compose up -d`. Because everything is configuration,
+  **no line of code changes.**
+
+---
+
+## Why this gives you expansion without pain
+
+| To add… | Cost, given the design | Touches the core? |
 |---|---|---|
-| 3ª/4ª câmera | adicionar pela seção Câmeras do dashboard, persistido em SQLite | Não |
-| Fonte nova (BLE, mmWave) | 1 classe `SensorSource` + registro | Não (seam pronto) |
-| Mudar de box (laptop→Jetson→mini-PC) | `pull` + `.env` + `docker run` | Não |
-| Segmentar a rede | Config de roteador/VLAN | Não (guards do app já viajam) |
-| Ajustar sensibilidade/pesos | `.env` (`WAVR_*`) | Não |
-| Dashboard como app nativo | Tauri em volta do MESMO HTML | Não |
+| A third or fourth camera | add it in the dashboard's Cameras section, persisted to SQLite | No |
+| A new modality (BLE, mmWave) | one `SensorSource` class plus registration | No — the seam exists |
+| A different box | `pull` + `.env` + `docker run` | No |
+| Network segmentation | router/VLAN configuration | No — the app's guards travel |
+| Different sensitivity or weights | `.env` (`WAVR_*`) | No |
+| The dashboard as a native app | Tauri around the same HTML | No |
 
-Nenhuma expansão exige reescrever o núcleo — porque o núcleo (fusão + fontes) é agnóstico de onde roda e de quantas fontes tem. É exatamente pra isso que a arquitetura de fonte-comum + config-driven foi feita.
+No expansion requires rewriting the core, because the core — fusion plus
+sources — is agnostic about where it runs and how many sources it has. That is
+what the common-source, config-driven architecture was for.
 
-## Ordem recomendada
-1. **Agora:** Fase 0 (endurecer laptop + os 3 pré-requisitos de código) → seguro e prático hoje.
-2. **Em seguida:** Fase 1 (Docker + GPU) → destrava a portabilidade; a partir daqui expandir é trivial.
-3. **Quando o orçamento/uso pedir:** Fase 2 (Jetson + VLAN) → segurança e praticidade máximas, migração sem dor.
+## Recommended order
+
+1. **Now:** Phase 0 — harden the workstation, and the three code prerequisites.
+2. **Next:** Phase 1 — Docker, which unlocks portability. From there, expanding
+   is trivial.
+3. **When budget or usage asks for it:** Phase 2 — dedicated box and VLAN.

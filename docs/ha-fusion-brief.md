@@ -1,69 +1,75 @@
-# HANDOFF BRIEF — Wavr como cérebro de presença+privacidade SOBRE o Home Assistant
+# Design note — Wavr as a presence brain *on top of* Home Assistant
 
-> **Para:** o terminal do **desktop/core** do Wavr (dono: `sensor-fusion-architect` + `python-backend-engineer`).
-> **De:** terminal do MCP (2026-07-06). **Status:** ideia validada, NÃO iniciada. Handoff — vocês decidem quando/como.
-> **NÃO é do MCP nem do mobile** — eles CONSOMEM o resultado de graça. Isto é core/fusão.
+> **Status:** validated as an idea, **not started**. This is a design note, not a plan
+> with dates. Nothing below is implemented.
 
-## A ideia (a alavanca)
+## The lever
 
-O HA já integra ~2000+ dispositivos (Zigbee, Z-Wave, câmeras, fechaduras, sensores de movimento/porta,
-device_tracker, energia...). O Wavr **já lê tudo isso** via `ha_client.py`/`ha_import` (é cliente do HA do
-usuário, local-only). **O gap:** LER os entities do HA ≠ FUNDIR eles na presença. Hoje a fusão do Wavr usa
-sinais próprios (mmWave, BLE, rede, câmera). Este brief é sobre **fazer os sinais relevantes do HA entrarem
-no modelo de presença-com-confiança do Wavr** — aí o Wavr "suporta presença" de tudo que o HA suporta, sem
-reconstruir integração de device nenhuma.
+Home Assistant already integrates thousands of devices — Zigbee, Z-Wave, cameras, locks,
+motion and door sensors, `device_tracker`, energy. Wavr **already reads all of it** through
+`ha_client.py` / `ha_import` — it is a client of the user's own HA instance, local-only.
 
-## O que fundir (concreto, do sinal mais forte pro mais fraco)
+The gap is narrow and specific: **reading** HA entities is not **fusing** them. Today Wavr's
+fusion runs on its own signals (mmWave, BLE, network, camera). HA entities are imported and
+displayed, but they do not contribute confidence to a room's presence.
 
-| Entity HA | Vira que sinal de presença | Peso/nota |
+Close that gap and Wavr supports presence from everything HA supports, without rebuilding a
+single device integration. That is the whole argument.
+
+## What to fuse, strongest signal first
+
+| HA entity | Becomes which presence signal | Weight / note |
 |---|---|---|
-| `binary_sensor` device_class **motion/occupancy/presence** | presença forte no cômodo | alto; decai rápido (movimento é instantâneo) |
-| `device_tracker` / `person` (home/away) | presença ligada a IDENTIDADE | alto p/ casa; cuidado com PII (ver invariantes) |
-| `binary_sensor` **door/window** | transição/contexto (entrou/saiu do cômodo) | médio; sinal de evento, não de estado |
-| `media_player` (playing) | atividade → alguém no cômodo | médio |
-| `light`/`switch` ligado | ocupação fraca (alguém acendeu) | baixo; decai devagar |
+| `binary_sensor`, device_class **motion / occupancy / presence** | strong presence in the room | high; decays fast — motion is instantaneous, not a state |
+| `device_tracker` / `person` (home/away) | presence tied to an **identity** | high for the house; identity handling applies (see invariants) |
+| `binary_sensor`, **door / window** | transition and context (entered / left) | medium; an event signal, not a state one |
+| `media_player` (playing) | activity implies somebody in the room | medium |
+| `light` / `switch` on | weak occupancy — somebody turned it on | low; decays slowly |
 
-Cada um entra no `RoomState` com um **peso de confiança + decay**, reusando a matemática `colorFor(pct)` /
-consenso que a ring/map-tint/room-rail já compartilham (sensor-fusion é dono disso).
+Each enters `RoomState` with a **confidence weight plus decay**, reusing the same
+`colorFor(pct)` / consensus maths the presence ring, the map tint and the room rail already
+share. No second scale, no second colour vocabulary.
 
-## Por onde começar (fatia 1 de-riscada)
+## Where to start — the de-risked first slice
 
-**`binary_sensor` motion/occupancy → presença**, ponta-a-ponta, UM tipo de sinal:
-HA entity → mapear ao cômodo Wavr → peso na fusão → RoomState → aparece na ring/rail.
-Prova o padrão; depois expande pra os outros tipos da tabela.
+**`binary_sensor` motion/occupancy → presence**, end to end, for exactly one signal type:
 
-## Ponte de cômodo (HA area → Wavr room)
+    HA entity → map to a Wavr room → weight in fusion → RoomState → visible on ring and rail
 
-Entities do HA têm **area**; o Wavr tem cômodos no `housemap`. Precisa mapear area↔room (o
-`spatial-geometry-engineer` ajuda se precisar de geometria; senão um mapa simples nome→nome no config).
+That proves the pattern against the real pipeline. The other rows in the table then become a
+question of weights, not of architecture.
 
-## Invariantes do Wavr (NÃO violar)
+## The room bridge (HA area → Wavr room)
 
-- **Local-only, zero egress** — só o HA do usuário na LAN (já é assim no `ha_client`).
-- **Privacidade** — a curadoria que o MCP já faz (tira vitals/targets/identities) tem que valer na fusão
-  também; `device_tracker`/`person` traz identidade → tratar com o mesmo cuidado.
-- **Precedência do `recog.py`** — decidir ONDE os sinais do HA entram na precedência
-  (user-pin > self-describe > MUD > DHCP-fp > port-hint > OUI). Um motion-sensor do HA é um sinal de
-  PRESENÇA, não de identidade de device — pode ser um eixo separado do consenso, não da precedência de recog.
-- **Read-only default (`ha_import`)** — nada disto ATUA. Controle segue via `call_ha_service`, gated,
-  ADR-0005 intocado. Isto é 100% READ/fusão.
+HA entities carry an **area**; Wavr has rooms in the `housemap`. Something has to map one to
+the other. A name-to-name map in config is enough to start; anything geometric is a later
+question and does not block the first slice.
 
-## Fora de escopo (não confundir)
+## Invariants this must not break
 
-- Controle/atuação (é o `call_ha_service`, gated — outro assunto).
-- Exposição via MCP (JÁ feita — o MCP proxya o RoomState; quando vocês enriquecerem, o MCP herda de graça).
-- Display no mobile (consumidor — herda de graça também).
+- **Local-only, zero egress.** Only the user's own HA on the LAN, which is what
+  `ha_client` already does. This adds no new destination.
+- **Privacy curation applies to fusion too.** The MCP layer already strips vitals, targets
+  and identities before anything leaves the Core. `device_tracker` / `person` carries
+  identity by construction, so it must be held to the same rule rather than to a new one.
+- **`recog.py` precedence is a separate axis.** The identity precedence chain is
+  user-pin > self-describe > MUD > DHCP-fingerprint > port-hint > OUI. An HA motion sensor
+  is a **presence** signal, not a claim about a device's identity, so it belongs on the
+  consensus axis and not in that chain. Mixing them would let a room's occupancy quietly
+  rewrite what a device *is*.
+- **Read-only by default (`ha_import`).** None of this actuates anything. Control stays
+  behind `call_ha_service`, gated, with ADR-0005 untouched. This is entirely read and fuse.
 
-## Coordenação (3 terminais no mesmo repo `<repo>`)
+## Explicitly out of scope
 
-- Isto é **core** → branch própria de vocês (ex. `feat/ha-fusion`). Toca `fusion.py`, `recog.py`,
-  `ha_client.py`/`ha_import.py`, `config.py`, `housemap.py`.
-- O MCP está em `feat/mcp-http-transport` (toca `mcp*.py`, `app.py`, connectors). **Overlap pequeno**
-  (`config.py`/`app.py` podem colidir — alinhar no merge).
-- O mobile só consome o RoomState.
+- **Control and actuation** — that is `call_ha_service`, gated, and a different subject.
+- **Exposing it over MCP** — already done. MCP proxies `RoomState`, so it inherits any
+  enrichment for free.
+- **Mobile display** — also a consumer of `RoomState`, and also inherits for free.
 
-## Dono sugerido
+## The adversarial question, before anyone writes code
 
-`sensor-fusion-architect` desenha (é a IP de presença do Wavr) → `python-backend-engineer` implementa →
-`qa-test-engineer` + `privacy-compliance-license-auditor` no gate (PII/local-only). Adversarial:
-`surveillance-threat-modeler` (spoof de presença via HA falso).
+If HA entities can raise a room's presence confidence, then **anything that can write to HA
+can fabricate presence in Wavr** — or, more usefully to an attacker, fabricate *absence*. A
+design that fuses HA needs an answer to "what happens when the HA instance is lying", and
+that answer should arrive with the first slice rather than after it.
