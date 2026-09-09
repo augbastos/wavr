@@ -3,6 +3,7 @@ coverage) + response shape + one end-to-end auto-fix pass with a fake stalled
 source, proving the SAFE-AUTO allowlist actually revives a source that is
 enabled=True but stalled -- and does NOTHING when the two-factor auto-fix
 gate (WAVR_NET_DOCTOR_AUTOFIX env AND auto_fix=true) isn't fully satisfied."""
+import threading
 import time
 
 from fastapi.testclient import TestClient
@@ -70,31 +71,75 @@ def _flaky_source_factory():
     """First events() call ends immediately (simulating a stalled/crashed
     source, enabled=True but not active) -- every call after that behaves
     like a normal SimulatedSource, so the auto-fix's restart-cycle can be
-    observed to actually bring it back to active=True."""
+    observed to actually bring it back to active=True.
+
+    Returns `(factory, stalled)`. `stalled` is set the moment the first call
+    returns, which is the thing these tests were waiting for. They used to wait
+    for it with `time.sleep(0.1)` -- a guess about how fast the machine is, which
+    is fast enough almost always and produces an intermittent red under load. The
+    source knows exactly when it happened, so it says so.
+    """
     state = {"calls": 0}
+    stalled = threading.Event()
 
     class _FlakySource:
         async def events(self):
             state["calls"] += 1
             if state["calls"] == 1:
+                stalled.set()
                 return
                 yield   # unreachable; keeps this an async generator function
             async for ev in SimulatedSource(interval=0.01).events():
                 yield ev
 
-    return lambda: _FlakySource()
+    return (lambda: _FlakySource()), stalled
+
+
+def _await_stall(stalled, timeout=5.0):
+    """Bounded wait for the first events() call to have finished.
+
+    Generous on purpose: the deadline exists to fail with a sentence instead of
+    hanging, not to assert anything about speed. It costs nothing when the event
+    arrives immediately, which is the normal case.
+    """
+    assert stalled.wait(timeout), (
+        "the flaky source's first events() call never completed within "
+        f"{timeout}s -- the fixture is not producing the stalled state these "
+        "tests are about, so anything below would be asserting on the wrong "
+        "situation")
+
+
+def _until(read, want, timeout=5.0, what=""):
+    """Poll a real state transition rather than sleeping through it.
+
+    `read()` is re-read until it equals `want` or the deadline passes. A state
+    transition has no timestamp the test can wait on, so polling IS the honest
+    primitive here -- what makes it deterministic is that it waits for the STATE,
+    not for a duration.
+    """
+    deadline = time.monotonic() + timeout
+    seen = None
+    while time.monotonic() < deadline:
+        seen = read()
+        if seen == want:
+            return seen
+        time.sleep(0.01)
+    raise AssertionError(
+        f"{what or 'state'} never reached {want!r} within {timeout}s "
+        f"(last read: {seen!r})")
 
 
 def test_doctor_autofix_revives_a_stalled_enabled_source(monkeypatch):
     monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
     monkeypatch.setenv("WAVR_NET_DOCTOR_AUTOFIX", "1")
+    factory, stalled = _flaky_source_factory()
     app = create_app(
-        sources=[("flaky", _flaky_source_factory(), True)],
+        sources=[("flaky", factory, True)],
         storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
         camera_store=CameraStore(":memory:"), health_resolvers={}, health_check=_up,
     )
     with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
-        time.sleep(0.1)   # let the first (self-terminating) events() call complete
+        _await_stall(stalled)
         pre = c.get("/api/system").json()
         flaky_pre = next(s for s in pre["sources"] if s["name"] == "flaky")
         # `active` no longer answers this: the supervisor has already scheduled a
@@ -111,22 +156,27 @@ def test_doctor_autofix_revives_a_stalled_enabled_source(monkeypatch):
         # The fix is still worth performing under supervision: it clears the
         # backoff, so the retry happens now rather than at the next scheduled
         # probe — which for a source that has been down a while is minutes away.
-        time.sleep(0.1)
-        post = c.get("/api/system").json()
-        flaky_post = next(s for s in post["sources"] if s["name"] == "flaky")
-        assert flaky_post["healthy"] is True
+        #
+        # Recovery is a state TRANSITION with no timestamp to wait on, so this
+        # reads the state until it changes rather than sleeping for a duration
+        # somebody guessed.
+        _until(
+            lambda: next(s for s in c.get("/api/system").json()["sources"]
+                         if s["name"] == "flaky")["healthy"],
+            True, what="the restarted source's health")
 
 
 def test_doctor_autofix_off_only_suggests_for_a_stalled_source(monkeypatch):
     monkeypatch.delenv("WAVR_LOCAL_TOKEN", raising=False)
     monkeypatch.delenv("WAVR_NET_DOCTOR_AUTOFIX", raising=False)   # default OFF
+    factory, stalled = _flaky_source_factory()
     app = create_app(
-        sources=[("flaky", _flaky_source_factory(), True)],
+        sources=[("flaky", factory, True)],
         storage=Storage(":memory:"), hub=Hub(), fusion=FusionEngine(),
         camera_store=CameraStore(":memory:"), health_resolvers={}, health_check=_up,
     )
     with TestClient(app, headers={"X-Wavr-Local": "1"}) as c:
-        time.sleep(0.1)
+        _await_stall(stalled)
         body = c.get("/api/health/doctor?auto_fix=true").json()
         assert body["auto_fixed"] == []
         assert any(s["id"] == "capture_stalled:flaky" for s in body["suggestions"])
