@@ -419,29 +419,59 @@ class DeviceStore:
         return device_id, token
 
     def verify(self, token: str) -> Device | None:
-        """Return the Device for a valid, non-revoked token (updating last_seen), or
-        None if the token is unknown or the device is revoked. Constant work either
-        way from the caller's view — the lookup is by token_hash."""
+        """Return the Device for a valid, non-revoked token, or None if the token is
+        unknown or the device is revoked. Constant work either way from the caller's
+        view — the lookup is by token_hash.
+
+        `last_seen_ts` advances ONLY while the device's consent is green.
+
+        It is a live "this device contacted the Core just now" oracle, and
+        `GET /api/devices` returns it verbatim. On a device whose owner set consent
+        to RED — withdrawn — a moving timestamp answers "is that person around?"
+        for somebody who asked not to be observed, and it answers it every time
+        their phone associates with the Wi-Fi. On YELLOW it re-identifies a device
+        the interface deliberately leaves unnamed.
+
+        The route is central/root-only, so the oracle is admin-visible rather than
+        peer-visible, which is why this is a small leak and not a large one. It is
+        still the exact thing the consent tier exists to stop.
+
+        NULL is not withdrawal. Every row that predates the consent column reads
+        back None, and this codebase resolves that to green everywhere else it
+        consumes consent (`Device.to_dict`, `_consent_of`). Reading NULL as
+        non-green here would freeze `last_seen` for every legacy device and quietly
+        break the ordinary device list — so the predicate is `(consent or "green")`,
+        matching the rest of the file rather than inventing a stricter rule in one
+        place.
+
+        The device stays fully functional: its token still verifies, its requests
+        still work. What stops is the running commentary about when its owner was
+        home.
+        """
         if not token:
             return None
         token_hash = _hash_token(token)
         ts = self._now()
         with self._lock:
             row = self._conn.execute(
-                "SELECT device_id, name, role, created_ts, revoked, scopes, tool_scopes,"
-                " consent, expires_at, person_id FROM devices WHERE token_hash = ?",
+                "SELECT device_id, name, role, created_ts, last_seen_ts, revoked,"
+                " scopes, tool_scopes, consent, expires_at, person_id"
+                " FROM devices WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()
             if row is None or row["revoked"] or _is_expired(row["expires_at"]):
                 return None    # unknown, revoked, or a guest invite past its deadline
-            self._conn.execute(
-                "UPDATE devices SET last_seen_ts = ? WHERE device_id = ?",
-                (ts, row["device_id"]),
-            )
-            self._conn.commit()
+            observable = (row["consent"] or "green") == "green"
+            if observable:
+                self._conn.execute(
+                    "UPDATE devices SET last_seen_ts = ? WHERE device_id = ?",
+                    (ts, row["device_id"]),
+                )
+                self._conn.commit()
         return Device(
             device_id=row["device_id"], name=row["name"], role=row["role"],
-            created_ts=row["created_ts"], last_seen_ts=ts, revoked=False,
+            created_ts=row["created_ts"],
+            last_seen_ts=ts if observable else row["last_seen_ts"], revoked=False,
             scopes=_parse_scopes(row["scopes"]),
             tool_scopes=_parse_scopes(row["tool_scopes"]),
             consent=row["consent"], expires_at=row["expires_at"],

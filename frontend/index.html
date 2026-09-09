@@ -471,6 +471,16 @@
      ring so an APPROXIMATE spot never reads as a pinpoint. A calibrated (homography) dot
      stays crisp. Static styling only — no new motion (calm-by-default). */
   .radar-target.est .radar-dot{opacity:.55;stroke:var(--accent);stroke-opacity:.3;stroke-width:.07;}
+  /* UNPOSITIONED: presence in the room with no measured x/y. Drawn as a large,
+     soft, dashed region rather than a dot, because "somewhere in this room" is
+     the whole of what is known. It used to render as a crisp dot at the room's
+     centre, visually identical to a calibrated fix. */
+  .radar-target.unpositioned .radar-dot{
+    r:.62; fill:var(--accent); fill-opacity:.10;
+    stroke:var(--accent); stroke-opacity:.45; stroke-width:.05;
+    stroke-dasharray:.14 .10;
+  }
+  .radar-target.unpositioned .radar-posture{opacity:.6;}
   .radar-posture{fill:var(--dim);font-size:.28px;text-anchor:middle;}
   .room-poly{fill:rgba(61,181,74,.05);stroke:var(--line-strong);stroke-width:.02;
              vector-effect:non-scaling-stroke;pointer-events:none;}

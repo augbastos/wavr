@@ -39,6 +39,7 @@ killed); no `press_count` can resurrect a revoked node.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import secrets
 import sqlite3
@@ -48,6 +49,8 @@ from datetime import datetime, timedelta, timezone
 
 from wavr.events import SensingEvent, Target
 from wavr.sources.mmwave import parse_ld2450_frame
+
+_log = logging.getLogger(__name__)
 
 # -- Sensor archetype -> fusion modality ------------------------------------
 # A node declares WHAT it is (operator-chosen at code-mint), and that maps to the
@@ -824,6 +827,27 @@ def node_event(node: Node, payload: dict, now_iso: str | None = None) -> Sensing
     # Only radar-class sensors may set a person COUNT (mirrors fusion's rule); a
     # PIR/BLE node never asserts a number even if the payload tries to.
     count = len(targets) if node.sensor_type in COUNTING_SENSORS else None
+
+    # ...and only those sensors may place a BODY. This gate was missing: `count`
+    # was refused above while `targets` went through untouched, so a node
+    # enrolled as `pir` or `ble_beacon` could POST `targets:[{"x":…, "y":…}]` and
+    # those coordinates reached RoomState.targets and got drawn on the map.
+    #
+    # The precision ladder never promoted them to "position", so the percentage
+    # on screen stayed honest -- but a coordinate invented by a sensor that
+    # cannot measure position is still a claim about where a person is, and it
+    # travelled. The enrolment row decides; the payload never does.
+    #
+    # Fusion refuses the same thing independently (LOCATABLE_MODALITIES). Two
+    # gates, because a capability a node DECLARES must not by itself grant the
+    # authority to act on it.
+    if node.sensor_type not in COUNTING_SENSORS and targets:
+        _log.info("node %s (%s) sent %d target(s); its sensor type cannot "
+                  "resolve position, so they are dropped and only presence is "
+                  "kept", node.node_id, node.sensor_type, len(targets))
+        targets = [Target(id=t.id, x=None, y=None, velocity=t.velocity,
+                          posture=t.posture, confidence=t.confidence)
+                   for t in targets]
 
     return SensingEvent(
         room=node.room, modality=node.modality, presence=presence, motion=motion,

@@ -1123,11 +1123,16 @@ async function renderRadar(){
 
   function absTargetPoint(room, t){       // mirror placeDot's in-room clamp so zone hit-test matches the dot
     const r = 0.12;
+    // `positioned` travels with the point because the consumers need it and
+    // cannot recover it: a target with no x/y is anchored at the room's centre
+    // so the 3D renderer has somewhere to put a marker, and that centre must
+    // never be mistaken for a measurement. See zoneOccupied().
+    const positioned = !!(t && t.x != null && t.y != null);
     let x = t.x!=null ? room.x + t.x : room.x + room.w/2;
     let y = t.y!=null ? room.y + t.y : room.y + room.h/2;
     x = Math.min(Math.max(x, room.x + r), room.x + room.w - r);
     y = Math.min(Math.max(y, room.y + r), room.y + room.h - r);
-    return {x, y};
+    return {x, y, positioned};
   }
   function zoneOccupied(z){
     // liveTargets now holds EVERY floor's rooms (so off-floor presence reaches 3D),
@@ -1138,8 +1143,14 @@ async function renderRadar(){
     for(const room of (f && f.rooms) || []){
       const pts = liveTargets[room.name];
       if(!pts) continue;
-      for(const p of pts)
+      for(const p of pts){
+        // A zone is a sub-room AREA, and this is where the room-centre anchor
+        // would stop being a drawing and become a claim: an unpositioned target
+        // used to light any zone covering the centre of its room -- including
+        // the rest zone the server's fall detection reads. No position, no zone.
+        if(!p.positioned) continue;
         if(p.x>=z.x && p.x<=z.x+z.w && p.y>=z.y && p.y<=z.y+z.h) return true;
+      }
     }
     return false;
   }
@@ -1979,7 +1990,11 @@ async function renderRadar(){
     // Feed absolute target positions for EVERY floor's rooms; the 3D people/floor-stack
     // renderer decides how to draw an off-floor one (ghost marker).
     liveTargets[rs.room] = (rs.targets||[]).map(t => {
-      const p = absTargetPoint(rect, t); p.est = isEstimated(t); return p;   // est -> hazy 3D marker
+      // est -> hazy 3D marker. An unpositioned target is treated the same way,
+      // so it never reads as a fix; it is also excluded from zone hit-testing.
+      const p = absTargetPoint(rect, t);
+      p.est = isEstimated(t) || !p.positioned;
+      return p;
     });
     // The 2D SVG only ever draws the ACTIVE floor, so its dot bookkeeping stays gated
     // on roomIdx (which only holds active-floor rooms + their DOM nodes).

@@ -127,6 +127,17 @@ function dot(room, t){
 
 function placeDot(g, room, t){
   const r = 0.12;
+  // An UNPOSITIONED target has no x/y. It used to be drawn at the room's centre,
+  // as a crisp dot indistinguishable from one placed by a four-point homography
+  // -- the code's own comment said "crisp = calibrated or room-centred". That is
+  // a fabricated position: the honest statement is "someone is in this room",
+  // and the middle of the room is not where they are.
+  //
+  // The centre is still where the marker is anchored, because there is nowhere
+  // else to anchor it. What changes is that it stops claiming to be a point: the
+  // class below styles it as a diffuse region covering the room.
+  const unpositioned = !isPositioned(t);
+  g.classList.toggle("unpositioned", unpositioned);
   let x = t.x != null ? room.x + t.x : room.x + room.w/2;
   let y = t.y != null ? room.y + t.y : room.y + room.h/2;
   x = Math.min(Math.max(x, room.x + r), room.x + room.w - r);

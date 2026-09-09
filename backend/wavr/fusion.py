@@ -71,6 +71,27 @@ RESOLUTION_SCOPE = {
     "ble": "room", "wifi_csi": "room", "pir": "room", "node": "room",
     "mmwave": "count", "camera": "count",
 }
+# Modalities that may carry per-target COORDINATES. Derived from RESOLUTION_SCOPE
+# rather than written out again, so the two cannot drift: `position` is EARNED at
+# runtime from `count`, so a modality that can resolve discrete targets is exactly
+# the one that can honestly say where one of them is.
+#
+# This exists because the merge used to gate targets on freshness alone. A node
+# enrolled under a presence-only modality could put `targets:[{x, y}]` in its
+# payload and those coordinates reached RoomState.targets and got drawn. The
+# precision ladder never promoted them to "position", so the percentage on screen
+# stayed honest -- but a coordinate invented by a sensor that cannot measure
+# position is a claim about where a person is, and it travelled.
+#
+# Fails CLOSED: a modality absent from RESOLUTION_SCOPE is not locatable. A new
+# modality has to be added deliberately, which is the decision this is meant to
+# force.
+LOCATABLE_MODALITIES = frozenset(
+    m for m, scope in RESOLUTION_SCOPE.items() if scope == "count")
+assert LOCATABLE_MODALITIES == COUNTING_MODALITIES, (
+    "locatable and counting have diverged: decide deliberately which modality "
+    "may place a body on the map, and say so here")
+
 _SCOPE_RANK = {"none": 0, "house": 1, "room": 2, "count": 3, "position": 4}
 _RANK_SCOPE = {v: k for k, v in _SCOPE_RANK.items()}
 _RANK_PCT = {0: 0, 1: 25, 2: 50, 3: 75, 4: 100}
@@ -530,9 +551,18 @@ class FusionEngine:
         best_targets: list = []
         best_w = -1.0
         for key, e in events.items():
-            # Same freshness/decay gate as the confidence loop: a stale/dead
-            # (or invalid-ts) source must not pass its targets through — a
-            # decayed-to-zero source is indistinguishable from an absent one.
+            # TWO gates, and neither implies the other.
+            #
+            # Freshness (below): a stale, dead or invalid-ts source must not pass
+            # its targets through -- a decayed-to-zero source is
+            # indistinguishable from an absent one.
+            #
+            # Authority (here): a source whose modality cannot RESOLVE a target
+            # must not place one, however fresh it is and however well-formed its
+            # payload. Freshness is not authority, and a payload shape that
+            # accepts x/y is not permission to send it.
+            if e.modality not in LOCATABLE_MODALITIES:
+                continue
             if e.presence and e.targets and decays.get(key, 0.0) > 0.0:
                 w = self._weights.get(e.modality, 0.5)
                 if w > best_w:
