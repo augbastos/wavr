@@ -1,10 +1,10 @@
 """Best-effort discovery of this machine's own LAN (Wi-Fi) IPv4 address.
 
-The first-user portal must bind to an address the S25, the tablet and the
-the field device can all reach over the home Wi-Fi -- not `127.0.0.1` (only this
-machine can reach that) and not `0.0.0.0` (which would also listen on a VPN
-adapter or anything else this laptop happens to be attached to, more than
-the mandate for this portal asks for). So this asks the OS which source
+The first-user portal must bind to an address the phones and tablets on the
+same Wi-Fi can reach -- not `127.0.0.1` (only this machine can reach that) and
+not `0.0.0.0` (which would also listen on a VPN adapter or anything else the
+host happens to be attached to, more than the mandate for this portal asks
+for). So this asks the OS which source
 address it would use to leave the local network, the same technique already
 proven in `backend/tests/test_companion_sees_a_live_core.py::_lan_ip`.
 

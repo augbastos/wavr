@@ -125,7 +125,7 @@ def test_a_sensor_going_quiet_is_named():
     """Named by a LABEL this module assigns, never by the id.
 
     `sensor_id` is very often the words an operator typed — "hall-radar",
-    "Ana's room camera" — and protocol 2 removed it from the experience context
+    "Sam's room camera" — and protocol 2 removed it from the experience context
     for exactly that reason. It went on shipping here, on `/ws/events` and
     `/api/events/recent`: the same private string, the same audience, a
     different route. An application still needs to know WHICH sensor, so it

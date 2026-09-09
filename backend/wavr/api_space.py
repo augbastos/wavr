@@ -167,7 +167,7 @@ def build_setup_router(space_store, settings, cores, *, devices=None,
 
         Returns the OPAQUE space id and the Core's own name — never a Space's
         human name. A Space is named by its owner for their own benefit; putting
-        "Augusto's Home" into an mDNS broadcast every device on the LAN can read
+        "Alex's Home" into an mDNS broadcast every device on the LAN can read
         is a disclosure nobody asked for. The name arrives after pairing."""
         if browse_peers is None:
             return {"cores": [], "available": False}
@@ -602,7 +602,7 @@ def build_space_router(space_store, cores, *, devices=None,
         the column `auth._apply_person_cap` reads when it decides what a request
         may actually do. Writing only the first — which this route used to do —
         left every UI-linked device with a NULL enforcement column, so the person
-        cap never fired and a demotion changed nothing. The Space said Ana owned
+        cap never fired and a demotion changed nothing. The Space said Sam owned
         that phone and authorization had never heard of her.
         """
         if person_id is None:

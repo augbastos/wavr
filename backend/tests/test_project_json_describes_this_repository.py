@@ -51,9 +51,15 @@ def test_every_surface_it_names_exists(mapa):
 
 def test_every_file_it_points_at_exists(mapa):
     """`where_to_look` is the section a reader uses first. A dead path there
-    sends them looking for something that moved."""
+    sends them looking for something that moved.
+
+    A key starting with `$` is an annotation, not a path -- the convention this
+    document already uses for `$comment` in three other sections. It was not
+    honoured here, so the first annotation added to `where_to_look` was read as
+    a filename and reported as missing. A validator that enforces a convention
+    in three places and not the fourth trains people to work around it."""
     faltando = [f"{k} -> {v}" for k, v in mapa["where_to_look"].items()
-                if not (RAIZ / v).exists()]
+                if not k.startswith("$") and not (RAIZ / v).exists()]
     assert not faltando, (
         "project.json points at paths that do not exist:\n  "
         + "\n  ".join(faltando))

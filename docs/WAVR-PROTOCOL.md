@@ -592,7 +592,7 @@ one `SensingEvent` shape in this system, not a Node-specific variant.
      "velocity": 0.3, "confidence": 0.9}
   ],
   "identities": [
-    {"person": "Ana", "source": "ble", "rssi": -62}
+    {"person": "Sam", "source": "ble", "rssi": -62}
   ],
   "count": 1
 }

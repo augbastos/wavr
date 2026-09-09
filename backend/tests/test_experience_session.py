@@ -313,8 +313,8 @@ def test_a_target_label_is_derived_even_when_the_caller_supplies_one():
     """
     targets = targets_in("kitchen", [
         {"device_id": "d1", "room": "kitchen", "display": True,
-         "label": "Augusto's iPhone", "name": "Augusto's iPhone"}])
+         "label": "Alex's iPhone", "name": "Alex's iPhone"}])
     assert len(targets) == 1
     label = targets[0]["label"]
-    assert "Augusto" not in label, f"the pairing name reached an experience: {label}"
+    assert "Alex" not in label, f"the pairing name reached an experience: {label}"
     assert "kitchen" in label.lower()

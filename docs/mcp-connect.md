@@ -66,7 +66,7 @@ sensitive domains are refused regardless.
 
 ### Connect with uvx / pipx (no clone, no editable install)
 
-The console script + stdio bridge live on the public repo's `master`, so an MCP host can spawn
+The console script + stdio bridge live on the public repo's `main`, so an MCP host can spawn
 `wavr-mcp` straight from git with **no local checkout** — uv builds it in an ephemeral env:
 
 ```
@@ -89,7 +89,7 @@ claude mcp add wavr -- uvx --from "wavr[mcp] @ git+https://github.com/augbastos/
 Caveats — this is still the **loopback, same-box** bridge:
 - It reads the running app on `127.0.0.1:<WAVR_PORT>`, so it must run **on the same machine** as
   the Wavr app, which must be up. It reaches nothing off the box (except the user's LAN HA).
-- `uvx` pulls the default branch (`master`). Pin a ref with `@<branch-or-tag>` if you need one.
+- `uvx` pulls the default branch (`main`). Pin a ref with `@<branch-or-tag>` if you need one.
 - A bare `uvx wavr-mcp` (PyPI) is **not** wired — Wavr is not published to PyPI yet. Use the
   `--from git+…` form above.
 
@@ -103,8 +103,8 @@ outright, so the same-box token can never be sent off-box.
 
 ## Transport 2 — HTTP (LAN-paired, read-only)
 
-> **Availability:** the in-app `/mcp` HTTP mount (ADR-0008 Slice 1) is on `master`. The
-> steps below work against `master` today, same as the stdio path above.
+> **Availability:** the in-app `/mcp` HTTP mount (ADR-0008 Slice 1) is on `main`. The
+> steps below work against `main` today, same as the stdio path above.
 
 The HTTP transport mounts a read-only MCP endpoint at `/mcp` **inside** the main Wavr app (same
 uvicorn, same self-signed TLS, same auth middleware). It is **default-OFF** and only serves when

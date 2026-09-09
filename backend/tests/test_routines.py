@@ -91,12 +91,12 @@ def test_room_and_person_edges_match_their_param():
     s = _store()
     a = s.add("k", "room_occupied", trigger_params={"room": "cozinha"}, actions=[_light_action()])
     s.set_enabled(a["id"], True)
-    b = s.add("me", "person_arrived", trigger_params={"person": "Augusto"}, actions=[_light_action()])
+    b = s.add("me", "person_arrived", trigger_params={"person": "Alex"}, actions=[_light_action()])
     s.set_enabled(b["id"], True)
     eng = _engine(s)
     assert [r["id"] for r in eng.on_room_edge("cozinha", True)] == [a["id"]]
     assert eng.on_room_edge("sala", True) == [], "different room -> no match"
-    assert [r["id"] for r in eng.on_person_edge("Augusto", True)] == [b["id"]]
+    assert [r["id"] for r in eng.on_person_edge("Alex", True)] == [b["id"]]
     assert eng.on_person_edge("Bea", True) == [], "different person -> no match"
 
 

@@ -46,7 +46,7 @@ Specifically:
 | Gap | Why it blocks the goal |
 |---|---|
 | **No Space** | Everything is implicitly "this house". Nothing can be named, joined, or transferred. |
-| **Person ≠ device** | `role=central` means both "this credential may administer" and "this box is a hub". You cannot express "Augusto is Owner, and *these four* of his devices are his". |
+| **Person ≠ device** | `role=central` means both "this credential may administer" and "this box is a hub". You cannot express "Alex is Owner, and *these four* of his devices are his". |
 | **No capability manifest** | Nothing can answer "what should this device become?", so every setup is manual. |
 | **No device function axis** | Core / Node / Client are conventions, not data. A machine cannot declare it is all three. |
 | **Config is 100% env vars** | This is the single biggest blocker. §45's acceptance test fails *by construction*: turning on LAN mode, naming the instance, enabling nodes — all require editing `.env`. |

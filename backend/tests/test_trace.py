@@ -100,13 +100,13 @@ def test_a_malformed_timestamp_is_reproduced_not_skipped():
 # -- Sanitisation --------------------------------------------------------------
 
 def test_identity_labels_and_vitals_are_always_removed():
-    """There is no debugging reason to know it was Ana, or what her breathing
+    """There is no debugging reason to know it was Sam, or what her breathing
     rate was."""
-    trace = _recorded(ev(0, identities=(Identity(person="Ana", source="ble", rssi=-60),),
+    trace = _recorded(ev(0, identities=(Identity(person="Sam", source="ble", rssi=-60),),
                          breathing=14.2))
     clean = sanitize(trace)
     blob = str(clean)
-    assert "Ana" not in blob
+    assert "Sam" not in blob
     assert clean["events"][0]["event"]["breathing_bpm"] is None
     assert clean["events"][0]["event"]["identities"] == []
 
@@ -143,7 +143,7 @@ def test_a_raw_trace_is_marked_raw():
 def test_sanitising_does_not_change_what_replay_produces():
     """Removing identities and vitals must not alter the fusion result — if it
     did, a sanitised trace would reproduce a different bug from the real one."""
-    trace = _recorded(ev(0, identities=(Identity(person="Ana", source="ble"),), breathing=14.0),
+    trace = _recorded(ev(0, identities=(Identity(person="Sam", source="ble"),), breathing=14.0),
                       ev(3))
     raw_states = [s.to_dict() for s in replay(trace, _engine)]
     clean_states = [s.to_dict() for s in replay(sanitize(trace), _engine)]

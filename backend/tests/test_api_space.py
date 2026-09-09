@@ -150,7 +150,7 @@ def test_capability_scan_returns_a_manifest_and_a_reasoned_recommendation():
 def test_the_whole_create_space_journey():
     with build() as c:
         r = c.post("/api/setup/create-space", headers=LOCAL, json={
-            "name": "My Home", "kind": "home", "owner_name": "Augusto",
+            "name": "My Home", "kind": "home", "owner_name": "Alex",
             "functions": ["core", "node", "client"]})
         assert r.status_code == 200
         body = r.json()
@@ -245,7 +245,7 @@ def test_adopt_actually_adopts_the_existing_devices():
         devices=devices, deps=[Depends(lambda: None)]))
     with TestClient(app) as c:
         body = c.post("/api/setup/adopt",
-                      json={"name": "My Home", "owner_name": "Augusto"}).json()
+                      json={"name": "My Home", "owner_name": "Alex"}).json()
         assert body["adopted_devices"] == 2
     owner = space.list_people()[0]
     central_id = [d.device_id for d in devices.list() if d.role == "central"][0]
@@ -307,14 +307,14 @@ def home():
     c = build()
     c.__enter__()
     c.post("/api/setup/create-space", headers=LOCAL,
-           json={"name": "My Home", "owner_name": "Augusto"})
+           json={"name": "My Home", "owner_name": "Alex"})
     yield c
     c.__exit__(None, None, None)
 
 
 def test_add_a_person_and_see_the_credential_they_will_get(home):
     r = home.post("/api/space/people", headers=LOCAL,
-                  json={"display_name": "Ana", "role": "admin"})
+                  json={"display_name": "Sam", "role": "admin"})
     assert r.status_code == 200
     # The consequence of the role is shown at the moment it is chosen.
     assert r.json()["device_role"] == "central"
@@ -331,7 +331,7 @@ def test_a_second_owner_is_refused(home):
 
 def test_role_change_discloses_that_live_tokens_keep_their_reach(home):
     ana = home.post("/api/space/people", headers=LOCAL,
-                    json={"display_name": "Ana", "role": "admin"}).json()
+                    json={"display_name": "Sam", "role": "admin"}).json()
     r = home.post(f"/api/space/people/{ana['person_id']}/role", headers=LOCAL,
                   json={"role": "user"})
     assert r.status_code == 200 and r.json()["role"] == "user"
@@ -341,17 +341,17 @@ def test_role_change_discloses_that_live_tokens_keep_their_reach(home):
 
 def test_transfer_moves_ownership_and_demotes_the_previous_owner(home):
     ana = home.post("/api/space/people", headers=LOCAL,
-                    json={"display_name": "Ana", "role": "admin"}).json()
+                    json={"display_name": "Sam", "role": "admin"}).json()
     r = home.post("/api/space/transfer", headers=LOCAL,
                   json={"to_person_id": ana["person_id"]})
     assert r.status_code == 200
-    assert r.json()["owner"]["display_name"] == "Ana"
+    assert r.json()["owner"]["display_name"] == "Sam"
     assert r.json()["previous_owner"]["role"] == "admin"
 
 
 def test_profile_edits_cannot_widen_capabilities(home):
     ana = home.post("/api/space/people", headers=LOCAL,
-                    json={"display_name": "Ana", "role": "user"}).json()
+                    json={"display_name": "Sam", "role": "user"}).json()
     r = home.post(f"/api/space/people/{ana['person_id']}/profile", headers=LOCAL,
                   json={"language": "pt-BR", "role": "owner",
                         "capabilities": ["space:transfer"]})

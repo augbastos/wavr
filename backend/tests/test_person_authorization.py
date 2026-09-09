@@ -150,7 +150,7 @@ def devices():
 
 
 def test_person_id_round_trips_and_defaults_to_none(devices):
-    did, token = devices.add("Ana's phone", "user")
+    did, token = devices.add("Sam's phone", "user")
     assert devices.verify(token).person_id is None
     assert devices.set_person(did, "p1") is True
     assert devices.verify(token).person_id == "p1"
@@ -228,7 +228,7 @@ def test_pairing_derives_the_role_from_the_person(monkeypatch, tmp_path):
     app, space = _multidevice_client(monkeypatch, tmp_path)
     with TestClient(app) as c:
         space.create_space("My Home")
-        owner = space.add_person("Augusto", ROLE_OWNER)
+        owner = space.add_person("Alex", ROLE_OWNER)
         kid = space.add_person("Kid", ROLE_USER)
 
         # An Admin's device: asking for `central` on an Owner is allowed.
@@ -253,13 +253,13 @@ def test_linking_a_person_in_the_ui_actually_caps_the_credential(
 
     This failed before: the associate route wrote the Space's own record and
     never `devices.person_id`, the column `auth._apply_person_cap` reads. So the
-    Devices screen showed the phone as belonging to Ana while authorization had
-    never heard of her, and demoting Ana changed nothing.
+    Devices screen showed the phone as belonging to Sam while authorization had
+    never heard of her, and demoting Sam changed nothing.
     """
     app, space = _multidevice_client(monkeypatch, tmp_path)
     with TestClient(app) as c:
         space.create_space("My Home")
-        ana = space.add_person("Ana", ROLE_ADMIN)
+        ana = space.add_person("Sam", ROLE_ADMIN)
 
         # Exactly what the frontend sends: a role, no person.
         code = c.post("/api/pair-code", headers=LOCAL,
@@ -270,7 +270,7 @@ def test_linking_a_person_in_the_ui_actually_caps_the_credential(
         auth = {"Authorization": f"Bearer {dev['token']}"}
         assert peer.get("/api/space/people", headers=auth).status_code == 200
 
-        # The admin clicks Ana's name on the Devices screen.
+        # The admin clicks Sam's name on the Devices screen.
         r = c.post(f"/api/space/devices/{dev['device_id']}/person",
                    headers=LOCAL, json={"person_id": ana.person_id})
         assert r.status_code == 200
@@ -333,12 +333,12 @@ def test_redeeming_a_person_code_associates_the_device(monkeypatch, tmp_path):
     app, space = _multidevice_client(monkeypatch, tmp_path)
     with TestClient(app, client=("127.0.0.1", 5000)) as c:
         space.create_space("My Home")
-        ana = space.add_person("Ana", ROLE_ADMIN)
+        ana = space.add_person("Sam", ROLE_ADMIN)
         code = c.post("/api/pair-code", headers=LOCAL,
                       json={"role": "central",
                             "person_id": ana.person_id}).json()["code"]
         paired = c.post("/api/pair", json={"code": code,
-                                           "device_name": "Ana's phone"})
+                                           "device_name": "Sam's phone"})
         assert paired.status_code == 200
         device_id = paired.json()["device_id"]
 

@@ -14,7 +14,7 @@ import android.content.SharedPreferences
  * THE DEFAULT IS "UNCONFIGURED", AND THAT IS LOAD-BEARING. An app that has never
  * been through onboarding must behave exactly as the kiosk did before the Core
  * runtime existed: render `https://localhost:8000/?core`, start no service, and
- * boot no interpreter. The the field device in the field runs its Core in a Termux
+ * boot no interpreter. The device in the field runs its Core in a Termux
  * proot on that same port — if this app decided on its own to become a Core it
  * would fight the running one for the socket. Becoming a Core is an explicit act.
  */

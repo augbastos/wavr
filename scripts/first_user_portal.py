@@ -1,6 +1,6 @@
 """One double-click entry point for the first-user test.
 
-Augusto cannot open a terminal, type an address, or know a port for
+The first user cannot open a terminal, type an address, or know a port for
 tomorrow's test. This is the one process that does everything between
 "double-click a shortcut" and "a QR code is on screen":
 
@@ -47,7 +47,8 @@ def build_portal_url(host: str, port: int) -> str:
 
 
 def report_generation(manifest: dict[str, Any], warnings: list[str]) -> None:
-    """Everything Augusto needs to see, in Portuguese, before anyone connects."""
+    """Everything the first user needs to see, in Portuguese, before anyone
+    connects."""
     for warning in warnings:
         _print(f"ATENCAO -- {warning}")
 

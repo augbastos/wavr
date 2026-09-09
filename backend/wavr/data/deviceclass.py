@@ -90,7 +90,7 @@ def display_hostname(hostname: str | None) -> str | None:
     1. Strip the DHCP/router search-domain suffix a PTR lookup adds -- keep
        only the first DNS label. A device's own name effectively never
        contains a dot; the tail is always the router's domain (e.g.
-       "Xiaomi-12T-Pto.lan.gateway" -> "Xiaomi-12T-Pto").
+       "Phone-12T-Pto.lan.gateway" -> "Phone-12T-Pto").
     2. Prettify: collapse hyphen/underscore runs to a single space and trim.
        Each resulting token is Title-cased ONLY when it is a plain word --
        purely alphabetic AND uniformly cased (all-lower or all-upper). A

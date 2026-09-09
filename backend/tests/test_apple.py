@@ -22,9 +22,9 @@ UUID = "1f2e3d4c-5b6a-7089-9a8b-0c1d2e3f4a5b"
 # -- A token is a session, not a device ----------------------------------------
 
 def test_a_discovery_token_is_shape_checked_but_never_an_identity():
-    """An integration that stored a token as "this is Augusto's phone" would
+    """An integration that stored a token as "this is Alex's phone" would
     hold a dead reference by the next session — and would confidently attribute
-    a stranger's phone to Augusto if a token were ever reused."""
+    a stranger's phone to Alex if a token were ever reused."""
     assert check_token(TOKEN) == TOKEN
     out = parse_nearby_object({"discovery_token": TOKEN, "distance_m": 2.0})
     assert "device_id" not in out and "person" not in out

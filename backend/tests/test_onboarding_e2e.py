@@ -71,7 +71,7 @@ def test_the_full_first_run_journey_with_an_empty_environment(core):
     # 3. The operator names the place and themselves, and accepts the proposal.
     #    Two strings; nothing technical.
     created = core.post("/api/setup/create-space", headers=LOCAL, json={
-        "name": "My Home", "kind": "home", "owner_name": "Augusto",
+        "name": "My Home", "kind": "home", "owner_name": "Alex",
         "functions": recommendation["functions"]}).json()
     assert created["space"]["name"] == "My Home"
     assert created["owner"]["role"] == "owner"
@@ -79,14 +79,14 @@ def test_the_full_first_run_journey_with_an_empty_environment(core):
     # 4. Wavr is now a named Space with someone in charge of it.
     space = core.get("/api/space", headers=LOCAL).json()
     assert space["name"] == "My Home"
-    assert [p["display_name"] for p in space["people"]] == ["Augusto"]
+    assert [p["display_name"] for p in space["people"]] == ["Alex"]
     assert space["topology"]["primary_core_id"]
     assert space["topology"]["contested"] is False
 
     # 5. Family. Choosing a role shows what credential it implies, at the moment
     #    of choosing rather than after something goes wrong.
     ana = core.post("/api/space/people", headers=LOCAL,
-                    json={"display_name": "Ana", "role": "admin"}).json()
+                    json={"display_name": "Sam", "role": "admin"}).json()
     assert ana["device_role"] == "central"
     kid = core.post("/api/space/people", headers=LOCAL,
                     json={"display_name": "Kid", "role": "user"}).json()
@@ -134,7 +134,7 @@ def test_no_step_hands_back_an_identifier_to_retype(core):
 def test_an_existing_install_is_adopted_without_losing_anything(core):
     """Someone who already ran Wavr must not be told to start over."""
     body = core.post("/api/setup/adopt", headers=LOCAL, json={
-        "name": "The Flat", "owner_name": "Augusto"}).json()
+        "name": "The Flat", "owner_name": "Alex"}).json()
     assert body["space"]["name"] == "The Flat"
     assert body["owner"]["role"] == "owner"
     assert body["core"]["status"] == "primary"

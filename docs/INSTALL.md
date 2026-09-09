@@ -19,7 +19,7 @@ is live, every command below uses the raw GitHub URL instead, which works today.
 | Route | Verified how |
 |---|---|
 | Windows — self-contained installer (MSI/NSIS, `desktop/`, **no Python needed**) | **Built and run for real** on a Windows 11 machine with every Python interpreter stripped from `PATH`: the MSI (42.9 MB) and NSIS (41.9 MB) installers were installed **silently**, and `/healthz`, the dashboard, and the first-run setup wizard all answered/worked correctly. `.github/workflows/release.yml`'s `windows-desktop-smoke` job repeats the same silent-install → launch → `/healthz` → silent-uninstall round trip on every build, for both installer formats. **Not published anywhere yet** — see [below](#self-contained-installer-msi--nsis--no-python-needed). |
-| Windows — `scripts/install.ps1` (developer/advanced bootstrap, needs Python) | **Run for real, end to end, on a Windows 11 machine**: standalone download from `github.com/augbastos/wavr` (master), fresh venv, editable install, backend start, `GET /healthz` and `GET /` both returned real responses, re-running upgraded in place without a duplicate process, `-Uninstall` removed the venv/source and left the database untouched. `-DryRun` checked separately (creates nothing). |
+| Windows — `scripts/install.ps1` (developer/advanced bootstrap, needs Python) | **Run for real, end to end, on a Windows 11 machine**: standalone download from `github.com/augbastos/wavr` (default branch), fresh venv, editable install, backend start, `GET /healthz` and `GET /` both returned real responses, re-running upgraded in place without a duplicate process, `-Uninstall` removed the venv/source and left the database untouched. `-DryRun` checked separately (creates nothing). |
 | Linux (`scripts/install.sh`) | **Run for real, on every push**, by the `install-matrix` workflow: install → start → `/healthz` → `--uninstall`, with a check that data survives the uninstall, on **Debian 12 (amd64 and arm64), Ubuntu 24.04, Fedora 40 and Alpine 3.20**. The script is also shellchecked in the POSIX dialect of its own shebang, and there is a leg asserting it prints the right message when no adequate Python is reachable. |
 | Raspberry Pi | **Not verified.** The arm64 leg above is Debian under QEMU on an x86 runner, which exercises the script and the architecture — not the hardware, not Raspberry Pi OS, not a real SD card, and not the thermal or power behaviour that makes a Pi a Pi. The Pi-specific detection in the script is written from documented behaviour. Treat this route as reviewed, not field-proven. |
 | Docker / NAS (`scripts/wavr-docker.sh` + `docker-compose.yml`) | **Built and run for real, on every push**, by the `docker` workflow: it builds the image, starts the container, waits for `/healthz`, asserts that `GET /` serves the actual dashboard rather than a 404, verifies `/data` survives a restart, and verifies the container is not running as root. The helper script's own argument parsing and its "docker not found" path are logic-tested separately. |
@@ -82,7 +82,7 @@ without building anything.
 ### `scripts/install.ps1` — the developer/advanced bootstrap (needs Python)
 
 ```powershell
-irm https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/augbastos/wavr/main/scripts/install.ps1 | iex
 ```
 
 What it does: finds an existing Python 3.11+ (the `py` launcher, or `python`/`python3`
@@ -110,7 +110,7 @@ If you only ever ran the piped one-liner (no local file saved), passing `-Uninst
 needs the wrapped form — a plain `irm ... | iex -Uninstall` does **not** pass the
 flag through, `iex` just ignores it. This form does (verified):
 ```powershell
-iex "& { $(irm https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.ps1) } -Uninstall"
+iex "& { $(irm https://raw.githubusercontent.com/augbastos/wavr/main/scripts/install.ps1) } -Uninstall"
 ```
 
 **If you already have a Wavr checkout with your own `.env`** (you're a Wavr
@@ -134,7 +134,7 @@ folder instead to get a clean, `.env`-free copy.
 ## Linux / Raspberry Pi
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/augbastos/wavr/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/augbastos/wavr/main/scripts/install.sh | sh
 ```
 
 Works on Debian/Ubuntu/Raspberry Pi OS, Fedora, Arch and Alpine — it detects which

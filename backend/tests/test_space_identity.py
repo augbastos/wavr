@@ -64,11 +64,11 @@ def test_status_carries_a_space_key_even_before_setup():
 
 def test_a_named_space_reaches_the_status_payload():
     store = SpaceStore(":memory:")
-    store.create_space("Augusto's flat", kind="apartment")
+    store.create_space("Alex's flat", kind="apartment")
     with TestClient(_app(store)) as c:
         space = _status(c)["space"]
     assert space is not None, "the Space exists but the shell cannot see it"
-    assert space["name"] == "Augusto's flat"
+    assert space["name"] == "Alex's flat"
     # "flat" is the English word; "apartment" is the stored kind. SPACE_KINDS is
     # the vocabulary, and anything outside it is coerced to "other" rather than
     # rejected -- a second Core joining from a newer build must not fail on a

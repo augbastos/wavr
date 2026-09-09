@@ -98,12 +98,12 @@ def test_starting_again_replaces_the_running_recording(scene):
 def test_download_is_sanitised_unless_raw_is_asked_for(scene):
     c, state = scene
     c.post("/api/trace/start")
-    _record(state, ev(0, identities=(Identity(person="Ana", source="ble"),)))
+    _record(state, ev(0, identities=(Identity(person="Sam", source="ble"),)))
     c.post("/api/trace/stop")
 
     clean = c.get("/api/trace/download").json()
     assert clean["sanitized"] is True
-    assert "Ana" not in str(clean)
+    assert "Sam" not in str(clean)
     assert clean["events"][0]["event"]["breathing_bpm"] is None
 
 
@@ -112,12 +112,12 @@ def test_the_raw_form_is_available_but_has_to_be_named(scene):
     want it. Deliberate, because it carries people."""
     c, state = scene
     c.post("/api/trace/start")
-    _record(state, ev(0, identities=(Identity(person="Ana", source="ble"),)))
+    _record(state, ev(0, identities=(Identity(person="Sam", source="ble"),)))
     c.post("/api/trace/stop")
 
     raw = c.get("/api/trace/download", params={"raw": "true"}).json()
     assert raw["sanitized"] is False
-    assert "Ana" in str(raw)
+    assert "Sam" in str(raw)
 
 
 def test_positions_can_be_dropped_on_the_way_out(scene):

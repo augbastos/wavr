@@ -512,7 +512,7 @@ def test_the_wake_gate_does_not_deadlock_when_pin_status_never_answers(page, cor
 _KNOWN_PRESENCE = json.dumps({
     "scope": "house", "modality": "network", "likely_home": True,
     "confidence": 0.7, "confidence_label": "coarse",
-    "corroborators": [{"person": "Ana", "mac_prefix": "aa:bb:cc",
+    "corroborators": [{"person": "Sam", "mac_prefix": "aa:bb:cc",
                        "present": True, "details": None}],
 })
 
@@ -546,7 +546,7 @@ def test_who_is_likely_here_retracts_its_names_over_a_dark_core(page, core):
     page.wait_for_function(
         "() => /\\bhere\\b/.test(document.getElementById('whoHomeList')"
         "?.innerText || '')", timeout=30000)
-    assert "Ana" in page.locator("#whoHomeList").inner_text()
+    assert "Sam" in page.locator("#whoHomeList").inner_text()
 
     state["dark"] = True
     # 15s poll, 8s deadline, two misses before it speaks.
@@ -554,7 +554,7 @@ def test_who_is_likely_here_retracts_its_names_over_a_dark_core(page, core):
         "() => /not answering/i.test(document.getElementById('whoHomeList')"
         "?.innerText || '')", timeout=90000)
     after = page.locator("#whoHomeList").inner_text()
-    assert "Ana" not in after, after
+    assert "Sam" not in after, after
     assert held, "no request was intercepted; the tile changed for another reason"
     # The sibling Who's-home tab reads this hook, and must stop asserting too.
     assert page.evaluate("() => window.__wavrKnownPresence") is None

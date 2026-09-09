@@ -39,7 +39,7 @@ def _room(name, **kw):
         # Everything below MUST be withheld by every tool in this file.
         "vitals": {"breathing_bpm": 14.2, "heart_bpm": 61},
         "targets": [{"id": 1, "x": 2.4, "y": 1.1, "posture": "sitting"}],
-        "identities": [{"person": "Augusto", "source": "ble", "rssi": -54}],
+        "identities": [{"person": "Alex", "source": "ble", "rssi": -54}],
     }
     base.update(kw)
     return base
@@ -87,7 +87,7 @@ def test_no_space_tool_leaks_vitals_targets_or_person_names(provider):
         blob = _blob(payload)
         assert "breathing_bpm" not in blob and "heart_bpm" not in blob
         assert "posture" not in blob
-        assert "Augusto" not in blob, "person labels are PII; MCP is stripped"
+        assert "Alex" not in blob, "person labels are PII; MCP is stripped"
         assert "rssi" not in blob
 
 
@@ -117,10 +117,10 @@ def test_device_context_omits_names_people_and_addresses():
         "capabilities": {"capabilities": {"camera": True, "ble": None},
                          "compute_tier": "medium"},
         # Must not survive the projection:
-        "name": "Ana's phone", "person_id": "p1", "base_url": "https://10.0.0.9",
+        "name": "Sam's phone", "person_id": "p1", "base_url": "https://10.0.0.9",
     }]
     blob = _blob(get_device_context(lambda: rows))
-    assert "Ana" not in blob and "person_id" not in blob
+    assert "Sam" not in blob and "person_id" not in blob
     assert "10.0.0.9" not in blob
     assert "d1" in blob and "Kitchen" in blob
 

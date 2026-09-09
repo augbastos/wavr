@@ -2,7 +2,7 @@
 not a stateless snapshot.
 
 `compose_known_presence` already tells you WHO is currently present, but as a pull
-snapshot with no edge/debounce -- it can't tell "Augusto just walked in" from "Augusto
+snapshot with no edge/debounce -- it can't tell "Alex just walked in" from "Alex
 has been home". PersonPresence adds exactly that: fed the CURRENT set of present known
 persons each cycle, it emits on_edge(person, home) when a person's DEBOUNCED state
 flips, mirroring AwayMonitor's house-level grace so a phone briefly dropping off ARP

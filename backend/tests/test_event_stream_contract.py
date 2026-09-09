@@ -66,13 +66,13 @@ def test_a_sensor_event_never_carries_the_operators_own_string():
     redacted context is behind — so a name the context strips must not arrive
     over the socket instead."""
     ev = SpatialEvents()
-    ev.observe(_state(sources=[_src("hall-cam"), _src("Ana office cam")]))
+    ev.observe(_state(sources=[_src("hall-cam"), _src("Sam office cam")]))
     out = ev.observe(_state(sources=[_src("hall-cam")]))
 
     assert [e["event"] for e in out] == [EV_SENSOR_OFFLINE]
     body = _flatten(out[0])
     assert "sensor_id" not in body, out[0]
-    assert "Ana office cam" not in body, (
+    assert "Sam office cam" not in body, (
         "the event named the sensor with the string an operator typed")
 
 
@@ -82,14 +82,14 @@ def test_a_disagreement_names_its_sensors_the_same_derived_way():
     offline event, once per sensor."""
     ev = SpatialEvents()
     ev.observe(_state(sources=[_src("hall-cam", presence=True),
-                               _src("Ana bedroom radar", "mmwave", presence=True)]))
+                               _src("Sam bedroom radar", "mmwave", presence=True)]))
     out = ev.observe(_state(sources=[_src("hall-cam", presence=False),
-                                     _src("Ana bedroom radar", "mmwave",
+                                     _src("Sam bedroom radar", "mmwave",
                                           presence=True)]))
 
     row = [e for e in out if e["event"] == EV_DISAGREEMENT][0]
     body = _flatten(row)
-    assert "sensor_id" not in body and "Ana bedroom radar" not in body, row
+    assert "sensor_id" not in body and "Sam bedroom radar" not in body, row
     assert {s["says"] for s in row["sensors"]} == {"occupied", "empty"}
 
 

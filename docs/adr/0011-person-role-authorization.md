@@ -15,12 +15,12 @@ person's role could change (`set_person_role`) without touching any credential
 already issued, and the API layer told the admin so directly, rather than
 implying a demotion had taken effect everywhere.
 
-That left a real gap. "Ana is now a Guest" (demoted from User) meant nothing
-happened to Ana's phone, which kept `user`-level access until someone
+That left a real gap. "Sam is now a Guest" (demoted from User) meant nothing
+happened to Sam's phone, which kept `user`-level access until someone
 remembered to separately revoke it — an administrative action a household
 operator has no particular reason to think of, and one the UI did not prompt
-for. The person-role model existed to let an operator answer "what can Ana do"
-in one place; if changing the answer there didn't change what Ana's devices
+for. The person-role model existed to let an operator answer "what can Sam do"
+in one place; if changing the answer there didn't change what Sam's devices
 could actually do, the model was recording a decision without enforcing it.
 
 The fix has to reckon with two failure directions that are NOT symmetric:
@@ -29,8 +29,8 @@ The fix has to reckon with two failure directions that are NOT symmetric:
   from `admin` keeps administering until someone thinks to chase down every
   device they ever paired.
 - **Over-enforcing a promotion** is a different, more surprising failure: if
-  promoting Ana to Admin silently widened a `user`-role token that is already
-  sitting on a phone she lent a houseguest last week, "make Ana an Admin"
+  promoting Sam to Admin silently widened a `user`-role token that is already
+  sitting on a phone they lent a houseguest last week, "make Sam an Admin"
   would retroactively hand elevated access to a device the operator never
   looked at.
 
@@ -90,8 +90,8 @@ its owner is promoted, regardless of which specific device that credential is
 on, when it was last used, or who is currently holding it. A person's role is
 a statement about a human; a device's credential is a statement about one
 specific piece of hardware that human is not necessarily still in possession
-of. Collapsing the two directions treats "Ana is trustworthy" and "this
-particular phone, wherever it is right now, should have Ana's current level of
+of. Collapsing the two directions treats "Sam is trustworthy" and "this
+particular phone, wherever it is right now, should have Sam's current level of
 access" as the same fact. They are not, and the asymmetry in Context exists
 specifically because getting this wrong in the widening direction is a worse
 failure than getting it wrong in the narrowing direction is a delay.
@@ -107,7 +107,7 @@ as surprising as a live one silently widening in place.
 
 ## Consequences
 
-- **Positive:** the gap in Context is closed. Demoting Ana from Admin to Guest
+- **Positive:** the gap in Context is closed. Demoting Sam from Admin to Guest
   takes effect on her very next request, from every device she has ever
   paired, without the operator needing to separately hunt down and revoke
   each one.

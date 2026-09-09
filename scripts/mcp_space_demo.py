@@ -48,7 +48,7 @@ class Provider:
             "precision_level": "count", "precision_next": "position",
             "ts": "2026-09-03T20:14:00+00:00",
             # None of this may reach the agent.
-            "vitals": {"breathing_bpm": 13.9}, "identities": [{"person": "Augusto"}],
+            "vitals": {"breathing_bpm": 13.9}, "identities": [{"person": "Alex"}],
             "targets": [{"id": 1, "x": 2.2, "y": 1.4, "posture": "sitting"}],
         },
         "cozinha": {
@@ -78,8 +78,8 @@ def main():
     space = SpaceStore(":memory:")
     cores = CoreRegistry(":memory:")
     sp = space.create_space("My Home", "home")
-    space.add_person("Augusto", ROLE_OWNER)
-    space.add_person("Ana", ROLE_ADMIN)
+    space.add_person("Alex", ROLE_OWNER)
+    space.add_person("Sam", ROLE_ADMIN)
     cores.register("core-laptop-0001", sp.space_id, "Laptop", is_self=True,
                    platform="windows", portable=True, room="Office")
     cores.promote("core-laptop-0001", space.bump_epoch())
@@ -127,7 +127,7 @@ def main():
         print("=" * 66)
         blob = json.dumps([ctx, why, cov], default=str)
         for forbidden, what in (("breathing_bpm", "vital signs"),
-                                ("Augusto", "a person's name"),
+                                ("Alex", "a person's name"),
                                 ("posture", "per-person posture"),
                                 ('"x"', "per-person position")):
             leaked = forbidden in blob

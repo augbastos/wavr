@@ -117,19 +117,19 @@ def test_unknown_person_role_pairs_as_the_weakest_credential():
 # -- People ------------------------------------------------------------------
 
 def test_add_and_list(space):
-    space.add_person("Augusto", ROLE_OWNER)
-    space.add_person("Ana", ROLE_ADMIN)
-    assert [p.display_name for p in space.list_people()] == ["Augusto", "Ana"]
+    space.add_person("Alex", ROLE_OWNER)
+    space.add_person("Sam", ROLE_ADMIN)
+    assert [p.display_name for p in space.list_people()] == ["Alex", "Sam"]
 
 
 def test_exactly_one_owner(space):
-    space.add_person("Augusto", ROLE_OWNER)
+    space.add_person("Alex", ROLE_OWNER)
     with pytest.raises(SpaceError, match="already has an Owner"):
         space.add_person("Impostor", ROLE_OWNER)
 
 
 def test_owner_cannot_be_demoted_or_removed(space):
-    owner = space.add_person("Augusto", ROLE_OWNER)
+    owner = space.add_person("Alex", ROLE_OWNER)
     with pytest.raises(SpaceError, match="transfer"):
         space.set_person_role(owner.person_id, ROLE_USER)
     with pytest.raises(SpaceError, match="transfer"):
@@ -137,15 +137,15 @@ def test_owner_cannot_be_demoted_or_removed(space):
 
 
 def test_cannot_promote_to_owner_by_role_change(space):
-    space.add_person("Augusto", ROLE_OWNER)
-    ana = space.add_person("Ana", ROLE_USER)
+    space.add_person("Alex", ROLE_OWNER)
+    ana = space.add_person("Sam", ROLE_USER)
     with pytest.raises(SpaceError, match="transfer_ownership"):
         space.set_person_role(ana.person_id, ROLE_OWNER)
 
 
 def test_transfer_is_atomic_and_leaves_exactly_one_owner(space):
-    aug = space.add_person("Augusto", ROLE_OWNER)
-    ana = space.add_person("Ana", ROLE_ADMIN)
+    aug = space.add_person("Alex", ROLE_OWNER)
+    ana = space.add_person("Sam", ROLE_ADMIN)
     new, prev = space.transfer_ownership(ana.person_id)
     assert new.person_id == ana.person_id and new.role == ROLE_OWNER
     assert prev.person_id == aug.person_id and prev.role == ROLE_ADMIN
@@ -154,18 +154,18 @@ def test_transfer_is_atomic_and_leaves_exactly_one_owner(space):
 
 
 def test_transfer_to_unknown_person_fails(space):
-    space.add_person("Augusto", ROLE_OWNER)
+    space.add_person("Alex", ROLE_OWNER)
     with pytest.raises(SpaceError):
         space.transfer_ownership("nope")
 
 
 def test_unknown_capability_in_explicit_grant_is_rejected(space):
     with pytest.raises(SpaceError, match="unknown capabilities"):
-        space.add_person("Ana", ROLE_USER, capabilities=frozenset({"do:anything"}))
+        space.add_person("Sam", ROLE_USER, capabilities=frozenset({"do:anything"}))
 
 
 def test_person_dict_resolves_capabilities_for_the_caller(space):
-    p = space.add_person("Ana", ROLE_ADMIN)
+    p = space.add_person("Sam", ROLE_ADMIN)
     assert set(p.to_dict()["capabilities"]) == set(capabilities_for(ROLE_ADMIN))
     assert set(p.to_dict()["capabilities"]) <= PERSON_CAPABILITIES
 
@@ -191,7 +191,7 @@ def test_people_are_capped(space):
 # -- Personalization must never touch authorization --------------------------
 
 def test_profile_cannot_widen_capabilities(space):
-    ana = space.add_person("Ana", ROLE_USER)
+    ana = space.add_person("Sam", ROLE_USER)
     space.set_person_profile(ana.person_id, {
         "language": "pt-BR", "role": "owner",
         "capabilities": ["space:transfer"], "admin": True})
@@ -201,7 +201,7 @@ def test_profile_cannot_widen_capabilities(space):
 
 
 def test_profile_is_bounded(space):
-    ana = space.add_person("Ana", ROLE_USER)
+    ana = space.add_person("Sam", ROLE_USER)
     with pytest.raises(SpaceError):
         space.set_person_profile(ana.person_id, {"x": "y" * 8000})
 
@@ -209,7 +209,7 @@ def test_profile_is_bounded(space):
 # -- Person <-> device -------------------------------------------------------
 
 def test_associate_and_look_up_both_ways(space):
-    ana = space.add_person("Ana", ROLE_USER)
+    ana = space.add_person("Sam", ROLE_USER)
     space.associate_device("dev1", ana.person_id)
     space.associate_device("dev2", ana.person_id)
     assert space.person_of_device("dev1") == (ana.person_id, "confirmed")
@@ -217,13 +217,13 @@ def test_associate_and_look_up_both_ways(space):
 
 
 def test_inferred_origin_is_kept_distinct_from_confirmed(space):
-    ana = space.add_person("Ana", ROLE_USER)
+    ana = space.add_person("Sam", ROLE_USER)
     space.associate_device("maybe", ana.person_id, origin="inferred")
     assert space.person_of_device("maybe")[1] == "inferred"
 
 
 def test_bad_origin_is_rejected(space):
-    ana = space.add_person("Ana", ROLE_USER)
+    ana = space.add_person("Sam", ROLE_USER)
     with pytest.raises(SpaceError):
         space.associate_device("d", ana.person_id, origin="probably")
 
@@ -244,7 +244,7 @@ def test_reassociating_moves_the_device(space):
 
 def test_removing_a_person_returns_their_devices_for_revocation(space):
     space.add_person("Owner", ROLE_OWNER)
-    ana = space.add_person("Ana", ROLE_USER)
+    ana = space.add_person("Sam", ROLE_USER)
     space.associate_device("phone", ana.person_id)
     assert space.remove_person(ana.person_id) == ["phone"]
     assert space.person_of_device("phone") is None
@@ -297,7 +297,7 @@ def test_missing_manifest_is_none(space):
 
 
 def test_forget_device_clears_every_axis(space):
-    ana = space.add_person("Ana", ROLE_USER)
+    ana = space.add_person("Sam", ROLE_USER)
     space.associate_device("d", ana.person_id)
     space.set_functions("d", ["client"])
     space.set_manifest("d", {"platform": "linux"})
@@ -310,7 +310,7 @@ def test_forget_device_clears_every_axis(space):
 # -- Rollback of a half-created Space ----------------------------------------
 
 def test_destroy_space_unwinds_a_setup_that_never_finished(space):
-    space.add_person("Augusto", ROLE_OWNER)
+    space.add_person("Alex", ROLE_OWNER)
     assert space.destroy_space() is True
     assert space.get_space() is None
     assert space.list_people() == []
@@ -319,7 +319,7 @@ def test_destroy_space_unwinds_a_setup_that_never_finished(space):
 
 
 def test_destroy_space_refuses_once_the_space_is_real(space):
-    space.add_person("Augusto", ROLE_OWNER)
+    space.add_person("Alex", ROLE_OWNER)
     space.set_functions("laptop", ["core"])
     with pytest.raises(SpaceError, match="refusing to delete"):
         space.destroy_space()
@@ -327,8 +327,8 @@ def test_destroy_space_refuses_once_the_space_is_real(space):
 
 
 def test_destroy_space_refuses_with_a_second_person(space):
-    space.add_person("Augusto", ROLE_OWNER)
-    space.add_person("Ana", ROLE_ADMIN)
+    space.add_person("Alex", ROLE_OWNER)
+    space.add_person("Sam", ROLE_ADMIN)
     with pytest.raises(SpaceError, match="refusing to delete"):
         space.destroy_space()
 
@@ -339,10 +339,10 @@ def test_adopt_legacy_creates_a_space_and_maps_central_devices(store):
     rows = [{"device_id": "d-central", "role": "central"},
             {"device_id": "d-user", "role": "user"},
             {"device_id": "d-agent", "role": "agent"}]
-    sp = store.adopt_legacy(rows, owner_name="Augusto", space_name="My Home")
+    sp = store.adopt_legacy(rows, owner_name="Alex", space_name="My Home")
     assert sp.name == "My Home"
     owner = store.list_people()[0]
-    assert owner.role == ROLE_OWNER and owner.display_name == "Augusto"
+    assert owner.role == ROLE_OWNER and owner.display_name == "Alex"
     # The central device becomes the Owner's...
     assert store.person_of_device("d-central") == (owner.person_id, "confirmed")
     # ...and the others are deliberately left unclaimed rather than guessed at.

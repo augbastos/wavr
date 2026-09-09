@@ -87,7 +87,7 @@ def test_person_arrival_fires_a_routine_end_to_end():
     # into the app. Uses the person_presence seam so no full fusion state is needed; the
     # edge dispatches off-loop, so we drive it inside a running lifespan and let it settle.
     store = RoutineStore(":memory:")
-    r = store.add("welcome me", "person_arrived", trigger_params={"person": "Augusto"},
+    r = store.add("welcome me", "person_arrived", trigger_params={"person": "Alex"},
                   actions=[{"kind": "set_watch", "params": {"on": True}}])
     store.set_enabled(r["id"], True)
     app = _app(store)
@@ -96,7 +96,7 @@ def test_person_arrival_fires_a_routine_end_to_end():
         async with app.router.lifespan_context(app):
             app.state.routines_mark_warm()   # skip the boot presence-edge warm-up
             app.state.person_presence.update(set())          # boot baseline: nobody home
-            app.state.person_presence.update({"Augusto"})    # Augusto arrives -> edge fires
+            app.state.person_presence.update({"Alex"})    # Alex arrives -> edge fires
             await asyncio.sleep(0.1)                          # let the dispatched action run
 
     asyncio.run(_drive())
@@ -358,7 +358,7 @@ def test_boot_warmup_suppresses_a_spurious_arrival():
     # warm-up window suppresses presence edges until the trackers are house-complete. Here
     # we DON'T mark warm, so the "arrival" must be suppressed.
     store = RoutineStore(":memory:")
-    r = store.add("welcome", "person_arrived", trigger_params={"person": "Augusto"},
+    r = store.add("welcome", "person_arrived", trigger_params={"person": "Alex"},
                   actions=[{"kind": "set_watch", "params": {"on": True}}])
     store.set_enabled(r["id"], True)
     app = _app(store)
@@ -367,7 +367,7 @@ def test_boot_warmup_suppresses_a_spurious_arrival():
         async with app.router.lifespan_context(app):
             # deliberately NOT calling routines_mark_warm() -> boot warm-up is active
             app.state.person_presence.update(set())
-            app.state.person_presence.update({"Augusto"})   # would be an arrival, but suppressed
+            app.state.person_presence.update({"Alex"})   # would be an arrival, but suppressed
             await asyncio.sleep(0.1)
 
     asyncio.run(_drive())
@@ -377,7 +377,7 @@ def test_boot_warmup_suppresses_a_spurious_arrival():
 
 def test_someone_elses_arrival_does_not_fire_my_routine():
     store = RoutineStore(":memory:")
-    r = store.add("welcome me", "person_arrived", trigger_params={"person": "Augusto"},
+    r = store.add("welcome me", "person_arrived", trigger_params={"person": "Alex"},
                   actions=[{"kind": "set_watch", "params": {"on": True}}])
     store.set_enabled(r["id"], True)
     app = _app(store)

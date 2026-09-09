@@ -120,7 +120,7 @@ def _seed(path):
     from wavr.space_store import SpaceStore
     store = SpaceStore(path)
     store.create_space("The flat", kind="apartment")
-    store.add_person("Augusto", role="owner")
+    store.add_person("Alex", role="owner")
 
     CameraStore(path).add("hall", "sala", "rtsp://127.0.0.1/x", 0.6)
 
@@ -163,7 +163,7 @@ def test_erasing_observations_leaves_the_installation_standing(db):
     space = store.get_space()
     assert space is not None and space.name == "The flat", (
         "erasing history destroyed the Space")
-    assert [p.display_name for p in store.list_people()] == ["Augusto"], (
+    assert [p.display_name for p in store.list_people()] == ["Alex"], (
         "erasing history destroyed the people")
     assert [c["name"] for c in CameraStore(db).list()] == ["hall"], (
         "erasing history destroyed the cameras")

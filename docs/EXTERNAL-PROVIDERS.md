@@ -209,8 +209,8 @@ has nothing to talk to yet.
 Two rules that shape it:
 
 - `NIDiscoveryToken` is generated **per session** and is not a device identity.
-  Storing one as "this is Augusto's phone" would hold a dead reference by the
-  next session — and would confidently attribute a stranger's phone to Augusto if
+  Storing one as "this is Alex's phone" would hold a dead reference by the
+  next session — and would confidently attribute a stranger's phone to Alex if
   a token were ever reused.
 - A UWB distance without a direction is a **sphere**. Nearby Interaction only
   produces a direction when devices roughly face each other with the app in the

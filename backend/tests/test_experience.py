@@ -115,11 +115,11 @@ def test_a_partly_broken_room_says_WHICH_sensor_is_quiet_without_naming_it():
     test encoded the bug as the requirement.
     """
     ctx = build_context(room="kitchen", coverage_rows=[
-        cov("cam1"), cov("Augusto's radar", modality="mmwave",
+        cov("cam1"), cov("Alex's radar", modality="mmwave",
                          health="offline")])
     said = " ".join(ctx.limitations)
     assert "mmwave 1" in said, said
-    assert "Augusto" not in said and "radar" not in said.replace("mmwave", "")
+    assert "Alex" not in said and "radar" not in said.replace("mmwave", "")
 
 
 def test_the_prose_and_the_sensor_list_agree_on_what_a_sensor_is_called():
@@ -179,9 +179,9 @@ def test_no_identity_ever_reaches_a_context():
     """An experience that can name the people in a room is a different product
     with a different consent conversation attached."""
     ctx = build_context(room="kitchen",
-                        room_state={**rs(), "identities": [{"name": "Augusto"}]},
+                        room_state={**rs(), "identities": [{"name": "Alex"}]},
                         coverage_rows=[cov()])
-    assert "Augusto" not in str(ctx.to_dict())
+    assert "Alex" not in str(ctx.to_dict())
     assert "identities" not in ctx.to_dict()
 
 
@@ -195,14 +195,14 @@ def test_no_target_coordinates_reach_a_context():
 
 def test_the_pairing_name_never_reaches_an_experience():
     """The name is typed by whoever paired the device and is very often
-    "Augusto's iPhone" — which is an identity, and this module promises
+    "Alex's iPhone" — which is an identity, and this module promises
     identities never appear. An earlier version returned it, and the
     contradiction between the promise and the code was caught in review."""
     ctx = build_context(room="kitchen", devices=[
-        {"device_id": "d1", "name": "Augusto's iPhone", "room": "kitchen",
+        {"device_id": "d1", "name": "Alex's iPhone", "room": "kitchen",
          "display": True, "person_id": "p_augusto", "token": "secret"}])
     d = ctx.to_dict()["devices"][0]
-    assert "Augusto" not in str(ctx.to_dict())
+    assert "Alex" not in str(ctx.to_dict())
     assert "name" not in d
     assert "person_id" not in d and "token" not in d
 
@@ -211,18 +211,18 @@ def test_a_device_gets_a_label_derived_from_what_it_is_and_where():
     """"living room screen" is enough for an application to ask "Continue on
     which?", and tells an experience nothing about whose phone it is."""
     ctx = build_context(room="living", devices=[
-        {"device_id": "d1", "name": "Augusto's TV", "room": "living",
+        {"device_id": "d1", "name": "Alex's TV", "room": "living",
          "display": True}])
     assert ctx.to_dict()["devices"][0]["label"] == "living screen"
 
 
 def test_two_of_a_kind_are_distinguishable_without_naming_anybody():
     ctx = build_context(room="living", devices=[
-        {"device_id": "a", "name": "Ana's tablet", "room": "living", "display": True},
+        {"device_id": "a", "name": "Sam's tablet", "room": "living", "display": True},
         {"device_id": "b", "name": "Bea's tablet", "room": "living", "display": True}])
     labels = [d["label"] for d in ctx.to_dict()["devices"]]
     assert labels == ["living screen", "living screen 2"]
-    assert "Ana" not in str(labels) and "Bea" not in str(labels)
+    assert "Sam" not in str(labels) and "Bea" not in str(labels)
 
 
 def test_a_device_that_never_said_is_not_reported_as_a_no():
@@ -342,13 +342,13 @@ def test_a_sensor_never_carries_the_name_an_operator_typed():
         room="kitchen",
         room_state={"occupied": True, "confidence": 0.8,
                     "precision_level": "room"},
-        coverage_rows=[cov(sensor_id="Augusto's office cam", room="kitchen"),
+        coverage_rows=[cov(sensor_id="Alex's office cam", room="kitchen"),
                        cov(sensor_id="baby monitor", room="kitchen",
                            modality="mmwave")],
     ).to_dict()
 
     blob = json.dumps(ctx)
-    assert "Augusto" not in blob and "baby monitor" not in blob,         f"an operator's own words reached an experience: {blob[:300]}"
+    assert "Alex" not in blob and "baby monitor" not in blob,         f"an operator's own words reached an experience: {blob[:300]}"
 
     labels = [s["label"] for s in ctx["sensors"]]
     assert labels == ["camera 1", "mmwave 1"], labels

@@ -391,7 +391,7 @@ def _visible_devices(devices, room: str) -> tuple[dict, ...]:
     """Authorized devices in this room, described by what they can DO.
 
     **No pairing name.** That name is typed by whoever paired the device and is
-    very often "Augusto's iPhone" -- which is an identity, and the docstring at
+    very often "Alex's iPhone" -- which is an identity, and the docstring at
     the top of this module says identities never appear here. An earlier version
     returned it anyway, and the contradiction between the promise and the code
     was caught in review rather than by the household it would have leaked to.

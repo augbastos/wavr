@@ -17,10 +17,10 @@ meant, at once, *"this credential may administer Wavr"* and *"this box is a
 hub."* That conflation makes three ordinary, true sentences impossible to
 express in the data model:
 
-- "Augusto is the Owner, and these four devices are his."
+- "Alex is the Owner, and these four devices are his."
 - "The tablet is a Client only; the laptop is Core **and** Node **and**
   Client."
-- "Make Ana an Admin" — without touching a single device's credential.
+- "Make Sam an Admin" — without touching a single device's credential.
 
 A fourth pressure point, added by the Capability Manifest work
 (`backend/wavr/capabilities.py`): once a device can report what it *can*

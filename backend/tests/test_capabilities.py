@@ -187,9 +187,11 @@ def test_scan_host_returns_a_valid_manifest_on_this_machine():
 
 
 def test_windows_interface_named_plain_wifi_is_detected(monkeypatch):
-    # Regression: a real Acer laptop names its adapter "WiFi" (no hyphen). An
-    # earlier "wi-fi"-only match reported that machine as having NO Wi-Fi -- a
-    # confident False about hardware that was plainly there.
+    # Regression: some Windows laptops name the adapter "WiFi", with no
+    # hyphen. An earlier "wi-fi"-only match reported such a machine as having
+    # NO Wi-Fi -- a confident False about hardware that was plainly there.
+    # Measured on a real machine; which machine is not the point and is not
+    # this repository's business.
     import wavr.capabilities as cap
 
     monkeypatch.setattr(cap.sys, "platform", "win32")

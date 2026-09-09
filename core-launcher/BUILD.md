@@ -86,8 +86,8 @@ A fresh install behaves exactly like the old kiosk: it renders
 Nothing becomes a Core until the operator says so through the panel
 (`WavrNative.setRoles(["core","node","client"])`).
 
-This is what keeps the field device safe. The the field device runs its Core inside
-a Termux `proot-distro debian` on port 8000; if this app decided on its own to
+This is what keeps the field device safe. That device runs its Core inside a
+Termux `proot-distro debian` on port 8000; if this app decided on its own to
 become a Core it would fight the running one for that socket.
 
 ## What you cannot verify on a build machine

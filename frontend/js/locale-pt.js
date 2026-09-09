@@ -177,7 +177,7 @@
     "Always on mains power, so it can stay awake.": "Sempre na tomada, então pode ficar acordado.",
     "An unobserved room is not an empty room. If your application turns lights off when a room reads unoccupied, this is the scenario that turns them off on somebody.": "Um cômodo sem observação não é um cômodo vazio. Se a sua aplicação apaga as luzes quando um cômodo aparece desocupado, este é o cenário que apaga a luz em cima de alguém.",
     "An update is available": "Há uma atualização disponível",
-    "Ana's phone": "Celular da Ana",
+    "Sam's phone": "Celular da Sam",
     "And who are you?": "E quem é você?",
     "Another device is handing out network addresses like a router. Usually a second router or a misconfiguration; occasionally an attack.": "Outro dispositivo está distribuindo endereços de rede como se fosse um roteador. Normalmente é um segundo roteador ou uma configuração errada; de vez em quando, um ataque.",
     "Another device on this network is already running Wavr.": "Outro dispositivo nesta rede já está rodando o Wavr.",

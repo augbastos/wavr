@@ -135,7 +135,7 @@ def sanitize(trace: dict, drop_positions: bool = False) -> dict:
     """Strip everything that identifies a person.
 
     Identity labels and vitals go unconditionally — there is no debugging reason
-    to know it was Ana, or what her breathing rate was. Coordinates stay by
+    to know it was Sam, or what their breathing rate was. Coordinates stay by
     default because a positional bug cannot be reproduced without them, and go
     when the trace is leaving the author's control.
 

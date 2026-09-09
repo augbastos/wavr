@@ -218,10 +218,10 @@ def test_display_name_strips_router_search_domain_hostname_stays_raw():
     # the untouched raw PTR answer.
     d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Xiaomi",
                device_type="phone", known=True,
-               hostname="Xiaomi-12T-Pto.lan.gateway")
+               hostname="Phone-12T-Pto.lan.gateway")
     view = _device_view(d)
-    assert view["hostname"] == "Xiaomi-12T-Pto.lan.gateway"   # raw, unmutated
-    assert view["display_name"] == "Xiaomi 12T Pto"                # cleaned
+    assert view["hostname"] == "Phone-12T-Pto.lan.gateway"   # raw, unmutated
+    assert view["display_name"] == "Phone 12T Pto"                # cleaned
 
 
 def test_display_name_absent_when_hostname_absent():
@@ -238,12 +238,12 @@ def test_user_set_name_is_never_run_through_the_display_cleanup():
     # HOSTNAME-derived label, never the user's own chosen name.
     d = Device(mac="a4:83:e7:11:22:33", ip="192.168.0.1", vendor="Xiaomi",
                device_type="phone", known=True,
-               hostname="Xiaomi-12T-Pto.lan.gateway")
+               hostname="Phone-12T-Pto.lan.gateway")
     meta = {"name": "kitchen-phone_v2", "first_seen": None, "last_seen": None,
             "device_type": None}
     view = _device_view(d, meta=meta)
     assert view["name"] == "kitchen-phone_v2"          # untouched, not prettified
-    assert view["display_name"] == "Xiaomi 12T Pto"    # hostname cleanup still ran
+    assert view["display_name"] == "Phone 12T Pto"    # hostname cleanup still ran
 
 
 def test_recog_still_classifies_the_raw_suffixed_hostname():

@@ -884,7 +884,7 @@
       // the same Wi-Fi at 192.168.1.141 with multicast enabled.
       //
       // The cause was a VPN. Finding a Core is a multicast query to
-      // 224.0.0.251, and a commercial VPN's tunnel on that phone carried `224.0.0.0/3` —
+      // 224.0.0.251, and the VPN's tunnel on that phone carried `224.0.0.0/3` —
       // every multicast address — while leaving `192.168.0.0/16` outside it.
       // So the Core stayed perfectly reachable by address and completely
       // unfindable by search: the one shape where a message telling you to

@@ -78,7 +78,7 @@ def test_hostname_regex_scopes_ambiguous_words():
 def test_display_hostname_strips_router_dhcp_search_domain_suffix():
     # the real example: Vodafone Ultrahub appends its own search domain to
     # every PTR answer -- pure router noise, never part of the device's name.
-    assert display_hostname("Xiaomi-12T-Pto.lan.gateway") == "Xiaomi 12T Pto"
+    assert display_hostname("Phone-12T-Pto.lan.gateway") == "Phone 12T Pto"
     assert display_hostname("amazon-abc.lan") == "Amazon Abc"
 
 

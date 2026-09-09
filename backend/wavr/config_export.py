@@ -338,7 +338,7 @@ def _config_shape(config: dict) -> dict:
     """How much of what, with none of the operator's own words.
 
     Counts and kinds. A supporter needs to know there are four cameras and nine
-    rooms; they do not need to know a room is called "Ana's bedroom", and the
+    rooms; they do not need to know a room is called "Sam's bedroom", and the
     person emailing the file has no way to notice that it was in there.
     """
     floors = (config.get("house") or {}).get("floors") or []
@@ -387,7 +387,7 @@ def _node_health(nodes) -> dict:
     carried a person's name once, in an anchor, before this module's own
     "shape, not content" rule existed (see `diagnostic_bundle`'s docstring). A
     supporter diagnosing "half my sensors dropped off" needs the counts, not
-    which one is called "Ana's room".
+    which one is called "Sam's room".
     """
     rows = list(nodes or ())
     by_state: dict[str, int] = {}

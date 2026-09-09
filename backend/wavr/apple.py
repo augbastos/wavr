@@ -11,8 +11,8 @@ Interaction reading into evidence.
 `NIDiscoveryToken` is generated per SESSION and is valid only for that session's
 lifetime. It is not a device identity, and treating it as one is the mistake this
 module exists to prevent: an integration that stored a token as "this is
-Augusto's phone" would be holding a dead reference by the next session, and
-between sessions it would confidently attribute a stranger's phone to Augusto if
+Alex's phone" would be holding a dead reference by the next session, and
+between sessions it would confidently attribute a stranger's phone to Alex if
 a token were ever reused.
 
 So a token is accepted for the duration of a session, mapped onto a device Wavr

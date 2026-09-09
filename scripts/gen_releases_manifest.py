@@ -87,7 +87,7 @@ PRODUCTS: tuple[ProductSpec, ...] = (
                  "there is nothing to set up first."),
         internal_filename="Wavr-Setup-Windows.exe",
         # Already a clean, human name -- and the exact one LEIA-ME.md tells
-        # Augusto to expect -- so it is kept as-is rather than invented
+        # the first user to expect -- so it is kept as-is rather than invented
         # anew. Only the numbered Android builds need a translation.
         download_name="Wavr-Setup-Windows.exe",
         check_staleness_against_core=True,

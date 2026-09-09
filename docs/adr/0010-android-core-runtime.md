@@ -14,7 +14,7 @@ a CameraX→loopback MJPEG source, and an `NsdManager` advertisement of
 
 Everything in that sentence is a **client**. The `:8000` it renders and the
 `_wavr._tcp` it advertises are not its own — on the one device where this
-actually runs (the the field device), they belong to a Python backend running
+actually runs, they belong to a Python backend running
 inside a `proot-distro debian` container under a Magisk-rooted Termux. Uninstall
 Termux and the kiosk becomes a spinner advertising a service that does not
 exist. The app claims to be a Core and is a browser.

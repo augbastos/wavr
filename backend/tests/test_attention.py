@@ -32,13 +32,13 @@ def test_a_waiting_pairing_request_blocks_and_says_so():
             return None
 
     mgr = PairApprovalManager(_Store())
-    mgr.create("Ana's phone")
+    mgr.create("Sam's phone")
     real = mgr.list_pending()
     assert real and "requester_name" in real[0], real
     items = collect(pending_pairings=real)
     assert len(items) == 1
     assert items[0].band == BLOCKING
-    assert "Ana's phone" in items[0].title, items[0].title
+    assert "Sam's phone" in items[0].title, items[0].title
     assert items[0].since, "no timestamp, so it cannot be ranked by how long it waited"
     assert items[0].action
 
@@ -219,7 +219,7 @@ def test_a_watch_level_alert_stays_ambient():
 def _one_of_everything():
     """One item of every kind this module can produce."""
     return collect(
-        pending_pairings=[{"requester_name": "Ana's phone", "request_id": "p1",
+        pending_pairings=[{"requester_name": "Sam's phone", "request_id": "p1",
                            "created_at": "2026-01-01T00:00:00Z"}],
         node_requests=[{"label": "kitchen-radar", "request_id": "n1",
                         "created_ts": "2026-01-01T00:00:00Z"}],
@@ -274,7 +274,7 @@ def test_no_row_makes_a_household_word_part_of_its_key():
     Wording this module did not write goes through as `*_text` and is never
     looked up at all, which is the other half of the same rule.
     """
-    private = ("Ana's phone", "kitchen-radar", "hall-cam", "sala",
+    private = ("Sam's phone", "kitchen-radar", "hall-cam", "sala",
                "escritório", "radar-1", "10.0.0.9", "10.0.0.5")
     leaked = []
     for i in _one_of_everything():

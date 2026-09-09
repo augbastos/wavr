@@ -234,7 +234,7 @@ def test_inventory_view_calls_get_many_once_not_get_per_device():
 
 def test_inventory_endpoint_merges_name_and_seen_fields():
     dm = DeviceMeta(":memory:")
-    dm.set_name("a4:83:e7:11:22:33", "MacBook do Augusto")
+    dm.set_name("a4:83:e7:11:22:33", "MacBook do Alex")
     svc = _service()
     asyncio.run(svc.scan_once())
     app = FastAPI()
@@ -243,7 +243,7 @@ def test_inventory_endpoint_merges_name_and_seen_fields():
         r = c.get("/api/inventory")
     by_mac = {d["mac"]: d for d in r.json()["devices"]}
     apple = by_mac["a4:83:e7:11:22:33"]
-    assert apple["name"] == "MacBook do Augusto"
+    assert apple["name"] == "MacBook do Alex"
     assert apple["first_seen"] is None and apple["last_seen"] is None   # named but never scanned via this dm
     unnamed = by_mac["24:0a:c4:aa:bb:cc"]
     assert unnamed["name"] is None

@@ -243,13 +243,13 @@ class DeviceStore:
         Pairing the same phone again minted another credential and left the old
         one valid. The first user's Core finished the day with four:
 
-            Augusto    central   seen 16:31
-            a handset  user      seen 16:32
-            S25        central   seen 18:44
-            S25        user      seen 20:53
+            my phone    central   seen 16:31
+            Phone       user      seen 16:32
+            phone       central   seen 18:44
+            phone       user      seen 20:53
 
         One phone, four rows, three of them stale and every one of them still a
-        working key to his home. He said it plainly: a device should be
+        working key to that home. The user put it plainly: a device should be
         recognised instead of piling up.
 
         `device_key` is what the phone says it is: a value that is the same

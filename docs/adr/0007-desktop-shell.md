@@ -42,7 +42,8 @@ FastAPI backend and `frontend/index.html` are unchanged.
 3. **Lifecycle = the on/off control plane.** Launch → backend up → sensing on. Closing the
    window hides to tray (the central is meant to stay on). **Quit** kills the backend
    child; the process exiting releases GPU VRAM (the camera source's `release_model()` +
-   process-exit path) — no orphaned python, VRAM back for games.
+   process-exit path) — no orphaned python, and the VRAM goes back to whatever else
+   the machine is for.
 4. **MVP spawns an installed backend; full packaging is later.** Bundling CPython +
    torch/opencv is heavy and platform-specific. The MVP resolves the venv python via
    `WAVR_PYTHON` → dev-relative `.venv` → `PATH`. A one-click self-contained installer

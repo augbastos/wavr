@@ -393,7 +393,7 @@ class WavrClientTest {
             {"total":2,"blocking":1,"degraded":1,"info":0,
              "headline":"2 things need your attention",
              "items":[{"key":"pairing:r1","band":"blocking",
-                       "title":"Ana's phone wants to join"}]}
+                       "title":"Sam's phone wants to join"}]}
         """.trimIndent()))
         val body = c.attention()
         assertEquals(2, body.getInt("total"))

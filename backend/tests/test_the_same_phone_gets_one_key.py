@@ -1,16 +1,16 @@
 """One phone, one live key to the home.
 
-The first user paired his phone four times over an afternoon -- a reinstall
-here, a fresh code there -- and his Core finished the day holding four live
-credentials:
+The first user paired the same phone four times over an afternoon -- a
+reinstall here, a fresh code there -- and the Core finished the day holding
+four live credentials:
 
-    Augusto    central   seen 16:31
-    a handset  user      seen 16:32
-    S25        central   seen 18:44
-    S25        user      seen 20:53
+    my phone    central   seen 16:31
+    Phone       user      seen 16:32
+    phone       central   seen 18:44
+    phone       user      seen 20:53
 
-One phone. Four rows. Three of them forgotten, and every one of them still a
-working key to his home. Re-pairing is not a rare event -- it happens on every
+One phone. Four rows, because the typed name drifted every time. Three of them
+forgotten, and every one of them still a working key to that home. Re-pairing is not a rare event -- it happens on every
 reinstall -- so this accumulates quietly for as long as somebody owns the
 product.
 
@@ -62,10 +62,10 @@ def test_pairing_the_same_phone_again_kills_the_old_key(tmp_path):
     store = _store(tmp_path)
     pairing = PairingManager(store)
 
-    _velho_id, velho_token = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    _velho_id, velho_token = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
     assert store.verify(velho_token) is not None            # it worked, before
 
-    _novo_id, novo_token = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    _novo_id, novo_token = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     assert store.verify(velho_token) is None, "the phone's previous key still opens the home"
     assert store.verify(novo_token) is not None, "the key the phone just received must work"
@@ -77,8 +77,8 @@ def test_the_old_row_is_retired_not_erased(tmp_path):
     store = _store(tmp_path)
     pairing = PairingManager(store)
 
-    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
-    pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
+    pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     velho = store.get(velho_id)
     assert velho is not None, "the record of the earlier pairing was deleted"
@@ -100,12 +100,12 @@ def test_a_phone_that_says_nothing_keeps_what_it_had(tmp_path):
 
 def test_a_different_phone_is_left_alone(tmp_path):
     """Two people, two phones, two keys. Matching must be on the key, not on
-    the name (both of his read `S25`) and not on "the newest wins"."""
+    the name (both read `my phone`) and not on "the newest wins"."""
     store = _store(tmp_path)
     pairing = PairingManager(store)
 
-    _meu_id, meu = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
-    _seu_id, seu = pairing.redeem(pairing.mint_code("user"), "S25", device_key=OUTRA)
+    _meu_id, meu = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
+    _seu_id, seu = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=OUTRA)
 
     assert store.verify(meu) is not None, "somebody else's phone revoked this one"
     assert store.verify(seu) is not None
@@ -132,9 +132,9 @@ def test_supersede_reports_what_it_retired(tmp_path):
     vanishing from somebody's device list is exactly the kind of thing that
     should be reported rather than inferred."""
     store = _store(tmp_path)
-    um, _ = store.add("S25", "user", device_key=CHAVE)
-    dois, _ = store.add("S25", "central", device_key=CHAVE)
-    fica, _ = store.add("S25", "user", device_key=CHAVE)
+    um, _ = store.add("my phone", "user", device_key=CHAVE)
+    dois, _ = store.add("my phone", "central", device_key=CHAVE)
+    fica, _ = store.add("my phone", "user", device_key=CHAVE)
     outro, _ = store.add("tablet", "user", device_key=OUTRA)
 
     retirados = store.supersede_same_device(CHAVE, fica)
@@ -186,10 +186,10 @@ def test_the_typed_code_endpoint_carries_the_key(tmp_path):
     client, store, pairing = _cliente_codigo(tmp_path)
 
     primeiro = client.post("/api/pair", json={
-        "code": pairing.mint_code("user"), "device_name": "S25", "device_key": CHAVE})
+        "code": pairing.mint_code("user"), "device_name": "my phone", "device_key": CHAVE})
     assert primeiro.status_code == 200
     segundo = client.post("/api/pair", json={
-        "code": pairing.mint_code("user"), "device_name": "S25", "device_key": CHAVE})
+        "code": pairing.mint_code("user"), "device_name": "my phone", "device_key": CHAVE})
     assert segundo.status_code == 200
 
     assert store.verify(primeiro.json()["token"]) is None
@@ -234,7 +234,7 @@ def test_the_approval_flow_carries_the_key_too(tmp_path):
 
     def parear() -> str:
         r = client.post("/api/pair-request", json={
-            "requester_name": "S25", "platform": "Android", "device_key": CHAVE})
+            "requester_name": "my phone", "platform": "Android", "device_key": CHAVE})
         assert r.status_code == 200, r.text
         corpo = r.json()
         device_id = approvals.approve(corpo["request_id"], "user", corpo["compare_code"])
@@ -262,7 +262,7 @@ def test_the_approval_screen_never_shows_the_key(tmp_path):
     """The operator's approve prompt has no use for it, and a value whose only
     job is to identify a phone should not travel anywhere it is not read."""
     _client, _store_, approvals = _cliente_aprovacao(tmp_path)
-    approvals.create("S25", platform="Android", device_key=CHAVE)
+    approvals.create("my phone", platform="Android", device_key=CHAVE)
     pendentes = approvals.list_pending()
     assert pendentes
     for r in pendentes:
@@ -274,13 +274,13 @@ def test_four_pairings_of_one_phone_leave_one_live_key(tmp_path):
     different roles, four times."""
     store = _store(tmp_path)
     pairing = PairingManager(store)
-    for nome, papel in (("Augusto", "central"), ("a handset", "user"),
-                        ("S25", "central"), ("S25", "user")):
+    for nome, papel in (("Alex", "central"), ("Phone", "user"),
+                        ("my phone", "central"), ("my phone", "user")):
         pairing.redeem(pairing.mint_code(papel), nome, device_key=CHAVE)
 
     vivos = _vivos(store)
     assert len(vivos) == 1, [d.name for d in vivos]
-    assert vivos[0].name == "S25" and vivos[0].role == "user"
+    assert vivos[0].name == "my phone" and vivos[0].role == "user"
     assert len(store.list()) == 4, "the earlier pairings must still be on record"
 
 
@@ -299,8 +299,8 @@ def test_a_visitor_code_cannot_retire_the_house_credential(tmp_path):
     store = _store(tmp_path)
     pairing = PairingManager(store)
 
-    dono_id, dono = pairing.redeem(pairing.mint_code("central"), "S25", device_key=CHAVE)
-    _hosp_id, hospede = pairing.redeem(pairing.mint_guest_code(4), "S25", device_key=CHAVE)
+    dono_id, dono = pairing.redeem(pairing.mint_code("central"), "my phone", device_key=CHAVE)
+    _hosp_id, hospede = pairing.redeem(pairing.mint_guest_code(4), "my phone", device_key=CHAVE)
 
     assert store.verify(dono) is not None, \
         "a four-hour visitor code retired the credential that runs the house"
@@ -314,8 +314,8 @@ def test_a_permanent_pairing_does_not_retire_a_live_visitor(tmp_path):
     store = _store(tmp_path)
     pairing = PairingManager(store)
 
-    hosp_id, hospede = pairing.redeem(pairing.mint_guest_code(4), "S25", device_key=CHAVE)
-    pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    hosp_id, hospede = pairing.redeem(pairing.mint_guest_code(4), "my phone", device_key=CHAVE)
+    pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     assert store.verify(hospede) is not None
     assert store.get(hosp_id).revoked is False
@@ -326,8 +326,8 @@ def test_two_visits_from_one_phone_still_leave_one(tmp_path):
     store = _store(tmp_path)
     pairing = PairingManager(store)
 
-    velho_id, velho = pairing.redeem(pairing.mint_guest_code(4), "S25", device_key=CHAVE)
-    _novo_id, novo = pairing.redeem(pairing.mint_guest_code(4), "S25", device_key=CHAVE)
+    velho_id, velho = pairing.redeem(pairing.mint_guest_code(4), "my phone", device_key=CHAVE)
+    _novo_id, novo = pairing.redeem(pairing.mint_guest_code(4), "my phone", device_key=CHAVE)
 
     assert store.verify(velho) is None, "the earlier visit is still a live key"
     assert store.verify(novo) is not None
@@ -346,8 +346,8 @@ def test_retiring_runs_the_same_cleanup_that_revoking_runs(tmp_path):
     store.set_revoke_hook(esquecidos.append)
     pairing = PairingManager(store)
 
-    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
-    pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
+    pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     assert esquecidos == [velho_id]
 
@@ -369,8 +369,8 @@ def test_a_cleanup_that_fails_does_not_fail_the_pairing(tmp_path):
     store.set_revoke_hook(explode)
     pairing = PairingManager(store)
 
-    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
-    resultado = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
+    resultado = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     assert resultado is not None
     assert store.verify(resultado[1]) is not None
@@ -391,9 +391,9 @@ def test_the_retirement_is_reported(tmp_path, caplog):
 
     store = _store(tmp_path)
     pairing = PairingManager(store)
-    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    velho_id, _ = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
     with caplog.at_level(logging.INFO):
-        pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+        pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     assert velho_id in caplog.text, "nothing said which credential was retired"
 
@@ -405,7 +405,7 @@ def test_nothing_is_said_when_nothing_was_retired(tmp_path, caplog):
     store = _store(tmp_path)
     pairing = PairingManager(store)
     with caplog.at_level(logging.INFO):
-        pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+        pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     assert "retired" not in caplog.text
 
@@ -422,7 +422,7 @@ def test_a_store_that_cannot_retire_says_so(tmp_path, caplog):
 
     pairing = PairingManager(_LojaAntiga())
     with caplog.at_level(logging.WARNING):
-        assert pairing.redeem(pairing.mint_code("user"), "S25",
+        assert pairing.redeem(pairing.mint_code("user"), "my phone",
                               device_key=CHAVE) == ("dev-1", "token-1")
 
     assert "duplicates will accumulate" in caplog.text
@@ -454,7 +454,7 @@ def test_a_failure_to_retire_still_hands_over_a_working_key(tmp_path):
     loja = _LojaQueNaoAposenta(real)
     pairing = PairingManager(loja)
 
-    resultado = pairing.redeem(pairing.mint_code("user"), "S25", device_key=CHAVE)
+    resultado = pairing.redeem(pairing.mint_code("user"), "my phone", device_key=CHAVE)
 
     assert loja.tentou, "it never even tried to retire the old credentials"
     assert resultado is not None, "the pairing failed over a tidiness problem"
@@ -475,8 +475,8 @@ def test_a_store_that_never_heard_of_this_still_pairs(tmp_path):
 
     loja = _LojaAntiga()
     pairing = PairingManager(loja)
-    assert pairing.redeem(pairing.mint_code("user"), "S25") == ("dev-1", "token-1")
-    assert loja.chamadas == [("S25", "user")]
+    assert pairing.redeem(pairing.mint_code("user"), "my phone") == ("dev-1", "token-1")
+    assert loja.chamadas == [("my phone", "user")]
 
 
 # --------------------------------------------------------------------------- #

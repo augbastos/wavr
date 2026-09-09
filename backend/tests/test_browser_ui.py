@@ -671,7 +671,7 @@ def test_things_that_need_a_person_appear_in_one_ranked_list(page, core):
 
     req = urllib.request.Request(
         core + "/api/pair-request",
-        data=json.dumps({"requester_name": "Ana's phone"}).encode(),
+        data=json.dumps({"requester_name": "Sam's phone"}).encode(),
         headers={"Content-Type": "application/json", "X-Wavr-Local": "1"},
         method="POST")
     try:
@@ -687,7 +687,7 @@ def test_things_that_need_a_person_appear_in_one_ranked_list(page, core):
     page.wait_for_selector("#attnTile:not([hidden])", timeout=15000)
     text = page.locator("#attnList").inner_text()
     # The person's own words for the device, not a placeholder.
-    assert "Ana's phone" in text, text
+    assert "Sam's phone" in text, text
     # And what it is waiting ON, so the row is actionable rather than a status.
     assert "approve" in text.lower() or "deny" in text.lower()
     assert page.locator(".attn-row[data-band='blocking']").count() >= 1
@@ -1819,7 +1819,7 @@ def big_core(tmp_path_factory):
               "kind": "home", "owner_name": "Tester", "room": "sala"})
         rooms = [
             # The shapes a real house produces and a mock never does.
-            "Quarto da Ana e do João (em cima, à esquerda)",
+            "Quarto da Sam e do João (em cima, à esquerda)",
             "Sala",
             "WC",
             "Escritório / quarto de hóspedes / arrumos",

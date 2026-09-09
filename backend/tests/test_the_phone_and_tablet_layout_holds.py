@@ -1,6 +1,7 @@
 """What the dashboard must not do on a phone or a tablet.
 
-The first user paired his S25, looked at it, and said the presentation was ugly.
+The first user paired a phone, looked at the dashboard, and said the
+presentation was ugly.
 "Ugly" is not actionable, so it was measured at 412x915 and 800x1280, and what
 came back was specific:
 

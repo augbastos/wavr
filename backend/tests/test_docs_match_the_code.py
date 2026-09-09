@@ -53,6 +53,11 @@ PROTOCOL = DOCS / "WAVR-PROTOCOL.md"
 README = REPO / "README.md"
 PRODUCT = REPO / "PRODUCT.md"
 REPO_CLAUDE_MD = REPO / "CLAUDE.md"
+# AGENTS.md is the canonical, model-neutral contract; CLAUDE.md was reduced to
+# a thin adapter over it. The "Read first" list moved with the content, so the
+# checks below follow it -- they are about where a new reader is SENT, and that
+# is now here for every agent and every human, not only for one vendor.
+REPO_AGENTS_MD = REPO / "AGENTS.md"
 SW = FRONTEND / "sw.js"
 WHATS_NEW = FRONTEND / "js" / "whats-new.js"
 
@@ -228,15 +233,28 @@ def test_the_service_worker_precaches_every_script_the_shell_loads():
         f"{sorted(shell_scripts - listed)}")
 
 
-# -- CLAUDE.md sends a reader somewhere that exists ----------------------------
+# -- AGENTS.md sends a reader somewhere that exists ----------------------------
 
 def test_read_first_points_at_documents_that_exist():
-    block = _slice(_read(REPO_CLAUDE_MD), "## Read first", "\n## ")
+    block = _slice(_read(REPO_AGENTS_MD), "## Read first", "\n## ")
     cited = re.findall(r"^- `([^`]+)`", block, re.M)
     assert len(cited) >= 3, "the Read-first list is not where this reads it"
     missing = [c for c in cited if not (REPO / c).is_file()]
     assert not missing, (
-        f"CLAUDE.md sends every new reader to files that do not exist: {missing}")
+        f"AGENTS.md sends every new reader to files that do not exist: {missing}")
+
+
+def test_the_adapter_defers_to_the_canonical_contract():
+    """CLAUDE.md may add vendor-specific notes; it may not become a second
+    source of truth. If it grows its own Read-first list, two documents start
+    telling a reader different things and neither knows about the other."""
+    claude = _read(REPO_CLAUDE_MD)
+    assert "AGENTS.md" in claude, (
+        "CLAUDE.md no longer points at AGENTS.md, so a Claude session never "
+        "reads the canonical contract")
+    assert "## Read first" not in claude, (
+        "CLAUDE.md grew its own Read-first list. That list lives in AGENTS.md; "
+        "two of them drift apart the moment one is edited.")
 
 
 def test_the_deleted_roadmap_is_not_cited_as_if_it_existed():
@@ -245,11 +263,12 @@ def test_the_deleted_roadmap_is_not_cited_as_if_it_existed():
     assert not (DOCS / "ROADMAP.md").exists(), (
         "docs/ROADMAP.md exists again — then CLAUDE.md's note saying it was "
         "deleted is the thing that is now wrong")
-    for line in _read(REPO_CLAUDE_MD).splitlines():
+    for line in (_read(REPO_CLAUDE_MD) + _read(REPO_AGENTS_MD)).splitlines():
         if "ROADMAP.md" not in line:
             continue
         assert re.search(r"\bno\b|deleted|dead", line, re.I), (
-            f"CLAUDE.md cites the deleted roadmap as a live document: {line.strip()}")
+            f"the agent contract cites the deleted roadmap as a live document: "
+            f"{line.strip()}")
 
 
 # -- a comment may not index a file by line ------------------------------------

@@ -140,8 +140,8 @@ def test_every_known_next_key_has_words():
 def test_the_disagreement_report_carries_no_person_data():
     provider = _Provider(_state(
         [src("office-cam", "camera", False), src("office-radar", "mmwave", True)],
-        identities=[{"person": "Ana"}],
+        identities=[{"person": "Sam"}],
         targets=[{"x": 1.0, "y": 2.0}]))
     blob = str(explain_room_state(provider, "office")["disagreement"])
-    assert "Ana" not in blob
+    assert "Sam" not in blob
     assert "x" not in blob.replace("counts_disagree", "")

@@ -2,9 +2,9 @@
 
 ## Why this exists
 
-Devices on the home Wi-Fi (the S25, the tablet, the the field device) need to reach
-the Wavr install site and download the actual installers from this laptop,
-without anyone typing an address or a port. This is that server: stdlib
+Phones and tablets on the home Wi-Fi need to reach the Wavr install site and
+download the actual installers from the machine running this, without anyone
+typing an address or a port. This is that server: stdlib
 only (`http.server`), no new framework, bound to one address for the
 duration of one test session.
 

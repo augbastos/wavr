@@ -11,9 +11,9 @@ Before this, `Device.role == "central"` meant two unrelated things at once:
 *"this credential may administer Wavr"* and *"this box is a hub"*. That
 conflation makes three ordinary sentences unsayable:
 
-  * "Augusto is the Owner, and these four devices are his."
+  * "Alex is the Owner, and these four devices are his."
   * "The tablet is a Client only; the laptop is Core **and** Node **and** Client."
-  * "Make Ana an Admin" — without touching a single device.
+  * "Make Sam an Admin" — without touching a single device.
 
 So there are now three independent axes, and this module owns the first two:
 
@@ -224,7 +224,7 @@ CREATE TABLE IF NOT EXISTS person_devices (
     -- How the association was made. 'confirmed' = a human said yes;
     -- 'inferred' = discovery guessed and NOBODY has confirmed it. The
     -- distinction is load-bearing for §36: Wavr may detect "a Samsung phone",
-    -- it must never silently decide "this is Augusto".
+    -- it must never silently decide "this is Alex".
     origin     TEXT NOT NULL DEFAULT 'confirmed'
 );
 

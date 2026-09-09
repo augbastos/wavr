@@ -1,11 +1,15 @@
-"""The owner's actual setup, exercised as far as software can carry it.
+"""One household's whole topology, exercised as far as software can carry it.
 
-    notebook  -> Primary Core + Admin Client + Node, named "My Home"
-    a handset -> Owner/Admin client, paired, no typed IP
-    Moto G    -> a second Core, joining the same Space
-    tablet    -> User
-    Xiaomi    -> User
-    cameras   -> surface in the Discovery Inbox, approved by a human
+    a laptop        -> Primary Core + Admin Client + Node, named "My Home"
+    a phone         -> Owner/Admin client, paired, no typed IP
+    a second phone  -> a second Core, joining the same Space
+    a tablet        -> User
+    a third phone   -> User
+    cameras         -> surface in the Discovery Inbox, approved by a human
+
+    Deliberately unbranded. This is the shape a real install takes, and the
+    specific handsets it was run on are not something a public repository
+    needs to carry.
 
 What this file can and cannot prove is worth being precise about. It drives the
 real HTTP surface end to end, so every API contract the journey depends on is
@@ -90,7 +94,7 @@ def test_the_owners_journey(notebook):
     assert any("network" in r.lower() for r in scan["recommendation"]["reasons"])
 
     created = client.post("/api/setup/create-space", headers=LOCAL, json={
-        "name": "My Home", "kind": "home", "owner_name": "Augusto",
+        "name": "My Home", "kind": "home", "owner_name": "Alex",
         "functions": scan["recommendation"]["functions"]}).json()
     assert created["space"]["name"] == "My Home"
     assert created["owner"]["role"] == "owner"
@@ -105,8 +109,8 @@ def test_the_owners_journey(notebook):
                       json={"value": True,
                             "consent": CONSENT_PHRASE}).status_code == 200
 
-    # ---- 3. The S25: the owner's own phone ---------------------------------
-    # Paired AS a person, so the credential follows Augusto's role rather than
+    # ---- 3. The owner's own phone ---------------------------------
+    # Paired AS a person, so the credential follows Alex's role rather than
     # whatever was typed. No IP is entered anywhere: the response carries both
     # routes the phone can use, and the QR is built from them.
     code = client.post("/api/pair-code", headers=LOCAL,
@@ -121,14 +125,14 @@ def test_the_owners_journey(notebook):
         status["lan_hostname_url"], "a name-based route, so nobody types an address"
 
     # ---- 4. The rest of the household --------------------------------------
-    for who in ("Ana", "Kid"):
+    for who in ("Sam", "Kid"):
         person = client.post("/api/space/people", headers=LOCAL,
                              json={"display_name": who, "role": "user"}).json()
         # Choosing the role shows the credential it implies, before pairing.
         assert person["device_role"] == "user"
 
     people = client.get("/api/space/people", headers=LOCAL).json()["people"]
-    assert {p["display_name"] for p in people} == {"Augusto", "Ana", "Kid"}
+    assert {p["display_name"] for p in people} == {"Alex", "Sam", "Kid"}
 
     # A User's device cannot be paired as an admin credential, however it is
     # asked for — the person is a ceiling.
@@ -138,11 +142,11 @@ def test_the_owners_journey(notebook):
                                  "person_id": kid["person_id"]}).json()
     assert narrowed["role"] == "user"
 
-    # ---- 5. A second Core (the Moto G's role in the Space) -----------------
+    # ---- 5. A second Core (a spare handset's role in the Space) ------------
     # The Space must be able to HOLD a second Core safely, whatever hardware
     # ends up running it. Joining never takes over.
     cores = app.state.core_registry
-    cores.register("core-moto-000001", created["space"]["space_id"], "Moto G",
+    cores.register("core-spare-00001", created["space"]["space_id"], "Spare phone",
                    platform="android", portable=True)
     topology = client.get("/api/space/cores", headers=LOCAL).json()
     assert len(topology["cores"]) == 2
@@ -150,7 +154,7 @@ def test_the_owners_journey(notebook):
     assert topology["contested"] is False, "joining must never contest"
 
     # And promotion is explicit, fenced, and reversible.
-    promoted = client.post("/api/space/cores/core-moto-000001/promote",
+    promoted = client.post("/api/space/cores/core-spare-00001/promote",
                            headers=LOCAL).json()
     assert promoted["promoted"]["status"] == "primary"
     assert promoted["promoted"]["epoch"] > created["core"]["epoch"]
@@ -189,7 +193,7 @@ def test_nothing_in_the_journey_needed_a_config_file(notebook):
     client, _app, _db = notebook
     client.post("/api/setup/create-space", headers=LOCAL, json={"name": "My Home"})
     client.post("/api/space/people", headers=LOCAL,
-                json={"display_name": "Ana", "role": "admin"})
+                json={"display_name": "Sam", "role": "admin"})
     client.put("/api/settings/lan_access", headers=LOCAL,
                json={"value": True, "consent": CONSENT_PHRASE})
 
@@ -201,21 +205,21 @@ def test_nothing_in_the_journey_needed_a_config_file(notebook):
 def test_a_demotion_reaches_an_already_paired_device(notebook):
     """The half of the person model that would be easy to fake.
 
-    Ana's phone was paired while she was an Admin. She is demoted. Her phone's
+    Sam's phone was paired while she was an Admin. She is demoted. Her phone's
     authority must drop on its very NEXT request — not at the next re-pair, and
     not only after somebody remembers to revoke it."""
     from wavr.auth import _apply_person_cap
 
     client, app, _db = notebook
     client.post("/api/setup/create-space", headers=LOCAL,
-                json={"name": "My Home", "owner_name": "Augusto"})
+                json={"name": "My Home", "owner_name": "Alex"})
     ana = client.post("/api/space/people", headers=LOCAL,
-                      json={"display_name": "Ana", "role": "admin"}).json()
+                      json={"display_name": "Sam", "role": "admin"}).json()
 
     space = app.state.space_store
 
     class _Phone:
-        role = "central"           # what Ana's phone was issued while Admin
+        role = "central"           # what Sam's phone was issued while Admin
         person_id = ana["person_id"]
         scopes = None
         tool_scopes = None
@@ -239,9 +243,9 @@ def test_removing_someone_stops_their_devices_dead(notebook):
 
     client, app, _db = notebook
     client.post("/api/setup/create-space", headers=LOCAL,
-                json={"name": "My Home", "owner_name": "Augusto"})
+                json={"name": "My Home", "owner_name": "Alex"})
     ana = client.post("/api/space/people", headers=LOCAL,
-                      json={"display_name": "Ana", "role": "admin"}).json()
+                      json={"display_name": "Sam", "role": "admin"}).json()
     space = app.state.space_store
 
     class _Phone:
