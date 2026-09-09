@@ -113,7 +113,7 @@ python3 -m wavr.serve</code></pre>
         <article id="platform-linux" class="tile platform-card">
           <h3>Linux (incl. Raspberry Pi)</h3>
           <div class="platform-body">
-            <span class="tag tag-note">Installer script, not yet run on real hardware</span>
+            <span class="tag tag-note">Installer script, exercised in CI containers on every push</span>
             <p>There's no <code>.deb</code> or <code>.AppImage</code> yet, but there is a
               script that does the whole job in one command: find Python, set Wavr up in
               its own folder, start it. It never runs <code>sudo</code> itself.</p>
@@ -135,12 +135,13 @@ python3 -m wavr.serve</code></pre>
               upgrades in place; <code>--uninstall</code> removes it and leaves your data
               alone. It can offer a <code>systemd --user</code> unit for autostart at
               login, but only if you say yes.</p>
-            <p><strong>Not yet run on real Linux or Raspberry Pi hardware.</strong> It's
-              POSIX-clean and was logic-tested (argument parsing, the download-and-extract
-              path, uninstall) on this project's own dev machine, but nobody has run it
-              end to end on an actual Linux box or a Pi yet. If a distro's package name is
-              wrong or a step behaves differently on yours, that's the most likely place to
-              look; treat it as reviewed, not field-proven. Full status:
+            <p><strong>Exercised in CI, never on physical hardware.</strong> Every push
+              installs it, starts the backend, waits for its health endpoint and uninstalls
+              again on Debian 12 (amd64 and arm64), Ubuntu 24.04, Fedora 40 and Alpine
+              3.20. Those are containers on a CI runner &mdash; the arm64 one under
+              emulation &mdash; so a real Raspberry Pi remains untested. If a distro's
+              package name is wrong or a step behaves differently on yours, that is still
+              the most likely place to look. Full status:
               <code>docs/INSTALL.md</code> (not on the public repository yet &mdash; see <a href="https://github.com/augbastos/wavr">the repository</a>).</p>
             <p>Prefer to install by hand, or run it in Docker instead? See
               <a href="#advanced-source">Advanced: install from source</a> or

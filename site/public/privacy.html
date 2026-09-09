@@ -74,8 +74,8 @@
         <g class="ld-read">
           <rect x="426" y="56" width="152" height="64" rx="10"/>
           <text x="502" y="78" class="ld-strong">Written to disk</text>
-          <text x="502" y="96">room, confidence,</text>
-          <text x="502" y="111">time. Nothing else.</text>
+          <text x="502" y="96">the derived answer,</text>
+          <text x="502" y="111">and your settings.</text>
         </g>
 
         <g class="ld-drop">
@@ -122,8 +122,13 @@
       </div>
       <div class="tile">
         <div class="tile-eyebrow">Only the conclusion is stored</div>
-        <p>What's saved is occupancy, a confidence score, and a timestamp, per room. Not
-          frames, not raw sensor coordinates, not your credentials.</p>
+        <p>Raw sensing is never written down: no frames, no pose keypoints, no per-person
+          coordinates — those live in memory and are gone. What reaches the disk is the
+          derived answer (occupancy, a confidence score, the per-source evidence behind it,
+          and the occupancy log) together with the configuration that makes your install
+          work: your paired devices and their hashed credentials, people and roles, consent
+          tiers, your house map, your cameras and nodes. All of it in one file on your own
+          machine, and erasing a Space erases that too.</p>
       </div>
       <div class="tile">
         <div class="tile-eyebrow">Every door out is a switch you flip</div>

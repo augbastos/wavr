@@ -69,9 +69,8 @@
   </section>
 
   <!-- What it is FOR.
-       This section exists because two people read the site cold on the same
-       night — the first person ever to install Wavr, and an independent
-       reviewer — and neither could say what it would do for them. The page
+       This section exists because the site was read cold and, on that reading,
+       nobody could say what Wavr would DO for them. The page
        explained the mechanism beautifully and never once named an outcome.
        Every line below maps to a trigger and an action that exist in
        `backend/wavr/routines.py`; nothing here is aspirational. -->
@@ -127,7 +126,7 @@
     </div>
 
     <p class="fine-print" style="margin-top:18px">Being told means a message in Wavr, and a
-      Windows notification for the serious ones. Pushing alerts to a phone means pointing
+      desktop notification for the serious ones when you run the desktop shell (in a browser tab there is no OS notification). Pushing alerts to a phone means pointing
       Wavr at a notification service, which is off until you do.</p>
   </section>
 
@@ -325,7 +324,7 @@
       <div class="tile">
         <div class="tile-eyebrow">Cameras boot off</div>
         <p>Frames live in RAM only, are never written to disk, and never leave the box.
-          Only the derived answer (occupied, confidence, a timestamp) is ever stored.</p>
+          Raw sensing is never written down — frames, pose keypoints and per-person coordinates live in memory only. What reaches the disk is the derived answer (occupancy, a confidence score, the per-source evidence behind it, and the occupancy log) plus the configuration that makes an install work: paired devices and their hashed credentials, people and roles, consent tiers, the house map, cameras, nodes. All of it in a file on your own machine.</p>
       </div>
       <div class="tile">
         <!-- "No account" was flattening two different things into one. There is

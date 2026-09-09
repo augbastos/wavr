@@ -1,8 +1,7 @@
 # Product
 
-## Register
-
-product
+What Wavr is, who it is for, and the design principles it is held to. The
+architecture decisions behind these choices are in `docs/adr/`.
 
 ## Users
 

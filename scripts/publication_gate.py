@@ -456,6 +456,17 @@ VISIBILITY_CLAIMS = [
      "public repo",
      "THIS ONE BECOMES TRUE. It describes a reader judging the work from the public "
      "repository — nobody outside can do that today."),
+    # The site is a publication surface too, and the first version of this list
+    # contained none of it. Five passages there say a file is "not on the public
+    # repository yet" -- true today, false the moment it is, with nothing to
+    # notice.
+    ("site/public/install.html",
+     "not on the public repository yet",
+     "four passages say a file is not on the public repository yet. It will be. "
+     "Replace each with a direct link to the file."),
+    ("site/public/docs.html",
+     "Not on the public repository yet",
+     "same, once."),
     ("SECURITY.md",
      "enable endpoint refuses it",
      "private vulnerability reporting becomes available. ENABLE IT, then delete the "

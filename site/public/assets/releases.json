@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-08T10:08:06Z",
+  "generatedAt": "2026-09-09T15:38:37Z",
   "generatedBy": "scripts/gen_releases_manifest.py",
-  "sourceDir": "_local/first-user-rc",
-  "note": "A pre-release build, made for you to try at home. It is not code-signed and is not on any app store, so Windows and Android will each warn you once -- the pages below say what to expect. Please keep it to yourself for now.",
+  "sourceDir": "_local/does-not-exist",
+  "note": "No release has been published. Every entry is marked unavailable on purpose: this file is what the SITE ships, and the site must not offer a download that does not exist. Regenerating it on a machine that holds local build artifacts flips these to available and is exactly the mistake test_the_site_offers_no_download_it_does_not_have.py now catches.",
   "products": [
     {
       "id": "windows-installer-exe",
@@ -14,15 +14,15 @@
       "internalFilename": "Wavr-Setup-Windows.exe",
       "downloadName": "Wavr-Setup-Windows.exe",
       "conflictsWith": [],
-      "available": true,
-      "sizeBytes": 43618008,
-      "sha256": "97facd9d8d98321236831b4f6ac8b5681aa584a4e4f1c637b7cb3fd92696558d",
-      "modifiedAt": "2026-09-08T02:11:30Z",
-      "downloadPath": "/download/Wavr-Setup-Windows.exe",
-      "outdatedCheck": "core-binary",
+      "available": false,
+      "sizeBytes": null,
+      "sha256": null,
+      "modifiedAt": null,
+      "downloadPath": null,
+      "outdatedCheck": "not-applicable",
       "outdated": false,
       "outdatedReason": null,
-      "missingReason": null
+      "missingReason": "No release has been published yet. This entry is deliberately unavailable: the site must not offer a download that does not exist."
     },
     {
       "id": "windows-installer-msi",
@@ -33,15 +33,15 @@
       "internalFilename": "Wavr-Windows.msi",
       "downloadName": "Wavr-Windows.msi",
       "conflictsWith": [],
-      "available": true,
-      "sizeBytes": 44593152,
-      "sha256": "f7ee28ddda0d05c0cfe1f2a5aded436d21acf48a0dadbe2ac8d73443233618d4",
-      "modifiedAt": "2026-09-08T02:11:30Z",
-      "downloadPath": "/download/Wavr-Windows.msi",
-      "outdatedCheck": "core-binary",
+      "available": false,
+      "sizeBytes": null,
+      "sha256": null,
+      "modifiedAt": null,
+      "downloadPath": null,
+      "outdatedCheck": "not-applicable",
       "outdated": false,
       "outdatedReason": null,
-      "missingReason": null
+      "missingReason": "No release has been published yet. This entry is deliberately unavailable: the site must not offer a download that does not exist."
     },
     {
       "id": "android-companion",
@@ -52,15 +52,15 @@
       "internalFilename": "2-wavr-app-for-phone-and-tablet.apk",
       "downloadName": "Wavr-Android.apk",
       "conflictsWith": [],
-      "available": true,
-      "sizeBytes": 12447560,
-      "sha256": "d92bc4eab8edcf823d03c533082e79253d502c40efd9d474a349596569204075",
-      "modifiedAt": "2026-09-08T02:07:37Z",
-      "downloadPath": "/download/Wavr-Android.apk",
+      "available": false,
+      "sizeBytes": null,
+      "sha256": null,
+      "modifiedAt": null,
+      "downloadPath": null,
       "outdatedCheck": "not-applicable",
       "outdated": false,
       "outdatedReason": null,
-      "missingReason": null
+      "missingReason": "No release has been published yet. This entry is deliberately unavailable: the site must not offer a download that does not exist."
     },
     {
       "id": "android-core-brain",
@@ -73,15 +73,15 @@
       "conflictsWith": [
         "android-kiosk"
       ],
-      "available": true,
-      "sizeBytes": 41495092,
-      "sha256": "753c0717bd02f2e423ef2ab7346aa4dc33035b297209e85be79d1e1c28598d5b",
-      "modifiedAt": "2026-09-06T18:29:02Z",
-      "downloadPath": "/download/Wavr-Core-Android.apk",
+      "available": false,
+      "sizeBytes": null,
+      "sha256": null,
+      "modifiedAt": null,
+      "downloadPath": null,
       "outdatedCheck": "not-applicable",
       "outdated": false,
       "outdatedReason": null,
-      "missingReason": null
+      "missingReason": "No release has been published yet. This entry is deliberately unavailable: the site must not offer a download that does not exist."
     },
     {
       "id": "android-kiosk",
@@ -94,15 +94,15 @@
       "conflictsWith": [
         "android-core-brain"
       ],
-      "available": true,
-      "sizeBytes": 4337843,
-      "sha256": "fdcba90977acc81ec2359be7f9f5bb338c80e9a87bbda7fae3a2fcfe5428f49f",
-      "modifiedAt": "2026-09-06T18:29:02Z",
-      "downloadPath": "/download/Wavr-Kiosk-Android.apk",
+      "available": false,
+      "sizeBytes": null,
+      "sha256": null,
+      "modifiedAt": null,
+      "downloadPath": null,
       "outdatedCheck": "not-applicable",
       "outdated": false,
       "outdatedReason": null,
-      "missingReason": null
+      "missingReason": "No release has been published yet. This entry is deliberately unavailable: the site must not offer a download that does not exist."
     }
   ]
 }

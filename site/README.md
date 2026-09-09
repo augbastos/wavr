@@ -180,7 +180,7 @@ explanatory note instead of a QR code that couldn't actually be reached from a p
   "pick your platform" list with JavaScript disabled (progressive enhancement, not a
   requirement). `download.html` never hides either platform card based on the guess; it only
   adds a "detected for you" highlight.
-- Every honesty gap that exists in the product today (the Node dashboard panel not built, the
+- Every honesty gap that exists in the product today (the Node dashboard panel (it is built — `frontend/js/nodes.js` lists, adds, disables and removes), the
   Android kiosk launcher unsigned and home-screen-replacing, the Android Core build with no
   first-run screen, macOS/Linux desktop-shell LAN HTTPS trust not implemented) is stated on
   the site rather than smoothed over, using the release manifest's own `purpose` text where
