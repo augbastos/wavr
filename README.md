@@ -1,7 +1,7 @@
 # 🌊 Wavr
 
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
-[![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
+[![license: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-green.svg)](LICENSE)
 
 **Your network already knows which of your devices are home. Wavr turns that — plus whatever sensors
 you own — into a live, explainable map of your space, running entirely on hardware you own.**

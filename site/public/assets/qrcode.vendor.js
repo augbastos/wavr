@@ -1,6 +1,8 @@
 //---------------------------------------------------------------------
 // Vendored, unmodified, from the npm package `qrcode-generator` v2.0.4
-// (dist/qrcode.js), MIT-licensed. Used by wavr.js on download.html to render
+// (dist/qrcode.js).
+// SPDX-License-Identifier: MIT  -- full text in frontend/vendor/LICENSE-qrcode-generator
+// Upstream copyright is preserved verbatim below. Used by wavr.js on download.html to render
 // a "take this page to your phone" QR code entirely client-side — no network
 // request, no third-party QR API. See site/README.md for how it's wired in.
 //---------------------------------------------------------------------

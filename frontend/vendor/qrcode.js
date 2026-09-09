@@ -1,4 +1,23 @@
 //---------------------------------------------------------------------
+// qrcode-generator, vendored unmodified.
+//
+// Upstream: https://github.com/kazuhikoarase/qrcode-generator
+// License:  MIT -- full text in ./LICENSE-qrcode-generator
+// SPDX-License-Identifier: MIT
+//
+// Self-hosted on purpose: the dashboard renders pairing QR codes without
+// a single request to a third-party QR service, and that is a claim the
+// network tab has to be able to confirm.
+//
+// The file declares no version of its own, so it is identified by hash -- of
+// the BODY, everything after this banner, with line endings normalised to LF.
+// Both halves matter: the banner is the one part upstream did not write, and a
+// raw-byte hash disagrees with itself between a CRLF checkout and an LF one.
+//   sha256 18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780
+//
+// See THIRD-PARTY-NOTICES.md.
+//---------------------------------------------------------------------
+//---------------------------------------------------------------------
 //
 // QR Code Generator for JavaScript
 //

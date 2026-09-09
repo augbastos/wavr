@@ -1,3 +1,40 @@
+/*!
+ * jsQR — QR code decoding, vendored.
+ *
+ * Upstream:  https://github.com/cozmo/jsQR
+ * @license   Apache-2.0 — full text in ./LICENSE-jsQR
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Upstream ships the stock Apache-2.0 text with the
+ * "Copyright {yyyy} {name of copyright owner}" field left unfilled, so
+ * there is no copyright line to carry across. Attribution here is the
+ * project and the URL above, which is what upstream itself states.
+ *
+ * Self-hosted on purpose: the pairing screen decodes the hub's QR on
+ * the device, and a camera frame must never leave it to reach a CDN.
+ *
+ * The bundle declares no version of its own, so the honest identifier
+ * is its hash rather than a number nobody can check. Two things had to
+ * be pinned down for that hash to be checkable at all:
+ *
+ *   - it covers the BODY, everything after this banner, because the
+ *     banner is the one thing here upstream did not write;
+ *   - it is taken with line endings normalised to LF, because this tree
+ *     is mixed CRLF/LF and Git rewrites them on checkout. A hash of the
+ *     raw bytes would disagree with itself between two clones, which is
+ *     worse than publishing none.
+ *
+ *   sha256 bc40c8a15196236b2314db0856f72ca0b49980cd5413b8c852a7349f5fee0859
+ *
+ * THIRD-PARTY-NOTICES.md carries the command that reproduces it. It does
+ * not live here, because the command has to name a comment terminator,
+ * and a comment terminator inside a comment ends the comment -- which is
+ * what broke this file the first time it was written, in a bundle that
+ * ships inside the Android APK.
+ *
+ * Upstream's bytes are otherwise unmodified. A future update should
+ * replace the body whole and recompute the hash above.
+ */
 (function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
 		module.exports = factory();

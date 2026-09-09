@@ -1,7 +1,11 @@
 [package]
 name = "wavr-desktop"
-version = "0.1.0"
+# Kept in step with tauri.conf.json, desktop/package.json and backend/pyproject.toml.
+# Tauri takes the PRODUCT version from tauri.conf.json, so this one is not what the
+# installer reports -- which is exactly why it drifted, and why it is pinned here.
+version = "0.4.0"
 description = "Wavr Desktop — native shell around the loopback central"
+license = "AGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.77"
 

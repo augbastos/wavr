@@ -1,5 +1,18 @@
-// Vendored: three.js r185 (npm three@0.185.1) examples/jsm/controls/OrbitControls.js
-// Self-hosted, do not fetch from CDN. Pinned 2026-07-03.
+/**
+ * @license
+ * Copyright 2010-2026 Three.js Authors
+ * SPDX-License-Identifier: MIT
+ *
+ * Full licence text: ../../../LICENSE
+ *
+ * Vendored: three.js r185 (npm three@0.185.1)
+ * examples/jsm/controls/OrbitControls.js
+ * Self-hosted, do not fetch from CDN. Pinned 2026-07-03.
+ *
+ * The copyright line above was missing: the vendoring comment had
+ * REPLACED the upstream header rather than sitting beside it, so
+ * this file shipped with no attribution at all.
+ */
 import {
 	Controls,
 	MOUSE,
