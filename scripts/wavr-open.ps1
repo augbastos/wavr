@@ -3,7 +3,10 @@
 # configured (loopback HTTP or multidevice HTTPS) is what serves. Safe to double-click
 # repeatedly — if Wavr is already up it just opens the dashboard.
 $ErrorActionPreference = 'SilentlyContinue'
-$repo = '<repo>'
+# Derived, not hard-coded: this script lives in scripts\, so the repository is its
+# parent. A literal path here would have tied the launcher to one clone on one
+# machine -- which is exactly what it was doing.
+$repo = Split-Path -Parent $PSScriptRoot
 $py   = Join-Path $repo '.venv\Scripts\python.exe'
 
 function Test-Up { (Test-NetConnection -ComputerName 127.0.0.1 -Port 8000 -InformationLevel Quiet) }

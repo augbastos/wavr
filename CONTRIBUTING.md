@@ -67,11 +67,11 @@ environments, make the skip loud and specific about what is missing.
 
 ### What enforces this, and what does not
 
-Nothing on the server side stops a red change reaching `master`. Branch
+Nothing on the server side stops a red change reaching `main`. Branch
 protection and rulesets both answer `403 — Upgrade to GitHub Pro or make this
 repository public` on this account, so the branch cannot be protected while the
 repository is private. That is stated here rather than papered over: assume
-`master` is writable, and treat the checks as something you read rather than
+`main` is writable, and treat the checks as something you read rather than
 something that stops you.
 
 What the repository does enforce:
@@ -92,7 +92,7 @@ What the repository does enforce:
   `install-matrix` watches `backend/wavr/**` rather than `backend/**`: it
   starts the backend and waits for `/healthz` on five distributions, so any
   product change can break it, and a change under `backend/tests/` cannot.
-- `tests` also runs on every push to `master`, so a red `master` is visible
+- `tests` also runs on every push to `main`, so a red `main` is visible
   within minutes even though nothing prevented it.
 - The maintenance auto-merge workflow refuses to merge while ANY check on that
   exact head SHA is unfinished or not green — it excludes only itself, and a

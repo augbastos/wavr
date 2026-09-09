@@ -1,19 +1,19 @@
-# Wavr — abrir sob demanda (Fase 0 item 5 do plano de deploy).
-# Sobe o servidor em loopback, abre o dashboard no browser quando ele responder.
-# Fechar esta janela (ou Ctrl+C) mata o processo -> VRAM 100% de volta pros jogos.
+# Wavr - open on demand (Phase 0, item 5 of the deployment plan).
+# Starts the server on loopback and opens the dashboard once it answers.
+# Closing this window (or Ctrl+C) kills the process, which releases the VRAM.
 
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path -Parent $PSScriptRoot   # scripts\ -> raiz do repo
+$repo = Split-Path -Parent $PSScriptRoot   # scripts\ -> repository root
 $url  = 'http://127.0.0.1:8000'
 
-# Ja tem um Wavr rodando? So abre o dashboard e sai.
+# Already running? Just open the dashboard and leave.
 try {
     Invoke-WebRequest "$url/api/system" -UseBasicParsing -TimeoutSec 1 | Out-Null
     Start-Process $url
     exit 0
 } catch {}
 
-# Abre o browser em paralelo assim que o servidor responder (ate ~15s).
+# Open the browser in parallel, as soon as the server answers (up to ~15s).
 Start-Job -ArgumentList $url {
     param($url)
     for ($i = 0; $i -lt 30; $i++) {
@@ -25,7 +25,7 @@ Start-Job -ArgumentList $url {
     }
 } | Out-Null
 
-# Rodar da raiz do repo: load_dotenv acha .\.env, wavr.db fica na raiz,
-# e o GET / resolve frontend\index.html. Bind loopback-only (guard do app).
+# Run from the repository root: load_dotenv finds .\.env, wavr.db lands at the
+# root, and GET / resolves frontend\index.html. Loopback-only bind (app guard).
 Set-Location $repo
 & "$repo\.venv\Scripts\python.exe" -m uvicorn wavr.app:app --host 127.0.0.1 --port 8000

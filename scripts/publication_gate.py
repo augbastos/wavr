@@ -361,6 +361,12 @@ VISIBILITY_CLAIMS = [
     ("CONTRIBUTING.md",
      "on a private repository those minutes come out",
      "the eleven minutes are free once public; keep the gate, change the reason."),
+    ("PRODUCT.md",
+     "from the public repo + README",
+     "THIS ONE BECOMES TRUE. PRODUCT.md describes a portfolio reader judging the "
+     "work from the public repository -- which nobody outside can do today. It "
+     "needs no edit on the flip; it needs somebody to confirm the reader it "
+     "describes can actually do what it says."),
     ("project.json",
      '"visibility": "private',
      "the machine-readable map states the visibility. Change it to \"public\"; a "
