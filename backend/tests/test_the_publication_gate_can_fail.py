@@ -56,10 +56,10 @@ def gate():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("line", [
-    r'EXE = "C:\Users\someone\AppData\Local\App\x.exe"',
-    r"path = 'C:/Users/someone/Desktop/notes.txt'",
-    "HOME = '/home/someone/projects/thing'",
-    'cache = "/Users/someone/Library/Caches"',
+    r'EXE = "C:\Users\someone\AppData\Local\App\x.exe"',  # publication-gate: synthetic
+    r"path = 'C:/Users/someone/Desktop/notes.txt'",  # publication-gate: synthetic
+    "HOME = '/home/someone/projects/thing'",  # publication-gate: synthetic
+    'cache = "/Users/someone/Library/Caches"',  # publication-gate: synthetic
 ])
 def test_it_sees_an_absolute_path_naming_an_account(gate, line):
     assert gate.ABSOLUTE_PATH.search(line), (
@@ -81,10 +81,10 @@ def test_it_does_not_cry_about_ordinary_paths(gate, line):
 
 
 @pytest.mark.parametrize("line", [
-    "WAVR_HOME_LAT=51.4778392",
-    'home_latitude: "-33.8567844"',
-    "HOUSE_LON = 18.4232430921",
-    "casa_lat = 40.6892474",
+    "WAVR_HOME_LAT=51.4778392",  # publication-gate: synthetic
+    'home_latitude: "-33.8567844"',  # publication-gate: synthetic
+    "HOUSE_LON = 18.4232430921",  # publication-gate: synthetic
+    "casa_lat = 40.6892474",  # publication-gate: synthetic
 ])
 def test_it_sees_a_doorstep_coordinate_in_a_home_context(gate, line):
     assert gate.HOME_COORD.search(line), (
@@ -93,7 +93,7 @@ def test_it_sees_a_doorstep_coordinate_in_a_home_context(gate, line):
 
 
 def test_it_sees_a_precise_coordinate_pair_anywhere(gate):
-    assert gate.COORD_PAIR_PRECISE.search("point = (51.5007292, -0.1246254)")
+    assert gate.COORD_PAIR_PRECISE.search("point = (51.5007292, -0.1246254)")  # publication-gate: synthetic
 
 
 @pytest.mark.parametrize("line", [
@@ -108,11 +108,11 @@ def test_it_does_not_cry_about_ordinary_numbers(gate, line):
 
 
 @pytest.mark.parametrize("line,what", [
-    ("aws_key = 'AKIAIOSFODNN7EXAMPLE'", "an AWS access key id"),
+    ("aws_key = 'AKIAIOSFODNN7EXAMPLE'", "an AWS access key id"),  # publication-gate: synthetic
     ("token = ghp_" + "x" * 36, "a GitHub token"),
-    ("-----BEGIN RSA PRIVATE KEY-----", "a private key block"),
-    ("slack = 'xoxb-1234567890-abcdefghij'", "a Slack token"),
-    ('password = "hunter2hunter2"', "a hard-coded credential"),
+    ("-----BEGIN RSA PRIVATE KEY-----", "a private key block"),  # publication-gate: synthetic
+    ("slack = 'xoxb-1234567890-abcdefghij'", "a Slack token"),  # publication-gate: synthetic
+    ('password = "hunter2hunter2"', "a hard-coded credential"),  # publication-gate: synthetic
 ])
 def test_it_sees_a_credential_shape(gate, line, what):
     hit = any(p.search(line) for p, _ in gate.CREDENTIALS)

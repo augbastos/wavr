@@ -4,9 +4,9 @@
   "generated_on": "2026-09-09",
   "project": {
     "name": "Wavr",
-    "one_line": "Local-first spatial presence: turns a home network plus whatever sensors you own into a live, explainable map of who is in which room.",
-    "problem": "Knowing who is home, room by room, normally means renting that understanding from someone else's cloud. Wavr does the same sensing on hardware the owner controls, and keeps the data there.",
-    "license": "AGPL-3.0-or-later, with a commercial dual license available",
+    "one_line": "An open, local-first spatial intelligence platform: it turns local network and sensor observations into an explainable model of a physical Space.",
+    "problem": "Understanding what is happening in a physical Space -- who is present, where, and how sure anyone can be about it -- normally means renting that understanding from somebody else's cloud. Wavr does the same sensing on hardware the owner controls, keeps the data there, and shows its reasoning.",
+    "license": "AGPL-3.0-or-later",
     "visibility": "private — see scripts/publication_gate.py, which lists every passage that becomes false when this changes",
     "maturity": "early; used by one person on one household's devices",
     "primary_language": "Python",
@@ -18,7 +18,9 @@
       "C++"
     ],
     "version": "0.4.0",
-    "version_source_of_truth": "VERSION at the repository root; backend/tests/test_the_version_is_one_number.py fails the build when any surface disagrees."
+    "version_source_of_truth": "VERSION at the repository root; backend/tests/test_the_version_is_one_number.py fails the build when any surface disagrees.",
+    "$positioning_note": "A Space is a home, an office, a shop -- the model is not home-specific, and identity is contextual (a person, a role, a device function) rather than a label stamped on a MAC address. See docs/adr/0009 and docs/VOCABULARY.md.",
+    "$license_note": "Commercial use is permitted under the AGPL's own terms. There is no separate commercial licence on offer: designing one is a deliberate future decision, and advertising it before the terms exist would be a promise nobody could honour."
   },
   "core_idea": {
     "unit_of_truth": "RoomState",
@@ -29,17 +31,18 @@
       "per-source evidence",
       "timestamp"
     ],
-    "fusion_rule": "confidence = strength of the best present evidence = trust weight x the source's own confidence x freshness decay",
-    "why_not_averaging": "Averaging lets several weak, agreeing sources manufacture certainty. Taking the strongest single piece of evidence means a confident answer always has one nameable reason behind it.",
-    "explainability": "Every source's own reading is surfaced next to the fused number rather than silently arbitrated. The user can always ask why."
+    "fusion_rule": "Confidence is the strength of the best PRESENT evidence -- trust weight x the source's own confidence x freshness decay -- reduced by fresh, trusted evidence of ABSENCE.",
+    "why_not_averaging": "Averaging lets several weak, agreeing sources manufacture certainty, and it lets a disagreement be smoothed into a number nobody can account for. Taking the strongest single piece of positive evidence, and letting a trusted negative pull against it, keeps both the confidence and the doubt attributable to a named source.",
+    "explainability": "Every source's own reading is surfaced next to the fused number rather than silently arbitrated. The user can always ask why.",
+    "$fusion_detail": "Two halves. (1) The strongest single present reading sets the strength, so a confident answer always has one nameable reason behind it. (2) A source that can genuinely prove absence, is still fresh, and reports empty enters the denominator at its own aged trust -- it lowers certainty rather than being averaged away. Silence is NOT contradiction, and neither is a negative from a source that cannot prove absence: a still person vanishes from radar, so a fresh mmWave 'empty' is a dropout, not an empty room. Only fusion.TRUSTED_ABSENCE_MODALITIES qualify. There is no Bayesian posterior here and the code does not pretend otherwise."
   },
   "invariants": {
     "$comment": "These are enforced in code and covered by tests. A change that breaks one is a product decision, not a refactor.",
     "loopback_only_by_default": "The base install never opens a LAN socket. Peer check + Host allowlist + CSRF header.",
     "cameras_boot_off": "Frames live in RAM only, are never written to disk, and never leave the machine.",
-    "derived_state_only": "Only occupancy, confidence and timestamps are stored or published. Never frames, never raw position targets, never credentials.",
-    "egress_is_opt_in": "Every path off the machine (LAN multi-device, MQTT, the MCP control tool, the narrator) is default-OFF and individually switched on.",
-    "no_telemetry": "No analytics, no telemetry SDK, no account. The frontend makes zero external requests.",
+    "derived_state_only": "Raw sensing is never persisted. What IS persisted is derived state and the configuration the product needs to run -- see storage_layers below.",
+    "egress_is_opt_in": "Every path off the machine — LAN multi-device, MQTT, the MCP control tool, the narrator, the diagnostics report — is default-OFF and individually switched on. The receiving end of the diagnostics path is in infra/wavr-diag-worker/, in this repository, so what it does with a report is readable rather than promised.",
+    "no_telemetry": "No analytics SDK, no crash reporter, no account, and nothing is sent anywhere by default. The dashboard and the companion make zero external requests. The one path that CAN leave is the diagnostics connector: default-OFF, switched on by hand, MAC-redacted before it is sent and again on arrival. Off is not the same as absent, and this says which one it is.",
     "credentials_never_echoed": "Tokens and keys are never logged, returned, or printed."
   },
   "surfaces": [
@@ -91,34 +94,43 @@
   ],
   "sensing_modalities": [
     {
+      "$comment": "`status` is the field that stops this list from reading as six equivalent capabilities. Two of them have never been run against the hardware they name, and one is not a Wavr source at all."
+    },
+    {
       "name": "network",
       "how": "ARP, DHCP, mDNS, SSDP, NetBIOS, SNMP — device presence inferred from the LAN itself",
-      "hardware": "none"
+      "hardware": "none",
+      "status": "shipped and exercised"
     },
     {
       "name": "bluetooth",
       "how": "BLE proximity with RSSI and confidence decay",
-      "hardware": "a BLE adapter"
+      "hardware": "a BLE adapter",
+      "status": "shipped and exercised"
     },
     {
       "name": "camera",
       "how": "RTSP/ONVIF plus person detection; frames stay in RAM",
-      "hardware": "an IP camera"
+      "hardware": "an IP camera",
+      "status": "shipped and exercised"
     },
     {
       "name": "mmwave",
       "how": "radar presence and micro-motion",
-      "hardware": "an mmWave module"
+      "hardware": "an mmWave module",
+      "status": "code and mock tests; ZERO validation on real hardware"
     },
     {
       "name": "wifi_csi",
-      "how": "channel-state sensing",
-      "hardware": "a supported radio"
+      "how": "channel-state sensing, consumed from an EXTERNAL service over its WebSocket -- there is no Wavr CSI source",
+      "hardware": "a supported radio, plus the external service that reads it",
+      "status": "seam only, not a shipped source"
     },
     {
       "name": "uwb",
       "how": "ultra-wideband ranging",
-      "hardware": "UWB anchors"
+      "hardware": "UWB anchors",
+      "status": "code and mock tests; ZERO validation on real hardware"
     }
   ],
   "vocabulary": {
@@ -173,7 +185,7 @@
   },
   "known_gaps": [
     "The Android Core's EMBEDDED-engine build (ADR-0010) is specified and not exercised. What was physically tested on 2026-09-08 is a different topology: the core-launcher app running as the device's home screen, with the ordinary Python backend beside it in a Debian container. That hub serves the current dashboard over the LAN and restarts unattended after a reboot; the embedded build remains untested.",
-    "Radar (mmWave) and UWB have code paths and mock tests but little time on real hardware. Mock-tested is not hardware-tested.",
+    "Radar (mmWave) and UWB have code paths and mock tests and ZERO validation on real hardware -- not 'little time', none. Wi-Fi CSI is a seam that consumes an external service, not a source this project ships.",
     "The companion's screens are routed through the dashboard's translator and carry Portuguese, but nothing has yet driven them in Portuguese on a real handset — the language was verified by the catalogue guards and by reading, not by using the app in it.",
     "The website exists in `site/` and is deliberately not deployed.",
     "Several files are large enough to be real architectural debt — `backend/wavr/app.py`, `desktop/src-tauri/src/main.rs`, the Core launcher's MainActivity. Recorded rather than split, because splitting to lower a line count is a refactor looking for a reason."
@@ -183,5 +195,12 @@
     "no_users_or_customers": "There are no users beyond the maintainer, no customers, no paying installations, and no production deployment.",
     "no_uptime_or_scale_claims": "No availability, install-count or scale figure in this repository is a measurement of real-world usage.",
     "not_a_medical_device": "Vitals-adjacent sensing is presence and motion only. It diagnoses nothing and must never be described as health monitoring (ADR-0003)."
+  },
+  "storage_layers": {
+    "$comment": "An earlier version of this file said only occupancy, confidence and timestamps are stored. That was materially wrong -- the database holds over thirty tables -- and 'a stale map is worse than none' applies to this file first.",
+    "never_persisted": "Camera frames, pose keypoints, raw radar frames, audio. Consumed in memory and dropped. Enforced by backend/tests/test_a_frame_never_reaches_the_disk.py.",
+    "live_only": "Per-person x/y targets and vitals. They travel over the live WebSocket and are never written to SQLite or published to MQTT: a movement history on disk is a liability this product refuses by design.",
+    "derived_and_historical": "Per-room occupancy, confidence, the per-source evidence behind it, and the occupancy log with its retention window. This is the product's output and it is meant to be queryable.",
+    "operational": "Everything that makes an install work and stay secure: paired devices and their hashed credentials, people and roles, consent tiers, rooms and the house map, cameras and their masked URLs, enrolled nodes, connectors, calibration, settings, discovery inbox, routines. Not sensing data, but not nothing either -- an owner erasing a Space is erasing this too."
   }
 }

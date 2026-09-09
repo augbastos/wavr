@@ -208,5 +208,5 @@ licence, not a non-commercial one. The obligation that matters in practice: if y
 people interact with it over a network, those users are entitled to the modified source. Running it
 unmodified, or modifying it privately without offering it to anyone, triggers nothing.
 
-A separate commercial licence is available for anyone who needs terms without that obligation — open an
-issue to ask.
+There is no separate commercial licence on offer. Designing one is a deliberate decision that has not
+been made, and advertising terms before they exist would be a promise nobody could honour.

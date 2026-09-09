@@ -1,7 +1,12 @@
 # Wavr — the spatial layer: implementation briefing
 
-Written before touching code, from a full read of the tree at `feat/spatial-layer`
-(base `0e97d93`, tests green).
+> **A dated record, not a description of today.** Written in 2026-08, before the
+> work it plans, from a full read of the tree at the time. It is kept because
+> ADR-0009 cites it as the account of what that pass covered, and because the
+> reasoning is worth reading — but everything below is in the present tense and
+> describes a repository that has since moved. The frontend it calls a
+> single file is now forty-four modules; the branch it names has been merged
+> into `main` and deleted. Read it as history.
 
 ## 1. What exists
 

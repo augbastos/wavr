@@ -1,6 +1,6 @@
 # Wavr Protocol v1
 
-- **Status:** Accepted (describes shipped behavior on `feat/spatial-layer`)
+- **Status:** Accepted. Describes the protocol as implemented on `main`.
 - **Version:** 1
 - **Scope:** the interoperability contract between Wavr components — Core, Client,
   Node, and peer Core — over the LAN.
@@ -110,11 +110,11 @@ TXT record fields:
 | `v` | Wavr Protocol version | Yes | Currently always `"1"`. |
 | `path` | Base path of the advertised service | Yes | Currently always `"/"`. |
 | `role` | Advertiser's role hint | Yes | e.g. `"desktop"`. Free-form; not authenticated (see §3.3). |
-| `sid` | Opaque Space id, first 16 chars | No | **New on this branch.** `""` when the advertiser predates this field or has no Space yet. |
+| `sid` | Opaque Space id, first 16 chars | No | `""` when the advertiser predates this field or has no Space yet. |
 | `pv` | Wavr Protocol version the advertiser speaks | Yes | Currently always `"1"` (`WAVR_PROTOCOL_VERSION`). Distinct from `v` above, which versions the DNS-SD advertisement's own shape rather than the application protocol; both happen to be `1` today. |
-| `cid` | The advertiser's own Core id, first 40 chars | No | **New on this branch.** Absent when the advertiser has no self-registered Core row yet (pre-Space). |
-| `st` | The advertiser's own belief about its leadership status | No | **New on this branch.** e.g. `"primary"` or `"standby"`, truncated to 16 chars. Present together with `ep` — see §3.4. |
-| `ep` | The epoch the advertiser believes applies to its own `st` | No | **New on this branch.** Present iff `st` is present. |
+| `cid` | The advertiser's own Core id, first 40 chars | No | Absent when the advertiser has no self-registered Core row yet (pre-Space). |
+| `st` | The advertiser's own belief about its leadership status | No | e.g. `"primary"` or `"standby"`, truncated to 16 chars. Present together with `ep` — see §3.4. |
+| `ep` | The epoch the advertiser believes applies to its own `st` | No | Present iff `st` is present. |
 
 ### 3.2 The `sid` field
 
@@ -144,7 +144,7 @@ identity independently; nothing about mDNS discovery shortcuts that.
 
 ### 3.4 Core-coordination hints (`cid`/`st`/`ep`/`pv`) are discovery only
 
-**New on this branch.** A self-advertising Core additionally broadcasts its own
+A self-advertising Core additionally broadcasts its own
 `core_id`, its own belief about its leadership status, the epoch that belief
 applies to, and the Wavr Protocol version it speaks (§3.1's `cid`/`st`/`ep`/`pv`
 fields). These exist so a browsing device's Discovery Inbox card can say
@@ -514,7 +514,7 @@ What this document adds, at the level this spec operates:
 
 ### 7.1 Node-initiated enrollment (request → approve → claim)
 
-**New on this branch.** Alongside the operator-minted-code flow above
+Alongside the operator-minted-code flow above
 (`firmware/NODE_PROTOCOL.md`), a Node MAY instead speak first and let a human
 approve it from an inbox — the Node-protocol analog of the companion
 "Approve on the Core" flow (§6.2). A Core implementing this flow exposes three
@@ -693,7 +693,7 @@ consensus protocol:
 
 ### 9.1 Two-tier trust: an authenticated peer poll feeds `observe_peer`; mDNS never does
 
-**New on this branch: `observe_peer()` now has a caller.** This subsection is
+**`observe_peer()` has a caller.** This subsection is
 the whole design, stated precisely, because the two tiers are easy to blur:
 
 1. **The authenticated tier — the only one that may move leadership.** A Core
@@ -766,7 +766,7 @@ credential role it receives (`owner|admin → central`, `user → user`,
 
 ### 10.1.1 Per-request narrowing (the person cap)
 
-**New on this branch: this axis is now wired into the real auth path, not only
+**This axis is wired into the real auth path, not only
 a UI preview.** A second, independent mechanism caps what an *already-issued*
 credential may reach, resolved **fresh on every authenticated request**
 (`auth.narrower_role`, `auth._apply_person_cap`, called from `access_for_scoped`

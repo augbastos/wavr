@@ -13,6 +13,19 @@
  *     host half masked — identical to diag.py's redact_macs) before storing.
  *   - We deliberately persist NO client IP / UA metadata of our own (Cloudflare's
  *     edge logs are outside this function's control; it stores report+ts only).
+ *   - PUBLICATION NOTE. There is no authentication and no rate limit here, and
+ *     that was a reasonable trade while the repository holding this URL was
+ *     private: the endpoint was known to one person. Publishing the repository
+ *     publishes the URL and this file, which makes it an OPEN write path into
+ *     the operator's KV namespace. Nothing sensitive is exposed by that — the
+ *     payload is re-redacted on arrival and no client metadata is kept — but
+ *     the daily write quota is finite and somebody else can spend it.
+ *
+ *     The fix belongs in front of this function, not inside it: a rate-limiting
+ *     rule on the route, configured where the project is hosted. Adding
+ *     untested counter logic to a live receiver would be the worse trade. This
+ *     note exists so the decision is made at publication time rather than
+ *     discovered afterwards.
  *   - Reports expire from KV after 90 days (expirationTtl) — debugging data, not
  *     an archive.
  */
