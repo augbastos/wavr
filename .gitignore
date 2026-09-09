@@ -79,3 +79,19 @@ desktop/sidecar/build/
 # mean the repository could no longer tell you whether the source still
 # produces it.
 mobile/www/
+
+# ---- Signing material and machine-local paths, everywhere in the tree -------
+# A per-module .gitignore only protects its own module. `mobile/android/` had
+# these lines commented out (the Android Studio template ships them that way),
+# and nothing covered the repository root or `mobile/` at all, so five of the
+# seven paths checked were not ignored. Stated once, here, for every module
+# present and every module added later.
+#
+# A leaked signing key cannot be un-leaked: whoever holds it can sign an APK
+# that Android accepts as an update to this app.
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+local.properties
