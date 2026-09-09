@@ -1,13 +1,13 @@
 {
   "$comment": "A machine-readable orientation to this repository, written for a language model reading it cold. Prose lives in README.md and PRODUCT.md; this file is the map. Keep it accurate or delete it — a stale map is worse than none.",
   "schema_version": 1,
-  "generated_on": "2026-09-08",
+  "generated_on": "2026-09-09",
   "project": {
     "name": "Wavr",
     "one_line": "Local-first spatial presence: turns a home network plus whatever sensors you own into a live, explainable map of who is in which room.",
     "problem": "Knowing who is home, room by room, normally means renting that understanding from someone else's cloud. Wavr does the same sensing on hardware the owner controls, and keeps the data there.",
     "license": "AGPL-3.0-or-later, with a commercial dual license available",
-    "visibility": "private",
+    "visibility": "private — see scripts/publication_gate.py, which lists every passage that becomes false when this changes",
     "maturity": "early; used by one person on one household's devices",
     "primary_language": "Python",
     "languages": [
@@ -152,6 +152,10 @@
     "vocabulary": "docs/VOCABULARY.md",
     "frontend_module_order": "docs/FRONTEND-MODULES.md",
     "install_routes": "docs/INSTALL.md",
+    "agent_contract": "AGENTS.md",
+    "$agent_contract_note": "Canonical and model-neutral. CLAUDE.md is a thin adapter over it and loses to it on any disagreement.",
+    "third_party_licences": "THIRD-PARTY-NOTICES.md",
+    "publication_readiness": "scripts/publication_gate.py",
     "lan_discovery_problems": "docs/network-fixes/",
     "fusion_engine": "backend/wavr/fusion.py",
     "recognition_and_precedence": "backend/wavr/recog.py",
