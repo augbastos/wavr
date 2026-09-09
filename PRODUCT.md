@@ -6,7 +6,7 @@ architecture decisions behind these choices are in `docs/adr/`.
 ## Users
 
 - **The owner-operator:** monitors their own home on a local machine (localhost dashboard). Context: glances at room occupancy/vitals while doing other work; toggles sources on/off at will. Job: "is someone home / in that room, and why does the system think so?"
-- **Portfolio viewers (recruiters, engineers):** judge the engineering quality of a multi-modal sensor-fusion system in under a minute — from the public repo + README, or by cloning and running the offline demo (`python -m wavr.serve`, simulated data, zero hardware). There is **no hosted online demo** (local-only by design).
+- **Portfolio viewers (recruiters, engineers):** judge the engineering quality of a multi-modal sensor-fusion system in under a minute — from this public repository and its README, or by cloning and running the offline demo (`python -m wavr.serve`, simulated data, zero hardware). There is **no hosted online demo** (local-only by design).
 
 ## What Wavr is
 

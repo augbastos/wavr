@@ -7,7 +7,7 @@
     "one_line": "An open, local-first spatial intelligence platform: it turns local network and sensor observations into an explainable model of a physical Space.",
     "problem": "Understanding what is happening in a physical Space -- who is present, where, and how sure anyone can be about it -- normally means renting that understanding from somebody else's cloud. Wavr does the same sensing on hardware the owner controls, keeps the data there, and shows its reasoning.",
     "license": "AGPL-3.0-or-later",
-    "visibility": "private — see scripts/publication_gate.py, which lists every passage that becomes false when this changes",
+    "visibility": "public",
     "maturity": "early; used by one person on one household's devices",
     "primary_language": "Python",
     "languages": [
@@ -20,7 +20,8 @@
     "version": "0.4.0",
     "version_source_of_truth": "VERSION at the repository root; backend/tests/test_the_version_is_one_number.py fails the build when any surface disagrees.",
     "$positioning_note": "A Space is a home, an office, a shop -- the model is not home-specific, and identity is contextual (a person, a role, a device function) rather than a label stamped on a MAC address. See docs/adr/0009 and docs/VOCABULARY.md.",
-    "$license_note": "Commercial use is permitted under the AGPL's own terms. There is no separate commercial licence on offer: designing one is a deliberate future decision, and advertising it before the terms exist would be a promise nobody could honour."
+    "$license_note": "Commercial use is permitted under the AGPL's own terms. There is no separate commercial licence on offer: designing one is a deliberate future decision, and advertising it before the terms exist would be a promise nobody could honour.",
+    "$visibility_note": "Published 2026-09-09. The unsanitized development history stayed behind in a separate private archive; this repository's history is the sanitized one. scripts/publication_gate.py still runs and still lists what a visibility change would make false."
   },
   "core_idea": {
     "unit_of_truth": "RoomState",

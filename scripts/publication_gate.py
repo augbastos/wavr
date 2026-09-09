@@ -447,26 +447,19 @@ VISIBILITY_CLAIMS = [
      '"visibility": "private',
      "the machine-readable map states the visibility. Change it. This file says of "
      "itself that a stale map is worse than none."),
+    # These two anchored on the URL itself and on the phrase "public repo",
+    # which are still PRESENT and now CORRECT: the URL resolves and the reader
+    # exists. An anchor that matches the fixed text as well as the broken text
+    # reports a passage nobody needs to act on, and a gate that cries wolf is a
+    # gate people stop reading. Narrowed to the stale wording only.
     ("docs/INSTALL.md",
-     "raw.githubusercontent.com",
-     "THIS ONE BECOMES TRUE. A raw.githubusercontent URL 404s on a private "
-     "repository, so the documented one-line installer cannot work today and starts "
-     "working on publication. Run it once, for real, immediately after."),
+     "does NOT resolve while this repository is private",
+     "the raw URL 404s on a private repository. Say that it resolves, and run "
+     "the one-line installer for real."),
     ("PRODUCT.md",
-     "public repo",
-     "THIS ONE BECOMES TRUE. It describes a reader judging the work from the public "
-     "repository — nobody outside can do that today."),
-    # The site is a publication surface too, and the first version of this list
-    # contained none of it. Five passages there say a file is "not on the public
-    # repository yet" -- true today, false the moment it is, with nothing to
-    # notice.
-    ("site/public/install.html",
-     "not on the public repository yet",
-     "four passages say a file is not on the public repository yet. It will be. "
-     "Replace each with a direct link to the file."),
-    ("site/public/docs.html",
-     "Not on the public repository yet",
-     "same, once."),
+     "from the public repo + README",
+     "it describes a reader judging the work from the public repository. Make "
+     "the sentence say THIS repository once that is true."),
     ("SECURITY.md",
      "enable endpoint refuses it",
      "private vulnerability reporting becomes available. ENABLE IT, then delete the "

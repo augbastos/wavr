@@ -12,7 +12,7 @@ this exact purpose (`site/public/install.html`, `assets/wavr.js`'s
 to. **It isn't live yet** — the install website's own "one-line install script"
 section says so ("Not live yet"), and that page still shows manual clone+pip steps
 for Windows/Linux rather than these scripts, since it predates them. Until `wavr.dev`
-is live, every command below uses the raw GitHub URL instead, which does NOT resolve while this repository is private — a raw URL to a private repository is a 404 without a token. Every command below starts working at the moment of publication, and the first thing to do then is to run one of them for real.
+is live, every command below uses the raw GitHub URL instead, which resolves for anyone: this repository is public, so no token is needed.
 
 ## Status — read this first
 

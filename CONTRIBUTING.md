@@ -67,12 +67,17 @@ environments, make the skip loud and specific about what is missing.
 
 ### What enforces this, and what does not
 
-Nothing on the server side stops a red change reaching `main`. Branch
-protection and rulesets both answer `403 — Upgrade to GitHub Pro or make this
-repository public` on this account, so the branch cannot be protected while the
-repository is private. That is stated here rather than papered over: assume
-`main` is writable, and treat the checks as something you read rather than
-something that stops you.
+`main` is protected by a ruleset. It cannot be force-pushed or deleted, and
+every change reaches it through a pull request whose required checks —
+`what-changed`, `test`, `guarantees`, the three SDK jobs and `verify` — must be
+green.
+
+Worth knowing, because it explains the shape of this file: none of that was
+possible until publication. Rulesets answer `403 — Upgrade to GitHub Pro or make
+this repository public` on a private repository on this plan, so for the whole
+of Wavr's private life the checks were something you read rather than something
+that stopped you. Going public is what made the protection available, and it was
+enabled in the same session.
 
 What the repository does enforce:
 
@@ -83,9 +88,9 @@ What the repository does enforce:
   absent. A `what-changed` job asks whether the commit touches anything a real
   Chromium could observe — the served pages, the code that serves them, its own
   four test modules — and `browser` runs only if it does. It costs eleven
-  minutes, and on a private repository those minutes come out of the account's
-  monthly Actions allowance instead of being discounted away. The gate **fails
-  open**: a first push, a shallow fetch, an unreadable base, anything it cannot
+  minutes of wall clock on every pull request that touches those paths, which is
+  the reason it is gated at all; the minutes themselves are free on a public
+  repository. The gate **fails open**: a first push, a shallow fetch, an unreadable base, anything it cannot
   work out, and the browser tests run.
 - `docker` and `install-matrix` are path-filtered at the workflow level and
   legitimately produce no check run for changes outside their paths.
