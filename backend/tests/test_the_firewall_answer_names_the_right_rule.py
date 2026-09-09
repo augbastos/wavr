@@ -43,7 +43,10 @@ import pytest
 
 from wavr import lan_reachability as lr
 
-EXE = r"C:\Users\someone\AppData\Local\Wavr Desktop\wavr-core.exe"
+# An invented account name. The Windows path SHAPE is the fixture -- this
+# test parses real `netsh advfirewall` output, which quotes the executable
+# by full path -- so the shape has to stay and the identity has to be fake.
+EXE = r"C:\Users\someone\AppData\Local\Wavr Desktop\wavr-core.exe"   # publication-gate: synthetic
 
 DUAS_REGRAS = f"""
 Rule Name:                            wavr-core.exe
