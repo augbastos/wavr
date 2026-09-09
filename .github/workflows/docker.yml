@@ -20,7 +20,7 @@ on:
       - ".dockerignore"
       - ".github/workflows/docker.yml"
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - "backend/**"
       - "frontend/**"

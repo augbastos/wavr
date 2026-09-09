@@ -23,7 +23,7 @@
 #
 #     The old text here said the Android app lived in a separate repository and
 #     built through EAS. That stopped being true the day `mobile/` was merged
-#     into master, and a workflow comment that describes an architecture the
+#     into main, and a workflow comment that describes an architecture the
 #     project no longer has is the kind of thing a reader trusts.
 #   * It does not publish to PyPI, Docker Hub or any registry. Publishing to a
 #     namespace is an irreversible, outward-facing act that belongs to the

@@ -24,7 +24,7 @@ on:
       - "backend/pyproject.toml"
       - ".github/workflows/install-matrix.yml"
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - "scripts/install.sh"
       - "backend/wavr/**"

@@ -2,8 +2,16 @@ name: tests
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
+
+# Read-only by default. Nothing in this workflow writes to the repository, and a
+# workflow triggered by `pull_request` runs code the head branch controls. On a
+# public repository the default token grant is whatever the account setting says,
+# which is not a property this file should depend on -- so it is stated here,
+# and a job that ever needs more has to ask for it in its own `permissions:`.
+permissions:
+  contents: read
 
 # A new push to the same ref makes the previous run obsolete: it reports a
 # verdict on a commit nobody is looking at any more. Cancelling keeps the

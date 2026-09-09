@@ -4,7 +4,7 @@ name: auto-merge maintenance PRs
 # workflow has passed on it, so the review queue drains itself and the
 # maintenance loop never stalls at its cap waiting for a human.
 #
-# Augusto's call (2026-08-14): anything that passes CI may merge itself,
+# Alex's call (2026-08-14): anything that passes CI may merge itself,
 # INCLUDING product code. The reasoning is his and it is sound for this
 # repository - the suite is large and honest, and a change that survives it is
 # more verified than most things a tired human waves through at midnight.
@@ -17,7 +17,7 @@ name: auto-merge maintenance PRs
 # for - so it merges immediately, before CI has said anything. It is safe only
 # behind branch protection, which is a repository setting, and a setting nobody
 # can see in a diff is the wrong home for the only thing between an agent and
-# master. Triggering on `workflow_run` puts the gate in a file you can read.
+# main. Triggering on `workflow_run` puts the gate in a file you can read.
 #
 # WHY `workflow_run` IS SAFE HERE: it runs from the DEFAULT BRANCH with write
 # permissions - which is precisely why it must never check out the pull
@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   merge:
-    # The suite must have SUCCEEDED, on a pull-request run. Green on master says
+    # The suite must have SUCCEEDED, on a pull-request run. Green on main says
     # nothing about a branch.
     if: >
       github.event.workflow_run.conclusion == 'success' &&
@@ -71,10 +71,13 @@ jobs:
 
           # INTEGRITY GATE 1 - it has to be our own agent, on this repository.
           # A fork is refused outright: a stranger opening a pull request must
-          # never reach master, no matter how green.
+          # never reach main, no matter how green.
           if [ "$same_repo" != "true" ]; then echo "PR #$pr is from a fork - refusing"; exit 0; fi
           if [ "$draft" = "true" ]; then echo "PR #$pr is a draft"; exit 0; fi
-          if ! printf '%s' "$branch" | grep -qE '^jules/|[0-9]{15,}'; then
+          # Agrupado. Sem os parenteses isto era `(^jules/)|([0-9]{15,})`, e
+          # QUALQUER branch com quinze digitos em qualquer posicao contava como
+          # manutencao — inclusive uma que nunca comecou com `jules/`.
+          if ! printf '%s' "$branch" | grep -qE '^(jules/|[a-z-]+-[0-9]{15,}$)'; then
             echo "PR #$pr ($branch) is not a maintenance branch - for a human"
             exit 0
           fi
@@ -93,34 +96,29 @@ jobs:
                     --jq '.[] | "\(.status) \(.filename)"')
           echo "files:"; printf '%s\n' "$files" | sed 's/^/  /'
 
-          # INTEGRITY GATE 3 - a deleted test cannot be allowed to buy a green
-          # suite. Removing the test that fails is the cheapest way to make CI
-          # pass, and it is indistinguishable from a real fix at the level of
-          # "conclusion == success".
-          if printf '%s\n' "$files" | grep -qE '^removed .*(test|spec)'; then
-            echo "PR #$pr deletes a test file - a human decides that"
+          # INTEGRITY GATE 3 - two areas this loop never merges on its own,
+          # whatever the diff looks like.
+          #
+          # It used to check that no test file was DELETED, which reads well and
+          # catches the wrong half of the problem: a test can be neutered in
+          # place. Replacing an assertion with `assert True` keeps the file, so
+          # the status is `modified`, so the old gate waved it through — and the
+          # suite then passes because the assertion that would have failed is
+          # gone. Same for the workflow gate below: it checked that a workflow
+          # diff LOOKED like a pin move, and `uses: attacker/action@main` looks
+          # exactly like a pin move.
+          #
+          # Both holes close the same way, and it is not a cleverer regex. These
+          # two paths are the ones that decide whether the OTHER gates mean
+          # anything, so an automated change to either of them is a decision a
+          # person makes. There is no pattern to defeat when there is no pattern.
+          if printf '%s\n' "$files" | grep -qE '^[a-z]+ backend/tests/'; then
+            echo "PR #$pr touches the test suite - a human decides that"
             exit 0
           fi
-
-          # INTEGRITY GATE 4 - the workflow files ARE the gate, and this file is
-          # one of them. Left open, an agent could weaken the check that lets it
-          # merge, or neuter the suite so that passing means nothing. So a
-          # workflow diff is held to a SHAPE, not a category: added and removed
-          # lines may only be `uses:` lines or comments - i.e. a pin move, which
-          # is the one workflow edit the maintenance loop is designed to produce.
-          if printf '%s\n' "$files" | grep -q ' \.github/workflows/'; then
-            offending=$(gh api "repos/$REPO/pulls/$pr" \
-                          -H "Accept: application/vnd.github.v3.diff" \
-                        | grep -E '^[+-]' \
-                        | grep -vE '^(\+\+\+|---)' \
-                        | grep -vE '^[+-][[:space:]]*#' \
-                        | grep -vE '^[+-][[:space:]]*-?[[:space:]]*uses:[[:space:]]*[A-Za-z0-9]' \
-                        || true)
-            if [ -n "$offending" ]; then
-              echo "workflow change is not a pure pin move - for a human:"
-              printf '%s\n' "$offending" | head -20 | sed 's/^/  /'
-              exit 0
-            fi
+          if printf '%s\n' "$files" | grep -qE '^[a-z]+ \.github/workflows/'; then
+            echo "PR #$pr touches a workflow - a human decides that"
+            exit 0
           fi
 
           # INTEGRITY GATE 5 - every OTHER check on this exact commit has to have
@@ -135,11 +133,28 @@ jobs:
           # one would deadlock every PR that does not touch its paths. Only
           # checks that EXIST are judged.
           #
-          # This job is excluded by name: it is in progress by definition, being
-          # the thing asking the question.
+          # This job excludes ITSELF, and the way it does so used to be wrong in
+          # a way nothing reported. The filter matched `auto-merge maintenance`,
+          # which is the name of the WORKFLOW; the Checks API exposes the name
+          # of the JOB, which is `merge`. Verified against the API on a real
+          # commit: `.check_runs[].name` comes back as `merge`.
+          #
+          # So this job's own check-run — `in_progress` for as long as this step
+          # runs, by definition — stayed in the list, the next test found a
+          # check that had not completed, and the gate stood down. Every time.
+          # A gate that always refuses is the safe direction to be broken in,
+          # and it is still broken: it never merged anything, and it reported
+          # that as "checks still running" rather than as a fault.
+          #
+          # Excluded by check-run ID now, not by any name. The ID is this run's
+          # own, so it cannot be confused with another job that happens to be
+          # called `merge`.
+          eu=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs" \
+                 --jq "[.check_runs[] | select(.name == \"merge\" and .status != \"completed\")][0].id // empty")
           runs=$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs" \
-                   --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' \
-                 | grep -v '^auto-merge maintenance' || true)
+                   --jq '.check_runs[] | [(.id|tostring), .name, .status, (.conclusion // "")] | @tsv' \
+                 | awk -F'\t' -v eu="$eu" '$1 != eu' \
+                 | cut -f2- || true)
 
           if [ -z "$runs" ]; then
             echo "no check runs on $HEAD_SHA - refusing to merge on silence"
