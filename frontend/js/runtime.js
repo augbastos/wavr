@@ -135,21 +135,27 @@
     starting: function () { return WavrT("Starting"); },
     updating: function () { return WavrT("Updating"); },
     paused: function () { return WavrT("Paused"); },
-    degraded: function () { return WavrT("1 issue"); },
+    degraded: function () { return WavrT("Needs a look"); },
     attention: function () { return WavrT("Needs attention"); },
     unavailable: function () { return WavrT("Not responding"); },
   };
 
   function label(body) {
+    // ONE VOCABULARY, ON EVERY SURFACE.
+    //
+    // This chip used to render a bare count for `degraded` and `attention` —
+    // "1 issue", "3 issues" — while the desktop tray, reading the same state
+    // from the same producer, said "needs a look" and "needs attention". Two
+    // vocabularies for one condition, and the tray's own comment had already
+    // made the argument for which one is right: a number with no verdict
+    // attached READS AS FINE. "3 issues" is a quantity. Somebody glancing at a
+    // chip needs to be told whether it is their problem.
+    //
+    // So the chip says the verdict, like the tray, like the Android
+    // notification, like the CLI. The count is not lost: it is in the detail
+    // this chip opens and in the description it already carries for screen
+    // readers, which is where a number belongs — beside the things it counts.
     var state = (body && body.state) || "unavailable";
-    if (state === "degraded" || state === "attention") {
-      // Count the findings that are actually at the worst level, so "1 issue"
-      // is true and "3 issues" is not invented from the total number of checks.
-      var n = ((body && body.findings) || []).filter(function (f) {
-        return f.state === state;
-      }).length;
-      return WavrT("{n} issue|{n} issues", {n: n});
-    }
     return LABEL[state] ? LABEL[state]() : state;
   }
 
