@@ -13,14 +13,15 @@ localhost only". Nothing scoped it — `--url` accepts anything — so pointing 
 at a Core across the LAN accepted whatever certificate was offered. The claim
 was in a comment; the enforcement was nowhere.
 """
+import io
 import json
 import ssl
 import sys
 
 import pytest
 
-from wavr.status import (ATTENTION, OK, UNREACHABLE, context_for, is_loopback,
-                         render)
+from wavr.status import (ATTENTION, OK, UNREACHABLE, _MARK, _MARK_ASCII,
+                         context_for, is_loopback, marks_for, render)
 
 
 # -- The scope that used to be a comment ---------------------------------------
@@ -193,7 +194,66 @@ def test_it_prints_a_status_when_stdout_cannot_encode_its_marks(monkeypatch):
     code = mod.main(["--url", "http://x"])          # must not raise
     narrow.flush()
     assert code == OK
-    assert raw.getvalue().strip(), "it printed nothing at all"
+    printed = raw.getvalue().decode("cp1252")
+    assert printed.strip(), "it printed nothing at all"
+
+    # And it has to still SAY something. This assertion is here because the
+    # whole fallback can be built correctly and then not reached: `main` picking
+    # the marks and `render` being handed them are two separate steps, and a
+    # version that resolved the right set and then rendered with the default one
+    # passed every test about `marks_for` in isolation.
+    assert _MARK_ASCII["healthy"] in printed, (
+        "the healthy mark never reached the output — main() and render() "
+        "disagree about which set is in use")
+    assert "?" not in printed, (
+        "a mark was replaced rather than substituted: " + printed)
+
+
+def test_a_narrow_stdout_still_tells_the_states_apart():
+    """Not crashing was only half of it.
+
+    `errors="replace"` keeps the command alive on a legacy code page by mapping
+    every unencodable mark onto "?" — and "●" and "○" both go there, so healthy,
+    starting, updating and paused all printed the SAME character. Worse than
+    ambiguous: "?" is what every reader takes to mean "unknown", which is a
+    fifth state, and a monitor's log then said the Core's condition was unknown
+    at a moment when it was known and fine.
+    """
+    marks = marks_for(io.TextIOWrapper(io.BytesIO(), encoding="cp1252"))
+    assert marks is _MARK_ASCII, "a cp1252 stream must not be handed the round marks"
+
+    printed = {}
+    for state, mark in marks.items():
+        # The mark has to survive the encoding it was chosen for, unreplaced.
+        assert mark.encode("cp1252", errors="strict").decode("cp1252") == mark
+        printed.setdefault(mark, []).append(state)
+
+    # The states that genuinely differ have to keep looking different. "paused"
+    # and "updating" deliberately share a mark upstream, so compare against the
+    # groupings the rich set already makes rather than demanding seven glyphs.
+    def grouping(table):
+        out = {}
+        for state, mark in table.items():
+            out.setdefault(mark, set()).add(state)
+        return sorted(sorted(g) for g in out.values())
+
+    assert grouping(marks) == grouping(_MARK), (
+        "the fallback merges states the rich marks keep apart: "
+        f"{grouping(marks)} != {grouping(_MARK)}")
+
+    assert "?" not in marks.values(), (
+        "a working Core must never print as a question mark")
+
+
+def test_a_capable_stdout_still_gets_the_round_marks():
+    """The control for the test above.
+
+    If `marks_for` returned the ASCII set for everything, that test would pass
+    while the CLI quietly lost the nicer glyphs on every terminal that can
+    render them.
+    """
+    assert marks_for(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) is _MARK
+    assert render(HEALTHY, {"total": 0, "headline": "x"}, _MARK).count("●") == 1
 
 
 # -- The interface `--help` calls stable ---------------------------------------

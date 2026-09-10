@@ -123,17 +123,61 @@ _MARK = {
     "unavailable": "×",
 }
 
+# The same marks, for a stream that cannot encode the round ones.
+#
+# Not crashing was only half of the problem. A Windows console hands this
+# command a legacy code page, `errors="replace"` turns each unencodable mark
+# into "?", and "●" and "○" both collapse into it -- so healthy, starting,
+# updating and paused all printed the SAME character, and the character they
+# printed as is the one every reader takes to mean "unknown", which is a
+# meaning none of those four states has.
+#
+# The state word is printed right next to the mark and carries the answer on
+# its own, so what is worth preserving when the glyphs go is not prettiness. It
+# is that states which differ keep looking different, and that a working Core
+# never renders as a question mark.
+_MARK_ASCII = {
+    "healthy": "+",
+    "starting": "-",
+    "updating": "-",
+    "paused": "-",
+    "degraded": "!",
+    "attention": "!",
+    "unavailable": "x",
+}
 
-def _rows(runtime: dict, attention: dict | None) -> list[tuple[str, str]]:
+
+def marks_for(stream) -> dict[str, str]:
+    """The mark set this stream can actually print.
+
+    Asked of the real stream rather than of the platform, because one Windows
+    machine has both: a console that encodes these and a redirected pipe that
+    does not. The pipe is the one that matters -- it is the cron job and the
+    monitor, the uses where nobody is watching and the output still has to
+    mean something when it is read later.
+    """
+    enc = getattr(stream, "encoding", None)
+    if not enc:
+        return _MARK_ASCII
+    try:
+        "".join(_MARK.values()).encode(enc)
+    except (UnicodeEncodeError, LookupError):
+        return _MARK_ASCII
+    return _MARK
+
+
+def _rows(runtime: dict, attention: dict | None,
+          marks: dict[str, str] | None = None) -> list[tuple[str, str]]:
     """The facts, in the order somebody scans them.
 
     State first, because it is the question. Everything after it either
     qualifies that answer or is a thing they came to do something about.
     """
+    marks = _MARK if marks is None else marks
     state = runtime.get("state", "unknown")
     rows = [
         ("Space", runtime.get("space") or "—"),
-        ("Core", _MARK.get(state, "•") + " " + state.capitalize()),
+        ("Core", marks.get(state, "•") + " " + state.capitalize()),
     ]
     if runtime.get("role"):
         rows.append(("Role", runtime["role"]))
@@ -156,8 +200,9 @@ def _rows(runtime: dict, attention: dict | None) -> list[tuple[str, str]]:
     return rows
 
 
-def render(runtime: dict, attention: dict | None) -> str:
-    rows = _rows(runtime, attention)
+def render(runtime: dict, attention: dict | None,
+           marks: dict[str, str] | None = None) -> str:
+    rows = _rows(runtime, attention, marks)
     width = max(len(k) for k, _ in rows)
     lines = ["Wavr"]
     lines += [f"  {k.ljust(width)}  {v}" for k, v in rows]
@@ -172,12 +217,20 @@ def render(runtime: dict, attention: dict | None) -> str:
 
 
 def main(argv=None) -> int:
-    # The marks below are "●", "○" and "×", and Windows hands a redirected
-    # stdout a legacy code page that cannot encode any of them. So the command
-    # documented for cron and for a monitor printed a UnicodeEncodeError
-    # traceback instead of a status the moment its output was not a console —
-    # which is every use where nobody is watching, and the only use where the
-    # exit code has to be trustworthy.
+    # The marks are "●", "○" and "×", and Windows hands a redirected stdout a
+    # legacy code page that cannot encode any of them. So the command documented
+    # for cron and for a monitor printed a UnicodeEncodeError traceback instead
+    # of a status the moment its output was not a console — which is every use
+    # where nobody is watching, and the only use where the exit code has to be
+    # trustworthy.
+    #
+    # `errors="replace"` below stops that traceback, and it is still the right
+    # net for the parts of this output that come from the user: a Space name can
+    # hold anything, and a name that will not encode must not take the status
+    # down with it. It is the WRONG answer for the marks, because replacement
+    # maps several of them onto one "?" — see `marks_for`, which picks a set the
+    # stream can actually print so that states which differ keep looking
+    # different.
     for stream in (sys.stdout, sys.stderr):
         with suppress(Exception):
             if hasattr(stream, "reconfigure"):
@@ -239,7 +292,7 @@ def main(argv=None) -> int:
     if args.json:
         print(json.dumps({"runtime": runtime, "attention": attention}, indent=2))
     elif not args.quiet:
-        print(render(runtime, attention))
+        print(render(runtime, attention, marks_for(sys.stdout)))
 
     state = runtime.get("state")
     if state == "unavailable":
