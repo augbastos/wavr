@@ -168,12 +168,26 @@ function Find-WavrPython {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         try {
             & py -0p 2>$null | ForEach-Object {
-                if ($_ -match '^\s*-(?:V:)?(\d+)\.(\d+)') {
+                # `py -0p` prints "<tag><spaces>[*]<spaces><path>", and the path
+                # may contain spaces. Splitting on whitespace and taking the last
+                # token therefore returns only the fragment after the interpreter's
+                # LAST space -- on a machine whose Python lives under, say,
+                # "...\Open Design\...", that yields a relative path with no drive
+                # letter. The venv step then asks PowerShell to run a command named
+                # after the second half of a directory, and the user sees an error
+                # that never mentions Python.
+                #
+                # The path is everything after the tag, to end of line.
+                if ($_ -match '^\s*-(?:V:)?(\d+)\.(\d+)\S*\s+\*?\s*(?<path>\S.*?)\s*$') {
                     $maj = [int]$Matches[1]; $min = [int]$Matches[2]
-                    $tokens = $_.Trim() -split '\s+'
-                    $path = $tokens[$tokens.Count - 1]
+                    $path = $Matches['path']
+                    # A candidate that is not a file on disk is a parse failure, not
+                    # an interpreter. Dropping it here keeps a bad guess from
+                    # becoming an unreadable error several steps later.
                     if ((($maj -eq 3) -and ($min -ge 11)) -or ($maj -gt 3)) {
-                        $candidates.Add([pscustomobject]@{ Path = $path; Ver = [version]"$maj.$min" })
+                        if (Test-Path -LiteralPath $path -PathType Leaf) {
+                            $candidates.Add([pscustomobject]@{ Path = $path; Ver = [version]"$maj.$min" })
+                        }
                     }
                 }
             }
@@ -297,6 +311,38 @@ function Invoke-WavrUninstall {
     # rather than writing to the non-terminating error stream). Wrapping it in its own
     # try/catch means a flaky/locked-down Task Scheduler can never abort the rest of the
     # uninstall or, worse, skip the "your data is untouched" notice below.
+    # Stop the backend THIS installer started, and only that one. Windows will not
+    # delete a file a running process holds open, so removing the venv underneath a
+    # live Core fails on a locked .pyd with a message that never mentions Wavr --
+    # which is the ordinary path, because installing ends by starting it.
+    #
+    # The pid comes from the file the install step wrote. It is re-checked against
+    # this installation's own venv before anything is stopped: a pid file can
+    # outlive its process and the operating system reuses pids, so a stale number
+    # must never be enough to kill something. If it does not match, it is left
+    # alone -- the existing rule stands, and nothing is stopped that was not
+    # started here.
+    $PidFile = Join-Path $InstallDir 'wavr.pid'
+    if (Test-Path $PidFile) {
+        try {
+            $wavrPid = [int](Get-Content -LiteralPath $PidFile -Raw).Trim()
+            $proc = Get-Process -Id $wavrPid -ErrorAction SilentlyContinue
+            $ours = $proc -and $proc.Path -and
+                    $proc.Path.StartsWith($VenvDir, [StringComparison]::OrdinalIgnoreCase)
+            if ($ours) {
+                if ($DryRun) { Write-Would "stop the Wavr backend this installer started (pid $wavrPid)" }
+                else {
+                    Stop-Process -Id $wavrPid -Force -ErrorAction SilentlyContinue
+                    $proc.WaitForExit(10000) | Out-Null
+                    Write-Ok "Stopped the Wavr backend this installer started (pid $wavrPid)."
+                }
+            } elseif ($proc) {
+                Write-Note "pid $wavrPid is not this installation's backend -- left alone."
+            }
+        } catch {}
+        if (-not $DryRun) { Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue }
+    }
+
     foreach ($dir in @($VenvDir, $SrcDir)) {
         if (Test-Path $dir) {
             if ($DryRun) { Write-Would "remove $dir" }
@@ -407,6 +453,14 @@ try {
             if ((Get-Date) -gt $deadline) { throw "Backend did not become healthy at $Url within 30s." }
             Start-Sleep -Milliseconds 400
         }
+        # Record the pid we started, so -Uninstall can stop THIS backend without
+        # ever reaching for a process it did not start. Without it, uninstalling
+        # a running install fails on a locked .pyd with a message that never
+        # mentions Wavr.
+        try {
+            Set-Content -LiteralPath (Join-Path $InstallDir 'wavr.pid') `
+                        -Value $proc.Id -Encoding ascii
+        } catch {}
         Write-Ok "Wavr is up (pid $($proc.Id))."
     }
 

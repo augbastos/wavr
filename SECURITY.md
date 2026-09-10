@@ -12,13 +12,6 @@ house is empty.
 visible only to the maintainer, and it is the only channel that does not
 publish the problem while it is still exploitable.
 
-> **Status, stated rather than assumed.** That feature is not available while
-> this repository is private — GitHub's own enable endpoint refuses it — so the
-> menu is not there yet. It is enabled as part of making the repository public,
-> before there is anybody outside who could need it. Until then the repository
-> has no outside reporters, and this section describes the channel that will
-> exist rather than one that does.
-
 Please do not open a public issue for anything exploitable, and do not include
 a working exploit in the first message — describe the class of problem and how
 to reach it, and we can go into detail privately.
