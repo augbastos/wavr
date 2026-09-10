@@ -70,6 +70,42 @@ def _parse_ts(ts: str) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
+def _which_device(a: dict) -> str:
+    """Which of them, in the bracket after the sentence.
+
+    This used to be the vendor and nothing else, and the vendor of a device
+    Wavr does not recognise is very often the literal string "unknown" -- so
+    four separate machines on one network produced four rows of "unrecognized
+    device on the network (unknown)", stacked, distinguishable by nothing. A
+    list where every row reads the same is not a list of four things; it is one
+    thing with a count, and it cannot be acted on: the reader cannot tell which
+    row they have already looked at, or which one they went to the Network tab
+    about.
+
+    Everything needed to tell them apart is already on the alert -- `hostname`,
+    `ip`, `mac` -- and was being dropped. Ordered by what a person can actually
+    use: a name they may recognise, then the address they would search for in
+    the Network tab, then the hardware address as a last resort. Nothing new is
+    read from the network and nothing leaves the Space; this is the same
+    authenticated dashboard that lists all three in full one tab over.
+    """
+    hostname = (a.get("hostname") or "").strip()
+    if hostname:
+        return hostname
+    vendor = (a.get("vendor") or "").strip()
+    # "unknown" is a vendor lookup that failed, not a vendor. Saying it names
+    # nothing, and saying it four times names nothing four times.
+    if vendor and vendor.lower() not in ("unknown", "unknown vendor"):
+        return vendor
+    ip = (a.get("ip") or "").strip()
+    if ip:
+        return ip
+    mac = (a.get("mac") or "").strip()
+    if mac:
+        return mac
+    return "unknown vendor"
+
+
 def _network_what(a: dict, kind: str) -> str:
     """Plain-English caption, reusing only fields GET /api/alerts already
     exposes (never a new raw field). Falls back to the bare kind name for a
@@ -94,7 +130,7 @@ def _network_what(a: dict, kind: str) -> str:
     # gone from the module's string table. Which is where a catalogue looks.
     if kind == "rogue_device":
         what = "unrecognized device on the network"
-        return f"{what} ({a.get('vendor') or 'unknown vendor'})"
+        return f"{what} ({_which_device(a)})"
     if kind == "rogue_dhcp":
         what = "extra DHCP server offering on the LAN"
         return f"{what} ({a.get('extra_server', 'unknown')})"

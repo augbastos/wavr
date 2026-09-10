@@ -95,7 +95,25 @@ function renderHouseStatus(){
     tile.hidden = false;
     const reasons = Array.isArray(hs.reasons) ? hs.reasons : [];
     const status = (typeof hs.status === "string" && hs.status) ? hs.status : "ok";
-    line.className = "house-status-line " + status;
+    // AMBER IS A PROMISE, and this line was breaking it six times over.
+    //
+    // `notice` is everything below `alert` on the severity ladder, so it covers
+    // `info` and `note` — an observation nobody has to act on — as well as
+    // `watch`. All of them painted amber, the colour this product uses for
+    // "needs attention", and the sentence underneath then had to spend three
+    // lines taking it back: "these are things Wavr noticed, not a to-do list —
+    // none of them needs a decision from you". A screen that has to argue with
+    // its own colour has the colour wrong, and every amber spent on something
+    // that needs nothing is amber that means less the day something does.
+    //
+    // The ladder is not touched: `severity` is already on every reason, and the
+    // question "is any of these above a note?" is a presentation question, so
+    // it is answered here. `watch` and up keep the amber they earn.
+    const LADDER = ["info", "note", "watch", "alert", "critical"];
+    const worstRank = reasons.reduce(
+      (m, r) => Math.max(m, LADDER.indexOf(r && r.severity)), -1);
+    const nothingToDo = status === "notice" && worstRank <= LADDER.indexOf("note");
+    line.className = "house-status-line " + status + (nothingToDo ? " noted" : "");
     // "unknown" is not a severity between the others, it is a refusal to
     // answer: nothing is wrong AND nothing is watching. "Everything looks
     // normal." there is the most damaging sentence this product can produce —
