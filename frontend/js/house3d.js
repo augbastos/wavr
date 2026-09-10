@@ -1947,7 +1947,25 @@ async function renderRadar(){
     const mapHome = document.getElementById("mapHome");
     const toggle  = document.getElementById("mapPanelToggle");
     if(!mapHome || !toggle) return;
-    const PANEL_MQ = window.matchMedia("(orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1)");
+    // The third site that asked "am I the wall panel?" by measuring the window's
+    // shape — and the reason the Space arrived COLLAPSED behind a "View map" bar
+    // on an ordinary laptop. A maximised 1366x768 viewport is 2.18 and a phone
+    // held sideways is 2.16, both past the 2/1 line drawn to exclude them.
+    // Gated on the signal the launcher actually sends, exactly as the stylesheet
+    // and render.js now are: one question, one answer, in three places.
+    const PANEL_SHAPE = window.matchMedia("(orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1)");
+    const PANEL_MQ = {
+      get matches(){
+        return document.documentElement.hasAttribute("data-core") && PANEL_SHAPE.matches;
+      },
+      // Forwarded, because the code below subscribes to `change` and would
+      // silently stop re-evaluating on a rotation if this object only answered
+      // `matches`. `data-core` never changes within a page's life, so the shape
+      // query remains the only thing worth listening to.
+      addEventListener: (...a) => PANEL_SHAPE.addEventListener(...a),
+      removeEventListener: (...a) => PANEL_SHAPE.removeEventListener(...a),
+      addListener: (...a) => PANEL_SHAPE.addListener?.(...a),
+    };
     // display:none -> visible sizes the WebGL canvas via its ResizeObserver (resize3D fixes the
     // camera aspect); we only nudge the render loop so a collapsed panel isn't spending frames.
     function afterExpand(){
