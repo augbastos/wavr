@@ -281,7 +281,7 @@
       heroSrEl.textContent = !haveFrame ? WavrT("Loading…")
         : !homeOccupied ? WavrT("Nobody here")
         : realOccupied.length > 0 ? WavrT("{n} room active|{n} rooms active", {n: realOccupied.length})
-        : WavrT("Someone here");
+        : WavrT("Someone's here");
     }
 
     // Wave energy target: 0 (empty house, calm) .. ~1 (several confirmed rooms at high
@@ -319,6 +319,12 @@
   window.__wavrRS = function(rs){
     try{ if(_rsCore) _rsCore(rs); }catch(e){}
     try{
+      // The FIRST frame is the moment "I have not been told anything" stops
+      // being true, and the wave is painted from that fact — so recolour on
+      // the edge. Without this the panel keeps the starting-up grey until the
+      // next alert refresh happens to call updateWaveMood(), which is its only
+      // other caller and runs on its own schedule.
+      var firstFrame = !haveFrame;
       haveFrame = true;
       // "Movement" pulse: THIS frame's room just flipped from unoccupied to occupied — a
       // fresh detection event, not steady state — gives the wave a brief lift on top of the
@@ -326,6 +332,7 @@
       if(rs && rs.room && rs.occupied && !prevRoomOcc[rs.room]) wave.pulse();
       if(rs && rs.room) prevRoomOcc[rs.room] = !!rs.occupied;
       renderHero();
+      if(firstFrame) updateWaveMood();
     }catch(e){}
   };
 
@@ -467,11 +474,19 @@
       sysWifiEl.hidden = false;
       sysWifiEl.setAttribute("data-level", String(lvl));
     }
-    labelParts.push(wifi.connected ? ("Wi-Fi: sinal " + lvl + "/4") : "Wi-Fi: desconectado");
+    // Through the catalogue, in English, like every other string on this panel.
+    // These three were written straight into the DOM in Portuguese, so an
+    // English reader's screen reader announced the panel's system strip in a
+    // language they had not chosen — and the catalogue already carried
+    // "Bluetooth on", unused, because the code never asked for it. A hard-coded
+    // translation is not localisation: it is one locale that cannot be changed
+    // and one that got lucky.
+    labelParts.push(wifi.connected ? WavrT("Wi-Fi: signal {n} of 4", {n: lvl})
+                                   : WavrT("Wi-Fi: disconnected"));
 
     var bt = (status.bluetooth && typeof status.bluetooth === "object") ? status.bluetooth : {};
     if(sysBtEl) sysBtEl.hidden = !bt.on;
-    if(bt.on) labelParts.push("Bluetooth ligado");
+    if(bt.on) labelParts.push(WavrT("Bluetooth on"));
 
     var batt = (status.battery && typeof status.battery === "object") ? status.battery : null;
     if(sysBattEl){
@@ -481,7 +496,8 @@
         if(sysBattFillEl) sysBattFillEl.style.width = pct + "%";
         sysBattEl.classList.toggle("core-batt-low", pct <= 15 && !batt.charging);
         if(sysBattBoltEl) sysBattBoltEl.hidden = !batt.charging;
-        labelParts.push("Bateria " + Math.round(pct) + "%" + (batt.charging ? " (carregando)" : ""));
+        labelParts.push(batt.charging ? WavrT("Battery {pct}% (charging)", {pct: Math.round(pct)})
+                              : WavrT("Battery {pct}%", {pct: Math.round(pct)}));
       } else {
         sysBattEl.hidden = true;
       }
@@ -516,7 +532,19 @@
     // "Could not check" comes FIRST, before any reading of the rows: an empty
     // list because nothing is wrong and an empty list because nobody answered
     // look identical from here, and only one of them is calm.
-    var unknown = list && list.dataset && list.dataset.unknown === "1";
+    //
+    // `haveFrame` joins it for the same reason, one step earlier. Before the
+    // first RoomState frame of the session Wavr has not been told anything
+    // about this Space yet, and "nobody is home" is not a thing it knows --
+    // yet the alert list is legitimately empty at that moment, so every test
+    // below fell through to calm. A panel on a wall painted the settled green
+    // for "everything is fine" while it was still starting up, which is the
+    // one confusion the comment above exists to prevent, on the only channel
+    // somebody three metres away can read. The honest answer already existed —
+    // `heroSrEl` says "Loading…" — and used to be .sr-only, which meant it was
+    // told to screen readers and to nobody else. It is painted now, in the hero
+    // stack, so the wave and the words finally agree about what is known.
+    var unknown = !haveFrame || (list && list.dataset && list.dataset.unknown === "1");
     var mood = unknown ? "unknown"
       : hasCritical ? "critical"
       : rows.length ? "alert"
