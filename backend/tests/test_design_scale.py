@@ -28,17 +28,40 @@ from pathlib import Path
 SHELL = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 
 # Today's counts. Lower them when the sprawl shrinks; raising one is a decision.
+#
+# Raised on 2026-09-10 by the pass that made the Space the page. This file's
+# whole purpose is to make somebody say why, out loud, so:
+#
+#   font-size 64 -> 66   Three sizes arrived and one left. The Core ambient face
+#                        is read from three metres and had no rank of its own:
+#                        its state, its qualifier and its clock now sit at
+#                        68 / 27 / 24px, and the 36px that used to make the
+#                        clock the headline retired with that composition.
+#                        Net +2. The dashboard's display tier is a token
+#                        (`--fs-display`) rather than a fourth literal.
+#   border-radius 20 -> 21   The new value is `0`. The stage's side column is one
+#                        surface with hairline divisions instead of three
+#                        stacked cards, so the sections inside it give their
+#                        corner back. A reset, not a new radius.
+#   gap 22 -> 23         One: the Core hero stack's own rhythm, set in vh
+#                        because that face is composed against the height of the
+#                        display it lives on rather than against a text scale.
+#
+# Everything else in that pass used the tokens below, which is why three numbers
+# moved instead of thirty.
 CEILINGS = {
-    "font-size": 64,
-    "border-radius": 20,
+    "font-size": 66,
+    "border-radius": 21,
     "font-weight": 6,
-    "gap": 22,
+    "gap": 23,
 }
 
 SCALE_TOKENS = {
     "--fs-xs", "--fs-sm", "--fs-md", "--fs-base", "--fs-lg", "--fs-xl",
+    "--fs-2xl", "--fs-display",
     "--fw-normal", "--fw-medium", "--fw-semibold", "--fw-bold",
     "--radius-sm", "--radius-pill",
+    "--sp-1", "--sp-2", "--sp-3", "--sp-4", "--sp-5", "--sp-6", "--sp-7", "--sp-8",
 }
 
 
