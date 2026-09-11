@@ -1185,13 +1185,28 @@ fn spawn_backend_monitor(app: tauri::AppHandle) {
 /// path in `setup()` below.
 fn report_backend_crashed(app: &tauri::AppHandle, msg: &str) {
     log_issue(&format!("Wavr: {msg}"));
-    if let Some(w) = app.get_webview_window("main") {
-        if let Ok(js_msg) = serde_json::to_string(msg) {
-            let _ = w.eval(format!(
-                "window.wavrShowStartupError && window.wavrShowStartupError({js_msg});"
-            ));
-        }
-    }
+    // The in-page banner that used to be attempted here is gone, and why is
+    // worth keeping: it never once rendered.
+    //
+    // It called `window.wavrShowStartupError`, which is defined only in the
+    // bundled placeholder page (`desktop/dist/index.html`) and never in the
+    // live dashboard the Core serves. This function is reached from the crash
+    // monitor, and that monitor by construction only runs AFTER the window has
+    // navigated to the live dashboard — so the `&&` guard was false every
+    // time. A dead branch that reads like a feature is worse than no branch:
+    // it is how "the desktop shell shows nothing when the Core dies" survived
+    // review, twice.
+    //
+    // Nothing is lost, because the dashboard already owns this state and owns
+    // it well: the runtime chip turns red and reads "Not responding", the
+    // headline gains "reconnecting…", and every tile that depends on a reading
+    // dims and says it may be out of date.
+    // `test_the_desktop_shell_has_nothing_left_to_say.py` holds that — if the
+    // dashboard ever stops announcing a dead Core, a test fails instead of a
+    // user finding out.
+    //
+    // What a shell CAN add is below: an OS notification, which is the one
+    // thing a web page cannot do for a window nobody is looking at.
     if notifications_enabled() {
         let _ = app
             .notification()

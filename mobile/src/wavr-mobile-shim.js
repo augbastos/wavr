@@ -692,10 +692,15 @@
       "user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;" +
       "border:1px solid var(--consent-color,rgba(255,255,255,.14))!important;}" +
       ".wavrm-consent.pending{opacity:.8;}" +
-      // 2s hold progress fill (withdrawal affordance): danger-tinted, animates 0->100% while held.
-      ".wavrm-consent .wavrm-cprog{position:absolute;left:0;bottom:0;height:2px;width:0;" +
-      "background:var(--danger,#e8726a);pointer-events:none;transition:width .15s ease;}" +
-      ".wavrm-consent.holding .wavrm-cprog{width:100%;transition:width 2s linear;}" +
+      // 2s hold progress fill (withdrawal affordance): danger-tinted, grows 0->100% while held.
+      // Scaled, not widened: this runs for a full two seconds on a phone, during a gesture whose
+      // whole job is to feel responsive to a finger that is deliberately holding still. Animating
+      // `width` relayouts the pill on every one of those frames; a transform is the same picture
+      // on the compositor. `transform-origin:left` keeps it growing from the same edge.
+      ".wavrm-consent .wavrm-cprog{position:absolute;left:0;bottom:0;height:2px;width:100%;" +
+      "transform:scaleX(0);transform-origin:left center;" +
+      "background:var(--danger,#e8726a);pointer-events:none;transition:transform .15s ease;}" +
+      ".wavrm-consent.holding .wavrm-cprog{transform:scaleX(1);transition:transform 2s linear;}" +
       // Item 5: the shared "?" help button, top-right of every card.
       ".wavrm-card{position:relative;}" +
       ".wavrm-help{position:absolute;top:10px;right:10px;width:32px;height:32px;min-height:0;padding:0;" +
@@ -2331,20 +2336,47 @@
   // TAP = decrease one step (green->yellow->red, wraps red->green). HOLD 2s = jump straight to RED (GDPR
   // "withdraw as easy as give") with a visible 2s progress fill. Pointer events only (no click) so a tap
   // and a hold never double-fire.
+  // A DRAG IS NOT A TAP, and on this control that distinction is the safety of
+  // it. This pill lives in `.status-pills`, which on a phone is
+  // `flex-wrap:nowrap; overflow-x:auto` -- a horizontal scroller. It also sets
+  // `touch-action:none` (deliberately, in injectStyle: that is what stops the
+  // Android WebView's long-press callout from stealing the pointer before the
+  // 2s withdrawal hold can finish), and the same declaration stops the browser
+  // from ever claiming the gesture as a scroll and firing the `pointercancel`
+  // that would have rescued this. So a finger that came down on this pill and
+  // swiped to scroll the row arrived at `pointerup` indistinguishable from a
+  // tap -- and a tap steps consent DOWN one level. Somebody scrolling their own
+  // header could withdraw their own consent without ever seeing it happen.
+  //
+  // The threshold is the fix rather than dropping `touch-action:none`, which
+  // would trade a silent consent change for a broken withdrawal gesture. A
+  // finger held still for two seconds does not travel 10px; a finger scrolling
+  // a row has travelled further than that by the first move event.
+  var CONSENT_TAP_SLOP_PX = 10;
+
   function attachConsentGestures(btn){
-    var holdTimer = null, held = false;
+    var holdTimer = null, held = false, moved = false, x0 = 0, y0 = 0;
     function clearHold(){ if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; } btn.classList.remove("holding"); }
     btn.addEventListener("pointerdown", function(ev){
-      held = false; btn.classList.add("holding");             // CSS fills the progress bar to 100% over 2s
+      held = false; moved = false; x0 = ev.clientX; y0 = ev.clientY;
+      btn.classList.add("holding");                           // CSS fills the progress bar to 100% over 2s
       holdTimer = setTimeout(function(){
         held = true; holdTimer = null; btn.classList.remove("holding");
         changeConsent("red");                                  // withdrawal shortcut
       }, 2000);
       try{ btn.setPointerCapture(ev.pointerId); }catch(_){}
     });
+    btn.addEventListener("pointermove", function(ev){
+      if(moved) return;
+      if(Math.abs(ev.clientX - x0) > CONSENT_TAP_SLOP_PX ||
+         Math.abs(ev.clientY - y0) > CONSENT_TAP_SLOP_PX){
+        moved = true;    // a scroll, or a finger on its way somewhere else
+        clearHold();     // and not a withdrawal either: that gesture has to be still
+      }
+    });
     btn.addEventListener("pointerup", function(){
-      var wasHeld = held; clearHold();
-      if(!wasHeld) changeConsent(CONSENT[_consent].next);      // TAP = one step down (wraps at red)
+      var wasHeld = held, wasDrag = moved; clearHold();
+      if(!wasHeld && !wasDrag) changeConsent(CONSENT[_consent].next);  // TAP = one step down (wraps at red)
     });
     btn.addEventListener("pointercancel", clearHold);
     btn.addEventListener("lostpointercapture", clearHold);

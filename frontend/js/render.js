@@ -185,6 +185,10 @@ function upsert(rs){
     fg0.style.strokeDasharray = String(RING_C);
     fg0.style.strokeDashoffset = String(RING_C);   // starts empty -> first update draws in
     roomsEl.appendChild(el); c = cards[rs.room] = el;
+    // A real room just landed, so the Space is no longer un-mapped. Cleared
+    // here rather than on a timer: the stage must never say "no rooms yet"
+    // across a room it is drawing at that moment.
+    window.__wavrSpaceEmpty?.(false);
     syncUnwatchedRooms();     // this room's placeholder, if it had one, goes
     // Draw-in on first paint: force one layout so the transition below animates from empty.
     void el.offsetWidth;
@@ -542,6 +546,43 @@ function setSelectedRoom(name){
   }
   selectedRoomName = name || null;
   if(selectedRoomName) linkRoom(selectedRoomName, true);
+  dockSelectedRoom();
+  // The structured spatial state carries which room is open, and selection
+  // happens between frames — so it is marked now rather than waiting for the
+  // next RoomState to rebuild the list.
+  window.__wavrMarkSpatialSelection?.(selectedRoomName);
+}
+
+// SELECTING A ROOM SHOULD NOT COST YOU THE SPACE.
+//
+// The room card already carries the whole evidence view — per-sensor agreement,
+// confidence, freshness, the "Why?" disclosure — and it is good. What it does
+// badly is where it happens: the strip sits under the Space, so selecting a
+// room scrolled the map off the top of the screen, and the column beside the
+// map, which exists to qualify the Space, sat empty below the sensing control.
+//
+// So the card MOVES into that column. The node itself, not a copy: every
+// re-render still writes to the same element wherever it currently lives, so
+// there is still exactly one producer of a room's state and no second view to
+// drift from the first. Its place in the strip is remembered and restored on
+// deselect, so the strip's order survives the round trip.
+let dockedCard = null, dockedAfter = null;
+function dockSelectedRoom(){
+  const side = document.querySelector(".space-stage .stage-side");
+  if(!side) return;                    // another surface's composition: leave it alone
+  if(dockedCard && dockedCard !== cards[selectedRoomName]){
+    // Back where it came from, at the position it held.
+    if(dockedAfter && dockedAfter.parentNode === roomsEl) roomsEl.insertBefore(dockedCard, dockedAfter);
+    else roomsEl.appendChild(dockedCard);
+    dockedCard.classList.remove("room-docked");
+    dockedCard = dockedAfter = null;
+  }
+  const card = selectedRoomName ? cards[selectedRoomName] : null;
+  if(!card || card === dockedCard) return;
+  dockedAfter = card.nextElementSibling;
+  dockedCard = card;
+  card.classList.add("room-docked");
+  side.prepend(card);   // first: it is the thing that was just asked for
 }
 // Hover (mouse) + focus (keyboard) delegation over every [data-room] node — including the
 // 2D SVG rects (Element.closest/dataset work on SVG). Moving onto a non-room node clears.
@@ -562,7 +603,29 @@ document.addEventListener("focusout", (e) => {
 // Fix 2 (Core panel): on the panel form factor a room tap OPENS the collapsed map first, then
 // focuses that room on it — otherwise the tap would select a display:none canvas (reads broken).
 // Desktop keeps the plain sticky-select (the map is always visible there).
-const HOME_PANEL_MQ = window.matchMedia("(orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1)");
+// "Am I the wall panel?" — asked the way the stylesheet now asks it.
+//
+// This was the same form-factor media query the CSS used, and it had the same
+// bug for the same reason: it describes a SHAPE, and a maximised 1366x768
+// laptop viewport (1366x628, ratio 2.18) and a phone held sideways (2.16) both
+// have it. So a room tap in an ordinary browser window took the panel branch —
+// expanding a card instead of selecting a room — while the surrounding CSS,
+// once gated, was drawing the desktop composition around it. Two different
+// answers to one question is worse than either answer.
+//
+// `data-core` is set in the head from `?core` / `window.WAVR_CORE`, which is
+// what the launcher actually sends. The shape stays as a second condition for
+// the same reason it does in the stylesheet: a panel that is somehow tall
+// should not get a composition designed for a short one.
+const PANEL_SHAPE_MQ = window.matchMedia("(orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1)");
+const HOME_PANEL_MQ = {
+  get matches(){
+    return document.documentElement.hasAttribute("data-core") && PANEL_SHAPE_MQ.matches;
+  },
+  addEventListener: (...a) => PANEL_SHAPE_MQ.addEventListener(...a),
+  removeEventListener: (...a) => PANEL_SHAPE_MQ.removeEventListener(...a),
+  addListener: (...a) => PANEL_SHAPE_MQ.addListener?.(...a),
+};
 function selectRoomFromRail(room){
   if(HOME_PANEL_MQ.matches){
     // On the panel a room tap EXPANDS that room's detection-methods breakdown (which sensors
@@ -627,8 +690,33 @@ if(MODE==="live"){
     if(heroLine2El){ heroLine2El.textContent = WavrT("Add a camera in the Devices tab or run a network scan."); }
     const emptyEl = roomsEl.querySelector(".empty");
     if(emptyEl) emptyEl.textContent = WavrT("No sensor is sending data yet — add a camera in the Devices tab or run a network scan.");
+    // And the Space itself says so, because the Space is what the reader is
+    // looking at. Same decision, same moment, ONE producer: this only reveals a
+    // composition already in the markup, and the guards above are the careful
+    // part — they wait for a card that is really drawn, not for data to merely
+    // have arrived.
+    showSpaceEmpty(true);
   }, 6000);
 }
+
+// Drawn-nothing is a state of the Space, so it is drawn on the Space. Hidden
+// again the moment a real room lands, from `upsert` — a stage that keeps saying
+// "no rooms yet" over a room it is currently rendering would be the same class
+// of lie this file's other guards exist to prevent.
+function showSpaceEmpty(on){
+  const el = document.getElementById("spaceEmpty");
+  if(el) el.hidden = !on;
+}
+window.__wavrSpaceEmpty = showSpaceEmpty;
+
+// The one action on that composition drives the navigation that already
+// exists, by clicking the destination's own button. No second router, and no
+// second opinion about which tab this is: if the destination moves or is
+// renamed, this follows it, and if it is not in this build the button is
+// simply not wired rather than throwing on a click.
+document.getElementById("spaceEmptyGo")?.addEventListener("click", () => {
+  document.querySelector('[data-tab="dispositivos"]')?.click();
+});
 
 const handle = (rs)=>{ setReconnecting(false); upsert(rs); pushTimeline(rs); updateHouse(rs); radarUpdate?.(rs); window.__wavrRS?.(rs); };
 

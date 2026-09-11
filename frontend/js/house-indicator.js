@@ -173,7 +173,98 @@ function updateHouse(rs){
     const txt = parts.length
       ? parts.join(". ") + "."
       : WavrT("No rooms to report yet.");
-    if(srEl.textContent !== txt) srEl.textContent = txt;
+    writeSpatialState(srEl, txt, byState);
   }
 }
 
+// THE MAP'S MEANING, IN THE DOM.
+//
+// The Space's whole spatial state lived in a WebGL canvas and in one run-on
+// sentence built above — "Occupied: Kitchen (confident, 87%). Empty: Hall.
+// Cannot see, camera down: Garage." That sentence is honest and complete, and
+// it is the wrong shape for both of its readers: a screen-reader user gets a
+// paragraph they cannot navigate or skim, and anything reading the page has to
+// parse prose to answer "which rooms are occupied".
+//
+// So the same producer, from the same `byState`, writes a list instead. One
+// representation, not two: this REPLACES the sentence rather than sitting
+// beside it, because two renderings of one truth in the accessibility tree is
+// the duplication this pass spent its time removing elsewhere.
+//
+// The summary line stays first, so the fast answer is still one read. Each room
+// is then its own list item carrying stable `data-wavr-*` attributes: state
+// from the map's own vocabulary (occupied / empty / offline / privacy /
+// unknown / blind), confidence as a number when there is one. Nothing here is
+// computed for this element — every value is already on screen for anyone
+// looking at the map, so this adds no reach and leaks nothing.
+//
+// Deliberately NOT aria-live: it is a place to look, not an announcement. The
+// hero already announces the state, and a live region rebuilt on every frame
+// would talk over it.
+function writeSpatialState(root, summary, byState){
+  const ORDER = ["occupied", "empty", "offline", "privacy", "unknown", "blind"];
+  const want = [];
+  ORDER.forEach(state => (byState[state] || []).forEach(room => want.push([room, state])));
+
+  // Cheap equality check before touching the DOM: this runs on every frame.
+  //
+  // Selection is part of the signature. Left out, the cache did its job too
+  // well: choosing a room changed nothing this string could see, so the list
+  // was never rebuilt and `data-wavr-selected` never appeared — the one
+  // attribute an agent needs to answer "which room is the user looking at".
+  let sel = "";
+  try{ sel = selectedRoomName || ""; }catch(_){ /* before render.js defines it */ }
+  markSpatialSelection.root = root;
+  const sig = summary + "|" + sel + "|" + want.map(([r, s]) =>
+    r + ":" + s + ":" + (roomConf[r] ?? "")).join(",");
+  if(root.dataset.sig === sig) return;
+  root.dataset.sig = sig;
+
+  root.textContent = "";
+  const head = document.createElement("p");
+  head.textContent = summary;
+  root.appendChild(head);
+  if(!want.length) return;
+
+  const list = document.createElement("ul");
+  list.setAttribute("data-wavr", "rooms");
+  want.forEach(([room, state]) => {
+    const li = document.createElement("li");
+    li.setAttribute("data-wavr-room", room);
+    li.setAttribute("data-wavr-state", state);
+    const conf = roomConf[room];
+    if(state === "occupied" && typeof conf === "number"){
+      li.setAttribute("data-wavr-confidence", conf.toFixed(2));
+      li.setAttribute("data-wavr-confidence-word", confWord(conf));
+    }
+    // `selectedRoomName` is a top-level `let` in render.js, which loads AFTER
+    // this file — so it is a real binding by the time a frame arrives, and a
+    // `typeof` guard would still throw if one somehow arrived earlier (a `let`
+    // in its temporal dead zone throws where an undeclared name does not).
+    try{ if(selectedRoomName === room) li.setAttribute("data-wavr-selected", "true"); }
+    catch(_){ /* nothing is selected before the module that tracks selection */ }
+    // Room names are whatever this household called them: textContent, never
+    // innerHTML, and never translated.
+    li.textContent = room + ": " + state
+      + (li.hasAttribute("data-wavr-confidence-word")
+          ? " (" + confLabel(confWord(conf)).toLowerCase() + ", "
+            + Math.round(conf * 100) + "%)"
+          : "");
+    list.appendChild(li);
+  });
+  root.appendChild(list);
+}
+
+// Selection changes without a new frame arriving, and rebuilding the whole list
+// for one attribute would be the wrong trade -- so the marks are moved in
+// place. Called by render.js the moment a room is chosen, which is the moment
+// an agent or a screen-reader user asks "which one is open?".
+function markSpatialSelection(name){
+  const root = markSpatialSelection.root;
+  if(!root) return;
+  root.querySelectorAll("[data-wavr-room]").forEach(li => {
+    if(li.getAttribute("data-wavr-room") === name) li.setAttribute("data-wavr-selected", "true");
+    else li.removeAttribute("data-wavr-selected");
+  });
+}
+window.__wavrMarkSpatialSelection = markSpatialSelection;

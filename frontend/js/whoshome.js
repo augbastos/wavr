@@ -69,7 +69,51 @@
     return false;   // demo/simulated: illustrative data, never claims sensing is off
   }
 
+  // The hero strip at the top of Space renders this same sentence, and the two
+  // comments below say so outright — "exact reuse of heroLine1's own wording",
+  // "exact reuse of heroLine2's own format". That reuse is deliberate and stays:
+  // this tile has to stand alone on surfaces where the hero is not present.
+  //
+  // On Space the hero IS present, immediately above, so the page said
+  //
+  //     Nobody here
+  //     no presence detected · sensors monitoring
+  //
+  // twice — once in the hero, once here in larger type — and since both
+  // elements are aria-live, a screen reader was told the same thing twice on
+  // every frame too. Two renderings of one fact is not emphasis; the second one
+  // reads as a second fact until you notice it is not.
+  //
+  // So the tile stands down instead of being deleted: it keeps its own copy for
+  // the surfaces that need it, and yields only when the hero is on screen
+  // saying the same words. What is left in the tile is the part the hero does
+  // not do — who, by name — which is the question the tile is titled after.
+  function standDownIfTheHeroSaidIt(){
+    var h1 = document.getElementById("heroLine1");
+    var h2 = document.getElementById("heroLine2");
+    var onScreen = !!(h1 && h1.offsetParent !== null);
+    var txt = function(el){ return el ? (el.textContent || "").trim() : ""; };
+    // The hero appends its own qualifiers — "Nobody here · reconnecting…" while
+    // the Core is quiet — so an exact match let the duplicate straight back in
+    // at the moment the screen is busiest. A prefix counts: if the hero opens
+    // with the whole of what the tile was going to say, the tile has nothing to
+    // add by saying it again, and the hero's version is the more informative
+    // one. Bounded to a whole leading phrase (the separator has to follow) so a
+    // short headline cannot swallow an unrelated longer one.
+    var sameHead = onScreen && txt(headline) !== "" &&
+      (txt(h1) === txt(headline) || txt(h1).indexOf(txt(headline) + " ") === 0);
+    // `hidden`, not a class: it takes the duplicate out of the accessibility
+    // tree as well as off the screen, which is the half that was announcing.
+    headline.hidden = sameHead;
+    if(sub) sub.hidden = sameHead && txt(h2) !== "" && txt(h2) === txt(sub);
+  }
+
   function render(){
+    renderTile();
+    standDownIfTheHeroSaidIt();
+  }
+
+  function renderTile(){
     if(!haveFrame){
       headline.className = "qc-headline"; headline.textContent = WavrT("Loading…");
       sub.textContent = ""; namesEl.textContent = ""; anonEl.textContent = "";
@@ -92,7 +136,7 @@
     var home = roomKeys.some(function(r){ return roomOcc[r]; });               // matches updateHouse()'s own definition (casa counts)
     var realOcc = roomKeys.filter(function(r){ return isRealRoom(r) && roomOcc[r]; });
     headline.className = "qc-headline " + (home ? "home" : "away");
-    headline.textContent = home ? WavrT("Someone is here") : WavrT("Nobody here");             // exact reuse of heroLine1's own wording
+    headline.textContent = home ? WavrT("Someone's here") : WavrT("Nobody here");             // exact reuse of heroLine1's own wording
     if(realOcc.length){
       var maxConf = Math.max.apply(null, realOcc.map(function(r){ return roomConf[r] || 0; }));
       sub.textContent = realOcc.join(", ") + " " + MIDDOT + " " + confWord(maxConf).toLowerCase()

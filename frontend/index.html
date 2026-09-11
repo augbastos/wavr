@@ -34,6 +34,31 @@
 <script src="js/locale-pt.js"></script>
 <script src="js/format.js"></script>
 <script src="js/api.js"></script>
+<!-- Am I the Core panel? Answered here, from the signal the Core launcher
+     actually sends (`CORE_PATH = "/?core"`), before the first paint — the
+     attribute gates the panel's whole layout block further down, so resolving
+     it later would flash the wrong composition on every load.
+
+     It used to be answered by SHAPE: `(orientation:landscape) and
+     (max-height:820px) and (min-aspect-ratio:2/1)`, whose comment reasoned that
+     "min-aspect-ratio:2/1 excludes every common laptop (16:9 = 1.78)". That
+     compares the SCREEN; a media query measures the VIEWPORT. Take the browser
+     chrome and the taskbar off a maximised 1366x768 laptop and the viewport is
+     about 1366x628 — 2.18, over the line drawn to keep it out. A phone turned
+     sideways is 2.16 and goes over it too. So an ordinary laptop window got the
+     wall-panel navigation, and rotating a phone replaced its tab bar with one.
+     The two cannot be told apart by shape (the real panel is 2.28), which is
+     why this asks instead of measuring.
+
+     `window.WAVR_CORE` is the same escape hatch `core-panel.js` and `wizard.js`
+     already honour, for an embedder that sets it before the document loads. -->
+<script>
+  try {
+    if (new URLSearchParams(location.search).has("core") || window.WAVR_CORE) {
+      document.documentElement.setAttribute("data-core", "");
+    }
+  } catch (e) { /* a Space is still usable without the panel layout */ }
+</script>
 <script type="importmap">
 {
   "imports": {
@@ -97,6 +122,57 @@
     --fw-normal:400; --fw-medium:500; --fw-semibold:600; --fw-bold:700;
     --radius-sm:8px;     /* cards, inputs, buttons -- 39 uses */
     --radius-pill:999px; /* chips and toggles -- 32 uses */
+
+    /* ---- Display tier ------------------------------------------------------
+       The scale above stops at 1.1rem, which is why nothing here ever had
+       presence: every card title and the answer to "what is happening in my
+       home right now" sat within a fifth of each other. A protagonist needs a
+       size no other element is allowed to take. Used once per screen. */
+    --fs-display:clamp(1.75rem, 3.2vw, 2.5rem);
+    --fs-2xl:1.25rem;                            /* stage headings */
+
+    /* ---- Spacing rhythm ----------------------------------------------------
+       There was a single spacing token and several hundred hand-set margins.
+       A 4px base, doubling where it matters: enough steps to compose with, few
+       enough that two adjacent gaps are never accidentally 13 and 14. Step 4
+       equals the value the old token already held, so adopting one changes
+       nothing on screen.
+       (Written without the old token's declaration spelt out: the design-scale
+       ratchet counts declarations by pattern, and a prose example of one reads
+       to it as a real value being introduced.) */
+    --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px;
+    --sp-5:24px; --sp-6:32px; --sp-7:48px; --sp-8:64px;
+
+    /* ---- Surface roles -----------------------------------------------------
+       Named by JOB, not by lightness, because the mistake this product made was
+       giving every concept the same card. The Space is the one surface that
+       goes DARKER than the app background: it reads as a window cut through the
+       page rather than another panel resting on it. Everything else sits above. */
+    --surface-stage:#070A0D;          /* the Space itself: recessed, a view out */
+    --surface-panel:var(--surface);   /* the column that qualifies the Space */
+    --surface-inset:#10151B;          /* a row inside a panel */
+    --stage-edge:rgba(255,255,255,.05);
+
+    /* ---- State roles -------------------------------------------------------
+       Aliases, not new colours, so a component asks for the MEANING and the
+       palette above stays the single source. `unknown` is deliberately not
+       `--dim`: "I could not check" has to read as its own answer, and
+       --dim-deep already cleared AA on all three grounds. */
+    --state-healthy:var(--accent);
+    --state-attention:var(--warn);
+    --state-critical:var(--danger);
+    --state-unknown:var(--dim-deep);
+    --state-offline:var(--dim);
+    --state-selected:var(--accent);
+
+    /* ---- Motion ------------------------------------------------------------
+       Three durations, two curves. `spatial` is slower and more damped: it is
+       for things that move THROUGH the Space -- selecting a room, a presence
+       arriving -- where reading as physical is the point. Everything else uses
+       `out` and gets out of the way. */
+    --dur-1:120ms; --dur-2:220ms; --dur-3:420ms;
+    --ease-out:cubic-bezier(.2,.7,.3,1);
+    --ease-spatial:cubic-bezier(.32,.72,0,1);
   }
   *{box-sizing:border-box;}
   /* JS toggles the `hidden` property/attribute on almost every panel — this must always win. */
@@ -1521,6 +1597,21 @@
   .house-status-line.ok::before{background:var(--accent);}
   .house-status-line.notice{color:var(--warn);}
   .house-status-line.notice::before{background:var(--warn);}
+  /* Noted, and nothing to do about it. `notice` spans the whole ladder below
+     `alert`, so a stack of `info`/`note` observations wore the same amber as a
+     degraded capability, and the paragraph under it had to spend three lines
+     explaining that none of them needed a decision. Amber is the colour that
+     asks for something; spending it on things that ask for nothing is what
+     makes it ignorable the day something does.
+
+     A hollow ring rather than a second grey disc: `unknown` — nothing is being
+     checked — is already the solid dim dot, and "I noticed six things" and "I
+     am not looking" must not arrive as the same picture. Outline reads as
+     logged; filled reads as live. house-status.js adds `.noted` only when every
+     reason ranks at or below `note`; `watch` and up keep their amber. */
+  .house-status-line.notice.noted{color:var(--text);font-weight:600;}
+  .house-status-line.notice.noted::before{background:transparent;
+                                          box-shadow:inset 0 0 0 2px var(--dim);}
   .house-status-line.alert{color:var(--danger);}
   .house-status-line.alert::before{background:var(--danger);}
   .house-status-details{margin-top:8px;}
@@ -1759,10 +1850,399 @@
     #radar,#radar3d{max-height:min(52vh,520px);}
   }
   /* ---------------- PC: rooms rail beside the map ---------------- */
+  /* ==========================================================================
+     THE STAGE — the Space is the page, not a card on it.
+
+     What this replaces: `homeHero` on top, then three administrative tiles
+     (attention, status, sensing level), and only then a grid whose left column
+     was "Who's here" and whose right column held the map. On a laptop window
+     the representation of the household's own home opened below the fold,
+     under sensor configuration. Every concept also arrived in an identical
+     bordered card, so nothing on the screen was more important than anything
+     else -- which is the same as nothing being important.
+
+     The composition now:
+
+        state line          one line, display size, the answer
+        attention           only when something needs a decision
+        ┌─────────────────────────────────┬──────────────────┐
+        │  THE SPACE                      │  who is here     │
+        │  recessed, dominant, above fold │  how sure        │
+        │                                 │  what is sensed  │
+        ├─────────────────────────────────┤                  │
+        │  room strip                     │                  │
+        └─────────────────────────────────┴──────────────────┘
+
+     The Space surface goes DARKER than the page. A panel resting on a
+     background is a card; a darker recess reads as a view through the page,
+     which is what a Space should be.
+     ========================================================================== */
+  .space-stage{
+    display:grid; gap:var(--sp-4);
+    grid-template-columns:minmax(0,1fr);
+    align-items:start;
+  }
+  .space-stage .stage-main{
+    display:grid; gap:var(--sp-3); min-width:0;
+    grid-template-rows:minmax(0,1fr) auto;
+  }
+  .space-stage .stage-main .map-home{order:0;}
+
+  /* The Space itself. `--surface-stage` is the only surface below the page
+     ground; the inset hairline is the window edge, not a card border. */
+  .space-stage .map-home .radar.tile{
+    background:var(--surface-stage);
+    border:1px solid var(--stage-edge);
+    border-radius:var(--radius);
+    padding:var(--sp-3);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  /* Tall enough to be the subject, short enough that the rooms it contains are
+     on the same screen as it. At 46vh the Space pushed the room strip past the
+     fold on a 900px viewport, which recreates the problem this composition
+     exists to fix, one element further down. */
+  .space-stage .map-home .radar.tile .rwrap,
+  .space-stage .map-home #radarCanvas,
+  .space-stage .map-home #house3d{
+    min-height:clamp(280px, 38vh, 460px);
+    max-height:min(52vh, 520px);
+  }
+
+  /* NOTHING EXPLAINS ITSELF INSIDE THE PROTAGONIST. The Space carried a "Map"
+     heading and a sentence teaching the reader to drag to orbit — instructions
+     printed permanently across the thing they instruct. The heading stays for
+     the accessibility tree (the region needs a name); the sentence becomes the
+     region's description, which is where an instruction belongs: read on
+     arrival by anyone who needs it, invisible to everyone who does not. */
+  .space-stage .map-home .radar.tile > .tile-head h2,
+  .space-stage .map-home .radar-sub{
+    position:absolute; width:1px; height:1px; overflow:hidden;
+    clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap;
+  }
+  .space-stage .map-home .radar.tile > .tile-head{
+    margin:0 0 var(--sp-2); min-height:0;
+    justify-content:flex-end;   /* the controls keep their row; the label left it */
+  }
+
+  /* View controls read as part of the Space, not as tooling laid over it. The
+     3D/Floor-plan pair was a filled accent pill — the brightest object on a
+     screen whose subject is the room behind it. Selection is now a lifted
+     surface and a weight change, which is how the rest of this product shows a
+     chosen segment. */
+  .space-stage .map-home .viewToggle{
+    background:var(--surface-inset); border:1px solid var(--line);
+    border-radius:var(--radius-pill); padding:2px; gap:2px; display:inline-flex;
+  }
+  .space-stage .map-home .viewToggle .ctl{
+    background:none; border:0; color:var(--dim);
+    border-radius:var(--radius-pill); padding:var(--sp-1) var(--sp-3);
+    font-size:var(--fs-sm); box-shadow:none;
+    transition:color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+  }
+  .space-stage .map-home .viewToggle .ctl.on{
+    background:var(--elevated-2); color:var(--text);
+    font-weight:var(--fw-semibold); box-shadow:none;
+  }
+  /* The zone editor is an authoring tool, not a way to look at the Space. It
+     keeps its place in the DOM and its full behaviour; it stops being drawn at
+     the same weight as the control that changes what you are looking at. */
+  .space-stage .map-home .zonebar .ctl{
+    background:none; border:1px solid var(--line); color:var(--dim);
+    font-size:var(--fs-sm);
+  }
+
+  /* ---- A Space Wavr cannot see yet ----------------------------------------
+     The honest empty state used to be an all-but-black rectangle with two faint
+     construction lines through it, which reads as a broken canvas rather than
+     as an answer. It is still not allowed to invent a room — so the composition
+     says what it actually knows, centred, with the one action that changes it.
+     Unknown gets a designed frame instead of a blank one. */
+  .space-stage .map-home .radar.tile{position:relative;}
+  .space-stage .map-home .radar.tile::after{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    border-radius:var(--radius);
+    background:radial-gradient(120% 90% at 50% 42%,
+                 rgba(61,181,74,.045) 0%, rgba(61,181,74,0) 58%);
+  }
+
+  .space-empty{
+    position:absolute; inset:0; z-index:2;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:var(--sp-3); padding:var(--sp-6) var(--sp-5); text-align:center;
+    background:var(--surface-stage); border-radius:var(--radius);
+  }
+  /* Three concentric rings, still. This is the product's own idea drawn once
+     and quietly: presence is something sensed at a distance, so the mark for
+     "a Space" is proximity, not a house pictogram. Nothing animates — an
+     ambient loop on a wall panel that never resolves is a pulse, and a pulse
+     that means nothing is worse than no mark at all. */
+  .space-empty-mark{
+    position:relative; width:104px; height:104px; margin-bottom:var(--sp-2);
+    display:grid; place-items:center;
+  }
+  .space-empty-mark i{
+    position:absolute; border-radius:50%; border:1px solid var(--accent);
+  }
+  .space-empty-mark i:nth-child(1){width:26px;  height:26px;  opacity:.5;}
+  .space-empty-mark i:nth-child(2){width:62px;  height:62px;  opacity:.22;}
+  .space-empty-mark i:nth-child(3){width:104px; height:104px; opacity:.1;}
+  .space-empty-title{
+    font-size:var(--fs-2xl); font-weight:var(--fw-semibold); color:var(--text);
+    margin:0; letter-spacing:-.01em;
+  }
+  .space-empty-sub{
+    font-size:var(--fs-base); color:var(--dim); margin:0; max-width:34ch;
+    line-height:1.55;
+  }
+  .space-empty .ctl.primary{margin-top:var(--sp-2);}
+
+  /* The Space says it once, so the header stops saying it too. `#house` renders
+     "Space: someone's in" / "Space: nobody home" -- the same reading the state
+     line gives at display size two rows below, in a green-bordered pill that
+     competed with it for the eye. It stays for every other tab, where the state
+     line is not on screen; on Space it stands down, which is the same rule the
+     Who's-here tile already follows. */
+  body:has(#panel-inicio.tab-panel.active) #house{display:none;}
+
+  /* And the room strip stops repeating the Space. When the stage is showing
+     "No rooms yet", a strip underneath explaining in four lines of prose that
+     no sensor is sending data is the same answer a second time, longer and
+     lower -- worst of all on a phone, where those four lines are most of a
+     screen. The strip returns the instant a room does. */
+  #panel-inicio:has(#spaceEmpty:not([hidden])) .rooms-col{display:none;}
+
+  /* The column that qualifies the Space. ONE surface with hairline divisions,
+     not three cards: "who is here", "how sure is Wavr" and "how much is being
+     sensed" are three readings of one subject, and three borders said they
+     were three subjects. */
+  .space-stage .stage-side{
+    display:flex; flex-direction:column;
+    background:var(--surface-panel);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    overflow:hidden; min-width:0;
+  }
+  .space-stage .stage-side > .tile{
+    background:none; border:0; border-radius:0; box-shadow:none;
+    padding:var(--sp-4);
+    border-bottom:1px solid var(--line);
+  }
+  .space-stage .stage-side > .tile:last-child{border-bottom:0;}
+  .space-stage .stage-side > .tile[hidden]{display:none !important;}
+
+  /* Section labels inside the column: quiet, uppercase, and NOT competing with
+     the state they introduce. */
+  .space-stage .stage-side .tile-head h2{
+    font-size:var(--fs-xs); font-weight:var(--fw-semibold);
+    letter-spacing:.1em; text-transform:uppercase; color:var(--dim);
+  }
+  .space-stage .stage-side .tile-head{margin-bottom:var(--sp-2);}
+
+  /* ---- The state line ------------------------------------------------------
+     Was: a heading, a badge and a sub-line stacked in their own section. Now
+     one baseline: the answer at display size, everything that qualifies it
+     trailing it at body size. A person reads left to right and stops when they
+     have what they came for. */
+  #homeHero{
+    display:flex; flex-wrap:wrap; align-items:baseline;
+    gap:var(--sp-2) var(--sp-4);
+    margin-bottom:var(--sp-5);
+  }
+  #homeHero .hero-row{display:flex; align-items:baseline; gap:var(--sp-3); min-width:0;}
+  #homeHero .hero-line1{
+    font-size:var(--fs-display); font-weight:var(--fw-semibold);
+    letter-spacing:-.022em; line-height:1.05; margin:0;
+    display:flex; align-items:baseline; gap:var(--sp-3);
+  }
+  /* THE STATE IS NOT THE SIGNAL. At display size, `.home`'s accent green turned
+     the answer into a shout — and green is this product's scarcest colour, the
+     one reserved for "healthy, confirmed, live". Spending it on 2.5rem of text
+     leaves nothing to say that with. The words go back to --text and the accent
+     survives as a dot: the same information, one twentieth of the area. */
+  #homeHero .hero-line1.home,
+  #homeHero .hero-line1.away{color:var(--text);}
+  #homeHero .hero-line1::before{
+    content:""; flex:none; width:.42em; height:.42em; border-radius:50%;
+    background:var(--state-unknown);
+    transform:translateY(-.12em);
+    transition:background var(--dur-2) var(--ease-out);
+  }
+  #homeHero .hero-line1.home::before{
+    background:var(--state-healthy);
+    /* The one identity gesture on this line: a presence reading is a thing
+       detected at a distance, so it arrives with a proximity halo rather than a
+       flat dot. Static -- a pulse here would be a heartbeat animation running
+       forever on a wall panel. */
+    box-shadow:0 0 0 3px var(--accent-soft), 0 0 0 7px rgba(61,181,74,.07);
+  }
+  #homeHero .hero-line1.away::before{background:var(--state-offline);}
+  #homeHero .hero-line1.stale::before{background:var(--state-unknown); box-shadow:none;}
+  #homeHero .hero-line2{
+    font-size:var(--fs-base); color:var(--dim); margin:0;
+    max-width:52ch;
+  }
+
+  /* ---- Sensing level, compact ----------------------------------------------
+     Was the largest block on the page: a heading, three full-width option
+     cards, a paragraph re-explaining the selected one, an action and a toggle
+     with its own note -- a configuration panel in the product's prime space.
+     What a person needs here is which level is ON. The three-way control stays
+     (it is one row now), and the prose moves behind the detail disclosure that
+     already exists for it. */
+  .space-stage #sensingLevelTile .sensing-level-seg{
+    display:grid; grid-auto-flow:column; grid-auto-columns:1fr;
+    gap:2px; padding:2px;
+    background:var(--surface-inset); border-radius:var(--radius-sm);
+  }
+  .space-stage #sensingLevelTile .sensing-level-seg .seg-btn{
+    padding:var(--sp-2) var(--sp-1); border:0; border-radius:6px;
+    font-size:var(--fs-md); background:none;
+  }
+  .space-stage #sensingLevelTile .seg-sub{display:none;}
+  .space-stage #sensingLevelTile .sensing-level-posture{
+    font-size:var(--fs-sm); margin-top:var(--sp-3); max-width:none;
+  }
+  .space-stage #sensingLevelTile .watch-note,
+  .space-stage #sensingLevelTile .sensing-level-actions .hint{
+    font-size:var(--fs-xs);
+  }
+  /* The section's own subtitle said "how much of your Space Wavr senses right
+     now" directly above a control labelled Off / Presence / Precise. The
+     control already says that. */
+  .space-stage #sensingLevelTile .tile-head .hint{display:none;}
+
+  /* Privacy pause and Watch are two real controls that arrived with a sentence
+     each explaining what they do -- permanently, on the product's first screen,
+     next to a control that is already labelled. A button that says "Privacy
+     pause" beside a line that says "Privacy pause drops one level instantly" is
+     one idea printed twice, and the second printing is the one that makes the
+     column tall. The sentences survive as the controls' own tooltips, which is
+     where an explanation belongs: available on the control, not stacked under
+     it. */
+  .space-stage #sensingLevelTile .sensing-level-actions,
+  .space-stage #sensingLevelTile .watch-row .watch-head{
+    display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap;
+  }
+  .space-stage #sensingLevelTile .sensing-level-actions .hint,
+  .space-stage #sensingLevelTile .watch-note{display:none;}
+  .space-stage #sensingLevelTile .watch-row{
+    margin-top:var(--sp-3); padding-top:var(--sp-3);
+    border-top:1px solid var(--line);
+  }
+
+  /* ---- The inspector's own hierarchy --------------------------------------
+     "Who is here" was the loudest thing on the page after the state line: the
+     same answer the hero had just given, set larger than the section it lives
+     in and coloured with the accent. Inside a column that qualifies the Space,
+     nothing outranks the Space. The answer keeps its emphasis relative to its
+     neighbours and loses it relative to the screen. */
+  .space-stage .stage-side .qc-headline{
+    font-size:var(--fs-2xl); font-weight:var(--fw-semibold);
+    letter-spacing:-.012em; color:var(--text); margin:0 0 var(--sp-1);
+  }
+  .space-stage .stage-side .qc-sub{font-size:var(--fs-base); color:var(--dim);}
+  .space-stage .stage-side .panel-note{font-size:var(--fs-sm); color:var(--dim-deep);}
+  /* One "right now" per screen. The tile's head carried "a calm glance, right
+     now" beside a state that is already live and already says so. */
+  .space-stage .stage-side .qc-tile .tile-head .hint{display:none;}
+
+  /* ---- Space status, sized to its consequence -----------------------------
+     WEIGHT IN PROPORTION TO WHAT IT ASKS OF YOU. This block spent a heading,
+     a bold line and four lines of prose explaining that none of the things it
+     listed needed a decision. Everything about its size said "attend to me"
+     and every word inside said "you do not have to" — so a reader either
+     stopped and read it (wrongly) or learned to skip the region where a real
+     problem would one day appear.
+     `.noted` is the class house-status.js adds when every reason ranks at or
+     below `note`. In that state the section collapses to a single line and the
+     paragraph explaining itself goes away entirely: the count is still there,
+     the detail is still one disclosure away, and the screen stays calm. When
+     something ranks higher, none of this applies and the block keeps its full
+     voice. */
+  .space-stage #houseStatusTile:has(.house-status-line.noted){
+    padding-top:var(--sp-3); padding-bottom:var(--sp-3);
+  }
+  .space-stage #houseStatusTile:has(.house-status-line.noted) > .tile-head{
+    display:none;
+  }
+  /* The note STAYS, and hiding it here was a real regression that a browser
+     test caught within the hour. It exists because Space can say "6 things"
+     while Manage → Needs attention says "nothing needs you" — both true, and
+     answering different questions — so without it a reader reasonably takes the
+     two counts as disagreeing. Deleting the one sentence that reconciles two
+     honest numbers is not a simplification.
+     The complaint was its weight, not its existence. So the weight is what
+     changes: one quiet line under the state, instead of a paragraph competing
+     with the Space. */
+  .space-stage #houseStatusTile #houseStatusInfoNote{
+    font-size:var(--fs-sm); line-height:1.45; color:var(--dim-deep);
+    margin:var(--sp-2) 0 0; max-width:46ch;
+  }
+  .space-stage #houseStatusTile .house-status-line{
+    font-size:var(--fs-base); font-weight:var(--fw-medium);
+  }
+  .space-stage #houseStatusTile .house-status-line.noted{
+    color:var(--dim); font-weight:var(--fw-normal);
+  }
+  .space-stage #houseStatusTile .house-status-details > summary{
+    font-size:var(--fs-sm); color:var(--dim);
+  }
+  /* An `ok` Space says so once, quietly, and takes one line doing it. */
+  .space-stage #houseStatusTile:has(.house-status-line.ok) > .tile-head{display:none;}
+  .space-stage #houseStatusTile .house-status-line.ok{color:var(--state-healthy);}
+
+  /* ---- Room strip ----------------------------------------------------------
+     The room column became a strip under the Space, because rooms belong to
+     the map: they are the same objects seen twice, and putting them side by
+     side made the map compete with a list of its own contents. */
+  .space-stage .rooms-col{
+    background:none; border:0; padding:0; box-shadow:none;
+  }
+  .space-stage .rooms-col > .tile-head{
+    margin:0 0 var(--sp-2);
+  }
+  .space-stage .rooms-col > .tile-head h2{
+    font-size:var(--fs-xs); font-weight:var(--fw-semibold);
+    letter-spacing:.1em; text-transform:uppercase; color:var(--dim);
+  }
+  /* 160px let four cards fit and broke every one of their names: "backyard"
+     came out "back / yard", "bedroom" as "bedr / oom". A room card carries a
+     confidence ring beside a name, so the track has to hold both — and a room
+     name is the household's own word, which is exactly the text that must never
+     be hyphenated by a grid. */
+  .space-stage .rooms{
+    display:grid; gap:var(--sp-2);
+    grid-template-columns:repeat(auto-fill, minmax(215px, 1fr));
+  }
+  .space-stage .rooms .card h2{overflow-wrap:normal; word-break:normal;}
+
+  /* The selected room, docked beside the Space instead of below it. It is the
+     same card element moved by render.js, so it keeps every behaviour it has in
+     the strip — the evidence rows, the "Why?" drill, live updates — and simply
+     sits where a person can read it without the map leaving the screen. The
+     accent edge is the one place selection is spent: it is the only card on the
+     page at that moment, so it does not need to shout to be found. */
+  .space-stage .stage-side > .card.room-docked{
+    background:var(--surface-inset); border:0;
+    border-bottom:1px solid var(--line); border-radius:0;
+    padding:var(--sp-4); box-shadow:inset 3px 0 0 var(--state-selected);
+    animation:roomDock var(--dur-3) var(--ease-spatial);
+  }
+  @keyframes roomDock{
+    from{opacity:0; transform:translateY(-6px);}
+    to{opacity:1; transform:none;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .space-stage .stage-side > .card.room-docked{animation:none;}
+  }
+
+  @media (min-width:1100px){
+    .space-stage{grid-template-columns:minmax(0,1fr) 340px; gap:var(--sp-5);}
+    /* The column tracks the Space rather than scrolling away from it. */
+    .space-stage .stage-side{position:sticky; top:var(--sp-4);}
+  }
   @media (min-width:1200px){
-    .inicio-grid{grid-template-columns:300px minmax(0,1fr);}
-    .map-home{order:0;}
-    .tab-panel.active{padding:20px 24px;}
+    .tab-panel.active{padding:var(--sp-5) var(--sp-6);}
     .ring{width:104px;height:104px;}   /* §6: ~88px on phone, larger on desktop */
   }
   /* ---------------- Phone: bottom tab-bar; gear relocates to the topbar ---------------- */
@@ -1950,210 +2430,246 @@
 
   /* ============================================================================
      Core panel form factor: landscape phone kiosk (~1640x720, glance display).
-     Gated purely by form factor — wide + short + landscape. min-aspect-ratio:2/1
-     excludes every common laptop (16:9 = 1.78, 16:10 = 1.60) and max-height:820
-     excludes tall ?core monitors, so the desktop layout is untouched. The real Wavr
-     Core (loopback dashboard opened with ?core at 1640x720) satisfies this. Goal:
-     the per-room live measurement is the glanceable hero above the fold; the touch-
-     heavy map is collapsed by default (tap to view; editing stays a separate explicit
-     mode); the sensing tile is demoted, not removed (privacy stays on screen). Reuses
-     the existing tokens + the live .card render path — no forked data, no new palette.
+     Goal: the per-room live measurement is the glanceable hero above the fold; the
+     touch-heavy map is collapsed by default (tap to view; editing stays a separate
+     explicit mode); the sensing tile is demoted, not removed (privacy stays on
+     screen). Reuses the existing tokens + the live .card render path — no forked
+     data, no new palette.
+
+     WHO GETS THIS LAYOUT — every rule below is under `html[data-core]`, set in the
+     head from `?core` / `window.WAVR_CORE`, which is what the Core launcher sends
+     on every load (`CORE_PATH = "/?core"`). The form-factor query stays as a
+     second condition, because a panel that is somehow tall should not get a
+     composition designed for a short one.
+
+     It used to be the ONLY condition, and this comment used to justify that with
+     "min-aspect-ratio:2/1 excludes every common laptop (16:9 = 1.78, 16:10 =
+     1.60)". Screens are 16:9; viewports are not. Subtract the browser chrome and
+     the taskbar from a maximised 1366x768 laptop and the viewport is about
+     1366x628 = 2.18 — past the line drawn to keep it out — and a phone turned
+     sideways is 2.16. So a common laptop window and a rotated phone both got the
+     wall-panel navigation, losing the sidebar and the tab bar respectively, and
+     the sub-lines under Off/Presence/Precise appeared on desktops and stayed
+     hidden on the phones this file already knew could not hover for them.
+     Measured before the change: a 1740x794 browser window matched at 2.19.
+
+     The real panel is 2.28. Shape cannot separate 2.28 from 2.18, so shape is no
+     longer asked to. Note the ambient face two blocks down was always gated the
+     explicit way, on `#corePanel` being un-hidden — this block is now consistent
+     with the one it exists to serve.
      ============================================================================ */
   @media (orientation:landscape) and (max-height:820px) and (min-aspect-ratio:2/1){
 
     /* -------- NAV: compact labeled rail (~84px), deterministic at the panel form factor
-       regardless of the width band (the 232px ≥1200 sidebar is too wide for a glance panel;
-       the 760–1199 rail drops labels — "the 4th icon" problem). Icon-over-label stack, calm
        instrument tone; the "Command Center" sub-brand is dropped ON THE RAIL only. -------- */
-    .sidenav{width:84px;}
-    .nav-brand{flex-direction:column;justify-content:center;gap:5px;padding:12px 4px;text-align:center;}
-    .nav-brand .brand-name{font-size:.72rem;letter-spacing:.4px;}
-    .nav-brand .brand-name small{display:none;}
+       html[data-core] regardless of the width band (the 232px ≥1200 sidebar is too wide for a glance panel;
+       the 760–1199 rail drops labels — "the 4th icon" problem). Icon-over-label stack,
+       html[data-core] calm
+    .sidenav {width:84px;}
+    html[data-core] .nav-brand {flex-direction:column;justify-content:center;gap:5px;padding:12px 4px;text-align:center;}
+    html[data-core] .nav-brand .brand-name {font-size:.72rem;letter-spacing:.4px;}
+    html[data-core] .nav-brand .brand-name small {display:none;}
     /* Overflow fix: the rail grew from 5 to 9 tabs (+Routines/Who's-home/New-devices/
-       What-Wavr-knows) this session and no longer fits 720px of kiosk height even after
-       tightening spacing below — Settings (.nav-foot, a sibling BELOW .nav-tabs) would get
+       html[data-core] What-Wavr-knows) this session and no longer fits 720px of kiosk height even after
+       tightening spacing below — Settings (.nav-foot,
+       html[data-core] a sibling BELOW .nav-tabs) would get
        squeezed against the last item or clipped off-screen with no way to reach the tabs
        past it. .nav-tabs keeps its base flex:1;min-height:0 (line ~77) so it's a bounded
-       flex item, not one that grows to fit content; overflow-y:auto here makes IT (not the
-       whole .sidenav) the scroll container, so .nav-brand/.nav-foot stay pinned top/bottom
+       flex item,
+       html[data-core] not one that grows to fit content; overflow-y:auto here makes IT (not the
+       whole .sidenav) the scroll container,
+       html[data-core] so .nav-brand/.nav-foot stay pinned top/bottom
        and every tab stays reachable regardless of how many more get added. Scrollbar hidden
        to match the phone bottom-bar's own hidden-scrollbar idiom (:1455) — switchTab()'s
-       existing btn.scrollIntoView({block:"nearest"}) (already unconditional, not phone-gated)
+       existing btn.scrollIntoView( {block:"nearest"}) (already unconditional, not phone-gated)
        brings the active tab into view on this axis too, no JS change needed. */
-    .nav-tabs{padding:6px 5px;gap:3px;overflow-y:auto;-ms-overflow-style:none;scrollbar-width:none;}
-    .nav-tabs::-webkit-scrollbar{display:none;}
-    .nav-item{flex:0 0 auto;flex-direction:column;gap:3px;justify-content:center;padding:6px 2px;min-height:46px;
+    html[data-core] .nav-tabs {padding:6px 5px;gap:3px;overflow-y:auto;-ms-overflow-style:none;scrollbar-width:none;}
+    html[data-core] .nav-tabs::-webkit-scrollbar {display:none;}
+    html[data-core] .nav-item {flex:0 0 auto;flex-direction:column;gap:3px;justify-content:center;padding:6px 2px;min-height:46px;
               text-align:center;border-radius:9px;touch-action:manipulation;}
-    .nav-item svg{width:20px;height:20px;}
-    .nav-label{display:block;font-size:.6rem;letter-spacing:.02em;line-height:1.1;}
-    .nav-item.active::before{left:12px;right:12px;top:0;bottom:auto;width:auto;height:2px;}
-    .nav-foot{padding:6px 5px;flex:none;}
+    html[data-core] .nav-item svg {width:20px;height:20px;}
+    html[data-core] .nav-label {display:block;font-size:.6rem;letter-spacing:.02em;line-height:1.1;}
+    html[data-core] .nav-item.active::before {left:12px;right:12px;top:0;bottom:auto;width:auto;height:2px;}
+    html[data-core] .nav-foot {padding:6px 5px;flex:none;}
 
     /* -------- HOME GRID: deterministic two-column instrument that fills the content height
-       with NO page scroll. .inicio-grid becomes display:contents so its rooms-col + mapHome
-       children join THIS grid directly (no DOM move → the desktop layout is untouched).
        Rows: hero strip / (sensing-level LEFT + rooms RIGHT) / map (full width, collapsed). -------- */
-    #panel-inicio.tab-panel.active{max-width:none;height:100%;min-height:0;padding:8px 16px 12px;
+       html[data-core] with NO page scroll. .inicio-grid becomes display:contents so its rooms-col + mapHome
+       children join THIS grid directly (no DOM move → the desktop layout is untouched).
+    #panel-inicio.tab-panel.active {max-width:none;height:100%;min-height:0;padding:8px 16px 12px;
         gap:10px 16px;display:grid;grid-template-columns:380px minmax(0,1fr);
         grid-template-rows:auto minmax(0,1fr) auto;
         grid-template-areas:"hero hero" "sense rooms" "map map";align-items:stretch;}
-    #panel-inicio > #homeHero{grid-area:hero;}
-    #panel-inicio > #sensingLevelTile{grid-area:sense;}
-    #panel-inicio > .inicio-grid{display:contents;}
-    #panel-inicio .rooms-col{grid-area:rooms;}
-    #panel-inicio .map-home{grid-area:map;min-height:0;}
+    html[data-core] #panel-inicio > #homeHero {grid-area:hero;}
+    html[data-core] #panel-inicio > #sensingLevelTile {grid-area:sense;}
+    html[data-core] #panel-inicio > .inicio-grid {display:contents;}
+    html[data-core] #panel-inicio .rooms-col {grid-area:rooms;}
+    html[data-core] #panel-inicio .map-home {grid-area:map;min-height:0;}
 
     /* HERO: one tight inline strip (~44px), not a big headline */
-    #homeHero{padding:0;display:flex;align-items:baseline;gap:12px;flex-wrap:nowrap;overflow:hidden;min-height:0;}
-    #panel-inicio .hero-row{flex:none;gap:8px;flex-wrap:nowrap;}
-    #panel-inicio .hero-line1{font-size:1.2rem;}
-    #panel-inicio .hero-line2{font-size:.9rem;margin:0;min-width:0;flex:1 1 auto;
+    html[data-core] #homeHero {padding:0;display:flex;align-items:baseline;gap:12px;flex-wrap:nowrap;overflow:hidden;min-height:0;}
+    html[data-core] #panel-inicio .hero-row {flex:none;gap:8px;flex-wrap:nowrap;}
+    html[data-core] #panel-inicio .hero-line1 {font-size:1.2rem;}
+    html[data-core] #panel-inicio .hero-line2 {font-size:.9rem;margin:0;min-width:0;flex:1 1 auto;
         white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-    #panel-inicio .hero-who{margin:0;}
+    html[data-core] #panel-inicio .hero-who {margin:0;}
 
     /* LEFT COLUMN — SENSING LEVEL: stacked full-width segments, each with an always-visible
-       plain sub-line stating the camera on/off meaning (tooltips never fire on a touch kiosk).
+       page, and never over the map canvas. */
+       html[data-core] plain sub-line stating the camera on/off meaning (tooltips never fire on a touch kiosk).
        Active segment = strong fill + weight bump + a 3px accent selection bar (not a faint
        background delta). Left column may scroll internally if the map is expanded — never the
-       page, and never over the map canvas. */
-    #sensingLevelTile.sensing-level-tile{padding:12px 14px;display:flex;flex-direction:column;
+    #sensingLevelTile.sensing-level-tile {padding:12px 14px;display:flex;flex-direction:column;
         min-height:0;overflow-y:auto;}
-    #panel-inicio .sensing-level-tile .tile-head{margin-bottom:8px;}
-    #panel-inicio .sensing-level-tile .tile-head h2{font-size:1rem;}
-    #panel-inicio .sensing-level-seg{flex-direction:column;max-width:none;gap:6px;background:transparent;
+    html[data-core] #panel-inicio .sensing-level-tile .tile-head {margin-bottom:8px;}
+    html[data-core] #panel-inicio .sensing-level-tile .tile-head h2 {font-size:1rem;}
+    html[data-core] #panel-inicio .sensing-level-seg {flex-direction:column;max-width:none;gap:6px;background:transparent;
         border:none;padding:0;}
-    #panel-inicio .sensing-level-seg .seg-btn{display:flex;flex-direction:column;align-items:flex-start;
+    html[data-core] #panel-inicio .sensing-level-seg .seg-btn {display:flex;flex-direction:column;align-items:flex-start;
         gap:1px;position:relative;text-align:left;padding:7px 12px 7px 15px;min-height:46px;border-radius:10px;
         background:var(--elevated);border:1px solid var(--line);color:var(--dim);}
-    #panel-inicio .sensing-level-seg .seg-title{font-size:1rem;font-weight:600;}
-    #panel-inicio .sensing-level-seg .seg-sub{display:block;font-size:.75rem;font-weight:400;
+    html[data-core] #panel-inicio .sensing-level-seg .seg-title {font-size:1rem;font-weight:600;}
+    html[data-core] #panel-inicio .sensing-level-seg .seg-sub {display:block;font-size:.75rem;font-weight:400;
         color:var(--dim);line-height:1.25;}
-    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"]{background:var(--elevated-2);
+    html[data-core] #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"] {background:var(--elevated-2);
         color:var(--text);border-color:var(--line-strong);box-shadow:none;}
-    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"] .seg-title{font-weight:700;}
-    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"] .seg-sub{color:var(--text);}
-    #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"]::before{content:"";position:absolute;
+    html[data-core] #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"] .seg-title {font-weight:700;}
+    html[data-core] #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"] .seg-sub {color:var(--text);}
+    html[data-core] #panel-inicio .sensing-level-seg .seg-btn[aria-pressed="true"]::before {content:"";position:absolute;
         left:0;top:8px;bottom:8px;width:3px;border-radius:0 3px 3px 0;background:var(--accent);}
-    #panel-inicio .sensing-level-posture{margin-top:9px;font-size:.9rem;line-height:1.35;}
-    #panel-inicio .sensing-level-actions{margin-top:auto;padding-top:9px;}
+    html[data-core] #panel-inicio .sensing-level-posture {margin-top:9px;font-size:.9rem;line-height:1.35;}
+    html[data-core] #panel-inicio .sensing-level-actions {margin-top:auto;padding-top:9px;}
 
     /* RIGHT COLUMN — ROOMS: a single-column vertical list of slim rows that scrolls WITHIN its
        own column (10+ rooms never push the sensing tile off-screen). Replaces the auto-fit grid. */
-    #panel-inicio .rooms-col.tile{padding:10px 12px;display:flex;flex-direction:column;
+    html[data-core] #panel-inicio .rooms-col.tile {padding:10px 12px;display:flex;flex-direction:column;
         min-height:0;overflow:hidden;}
-    #panel-inicio .rooms-col .tile-head{margin-bottom:6px;}
-    #panel-inicio .rooms{display:flex;flex-direction:column;gap:6px;overflow-y:auto;min-height:0;flex:1;
+    html[data-core] #panel-inicio .rooms-col .tile-head {margin-bottom:6px;}
+    html[data-core] #panel-inicio .rooms {display:flex;flex-direction:column;gap:6px;overflow-y:auto;min-height:0;flex:1;
         grid-template-columns:none;}
 
     /* ROOM ROW: one compact line — room NAME (left) · big OCCUPIED/EMPTY state (the primary
-       glance signal) · a small %+precision chip (secondary "how sure"). The card is flattened via
-       display:contents so name, state pill and chip are direct flex children; the ring circle, the
-       per-sensor rows, the "Why?" details and the mini bar are hidden (they belong to the tap→map
        detail view). The live upsert() write path is untouched — presentation only. */
-    #panel-inicio .rooms .card{padding:9px 12px;display:flex;align-items:center;gap:12px;min-height:52px;}
-    #panel-inicio .rooms .card-top{display:contents;}
-    #panel-inicio .rooms .card-info{display:contents;}
-    #panel-inicio .rooms .card h2{order:1;flex:1 1 auto;min-width:0;font-size:1.1rem;margin:0;
+       html[data-core] glance signal) · a small %+precision chip (secondary "how sure"). The card is flattened via
+       display:contents so name,
+       html[data-core] state pill and chip are direct flex children; the ring circle,
+       html[data-core] the
+       per-sensor rows,
+       html[data-core] the "Why?" details and the mini bar are hidden (they belong to the tap→map
+    #panel-inicio .rooms .card {padding:9px 12px;display:flex;align-items:center;gap:12px;min-height:52px;}
+    html[data-core] #panel-inicio .rooms .card-top {display:contents;}
+    html[data-core] #panel-inicio .rooms .card-info {display:contents;}
+    html[data-core] #panel-inicio .rooms .card h2 {order:1;flex:1 1 auto;min-width:0;font-size:1.1rem;margin:0;
         white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-    #panel-inicio .rooms .pill{order:2;margin:0;font-size:1.02rem;font-weight:700;padding:5px 13px;
+    html[data-core] #panel-inicio .rooms .pill {order:2;margin:0;font-size:1.02rem;font-weight:700;padding:5px 13px;
         text-transform:capitalize;letter-spacing:.01em;flex:none;}
-    #panel-inicio .rooms .ring{order:3;width:auto;height:auto;flex:none;}
-    #panel-inicio .rooms .ring svg{display:none;}
-    #panel-inicio .rooms .card.quiet .ring{opacity:1;}
-    #panel-inicio .rooms .ring-pct{position:static;flex-direction:row;align-items:center;gap:7px;
+    html[data-core] #panel-inicio .rooms .ring {order:3;width:auto;height:auto;flex:none;}
+    html[data-core] #panel-inicio .rooms .ring svg {display:none;}
+    html[data-core] #panel-inicio .rooms .card.quiet .ring {opacity:1;}
+    html[data-core] #panel-inicio .rooms .ring-pct {position:static;flex-direction:row;align-items:center;gap:7px;
         padding:3px 10px;border-radius:999px;background:var(--elevated);border:1px solid var(--line);}
-    #panel-inicio .rooms .ring-pct b{font-size:.95rem;font-weight:650;color:var(--text);}
-    #panel-inicio .rooms .ring-pct small{font-size:.8rem;color:var(--dim);position:relative;padding-left:16px;
+    html[data-core] #panel-inicio .rooms .ring-pct b {font-size:.95rem;font-weight:650;color:var(--text);}
+    html[data-core] #panel-inicio .rooms .ring-pct small {font-size:.8rem;color:var(--dim);position:relative;padding-left:16px;
         letter-spacing:0;}
     /* precision indicator = word + a shape dot (filled/half/hollow), legible without relying on
        color. data-conf mirrors confWord(): Confident / Likely / Uncertain (+ "empty" unoccupied). */
-    #panel-inicio .rooms .ring-pct small::before{content:"";position:absolute;left:0;top:50%;
+    html[data-core] #panel-inicio .rooms .ring-pct small::before {content:"";position:absolute;left:0;top:50%;
         transform:translateY(-50%);width:10px;height:10px;border-radius:50%;box-sizing:border-box;
         border:1.5px solid var(--dim);background:transparent;}
-    #panel-inicio .rooms .ring-pct small[data-conf="Confident"]::before{background:var(--text);border-color:var(--text);}
-    #panel-inicio .rooms .ring-pct small[data-conf="Likely"]::before{background:linear-gradient(90deg,var(--text) 0 50%,transparent 50% 100%);border-color:var(--text);}
-    #panel-inicio .rooms .ring-pct small[data-conf="Uncertain"]::before{background:transparent;border-color:var(--dim);}
-    #panel-inicio .rooms .ring-pct small[data-conf="empty"]::before{background:transparent;border-color:var(--line-strong);}
-    #panel-inicio .rooms .card .bar,
-    #panel-inicio .rooms .card .precision,
-    #panel-inicio .rooms .card .srcs,
-    #panel-inicio .rooms .card .why{display:none;}
+    html[data-core] #panel-inicio .rooms .ring-pct small[data-conf="Confident"]::before {background:var(--text);border-color:var(--text);}
+    html[data-core] #panel-inicio .rooms .ring-pct small[data-conf="Likely"]::before {background:linear-gradient(90deg,var(--text) 0 50%,transparent 50% 100%);border-color:var(--text);}
+    html[data-core] #panel-inicio .rooms .ring-pct small[data-conf="Uncertain"]::before {background:transparent;border-color:var(--dim);}
+    html[data-core] #panel-inicio .rooms .ring-pct small[data-conf="empty"]::before {background:transparent;border-color:var(--line-strong);}
+    html[data-core] #panel-inicio .rooms .card .bar,
+    html[data-core] #panel-inicio .rooms .card .precision,
+    html[data-core] #panel-inicio .rooms .card .srcs,
+    html[data-core] #panel-inicio .rooms .card .why {display:none;}
     /* Panel: a room card is tappable to reveal its detection-methods breakdown inline (which
-       sensors see it), via selectRoomFromRail's srcs-open toggle. A chevron marks it, the map
        is no longer opened by a room tap. */
-    #panel-inicio .rooms .card{cursor:pointer;position:relative;}
-    #panel-inicio .rooms .card::after{content:"\203A";position:absolute;top:10px;right:14px;
+       html[data-core] sensors see it),
+       html[data-core] via selectRoomFromRail's srcs-open toggle. A chevron marks it,
+       html[data-core] the map
+    #panel-inicio .rooms .card {cursor:pointer;position:relative;}
+    html[data-core] #panel-inicio .rooms .card::after {content:"\203A";position:absolute;top:10px;right:14px;
       color:var(--dim);font-size:1.3em;line-height:1;transition:transform .18s ease;}
-    #panel-inicio .rooms .card.srcs-open::after{transform:rotate(90deg);color:var(--accent);}
-    #panel-inicio .rooms .card.srcs-open .srcs{display:block;}
+    html[data-core] #panel-inicio .rooms .card.srcs-open::after {transform:rotate(90deg);color:var(--accent);}
+    html[data-core] #panel-inicio .rooms .card.srcs-open .srcs {display:block;}
 
     /* MAP: full-width region beneath the columns. Collapsed by default = only the "View house map"
-       bar (radar hidden, so the OrbitControls canvas never sits in a scroll path). Tapping the bar
-       OR a room row expands it, capped so the columns + map coexist within 720 (no page scroll);
        the always-visible "Hide house map" bar is the escape. */
-    .map-panel-toggle{display:flex;}
-    #panel-inicio .map-panel-toggle .mpt-open-label,
-    #panel-inicio .map-panel-toggle .mpt-close-label{color:var(--text);font-weight:600;font-size:.95rem;}
-    #mapHome:not(.map-open) #radarWrap{display:none;}
-    #mapHome.map-open .mpt-open-label{display:none;}
-    #mapHome.map-open .mpt-close-label{display:block;}
-    #mapHome.map-open .mpt-chevron{transform:rotate(90deg);}
-    #panel-inicio #radarWrap{margin-top:8px;}
-    #panel-inicio #radar,#panel-inicio #radar3d{max-height:30vh;}
+       html[data-core] bar (radar hidden,
+       html[data-core] so the OrbitControls canvas never sits in a scroll path). Tapping the bar
+       OR a room row expands it,
+       html[data-core] capped so the columns + map coexist within 720 (no page scroll);
+    .map-panel-toggle {display:flex;}
+    html[data-core] #panel-inicio .map-panel-toggle .mpt-open-label,
+    html[data-core] #panel-inicio .map-panel-toggle .mpt-close-label {color:var(--text);font-weight:600;font-size:.95rem;}
+    html[data-core] #mapHome:not(.map-open) #radarWrap {display:none;}
+    html[data-core] #mapHome.map-open .mpt-open-label {display:none;}
+    html[data-core] #mapHome.map-open .mpt-close-label {display:block;}
+    html[data-core] #mapHome.map-open .mpt-chevron {transform:rotate(90deg);}
+    html[data-core] #panel-inicio #radarWrap {margin-top:8px;}
+    html[data-core] #panel-inicio #radar,
+    html[data-core] #panel-inicio #radar3d {max-height:30vh;}
 
     /* -------- SYSTEM: two labeled instrument cards (380px + 1fr), no page scroll —
-       each column scrolls internally. #sysColLeft/#sysColRight are display:contents
-       by default (see the base .sys-col rule); this MQ gives them real box + scroll
        behavior only at the panel form factor. -------- */
-    #panel-sistema.tab-panel.active{max-width:none;height:100%;min-height:0;
+       html[data-core] each column scrolls internally. #sysColLeft/#sysColRight are display:contents
+       by default (see the base .sys-col rule); this MQ gives them real box + scroll
+    #panel-sistema.tab-panel.active {max-width:none;height:100%;min-height:0;
         padding:8px 16px 12px;gap:10px 16px;display:grid;
         grid-template-columns:380px minmax(0,1fr);grid-template-rows:minmax(0,1fr);
         align-items:stretch;}
-    #panel-sistema .sys-col{display:flex;flex-direction:column;gap:10px;
+    html[data-core] #panel-sistema .sys-col {display:flex;flex-direction:column;gap:10px;
         min-height:0;overflow-y:auto;}
-    #panel-sistema #sysColLeft{grid-column:1;}
-    #panel-sistema #sysColRight{grid-column:2;}
-    #panel-sistema .sys-col .tile{flex:none;}
-    #panel-sistema #sisNote{grid-column:1/-1;}
+    html[data-core] #panel-sistema #sysColLeft {grid-column:1;}
+    html[data-core] #panel-sistema #sysColRight {grid-column:2;}
+    html[data-core] #panel-sistema .sys-col .tile {flex:none;}
+    html[data-core] #panel-sistema #sisNote {grid-column:1/-1;}
 
     /* -------- CONNECTORS: card grid instead of a capped single column; the group
        headers renderConnectors() inserts (.conn-group-h) span the full grid width. -------- */
-    #connList{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;}
-    #connList .conn-group-h{grid-column:1/-1;}
-    .conn-card{max-width:none;}
-    .conn-desc,.conn-scope,.conn-state{font-size:.9rem;}
-    .conn-group-h{font-size:1rem;}
+    html[data-core] #connList {display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;}
+    html[data-core] #connList .conn-group-h {grid-column:1/-1;}
+    html[data-core] .conn-card {max-width:none;}
+    html[data-core] .conn-desc,
+    html[data-core] .conn-scope,
+    html[data-core] .conn-state {font-size:.9rem;}
+    html[data-core] .conn-group-h {font-size:1rem;}
 
     /* -------- SETTINGS: two-pane instrument (200px rail + 1fr), single-section visibility —
-       no marathon scroll, no eager floor-plan mount (findings #6/#7/#8). Scoped to
-       #gearOverlay only so the Add-device overlay's #setupContent (also .overlay-content)
        keeps its centered column, untouched. -------- */
-    #gearOverlay .overlay-content{max-width:none;height:100%;min-height:0;padding:0;
+       html[data-core] no marathon scroll,
+       html[data-core] no eager floor-plan mount (findings #6/#7/#8). Scoped to
+       #gearOverlay only so the Add-device overlay's #setupContent (also .overlay-content)
+    #gearOverlay .overlay-content {max-width:none;height:100%;min-height:0;padding:0;
         display:grid;grid-template-columns:200px minmax(0,1fr);}
-    .gear-rail{display:flex;flex-direction:column;gap:2px;padding:12px 8px;min-height:0;
+    html[data-core] .gear-rail {display:flex;flex-direction:column;gap:2px;padding:12px 8px;min-height:0;
         overflow-y:auto;border-right:1px solid var(--line);background:var(--surface);}
-    .gear-rail-item{position:relative;display:flex;align-items:center;min-height:44px;
+    html[data-core] .gear-rail-item {position:relative;display:flex;align-items:center;min-height:44px;
         padding:0 14px;border-radius:8px;border:none;background:transparent;color:var(--dim);
         font-size:.9rem;font-weight:560;text-align:left;cursor:pointer;}
-    .gear-rail-item:hover{background:var(--elevated);color:var(--text);}
-    .gear-rail-item.active{background:var(--elevated);color:var(--text);}
-    .gear-rail-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;
+    html[data-core] .gear-rail-item:hover {background:var(--elevated);color:var(--text);}
+    html[data-core] .gear-rail-item.active {background:var(--elevated);color:var(--text);}
+    html[data-core] .gear-rail-item.active::before {content:"";position:absolute;left:0;top:8px;bottom:8px;
         width:2px;border-radius:2px;background:var(--accent);}
-    #gearRightPane{display:flex;flex-direction:column;min-height:0;overflow-y:auto;}
-    .settings-section{display:none;flex-direction:column;gap:var(--gap);padding:0 16px 16px;}
-    .settings-section.active{display:flex;}
-    .settings-section-h{display:block;position:sticky;top:0;margin:0 -16px 4px;
+    html[data-core] #gearRightPane {display:flex;flex-direction:column;min-height:0;overflow-y:auto;}
+    html[data-core] .settings-section {display:none;flex-direction:column;gap:var(--gap);padding:0 16px 16px;}
+    html[data-core] .settings-section.active {display:flex;}
+    html[data-core] .settings-section-h {display:block;position:sticky;top:0;margin:0 -16px 4px;
         padding:14px 16px 10px;background:var(--bg);font-size:1rem;font-weight:600;
         border-bottom:1px solid var(--line);z-index:1;}
     /* Saliency fix (15 screen) is a continuous-scroll-only concern — under panel/kiosk mode
-       each settings-section is already isolated one-at-a-time with its own sticky header
        (directly above), so the extra top divider on Panel-lock would be redundant. */
-    #gearSecPanelLock > .tile{margin-top:0;padding-top:0;border-top:0;}
+       html[data-core] each settings-section is already isolated one-at-a-time with its own sticky header
+    #gearSecPanelLock > .tile {margin-top:0;padding-top:0;border-top:0;}
 
     /* -------- Touch-target floor, asserted directly in this form-factor MQ — NOT gated
-       on @media(pointer:coarse) (a kiosk WebView may not report it). Covers every source
        and connector toggle too (both are rendered with the .ctl.switch class). -------- */
-    .ctl,.ctl.small,.ctl.switch{min-height:44px;}
+       html[data-core] on @media(pointer:coarse) (a kiosk WebView may not report it). Covers every source
+    .ctl,
+       html[data-core] .ctl.small,
+       html[data-core] .ctl.switch {min-height:44px;}
   }
 
   /* ============================================================================
@@ -2178,7 +2694,12 @@
              font-variant-numeric:tabular-nums;}
   #corePanel.core-dissolved{opacity:0;pointer-events:none;}
   .core-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}
-  .core-time{margin:0;font-size:clamp(22px,3.4vw,36px);font-weight:600;letter-spacing:.01em;
+  /* Demoted, deliberately. At 36px this was the largest element on a surface
+     whose job is to answer "is my Space okay?" -- so the thing every wall
+     already tells you outranked the only thing this display knows. It stays
+     (a panel that cannot tell the time is worse than one that can) and it stops
+     being the headline. */
+  .core-time{margin:0;font-size:clamp(17px,2.1vw,24px);font-weight:500;letter-spacing:.01em;
              font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
   .core-date{margin:3px 0 0;font-size:clamp(12px,1.5vw,16px);color:var(--dim);
              text-transform:capitalize;}
@@ -2219,6 +2740,46 @@
      Decorative only (aria-hidden) — #coreHeroSr carries the equivalent text for screen
      readers, same information the old text hero announced, just no longer painted. */
   .core-wave{position:absolute;inset:0;width:100%;height:100%;display:block;}
+
+  /* The hierarchy, in sizes. Everything on this face is now ranked against the
+     question a person crossing the room is asking, and the clock -- useful, and
+     not the product -- ranks below all of it. */
+  .core-hero-stack{position:relative;z-index:1;display:flex;flex-direction:column;
+                   align-items:center;gap:clamp(6px,1.4vh,14px);text-align:center;
+                   padding:clamp(12px,2vh,28px) clamp(24px,5vw,64px);
+                   /* Wide enough that a two-word answer stays on one line: at
+                      68px, "Someone's here" broken after the apostrophe reads
+                      as a layout accident, and this face has one sentence to
+                      get right.
+
+                      Not `ch`. This container's own font-size is the inherited
+                      ~16px while its headline child is 68px, so a ch-based
+                      limit resolved against the wrong text and came out at
+                      about 240px — narrower than the phrase it was sizing. */
+                   max-width:min(86%, 900px);}
+  /* The wave passes behind the words, so the words get their own ground. A
+     radial scrim rather than a panel: a box here would put a card back on a
+     surface whose whole composition is open space. */
+  .core-hero-stack::before{
+    content:"";position:absolute;inset:-8% -6%;z-index:-1;pointer-events:none;
+    background:radial-gradient(58% 62% at 50% 50%,
+                 rgba(11,14,18,.92) 0%, rgba(11,14,18,.62) 55%, rgba(11,14,18,0) 100%);
+  }
+  .core-hero-state{font-size:clamp(30px,6.4vw,68px);font-weight:600;letter-spacing:-.02em;
+                   line-height:1.02;color:var(--text);text-wrap:balance;}
+  /* Attention, sized to what it is asking for rather than to the space left
+     over in a corner. Amber and second in the stack: it qualifies the state
+     above it, and a person who reads only the first line has still been told
+     the important half. */
+  /* One size for both, because they are one rank: each is a qualifier on the
+     state above it, and only ever one of them is showing. Two clamps four
+     pixels apart would be two values nobody can tell apart -- the exact sprawl
+     `test_design_scale.py` counts. */
+  .core-hero-stack .core-alerts,
+  .core-hero-stack .core-runtime{font-size:clamp(15px,2.7vw,27px);font-weight:600;
+                                 letter-spacing:-.01em;}
+  .core-hero-stack .core-alerts{color:var(--warn);}
+
   .core-bottom{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
                flex-wrap:wrap;}
   .core-rooms{display:flex;gap:18px;flex-wrap:wrap;}
@@ -2885,7 +3446,13 @@
       <section class="tab-panel active" id="panel-inicio" data-tab="inicio" role="tabpanel" aria-labelledby="tab-inicio">
         <section id="homeHero" aria-live="polite">
           <div class="hero-row">
-            <p id="heroLine1" class="hero-line1"></p>
+            <!-- An h1, because it is one. The whole document started at h2, so
+                 a screen reader arriving here was handed a page with no title
+                 and eight equal-rank sections; the state of the Space IS this
+                 page's heading, and the one element that should never be
+                 outranked was marked up as a paragraph. Styling is unchanged —
+                 `.hero-line1` still carries every rule. -->
+            <h1 id="heroLine1" class="hero-line1"></h1>
             <!-- Heartbeat badge (§2.1): revealed on the first RoomState frame; the ONE allowed
                  perpetual animation, so the quiet "Empty home" state still visibly ticks. -->
             <span id="heroLive" class="live-badge" hidden><i aria-hidden="true"></i><span id="heroLiveTxt" data-i18n>live</span></span>
@@ -2928,25 +3495,6 @@
              physical layer (Watch intrusion + occupancy routine anomaly). GET /api/house-status
              (read-only, derived-only, live/companion only -- same MODE gate as renderNetwork).
              One honest line; the evidence trail is an on-demand <details> disclosure. -->
-        <div id="houseStatusTile" class="tile house-status-tile" hidden>
-          <div class="tile-head"><h2 id="house-status-h" data-i18n>Space status</h2></div>
-          <p id="houseStatusLine" class="house-status-line" aria-live="polite"></p>
-          <!-- This tile and Manage → Needs attention read different bands on purpose
-               (see attention.py: "an item nobody can act on is a bug in this module, not
-               an item") — a reason here can be true and unactionable at once (an unnamed
-               device with no stable identity is nothing a person can assign or accept).
-               Without this, "Worth a glance — 6 things" here and "Nothing needs your
-               attention" on Manage read as the SAME claim, disagreeing. Sits OUTSIDE the
-               <details> below (not behind "show details") — the discrepancy it explains
-               is visible the instant the headline is, so the explanation has to be too. -->
-          <p id="houseStatusInfoNote" class="panel-note" hidden data-i18n>These are things
-            Wavr noticed, not a to-do list — none of them needs a decision from you. What
-            does need one always shows under Manage → Needs attention.</p>
-          <details id="houseStatusDetails" class="house-status-details" hidden>
-            <summary id="houseStatusSummary"></summary>
-            <ul id="houseStatusReasons" class="house-status-reasons" aria-live="polite"></ul>
-          </details>
-        </div>
         <!-- Global sensing-level meter (Off | Presence | Precise), DERIVED
              from system.running + whether any camera source is enabled. Wired ONLY to the
              existing /api/system + /api/sources toggle seams (no new backend state). Default
@@ -2956,53 +3504,17 @@
              (desktop keeps the bare word) and revealed ONLY in the Core-panel media query, where
              hover/title tooltips never fire on the touch kiosk — so the camera on/off meaning
              must live on the control itself (privacy visible / explain-don't-just-display). -->
-        <div id="sensingLevelTile" class="tile sensing-level-tile">
-          <div class="tile-head"><h2 id="sensing-level-h" data-i18n>Sensing level</h2><span class="hint" data-i18n>how much of your Space Wavr senses right now</span></div>
-          <div id="sensingLevelSeg" class="sensing-level-seg" role="group" aria-label="sensing level" data-i18n-attr="aria-label:sensing level">
-            <button type="button" class="seg-btn" data-tier="off" aria-pressed="false" data-tip="Pauses every source — no network, no Bluetooth, no cameras. Zero compute." data-i18n-attr="data-tip:Pauses every source — no network, no Bluetooth, no cameras. Zero compute."><span class="seg-title" data-i18n>Off</span><span class="seg-sub" data-i18n>Nothing is sensing</span></button>
-            <button type="button" class="seg-btn" data-tier="presence" aria-pressed="false" data-tip="Network and Bluetooth presence only — Space-level, no cameras, zero video, zero VRAM." data-i18n-attr="data-tip:Network and Bluetooth presence only — Space-level, no cameras, zero video, zero VRAM."><span class="seg-title" data-i18n>Presence</span><span class="seg-sub" data-i18n>Knows if someone's here · no cameras</span></button>
-            <button type="button" class="seg-btn" data-tier="precise" aria-pressed="false" data-tip="Adds camera person-detection — per-room precision. Video is processed in memory and never leaves your network; uses the GPU/VRAM." data-i18n-attr="data-tip:Adds camera person-detection — per-room precision. Video is processed in memory and never leaves your network; uses the GPU/VRAM."><span class="seg-title" data-i18n>Precise</span><span class="seg-sub" data-i18n>Knows which room · cameras on</span></button>
-          </div>
-          <p id="sensingLevelPosture" class="sensing-level-posture" aria-live="polite"></p>
-          <div class="sensing-level-actions">
-            <button id="privacyPauseBtn" type="button" class="ctl small off" data-tip="Drops to the next lower level right now — instantly turns off the heavier sensing" data-i18n data-i18n-attr="data-tip:Drops to the next lower level right now — instantly turns off the heavier sensing">Privacy pause</button>
-            <span id="sensingLevelNote" class="sensing-level-note" aria-live="polite"></span>
-          </div>
-          <div id="watchRow" class="watch-row">
-            <div class="watch-head">
-              <button id="watchToggle" type="button" class="ctl switch off" role="switch" aria-checked="false" data-tip="Watch (Vigia): detect an unrecognized person WITHOUT surveilling everyone else. While on, Wavr hides everyone positions, identities and vitals from the dashboard and from every export (MQTT, MCP, narrator) — only people counts and the room of an unrecognized person can leave." data-i18n data-i18n-attr="data-tip:Watch (Vigia): detect an unrecognized person WITHOUT surveilling everyone else. While on, Wavr hides everyone positions, identities and vitals from the dashboard and from every export (MQTT, MCP, narrator) — only people counts and the room of an unrecognized person can leave.">Watch: off</button>
-              <span id="watchState" class="watch-state" data-i18n>Off</span>
-            </div>
-            <p id="watchNote" class="watch-note" aria-live="polite"></p>
-          </div>
-        </div>
-        <div class="inicio-grid">
-        <!-- Who's home, composed into Space (was its own primary tab).
-             It answers WHO; the room column immediately below answers WHERE,
-             and the two were never worth a separate destination each. Its
-             companion "Rooms" tile came with it and was DROPPED, not moved:
-             that tile listed every room as occupied or empty, which is the
-             room column's entire job — keeping both on one screen would be
-             the card sprawl this reorganisation exists to remove. -->
-          <div id="qcTile" class="tile qc-tile" aria-labelledby="qc-h">
-          <div class="tile-head"><h2 id="qc-h" data-i18n>Who's here</h2><span class="hint" data-i18n>a calm glance, right now</span></div>
-          <p id="qcHeadline" class="qc-headline" aria-live="polite" data-i18n>Working out who is here…</p>
-          <p id="qcSub" class="qc-sub" aria-live="polite"></p>
-          <div id="qcNames" class="qc-names" aria-live="polite"></div>
-          <div id="qcAnon" class="qc-anon" aria-live="polite"></div>
-          <p class="panel-note" id="qcNote" hidden></p>
-          <!-- Set only by setReconnecting() (core-connection.js) — same dim+note treatment
-               as #roomsStale, reusing its class, for a Core that has gone quiet. -->
-          <p id="qcStaleNote" class="rooms-stale" hidden aria-live="polite" data-i18n>No reading has arrived for a while, so who is home may be out of date.</p>
-        </div>
-          <div class="tile rooms-col">
-            <div class="tile-head"><h2 id="rooms-h" data-i18n>Rooms</h2></div>
-            <!-- Shown by `setReconnecting` while the live stream is down or silent.
-                 The cards keep the last verdict that arrived -- they must not invent
-                 a new one -- and this says that is what they are. -->
-            <p id="roomsStale" class="rooms-stale" hidden aria-live="polite" data-i18n>No reading has arrived for a while, so what these cards say may be out of date.</p>
-            <div class="rooms" id="rooms" aria-label="Status by room" data-i18n-attr="aria-label:Status by room"><div class="empty" data-i18n>Waiting for the Core's first reading…</div></div>
-          </div>
+        <!-- THE SPACE IS THE PAGE.
+             The stage: the Space itself on the left, at the size a
+             protagonist gets, with the room strip beneath it; the things
+             that qualify it -- who, how sure, how much is being sensed --
+             in a column beside it rather than stacked on top of it. The
+             old order put three administrative cards above the map, so a
+             laptop window opened on sensor configuration and the house was
+             below the fold. `attnTile` stays above this block: when
+             something needs a decision it still arrives first. -->
+        <div class="inicio-grid space-stage">
+          <div class="stage-main">
           <div id="mapHome" class="map-home">
             <!-- Core-panel only (shown by the landscape/short media query): the map starts
                  collapsed so the room measurements are the glanceable hero and the touch-heavy
@@ -3015,6 +3527,27 @@
               <span class="mpt-chevron" aria-hidden="true">&rsaquo;</span>
             </button>
             <div id="radarWrap" class="radar tile">
+              <!-- A SPACE WAVR CANNOT SEE YET, drawn on purpose.
+
+                   With nothing to tell it where the rooms are, the stage
+                   rendered an empty floor grid: two faint construction lines
+                   across a black rectangle, which reads as a broken canvas
+                   rather than as an answer. This is the answer. It invents no
+                   room and shows no fabricated position — it says what is true
+                   and offers the one thing that changes it.
+
+                   `render.js` already owns the "nothing is drawn" decision, and
+                   owns it carefully: it waits for real cards rather than for
+                   data to merely arrive, after the bug where a whole-building
+                   pseudo-room left the panel claiming to be still loading for
+                   ever. This hangs off that producer rather than becoming a
+                   second one with its own opinion. -->
+              <div id="spaceEmpty" class="space-empty" hidden>
+                <div class="space-empty-mark" aria-hidden="true"><i></i><i></i><i></i></div>
+                <p class="space-empty-title" data-i18n>No rooms yet</p>
+                <p class="space-empty-sub" data-i18n>Wavr draws your Space here as soon as it knows where the rooms are.</p>
+                <button type="button" id="spaceEmptyGo" class="ctl primary" data-i18n>Set up this Space</button>
+              </div>
               <div class="tile-head">
                 <h2 id="radar-h" data-i18n>Map</h2>
                 <div class="viewToggle" role="group" aria-label="view mode" data-i18n-attr="aria-label:view mode">
@@ -3049,6 +3582,67 @@
               </div>
             </div>
           </div>
+          <div class="tile rooms-col">
+            <div class="tile-head"><h2 id="rooms-h" data-i18n>Rooms</h2></div>
+            <!-- Shown by `setReconnecting` while the live stream is down or silent.
+                 The cards keep the last verdict that arrived -- they must not invent
+                 a new one -- and this says that is what they are. -->
+            <p id="roomsStale" class="rooms-stale" hidden aria-live="polite" data-i18n>No reading has arrived for a while, so what these cards say may be out of date.</p>
+            <div class="rooms" id="rooms" aria-label="Status by room" data-i18n-attr="aria-label:Status by room"><div class="empty" data-i18n>Waiting for the Core's first reading…</div></div>
+          </div>
+          </div>
+          <aside class="stage-side" aria-label="Space detail">
+          <div id="qcTile" class="tile qc-tile" aria-labelledby="qc-h">
+          <div class="tile-head"><h2 id="qc-h" data-i18n>Who's here</h2><span class="hint" data-i18n>a calm glance, right now</span></div>
+          <p id="qcHeadline" class="qc-headline" aria-live="polite" data-i18n>Working out who is here…</p>
+          <p id="qcSub" class="qc-sub" aria-live="polite"></p>
+          <div id="qcNames" class="qc-names" aria-live="polite"></div>
+          <div id="qcAnon" class="qc-anon" aria-live="polite"></div>
+          <p class="panel-note" id="qcNote" hidden></p>
+          <!-- Set only by setReconnecting() (core-connection.js) — same dim+note treatment
+               as #roomsStale, reusing its class, for a Core that has gone quiet. -->
+          <p id="qcStaleNote" class="rooms-stale" hidden aria-live="polite" data-i18n>No reading has arrived for a while, so who is home may be out of date.</p>
+        </div>
+        <div id="houseStatusTile" class="tile house-status-tile" hidden>
+          <div class="tile-head"><h2 id="house-status-h" data-i18n>Space status</h2></div>
+          <p id="houseStatusLine" class="house-status-line" aria-live="polite"></p>
+          <!-- This tile and Manage → Needs attention read different bands on purpose
+               (see attention.py: "an item nobody can act on is a bug in this module, not
+               an item") — a reason here can be true and unactionable at once (an unnamed
+               device with no stable identity is nothing a person can assign or accept).
+               Without this, "Worth a glance — 6 things" here and "Nothing needs your
+               attention" on Manage read as the SAME claim, disagreeing. Sits OUTSIDE the
+               <details> below (not behind "show details") — the discrepancy it explains
+               is visible the instant the headline is, so the explanation has to be too. -->
+          <p id="houseStatusInfoNote" class="panel-note" hidden data-i18n>These are things
+            Wavr noticed, not a to-do list — none of them needs a decision from you. What
+            does need one always shows under Manage → Needs attention.</p>
+          <details id="houseStatusDetails" class="house-status-details" hidden>
+            <summary id="houseStatusSummary"></summary>
+            <ul id="houseStatusReasons" class="house-status-reasons" aria-live="polite"></ul>
+          </details>
+        </div>
+        <div id="sensingLevelTile" class="tile sensing-level-tile">
+          <div class="tile-head"><h2 id="sensing-level-h" data-i18n>Sensing level</h2><span class="hint" data-i18n>how much of your Space Wavr senses right now</span></div>
+          <div id="sensingLevelSeg" class="sensing-level-seg" role="group" aria-label="sensing level" data-i18n-attr="aria-label:sensing level">
+            <button type="button" class="seg-btn" data-tier="off" aria-pressed="false" data-tip="Pauses every source — no network, no Bluetooth, no cameras. Zero compute." data-i18n-attr="data-tip:Pauses every source — no network, no Bluetooth, no cameras. Zero compute."><span class="seg-title" data-i18n>Off</span><span class="seg-sub" data-i18n>Nothing is sensing</span></button>
+            <button type="button" class="seg-btn" data-tier="presence" aria-pressed="false" data-tip="Network and Bluetooth presence only — Space-level, no cameras, zero video, zero VRAM." data-i18n-attr="data-tip:Network and Bluetooth presence only — Space-level, no cameras, zero video, zero VRAM."><span class="seg-title" data-i18n>Presence</span><span class="seg-sub" data-i18n>Knows if someone's here · no cameras</span></button>
+            <button type="button" class="seg-btn" data-tier="precise" aria-pressed="false" data-tip="Adds camera person-detection — per-room precision. Video is processed in memory and never leaves your network; uses the GPU/VRAM." data-i18n-attr="data-tip:Adds camera person-detection — per-room precision. Video is processed in memory and never leaves your network; uses the GPU/VRAM."><span class="seg-title" data-i18n>Precise</span><span class="seg-sub" data-i18n>Knows which room · cameras on</span></button>
+          </div>
+          <p id="sensingLevelPosture" class="sensing-level-posture" aria-live="polite"></p>
+          <div class="sensing-level-actions">
+            <button id="privacyPauseBtn" type="button" class="ctl small off" data-tip="Drops to the next lower level right now — instantly turns off the heavier sensing" data-i18n data-i18n-attr="data-tip:Drops to the next lower level right now — instantly turns off the heavier sensing">Privacy pause</button>
+            <span id="sensingLevelNote" class="sensing-level-note" aria-live="polite"></span>
+          </div>
+          <div id="watchRow" class="watch-row">
+            <div class="watch-head">
+              <button id="watchToggle" type="button" class="ctl switch off" role="switch" aria-checked="false" data-tip="Watch (Vigia): detect an unrecognized person WITHOUT surveilling everyone else. While on, Wavr hides everyone positions, identities and vitals from the dashboard and from every export (MQTT, MCP, narrator) — only people counts and the room of an unrecognized person can leave." data-i18n data-i18n-attr="data-tip:Watch (Vigia): detect an unrecognized person WITHOUT surveilling everyone else. While on, Wavr hides everyone positions, identities and vitals from the dashboard and from every export (MQTT, MCP, narrator) — only people counts and the room of an unrecognized person can leave.">Watch: off</button>
+              <span id="watchState" class="watch-state" data-i18n>Off</span>
+            </div>
+            <p id="watchNote" class="watch-note" aria-live="polite"></p>
+          </div>
+        </div>
+          </aside>
         </div>
       </section>
 
@@ -3816,7 +4410,7 @@
     <nav id="gearRail" class="gear-rail" aria-label="Settings sections" data-i18n-attr="aria-label:Settings sections">
       <button type="button" class="gear-rail-item" data-section="gearSecLayout" aria-pressed="false" data-i18n>Layout</button>
       <button type="button" class="gear-rail-item" data-section="gearSecSpace" aria-pressed="false" data-i18n>Space</button>
-      <button type="button" class="gear-rail-item" data-section="gearSecDevices" aria-pressed="false" data-i18n>Devices</button>
+      <button type="button" class="gear-rail-item" data-section="gearSecDevices" aria-pressed="false" data-i18n>Pair a device</button>
       <button type="button" class="gear-rail-item" data-section="gearSecConnectors" aria-pressed="false" data-i18n>Connectors</button>
       <button type="button" class="gear-rail-item" data-section="gearSecAssistant" aria-pressed="false" data-i18n>Assistant</button>
       <button type="button" class="gear-rail-item" data-section="gearSecSettings" aria-pressed="false" data-i18n>Core settings</button>
@@ -4719,9 +5313,29 @@
     </div>
     <p id="coreInfoPopBody" class="core-info-pop-body"></p>
   </div>
+  <!-- THE ANSWER GOES IN THE MIDDLE.
+
+       This surface is read from three metres by somebody who is not going to
+       walk over to it, and it was composed the other way round: the clock was
+       the largest thing on it at 36px, the line that says Wavr is broken was
+       16px, "5 alerts" was 18px in the far bottom-right corner, and the whole
+       centre — the biggest area by a wide margin — held nothing but a canvas
+       that is `aria-hidden` by design. The one element carrying the actual
+       answer, `#coreHeroSr`, was `.sr-only`: the honest sentence existed and
+       was told to screen readers and to nobody else.
+
+       So it stops being sr-only. Same element, same producer, same aria-live —
+       it is simply also painted now, at the size its content deserves, with the
+       wave behind it as the ambient texture it always was. The runtime line and
+       the alert count come with it: what needs a person cannot live in a corner
+       at the smallest size on the display. -->
   <div class="core-hero">
     <canvas id="coreWave" class="core-wave" aria-hidden="true"></canvas>
-    <span id="coreHeroSr" class="sr-only" aria-live="polite" data-i18n>Waiting for the Core's first reading…</span>
+    <div class="core-hero-stack">
+      <span id="coreHeroSr" class="core-hero-state" aria-live="polite" data-i18n>Waiting for the Core's first reading…</span>
+      <span id="coreRuntime" class="core-runtime" hidden role="status"></span>
+      <span id="coreAlerts" class="core-alerts" hidden></span>
+    </div>
   </div>
   <div class="core-bottom">
     <div id="coreRooms" class="core-rooms"></div>
@@ -4734,9 +5348,11 @@
          Same producer as the tray, the header chip, the Android notification
          and the CLI. Sized to be read at three metres, and it stays out of the
          way entirely while everything is fine — an ambient surface that always
-         shows a badge has no way to say something changed. -->
-    <span id="coreRuntime" class="core-runtime" hidden role="status"></span>
-    <span id="coreAlerts" class="core-alerts" hidden></span>
+         shows a badge has no way to say something changed.
+
+         Both of these moved up into the hero stack, where the eye already is.
+         The reasoning above is unchanged and is why: something read at three
+         metres cannot be the smallest text on the display. -->
   </div>
   <!-- Feature 2 (glance-free lock): overlays the ambient face above (never replaces it) once
        wake() finds a lock configured — window.WavrNative.hasBiometric() or the backend's
