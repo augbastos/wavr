@@ -114,7 +114,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyinstaller
-          python -m pip install -e backend
+          # `[mdns]`, because the spec refuses to freeze a Core without zeroconf
+          # — deliberately, and it is right to. That import is lazy, so a build
+          # without the extra SUCCEEDS and produces a Core that never advertises
+          # `_wavr._tcp`; the phone's "Find your Wavr hub" then spends a minute
+          # failing to find a hub that was never there to be found. The guard
+          # exists because exactly that shipped once.
+          #
+          # Which is also why this line was wrong for as long as it has existed
+          # and nobody knew: the repository has no releases, so the first real
+          # tag was the first time this job ever got past `pip install`.
+          python -m pip install -e "backend[mdns]"
           python -m PyInstaller desktop/sidecar/wavr-core.spec             --distpath desktop/sidecar/dist --workpath desktop/sidecar/build --noconfirm
           mkdir -p desktop/src-tauri/binaries
           # Tauri resolves externalBin by target triple.
