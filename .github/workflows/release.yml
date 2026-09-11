@@ -144,8 +144,23 @@ jobs:
             sleep 1
             curl -sf http://127.0.0.1:8000/healthz && break
           done
-          curl -sf http://127.0.0.1:8000/healthz | grep -q '"ok":true'             || { echo "sidecar did not answer /healthz"; kill $CORE; exit 1; }
-          curl -sf http://127.0.0.1:8000/ | grep -q "<title>Wavr"             || { echo "sidecar serves no dashboard"; kill $CORE; exit 1; }
+          # Fetched to a file, then grepped — NOT piped into `grep -q`.
+          #
+          # This step runs under `bash -e -o pipefail`, and `grep -q` exits the
+          # moment it matches. On a 29-byte /healthz body curl has already
+          # finished writing, so nothing happens. On the ~390 KB dashboard it
+          # has not: curl takes SIGPIPE, exits 23 ("failed writing body"), and
+          # pipefail makes the pipeline fail — so the step reported
+          # "sidecar serves no dashboard" about a sidecar that had just served
+          # it, with a 200 in the log directly above the error.
+          #
+          # It would have failed every release, forever, and never once because
+          # of the thing it was checking. The first tag this repository ever cut
+          # is what found it.
+          curl -sf http://127.0.0.1:8000/healthz -o health.txt || { echo "sidecar did not answer /healthz"; kill $CORE; exit 1; }
+          grep -q '"ok":true' health.txt                       || { echo "sidecar /healthz is not ok"; kill $CORE; exit 1; }
+          curl -sf http://127.0.0.1:8000/ -o index.html        || { echo "sidecar did not answer GET /"; kill $CORE; exit 1; }
+          grep -q "<title>Wavr" index.html                     || { echo "sidecar serves no dashboard"; kill $CORE; exit 1; }
           # The shell is split across files now: a bundle that carries index.html
           # and not its scripts serves a dashboard with no setup screen and no
           # Discoveries tab, and nothing else would notice.
