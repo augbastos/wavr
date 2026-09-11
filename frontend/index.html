@@ -2162,9 +2162,21 @@
   .space-stage #houseStatusTile:has(.house-status-line.noted){
     padding-top:var(--sp-3); padding-bottom:var(--sp-3);
   }
-  .space-stage #houseStatusTile:has(.house-status-line.noted) > .tile-head,
-  .space-stage #houseStatusTile:has(.house-status-line.noted) #houseStatusInfoNote{
+  .space-stage #houseStatusTile:has(.house-status-line.noted) > .tile-head{
     display:none;
+  }
+  /* The note STAYS, and hiding it here was a real regression that a browser
+     test caught within the hour. It exists because Space can say "6 things"
+     while Manage → Needs attention says "nothing needs you" — both true, and
+     answering different questions — so without it a reader reasonably takes the
+     two counts as disagreeing. Deleting the one sentence that reconciles two
+     honest numbers is not a simplification.
+     The complaint was its weight, not its existence. So the weight is what
+     changes: one quiet line under the state, instead of a paragraph competing
+     with the Space. */
+  .space-stage #houseStatusTile #houseStatusInfoNote{
+    font-size:var(--fs-sm); line-height:1.45; color:var(--dim-deep);
+    margin:var(--sp-2) 0 0; max-width:46ch;
   }
   .space-stage #houseStatusTile .house-status-line{
     font-size:var(--fs-base); font-weight:var(--fw-medium);
