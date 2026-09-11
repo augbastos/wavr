@@ -3,10 +3,10 @@
 [![tests](https://github.com/augbastos/wavr/actions/workflows/tests.yml/badge.svg)](https://github.com/augbastos/wavr/actions/workflows/tests.yml)
 [![license: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-green.svg)](LICENSE)
 
-**Your network already knows which of your devices are home. Wavr turns that — plus whatever sensors
-you own — into a live, explainable map of your space, running entirely on hardware you own.**
+**Your network already knows which of your devices are present. Wavr turns that — plus whatever sensors
+you own — into a live, explainable model of a physical Space, running entirely on hardware you own.**
 
-![Wavr — live per-room presence on a 3D map of your own home, fused from network, Bluetooth and camera, running on your local network](docs/hero.gif)
+![The Wavr Space view: a 3D map of a home with occupied rooms lit green and people shown as markers, a one-line state headline above it, and a column beside it showing who is here and how much is being sensed](docs/img/space.png)
 
 Every room gets one answer, and **"I don't know" is more than one of them**: occupied, empty, a sensor
 that is switched off or has stopped answering, or nothing watching at all. The first two carry a
@@ -30,12 +30,15 @@ first time it runs, because they are not vendored here.
 | **Built for agents** | A read-only MCP server (stdio + HTTP) hands `RoomState` and the house map to your own agents as structured context. Home Assistant control is a separate, opt-in, default-OFF tool. |
 | **Local by construction** | Loopback-only out of the box. Cameras boot OFF and frames never touch disk. A credential goes only where the authentication protocol needs it — never into a log, a response body, or a screen. |
 | **You are the admin** | You draw the rooms, switch every sensor on and off, and decide what — if anything — is ever shared. |
+| **The Space is the screen** | The dashboard opens on the map, at the size a subject gets, with a room's evidence one tap away beside it. Everything that configures Wavr sits around that rather than on top of it. |
 
 **Try it with nothing installed:** open `frontend/index.html` in a browser. Opened from the filesystem
 the dashboard switches itself to a built-in simulator, says so on screen, and makes zero network
 requests.
 
-![Wavr Command Center — a 3D house map with per-person markers, per-room confidence rings, the Off/Presence/Precise sensing meter, and explainable per-modality fusion](docs/img/demo.png)
+![A room selected in Wavr: its card opens beside the map showing each sensor's own reading — camera present at 90% confident, Wi-Fi active but disagreeing, network reporting no sensor in that room — with the map still on screen](docs/img/room-evidence.png)
+
+*Select a room and its evidence opens beside the Space, not under it: what each sensor sees, how sure it is, and how long ago. The fused answer never hides the readings it came from.*
 
 ---
 
@@ -87,12 +90,14 @@ what you need; add more later.
 | **Core** | [`core-launcher/`](core-launcher/) — an always-on appliance that *is* the hub: ambient panel, mDNS discovery, kiosk launcher. It has run on a dedicated Android phone; a mini PC or Raspberry Pi is a supported install route that has never been exercised on that hardware ([`docs/INSTALL.md`](docs/INSTALL.md)). |
 | **MCP** | [`backend/wavr/mcp_serve.py`](backend/wavr/) — read-only presence for your own agents, over stdio or HTTP. |
 
-![One brain, every screen — the same open core as a web dashboard, a Tauri desktop app, a certificate-pinned Android companion, and the always-on Core hub](docs/img/card-platforms.png)
+![The same Space view on a phone in portrait: the state headline, the map, and the rooms beneath it, with a bottom tab bar](docs/img/mobile.png)
 
-![The Wavr Core ambient panel — a calm green-wave presence face over a dark screen, with glance-free status in the corners: clock, Core and network health, Wi-Fi signal and battery](docs/img/core-panel.png)
+*The same fusion engine on a phone — composed for the screen rather than scaled down to it.*
 
-*The Core's ambient panel: readable from across the room. Waking the full dashboard takes the admin PIN
-or a fingerprint.*
+![The Wavr Core ambient panel — the state of the Space in large type at the centre of a dark screen, anything needing attention directly beneath it, an ambient wave behind, and the clock and connection health small in the corners](docs/img/core-panel.png)
+
+*The Core's ambient panel. What is happening in your Space is the largest thing on it — the clock is not — so it answers from across the room.
+Waking the full dashboard takes the admin PIN or a fingerprint.*
 
 ---
 
