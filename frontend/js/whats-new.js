@@ -32,7 +32,12 @@ window.WAVR_WHATS_NEW = [
   // 0.4.0: what a household can SEE. The connector reach
   // vocabulary, the pinned test addresses and the offline producer
   // are real work in this release and are not release notes.
-  { version: "0.4.0", date: "2026-09-08", items: [
+  { version: "0.4.0", date: "2026-09-11", items: [
+    WavrT("🏡 Wavr opens on your Space. The map is the first thing on the screen now, at the size it deserves, instead of sitting under three panels of settings."),
+    WavrT("🔍 Tap a room and it opens beside the map, not below it — which sensor sees it, how sure each one is, and how long ago. The Space stays on screen while you read."),
+    WavrT("📴 A Space Wavr has not mapped yet says so, and says what to do about it, instead of showing an empty grid."),
+    WavrT("⚠️ Amber is kept for things that actually want you. Devices Wavr merely noticed are listed calmly, and each one now says which device it is instead of six identical lines."),
+    WavrT("📺 The wall panel answers from across the room. What is happening in your Space is the largest thing on it; the clock is not."),
     WavrT("📱 The phone app speaks your language. Every screen in the "
           + "companion — finding your hub, checking its certificate, choosing "
           + "what the device does — follows the language you picked, instead of "
