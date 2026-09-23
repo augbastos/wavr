@@ -1,0 +1,60 @@
+name: firmware
+
+# Path-filtered on purpose: this workflow builds an ESP32 toolchain (slow,
+# and CI minutes are scarce), so it only runs when something it can actually
+# observe changed -- the firmware tree itself or this file.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+
+# Read-only by default -- nothing in this workflow writes to the repository,
+# and a `pull_request` trigger runs code the head branch controls (see
+# tests.yml's same comment).
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware/wavr_node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # PlatformIO's own package/toolchain cache -- without it every run
+      # re-downloads the pinned espressif32 platform (toolchain + Arduino-
+      # ESP32 core), which dwarfs the actual compile time.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('firmware/wavr_node/platformio.ini') }}
+      - name: Install PlatformIO
+        run: pip install platformio==6.2.0   # the version the pinned build was verified with
+      # Build-only -- no `-t upload`, there is no hardware attached to a
+      # runner. All three envs share the pinned espressif32 platform, so
+      # after the first `pio run` primes ~/.platformio the rest are fast.
+      - name: Build esp32dev (LD2450, default)
+        run: pio run -e esp32dev
+      - name: Build esp32dev-pir
+        run: pio run -e esp32dev-pir
+      - name: Build esp32dev-ota
+        run: pio run -e esp32dev-ota
+      # Native (host-compiled) unit test for the one piece of pure,
+      # hardware-independent logic in this firmware -- see
+      # test/test_fingerprint_fmt/ and src/fingerprint_fmt.h.
+      - name: Native unit tests
+        run: pio test -e native

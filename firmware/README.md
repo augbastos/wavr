@@ -18,6 +18,8 @@ firmware/
       wifi_provision.{h,cpp}  SoftAP captive portal + NVS creds + reconnect watchdog
       wavr_client.{h,cpp}     HTTPS to Wavr: enroll/telemetry/heartbeat/reactivate
       tls_pin.{h,cpp}         TOFU cert pinning for wavr_client's TLS connections
+      fingerprint_fmt.{h,cpp} pure SHA-256-digest-to-hex formatter (used by tls_pin.cpp;
+                               split out so it is host-testable, no Arduino/mbedtls needed)
       kill_switch.{h,cpp}     debounced physical button/jumper read
       status_led.{h,cpp}      non-blocking status blink patterns
       ota_update.{h,cpp}      local-network-only OTA hook (ArduinoOTA/espota)
@@ -25,6 +27,8 @@ firmware/
         sensor_driver.h        the driver interface every sensor implements
         ld2450_driver.{h,cpp}  HLK-LD2450 mmWave radar (default, first target)
         pir_driver.{h,cpp}     HC-SR501-class PIR (concrete 2nd driver, proves the seam)
+    test/test_fingerprint_fmt/  native (host-compiled) Unity test for fingerprint_fmt --
+                                 `pio test -e native`, no ESP32 hardware needed
 ```
 A new sensor type (BLE beacon, environmental, a different radar…) means: write a
 `SensorDriver` implementation under `src/sensors/`, add a `WAVR_SENSOR_*` build
@@ -53,22 +57,37 @@ Requires [PlatformIO](https://platformio.org/) (CLI or the VS Code extension).
 `platformio.ini` pulls the `espressif32` platform + ArduinoJson automatically on
 first build — no manual library install.
 
-**Compile status: NOT compiled here.** This environment has no ESP32 toolchain
-(no `pio`/Arduino-ESP32 core installed), so the modules above were written
-against the documented Arduino-ESP32 core APIs (`WiFi`, `WiFiClientSecure`,
-`HTTPClient`, `WebServer`, `DNSServer`, `Preferences`, `ArduinoOTA`) and
-ArduinoJson 6.x, and reviewed by hand for API/type correctness, but **not
-verified with `pio run`**. Before flashing real hardware, run
-`pio run -e esp32dev` once to catch anything a compiler would — most likely
-candidates for a first-pass fix are `HTTPClient::collectHeaders`/`header()`
-argument types and `strptime` availability on your specific ESP-IDF/newlib
-version (see the comment above `syncTimeFromHeader` in `wavr_client.cpp`), and
-`src/tls_pin.cpp`'s reach into `sslclient_context::ssl_ctx` (via `ssl_client.h`,
-an Arduino-ESP32 core internal, not a documented public API — see the module
-comment in `src/tls_pin.h`) and `mbedtls_sha256`'s exact signature, which
-renamed to/from `mbedtls_sha256_ret` across mbedtls 2.x/3.x. **`tls_pin.cpp`
-is the highest-risk file in this firmware to have a compile error in** — check
-it first.
+**Compile status: compiled 2026-09-23**, `pio run` (build-only, no upload —
+tested on one machine, no hardware attached) against `espressif32@7.1.3`
+(Arduino-ESP32 3.x / ESP-IDF 5.x / mbedtls 3.x, pinned in `platformio.ini`,
+not floating) and `bblanchon/ArduinoJson@6.21.5` (pinned; ArduinoJson 7
+removed `StaticJsonDocument`/`createNestedArray()`, which this firmware
+uses). All three envs build SUCCESS from a clean `.pio`:
+
+| env | RAM | Flash |
+|---|---|---|
+| `esp32dev` | 51776/327680 B (15.8%) | 1009765/1310720 B (77.0%) |
+| `esp32dev-pir` | 51640/327680 B (15.8%) | 1009337/1310720 B (77.0%) |
+| `esp32dev-ota` | 51776/327680 B (15.8%) | 1009765/1310720 B (77.0%) |
+
+No source changes were needed against this pinned core: `HTTPClient::
+collectHeaders`/`header()`, `strptime`, `src/tls_pin.cpp`'s reach into
+`sslclient_context::ssl_ctx` via `ssl_client.h`, and `mbedtls_sha256`
+(mbedtls 3.x's name, not `mbedtls_sha256_ret`) all compiled as written
+against this specific pinned core version — that is a property of this exact
+pin, not a general guarantee; a future `espressif32` bump can still break
+any of them, especially the `ssl_client.h` internal reach (see the module
+comment in `src/tls_pin.h`). The SHA-256 fingerprint hex formatting (the
+part that must match `backend/wavr/tls.py::format_fingerprint` byte-for-byte)
+was extracted into `src/fingerprint_fmt.{h,cpp}` and is covered by a native
+Unity test — `pio test -e native` — that needs no hardware.
+
+**Not verified — no hardware was flashed**: behaviour on a real ESP32 board,
+the LD2450 UART framing against a real module, PIR timing against a real
+HC-SR501, OTA upload over `espota`, and the TOFU TLS pinning against a live
+Wavr Core are all still unverified beyond compiling. CI (`.github/workflows/
+firmware.yml`) builds all three envs and runs the native test on every
+`firmware/**` change but likewise never touches real hardware.
 
 ## Wiring
 - **HLK-LD2450** (UART2): LD2450 `TX` → ESP32 **GPIO16** (RX2), LD2450 `RX` →
