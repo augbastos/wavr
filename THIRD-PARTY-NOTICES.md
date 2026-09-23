@@ -154,7 +154,21 @@ DENSO WAVE INCORPORATED.
   not vendored. It is **AGPL-3.0**, and it is the reason the camera path is an *extra*
   rather than a base requirement: a Wavr install without cameras never pulls it in.
 - **Model weights** are not committed and not redistributed here. They are downloaded by
-  Ultralytics at first use, under their own terms.
+  Ultralytics at first use, under their own terms. Ultralytics' own analytics are
+  switched off before it is imported (`wavr.sources.camera.import_yolo`).
+- **Sensing systems Wavr reads, and does not contain.** Each is integrated over its own
+  documented interface; no source from any of them is copied into this repository, so no
+  notice is owed, and none of them is required.
+
+  | System | Upstream | Licence | How Wavr uses it | Code copied |
+  |---|---|---|---|---|
+  | ESPresense (firmware) | github.com/ESPresense/ESPresense | AGPL-3.0 | Subscribes to its MQTT device and room topics (`wavr/espresense.py`) | no |
+  | Bermuda BLE Trilateration | github.com/agittins/bermuda | MIT | Reads its Home Assistant area sensor through HA's REST API (`wavr/ha_presence.py`, location mappings) | no |
+  | ESPHome Bluetooth Proxy | github.com/esphome/esphome | not checked: nothing of it is used | Never touched directly: it feeds Home Assistant, which feeds Bermuda | no |
+  | Frigate NVR | github.com/blakeblackshear/frigate | MIT (+ trademark policy) | Subscribes to its MQTT person-count, detect-state and availability topics (`wavr/frigate.py`). The name is used only to say what is being read | no |
+
+  Versions whose interfaces were read: ESPresense firmware v4.0.6, ESPresense-companion
+  v2.2.2, Bermuda v0.8.7, Frigate 0.18.0 (2026-09-23).
 - The IEEE OUI data and the device heuristics in `backend/wavr/data/` are compiled from
   public registry data and from this project's own observations, not copied from any
   commercial device-identification product. See

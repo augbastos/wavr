@@ -93,6 +93,86 @@ HA keeps its own clock, so `last_changed` goes through `wavr/timebase.py`.
 
 **Reach:** `lan`. Nothing about the home leaves the premises.
 
+#### Location mappings: Bermuda area sensors
+
+[Bermuda](https://github.com/agittins/bermuda) (MIT) turns ESPHome Bluetooth proxies
+into a Home Assistant `sensor.<device>_area` whose **state is an HA area name**
+("Kitchen"). A binary mapping read that as "not on" — absence. A *location mapping*
+reads it as a place:
+
+```
+PUT /api/ha/presence/sensor.phone_area
+{"areas": {"Kitchen": "kitchen", "Office": "office"}, "label": "Alex's phone"}
+```
+
+- The table is the operator's, and it is the only way an area becomes a room. An area
+  not in it ("Garage") releases every mapped room and invents none; the `area_id` /
+  `area_name` attributes are ignored.
+- One state speaks for every room in the table: present where the area maps, a
+  zero-mass reading in the others, so Kitchen → Office releases the kitchen at once.
+- `unknown` (Bermuda: not heard for ~30 s), `unavailable` and "Invalid Area for …" say
+  nothing, as for any HA sensor. Modality `ble`: room precision, no trusted absence.
+- Bermuda and the proxies are not re-implemented, and Wavr never talks to a proxy.
+
+**Freshness, for every HA mapping.** A polled state is evidence *as of the poll*. HA's
+`last_changed` is when the state began; stamping events with it made a sensor that
+stayed on for two minutes look two minutes stale, and fusion discarded it. Only a change
+observed between two polls feeds the clock-skew estimate.
+
+**Tested:** against simulated HA states shaped from Bermuda's source (no verbatim
+payload exists upstream). **Not tested:** a real Bermuda install.
+
+### ESPresense · `espresense`
+
+[ESPresense](https://github.com/ESPresense/ESPresense) (AGPL-3.0) is ESP32 firmware, one
+board per room, that publishes each nearby BLE device's distance over MQTT. Wavr
+subscribes to the operator's broker (`wavr/espresense.py`):
+
+```
+WAVR_ESPRESENSE_DEVICES="irk:0123…=Alex,watch:darrell=Darrell"   # enrolled ids -> label
+WAVR_ESPRESENSE_ROOMS="living_room=living,kitchen=kitchen"        # board slug -> Wavr room
+WAVR_MQTT_HOST / WAVR_MQTT_PORT / WAVR_MQTT_USERNAME / WAVR_MQTT_PASSWORD
+WAVR_ESPRESENSE_MAX_DISTANCE=5    WAVR_ESPRESENSE_TIMEOUT=30      # metres, seconds
+```
+
+- **Only enrolled ids are subscribed** (`espresense/devices/<id>/+`, one topic each), so a
+  neighbour's phone is never received — not filtered after arrival. Settings topics
+  (which carry IRKs) are never subscribed; `mac` and `irk` payload fields are dropped;
+  the id is hashed before it names a sensor.
+- The room is the operator's mapping of the board's slug; the nearest fresh board within
+  the distance limit wins. ESPresense never announces absence, so a reading older than
+  the timeout is released by Wavr; a board whose LWT says `offline` releases everything.
+- Board motion (`rooms/<slug>/motion`) is `pir`. No identity leaves the adapter.
+
+**Tested:** ESPresense's documented device object and two real MQTT captures from
+ESPresense-companion's test data, through the real `create_app`. **Not tested:** real
+boards, a real broker.
+
+### Frigate · `frigate`
+
+[Frigate](https://github.com/blakeblackshear/frigate) (MIT) runs object detection on its
+own cameras. A household that has it does not need Wavr to detect people on the same
+streams again (`wavr/frigate.py`):
+
+```
+WAVR_FRIGATE_CAMERAS="front_door=hall,yard=garden"   # Frigate camera or zone -> Wavr room
+WAVR_FRIGATE_PREFIX=frigate
+```
+
+- Subscribes to `frigate/available` and, per mapped name, `<name>/person` and
+  `<name>/detect/state`. Never a wildcard: Frigate publishes a **retained JPEG** on
+  `<camera>/person/snapshot`, and face names, plates and speech on other topics. No
+  image, clip or event body ever reaches Wavr.
+- Count topics are published on change and not retained: **no message is unknown, not
+  zero.** A zero becomes (trusted, `camera`) absence only for a camera whose
+  `detect/state` is known ON while Frigate is `online`; a zone only contributes presence.
+- Held counts are re-asserted, stamped now, while Frigate is online; `stopped`/`offline`
+  forgets them.
+
+**Tested:** simulated topic streams. **Not tested:** a real Frigate. The `detect/state`
+retain flag is not documented upstream, so after a Wavr restart a zero may stay unknown
+until Frigate next publishes it — the safe direction.
+
 ### OpenXR runtimes · `openxr`
 
 > **No endpoint yet.** What exists is the SOLVER and the parser
