@@ -290,6 +290,44 @@ def _is_opened(cap) -> bool:
         return False
 
 
+# What ultralytics must be told BEFORE it is imported, because it acts at import
+# and at the end of every prediction:
+#
+#   YOLO_OFFLINE=1       -- its `ONLINE` flag is computed at import by resolving
+#                           public DNS names, and every analytics path is gated on
+#                           it. With the flag off there is no DNS probe, no
+#                           Google Analytics event after each `predict` (keyed by
+#                           a hash of this machine's MAC address), and no Sentry.
+#   YOLO_AUTOINSTALL=0   -- otherwise a missing optional package is pip-installed
+#                           at runtime, which is code arriving from the internet
+#                           while a camera is running.
+#
+# Forced, not defaulted: "no analytics, no telemetry" is a Wavr guarantee, not a
+# preference an inherited environment variable may turn off. It was not true
+# until this existed -- ultralytics' analytics are ON by default and nothing here
+# switched them off. What remains, and is documented as the one exception: the
+# model weights are downloaded on first use when they are not already on disk.
+_ULTRALYTICS_ENV = {"YOLO_OFFLINE": "1", "YOLO_AUTOINSTALL": "False"}
+
+
+def import_yolo():
+    """`ultralytics.YOLO`, with its network behaviour switched off first.
+
+    The ONLY sanctioned way to import ultralytics in this codebase;
+    `tests/test_camera_has_no_analytics.py` fails on any other import site.
+    """
+    import os
+    os.environ.update(_ULTRALYTICS_ENV)
+    from ultralytics import YOLO
+    # Belt and braces: the analytics singleton is built on first use, and an
+    # older ultralytics might not honour the flag above. Absent module = nothing
+    # to switch off.
+    with contextlib.suppress(Exception):
+        from ultralytics.utils import events as _ult_events
+        _ult_events.events.enabled = False
+    return YOLO
+
+
 def _model():
     """Load the YOLO nano model once (GPU if available). Lazy — importing
     ultralytics pulls torch/CUDA, which we never want at import/test time.
@@ -299,8 +337,7 @@ def _model():
     if _YOLO_MODEL is None:
         with _MODEL_LOCK:
             if _YOLO_MODEL is None:
-                from ultralytics import YOLO
-                _YOLO_MODEL = YOLO("yolov8n.pt")
+                _YOLO_MODEL = import_yolo()("yolov8n.pt")
     return _YOLO_MODEL
 
 
@@ -313,8 +350,7 @@ def _pose_model():
     if _POSE_MODEL is None:
         with _MODEL_LOCK:
             if _POSE_MODEL is None:
-                from ultralytics import YOLO
-                _POSE_MODEL = YOLO("yolo11n-pose.pt")
+                _POSE_MODEL = import_yolo()("yolo11n-pose.pt")
     return _POSE_MODEL
 
 
