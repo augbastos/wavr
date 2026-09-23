@@ -308,3 +308,17 @@ def test_the_one_answer_for_silence_is_the_one_this_prints(monkeypatch, capsys):
     mod.main(["--url", "http://x", "--json"])
     printed = json.loads(capsys.readouterr().out)["runtime"]
     assert printed == unreachable().to_dict()
+
+
+def test_the_default_address_is_the_one_this_machines_core_serves(monkeypatch):
+    """A Core without LAN access serves plain HTTP. The default used to be
+    https://127.0.0.1:8000 regardless, so on a default install this command
+    reported a healthy, running Core as "not answering" and exited 2."""
+    from wavr import status
+    monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
+    monkeypatch.delenv("WAVR_PORT", raising=False)
+    assert status.default_url() == "http://127.0.0.1:8000"
+    monkeypatch.setenv("WAVR_PORT", "8123")
+    assert status.default_url() == "http://127.0.0.1:8123"
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    assert status.default_url() == "https://127.0.0.1:8123"

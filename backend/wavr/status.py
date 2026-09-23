@@ -48,7 +48,20 @@ import urllib.request
 # guarantee in its docstring was held by nobody.
 from wavr.runtime_status import unreachable
 
-DEFAULT_URL = "https://127.0.0.1:8000"
+
+def default_url() -> str:
+    """Where THIS machine's own Core answers, from the settings it reads.
+
+    This was a constant, `https://127.0.0.1:8000` -- but a Core without LAN
+    access (the default) serves plain HTTP, so on exactly the headless machine
+    this command exists for it answered "Wavr is not answering" about a Core
+    that was running and healthy, and exited 2. HTTPS only when multidevice is
+    on; the port the Core was told to use.
+    """
+    from wavr.config import load_config
+    cfg = load_config()
+    return f"{'https' if cfg.multidevice else 'http'}://127.0.0.1:{cfg.port}"
+
 
 # Exit codes, which are part of the interface. Chosen so `wavr status && …`
 # reads correctly: success means "nothing needs you".
@@ -240,8 +253,9 @@ def main(argv=None) -> int:
         prog="wavr status",
         description="Is Wavr running, and is anything waiting for you.")
     ap.add_argument("--url",
-                    default=os.environ.get("WAVR_DOCTOR_URL", DEFAULT_URL),
-                    help=f"Core base URL (default {DEFAULT_URL})")
+                    default=os.environ.get("WAVR_DOCTOR_URL") or default_url(),
+                    help="Core base URL (default: this machine's Core, http or "
+                         "https as its LAN setting says)")
     ap.add_argument("--token", default=os.environ.get("WAVR_LOCAL_TOKEN"),
                     help="local API token, if the Core requires one")
     ap.add_argument("--json", action="store_true",
