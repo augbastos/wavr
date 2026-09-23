@@ -1,0 +1,271 @@
+{
+ "label": "2026-09-23-baseline-base",
+ "environment": {
+  "when": "2026-09-23T19:20:22+00:00",
+  "git": "d1ae3cd",
+  "os_family": "Windows",
+  "core_python": "3.14.5",
+  "core_env": "base",
+  "scope": "one development machine; compare runs from the same machine only"
+ },
+ "imports": {
+  "repeat": 5,
+  "total_ms_median": 1390.8,
+  "total_ms_all": [
+   1353.6,
+   1171.7,
+   1390.8,
+   2299.9,
+   1887.9
+  ],
+  "wavr_app_self_ms_median": 312.2,
+  "top_packages_self_ms": {
+   "wavr": 625.0,
+   "fastapi": 193.8,
+   "pydantic": 117.7,
+   "numpy": 100.3,
+   "asyncio": 35.3,
+   "starlette": 28.1,
+   "pydantic_core": 22.1,
+   "anyio": 15.7,
+   "email": 14.6,
+   "annotated_types": 10.1,
+   "zoneinfo": 9.4,
+   "importlib": 9.0,
+   "urllib": 8.5,
+   "xml": 8.5,
+   "_colorize": 8.2,
+   "typing_inspection": 6.4,
+   "http": 6.2,
+   "compression": 5.9,
+   "dotenv": 5.2,
+   "_ssl": 4.8
+  },
+  "heavy_packages_imported": [
+   "numpy",
+   "pydantic"
+  ],
+  "module_count": 655
+ },
+ "startup": {
+  "repeat": 5,
+  "fresh_db": {
+   "interpreter_s": {
+    "median": 0.2,
+    "min": 0.16,
+    "max": 0.242
+   },
+   "import_and_create_app_s": {
+    "median": 1.659,
+    "min": 1.413,
+    "max": 1.954
+   },
+   "serve_to_healthz_s": {
+    "median": 0.563,
+    "min": 0.381,
+    "max": 0.696
+   },
+   "healthz_s": {
+    "median": 2.211,
+    "min": 2.183,
+    "max": 2.809
+   },
+   "runtime_s": {
+    "median": 2.216,
+    "min": 2.187,
+    "max": 2.82
+   }
+  },
+  "existing_db": {
+   "interpreter_s": {
+    "median": 0.187,
+    "min": 0.141,
+    "max": 0.439
+   },
+   "import_and_create_app_s": {
+    "median": 1.584,
+    "min": 0.998,
+    "max": 1.978
+   },
+   "serve_to_healthz_s": {
+    "median": 0.588,
+    "min": 0.483,
+    "max": 0.644
+   },
+   "healthz_s": {
+    "median": 2.298,
+    "min": 1.685,
+    "max": 2.965
+   },
+   "runtime_s": {
+    "median": 2.304,
+    "min": 1.711,
+    "max": 2.978
+   }
+  }
+ },
+ "idle": {
+  "base": {
+   "window_s": 60.1,
+   "cpu_s_per_min": 0.14,
+   "cpu_pct_one_core": 0.23,
+   "rss_mb": 90.6,
+   "uss_mb": 70.5,
+   "private_mb": 426.7,
+   "threads": 19,
+   "handles_or_fds": 278,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 4.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 58.6
+  },
+  "network": {
+   "window_s": 60.0,
+   "cpu_s_per_min": 0.234,
+   "cpu_pct_one_core": 0.39,
+   "rss_mb": 90.8,
+   "uss_mb": 70.7,
+   "private_mb": 426.9,
+   "threads": 19,
+   "handles_or_fds": 278,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 4.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 60.4
+  },
+  "inventory": {
+   "window_s": 60.1,
+   "cpu_s_per_min": 0.172,
+   "cpu_pct_one_core": 0.29,
+   "rss_mb": 90.8,
+   "uss_mb": 70.6,
+   "private_mb": 426.9,
+   "threads": 19,
+   "handles_or_fds": 280,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 4.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 63.4
+  },
+  "ble": {
+   "window_s": 60.0,
+   "cpu_s_per_min": 0.172,
+   "cpu_pct_one_core": 0.29,
+   "rss_mb": 90.5,
+   "uss_mb": 70.4,
+   "private_mb": 426.9,
+   "threads": 19,
+   "handles_or_fds": 278,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 7.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 43.2
+  },
+  "ha": {
+   "window_s": 60.0,
+   "cpu_s_per_min": 0.328,
+   "cpu_pct_one_core": 0.55,
+   "rss_mb": 91.0,
+   "uss_mb": 70.9,
+   "private_mb": 427.0,
+   "threads": 19,
+   "handles_or_fds": 278,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 40.0,
+   "ha_requests_per_min": 80.0,
+   "system_cpu_pct_during_window": 48.3
+  },
+  "sim": {
+   "window_s": 60.1,
+   "cpu_s_per_min": 0.437,
+   "cpu_pct_one_core": 0.73,
+   "rss_mb": 91.0,
+   "uss_mb": 70.9,
+   "private_mb": 427.1,
+   "threads": 20,
+   "handles_or_fds": 282,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 373.6,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 35.0
+  },
+  "multi": {
+   "window_s": 60.1,
+   "cpu_s_per_min": 0.671,
+   "cpu_pct_one_core": 1.12,
+   "rss_mb": 92.0,
+   "uss_mb": 71.7,
+   "private_mb": 427.7,
+   "threads": 20,
+   "handles_or_fds": 284,
+   "children_spawned_per_min": 1.0,
+   "children_cpu_s_per_min_lower_bound": 0.016,
+   "db_rows_written_per_min": 425.6,
+   "ha_requests_per_min": 79.9,
+   "system_cpu_pct_during_window": 39.7
+  },
+  "network-lan": {
+   "window_s": 60.1,
+   "cpu_s_per_min": 4.23,
+   "cpu_pct_one_core": 7.05,
+   "rss_mb": 107.3,
+   "uss_mb": 87.1,
+   "private_mb": 442.6,
+   "threads": 19,
+   "handles_or_fds": 280,
+   "children_spawned_per_min": 773.2,
+   "children_cpu_s_per_min_lower_bound": 9.163,
+   "db_rows_written_per_min": 4.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 36.5
+  },
+  "network+inventory-lan": {
+   "window_s": 60.0,
+   "cpu_s_per_min": 5.905,
+   "cpu_pct_one_core": 9.84,
+   "rss_mb": 113.5,
+   "uss_mb": 93.3,
+   "private_mb": 449.9,
+   "threads": 18,
+   "handles_or_fds": 276,
+   "children_spawned_per_min": 1066.8,
+   "children_cpu_s_per_min_lower_bound": 11.03,
+   "db_rows_written_per_min": 4.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 36.5
+  }
+ },
+ "footprint": {
+  "total_mb": 77.2,
+  "distributions": 20,
+  "by_distribution_mb": {
+   "numpy": 51.93,
+   "pip": 11.26,
+   "wavr": 5.42,
+   "pydantic_core": 5.42,
+   "pydantic": 3.94,
+   "websockets": 1.76,
+   "fastapi": 1.57,
+   "anyio": 1.38,
+   "click": 0.99,
+   "watchfiles": 0.86,
+   "uvicorn": 0.81,
+   "pyyaml": 0.71,
+   "starlette": 0.69,
+   "idna": 0.61,
+   "typing_extensions": 0.35,
+   "python-dotenv": 0.23,
+   "httptools": 0.22,
+   "h11": 0.2,
+   "typing-inspection": 0.09,
+   "annotated-types": 0.07,
+   "annotated-doc": 0.01
+  }
+ }
+}
