@@ -60,6 +60,8 @@ async def test_default_transport_used_when_none_injected(monkeypatch):
         assert args == ("arp", "-a")
         return WINDOWS_ARP
     monkeypatch.setattr("wavr.sources.network._run", fake_run)
+    # Force the `arp -a` path: on Linux the table is read from /proc first.
+    monkeypatch.setattr("wavr.sources.network._proc_net_arp", lambda: None)
     mac = await resolve_source_mac("192.168.0.23")
     assert mac == "24:0a:c4:aa:bb:cc"
 

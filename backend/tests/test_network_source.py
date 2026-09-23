@@ -172,6 +172,7 @@ async def test_arp_scan_parses_real_command_output(monkeypatch):
             return ""
         return "iface\n  192.168.0.1  AA-BB-CC-DD-EE-FF  dynamic\n"
     monkeypatch.setattr(network, "_run", fake_run)
+    monkeypatch.setattr(network, "_proc_net_arp", lambda: None)  # the `arp -a` path
     monkeypatch.setattr(network, "_local_ipv4", lambda: None)  # skip the warm-up sweep
     macs = await network.arp_scan()
     assert "aa:bb:cc:dd:ee:ff" in macs
@@ -197,6 +198,7 @@ def _counting_sweep(monkeypatch):
     monkeypatch.setattr(network, "_local_ipv4", lambda: "192.168.0.10")
     monkeypatch.setattr(network, "_warm_arp_cache", warm)
     monkeypatch.setattr(network, "_run", fake_run)
+    monkeypatch.setattr(network, "_proc_net_arp", lambda: None)  # the `arp -a` path
     monkeypatch.setattr(network, "_ARP_SETTLE_S", 0.0)
     return network, calls
 
@@ -225,3 +227,40 @@ def test_the_warm_up_is_datagrams_to_the_own_subnet_not_processes():
     # /24, the sender itself excluded, and no child process at all.
     from wavr.sources import network
     assert network._warm_arp_cache("127.0.0.5") == 253
+
+
+# -- The neighbour table on a Linux without net-tools --------------------------------
+
+PROC_NET_ARP = (
+    "IP address       HW type     Flags       HW address            Mask     Device\n"
+    "192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0\n"
+    "192.168.1.40     0x1         0x0         00:00:00:00:00:00     *        wlan0\n"
+    "192.168.1.57     0x1         0x6         24:0a:c4:aa:bb:cc     *        wlan0\n"
+)
+
+
+def test_proc_net_arp_is_read_as_the_arp_parsers_expect(tmp_path):
+    """Stock Debian/Ubuntu no longer ship `arp` (net-tools); on such a host
+    every sweep failed and presence saw nobody. Incomplete entries (flag 0x0,
+    all-zero MAC) are not devices."""
+    from wavr import netinventory
+    from wavr.sources import network
+    f = tmp_path / "arp"
+    f.write_text(PROC_NET_ARP, encoding="ascii")
+    text = network._proc_net_arp(str(f))
+    assert network.parse_arp_table(text) == {"aa:bb:cc:dd:ee:ff", "24:0a:c4:aa:bb:cc"}
+    assert netinventory.parse_arp_inventory(text) == [
+        ("192.168.1.1", "aa:bb:cc:dd:ee:ff"), ("192.168.1.57", "24:0a:c4:aa:bb:cc")]
+    assert network._proc_net_arp(str(tmp_path / "absent")) is None
+
+
+async def test_linux_reads_proc_and_spawns_nothing(monkeypatch):
+    from wavr.sources import network
+
+    async def no_process(*args):
+        raise AssertionError(f"spawned {args}")
+
+    monkeypatch.setattr(network.sys, "platform", "linux")
+    monkeypatch.setattr(network, "_proc_net_arp", lambda: "192.168.1.1 aa:bb:cc:dd:ee:ff\n")
+    monkeypatch.setattr(network, "_run", no_process)
+    assert await network.neighbour_table() == "192.168.1.1 aa:bb:cc:dd:ee:ff\n"

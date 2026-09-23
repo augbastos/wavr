@@ -143,10 +143,55 @@ async def arp_table_text(max_age_s: float = _SWEEP_REUSE_S) -> str:
         if ip:
             _warm_arp_cache(ip)
             await asyncio.sleep(_ARP_SETTLE_S)
-        text = await _run("arp", "-a")
+        text = await neighbour_table()
         if ip:          # only a real sweep is worth handing to the next caller
             state.at, state.text = time.monotonic(), text
         return text
+
+
+_PROC_NET_ARP = "/proc/net/arp"
+_ATF_COM = 0x2          # kernel flag: the entry is complete (a MAC is known)
+
+
+def _proc_net_arp(path: str = _PROC_NET_ARP) -> str | None:
+    """The kernel's own neighbour table on Linux, as `ip mac` lines.
+
+    `arp` comes from net-tools, which modern Debian and Ubuntu no longer
+    install by default -- measured: absent on a stock Ubuntu (WSL). On such a
+    host every sweep ended in "arp: not found", presence saw no device and the
+    inventory stayed empty, with nothing on screen to say why. That is the
+    Raspberry Pi tier. /proc/net/arp is always there and needs no process.
+    None when unreadable (not Linux, or a sandbox that hides it -- Android
+    does), so the caller falls back to `arp -a`.
+    """
+    try:
+        with open(path, encoding="ascii", errors="replace") as fh:
+            rows = fh.read().splitlines()[1:]
+    except OSError:
+        return None
+    out = []
+    for row in rows:
+        cols = row.split()
+        if len(cols) < 4:
+            continue
+        ip, flags, mac = cols[0], cols[2], cols[3]
+        try:
+            complete = int(flags, 16) & _ATF_COM
+        except ValueError:
+            continue
+        if complete and mac != "00:00:00:00:00:00":
+            out.append(f"{ip} {mac}")
+    return "\n".join(out) + ("\n" if out else "")
+
+
+async def neighbour_table() -> str:
+    """This host's ARP/neighbour table as text the `arp -a` parsers read:
+    /proc/net/arp where it can be read, `arp -a` otherwise."""
+    if sys.platform.startswith("linux"):
+        text = _proc_net_arp()
+        if text is not None:
+            return text
+    return await _run("arp", "-a")
 
 
 async def arp_scan() -> set[str]:
