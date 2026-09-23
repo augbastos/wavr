@@ -172,6 +172,56 @@ async def test_arp_scan_parses_real_command_output(monkeypatch):
             return ""
         return "iface\n  192.168.0.1  AA-BB-CC-DD-EE-FF  dynamic\n"
     monkeypatch.setattr(network, "_run", fake_run)
-    monkeypatch.setattr(network, "_local_ipv4", lambda: None)  # skip the ping sweep
+    monkeypatch.setattr(network, "_local_ipv4", lambda: None)  # skip the warm-up sweep
     macs = await network.arp_scan()
     assert "aa:bb:cc:dd:ee:ff" in macs
+
+
+# -- The shared sweep ------------------------------------------------------------
+
+def _counting_sweep(monkeypatch):
+    """The real `arp_table_text`, with the edges counted instead of performed."""
+    from wavr.sources import network
+    calls = {"warm": 0, "arp": 0}
+
+    def warm(ip):
+        calls["warm"] += 1
+        return 253
+
+    async def fake_run(*args):
+        assert args == ("arp", "-a"), "no ping subprocess, ever"
+        calls["arp"] += 1
+        await asyncio.sleep(0.01)
+        return "  192.168.0.7  aa-bb-cc-dd-ee-ff  dynamic\n"
+
+    monkeypatch.setattr(network, "_local_ipv4", lambda: "192.168.0.10")
+    monkeypatch.setattr(network, "_warm_arp_cache", warm)
+    monkeypatch.setattr(network, "_run", fake_run)
+    monkeypatch.setattr(network, "_ARP_SETTLE_S", 0.0)
+    return network, calls
+
+
+async def test_the_presence_source_and_the_inventory_share_one_sweep(monkeypatch):
+    # They each ran their own 254-process sweep, on their own timers. Both at
+    # once -- or one within seconds of the other -- is now one sweep.
+    from wavr import netinventory
+    network, calls = _counting_sweep(monkeypatch)
+    macs, text = await asyncio.gather(network.arp_scan(), netinventory._arp_output())
+    assert calls == {"warm": 1, "arp": 1}
+    assert "aa:bb:cc:dd:ee:ff" in macs and "aa-bb-cc-dd-ee-ff" in text
+    await network.arp_scan()                       # well inside the reuse window
+    assert calls == {"warm": 1, "arp": 1}
+
+
+async def test_a_sweep_older_than_the_window_is_repeated(monkeypatch):
+    network, calls = _counting_sweep(monkeypatch)
+    await network.arp_table_text()
+    await network.arp_table_text(max_age_s=0.0)    # the caller wants it fresh
+    assert calls == {"warm": 2, "arp": 2}
+
+
+def test_the_warm_up_is_datagrams_to_the_own_subnet_not_processes():
+    # Loopback, so nothing leaves the machine: one empty datagram per host of the
+    # /24, the sender itself excluded, and no child process at all.
+    from wavr.sources import network
+    assert network._warm_arp_cache("127.0.0.5") == 253

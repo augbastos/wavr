@@ -15,8 +15,6 @@ thing is mock-testable with zero hardware / zero real network.
 """
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import ipaddress
 import logging
 import re
@@ -247,22 +245,13 @@ def build_inventory(entries: list[tuple[str, str]], known_macs=None,
 
 
 async def _arp_output() -> str:
-    """Default real transport: warm the ARP cache with a local /24 ping sweep,
-    then return raw `arp -a` text. Scans ONLY the LAN this host is already on --
-    no sniffing, no injection. Reuses wavr.sources.network's subprocess seam so
-    tests can inject a mock transport instead."""
-    ip = network._local_ipv4()
-    if ip:
-        net = ipaddress.ip_network(ip + "/24", strict=False)
-        sem = asyncio.Semaphore(32)   # cap concurrent ping subprocesses (was up to 254)
+    """Default real transport: raw `arp -a` text after a warm-up of the local /24.
+    Scans ONLY the LAN this host is already on -- no sniffing, no injection.
 
-        async def ping(addr: str) -> None:
-            async with sem:
-                with contextlib.suppress(Exception):
-                    await network._run(*network.ping_argv(addr, 200))
-
-        await asyncio.gather(*(ping(str(h)) for h in net.hosts()))
-    return await network._run("arp", "-a")
+    The sweep is `wavr.sources.network`'s SHARED one: this used to run its own
+    254-process ping sweep every 30 s alongside the presence source's own every
+    15 s, doubling the cheapest-looking and most expensive thing a Core does."""
+    return await network.arp_table_text()
 
 
 async def scan_inventory(known_macs=None,
