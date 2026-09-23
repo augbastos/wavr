@@ -127,6 +127,20 @@ def test_unknown_device_unknown_room_and_malformed_payloads_produce_nothing():
     assert t.dropped == {"unknown_device": 1, "unknown_room": 1, "malformed": 6}
 
 
+def test_hostile_payloads_are_dropped_not_fatal():
+    """Found in review: deeply nested JSON raised RecursionError out of the
+    adapter, restarting it on every such message. And an oversized body is not a
+    device object."""
+    t = EspresenseTracker(cfg())
+    nested = b"[" * 200000 + b"]" * 200000
+    assert t.on_message("espresense/devices/watch:darrell/office", nested, at(0)) == []
+    huge = json.dumps(dict(CAPTURE_OFFICE, pad="x" * 10000)).encode()
+    assert t.on_message("espresense/devices/watch:darrell/office", huge, at(0)) == []
+    assert t.dropped["malformed"] == 2
+    assert t.on_message(*dev("watch:darrell", "office", CAPTURE_OFFICE), at(1)), \
+        "and the adapter carries on"
+
+
 def test_the_mac_and_irk_in_a_payload_are_never_kept():
     t = EspresenseTracker(cfg(devices={"irk:00112233445566778899aabbccddeeff": ""}))
     body = dict(CAPTURE_OFFICE, id="irk:00112233445566778899aabbccddeeff",

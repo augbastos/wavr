@@ -78,6 +78,7 @@ DEFAULT_TIMEOUT_S = 30.0
 REASSERT_S = 10.0
 
 _FORBIDDEN_IN_ID = ("/", "+", "#")
+_MAX_PAYLOAD_BYTES = 4096
 
 
 class EspresenseConfigError(ValueError):
@@ -193,10 +194,18 @@ class EspresenseTracker:
         if slug not in self.cfg.rooms:
             self.dropped["unknown_room"] += 1
             return []
+        # A board's device object is a few hundred bytes. Anything far larger is
+        # not one, and is refused before a parser spends memory on it.
+        if len(payload) > _MAX_PAYLOAD_BYTES:
+            self.dropped["malformed"] += 1
+            return []
         try:
             body = json.loads(payload)
             distance = float(body["distance"])
-        except (ValueError, TypeError, KeyError, UnicodeDecodeError):
+        except (ValueError, TypeError, KeyError, UnicodeDecodeError, RecursionError):
+            # RecursionError: deeply nested JSON from whoever can publish on the
+            # enrolled topic. Found in review; it used to escape and restart
+            # the whole adapter on every such message.
             self.dropped["malformed"] += 1
             return []
         if not (math.isfinite(distance) and distance >= 0):
