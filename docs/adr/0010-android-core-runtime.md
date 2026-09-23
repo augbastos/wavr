@@ -373,3 +373,30 @@ privacy regression:
 - **No new egress.** The APK adds no analytics, no crash reporter, and no
   network peer. The only sockets it opens are the Core's own listener, the
   loopback MJPEG source, and mDNS on the LAN.
+
+## Amendment 2026-09-23 — numpy leaves the APK, and one named risk is closed
+
+Measured on the build machine, not on a phone.
+
+- **numpy is no longer installed.** The Core stopped importing it at start
+  (`backend/wavr/localize.py` imports it only to solve a camera homography, which
+  rides the `[camera]` extra this ADR already leaves off Android), so the
+  `numpy==1.26.2` pin was removed from `core-launcher/app/build.gradle`. Chaquopy
+  had also pulled OpenBLAS, libgfortran and libc++ solely for it. Debug,
+  arm64-v8a, clean builds: **41,609,187 → 29,337,791 bytes (−12.27 MB, −29.5%)**;
+  all of it came out of `assets/chaquopy/requirements-common.imy`, and a byte
+  search of every remaining `.so` finds no reference to the dropped libraries.
+  (An incremental rebuild reports the old size: AGP leaves the freed space as
+  holes. Only a clean build measures this.) The figures quoted above — 39 MB, and
+  numpy/OpenBLAS in the resolved set and the native libs — describe the build as
+  it was on 2026-09-03.
+- **The Python half still runs on the Android-resolved set without numpy**, on
+  host CPython 3.13: `import wavr.app` loads no numpy, `python -m wavr.serve`
+  answers `/healthz` and `/api/runtime` with 200, and the adapter, HA, network,
+  app and pair-request suites pass on fastapi 0.125.0 / pydantic 1.10.26.
+- **The pydantic-v1 divergence named under "Risks" is gone.** Both pair-request
+  assertions that returned 200 on pydantic v1 now return 422 there too, because
+  `api_pair_requests._reject_coerced` re-reads the raw body and refuses any field
+  that is not a string — mitigation (2) above, applied. The FastAPI ceiling at
+  0.125.0 remains, and so does the case for the Starlette-only direction.
+- Still unmeasured, as before: anything on the device itself.

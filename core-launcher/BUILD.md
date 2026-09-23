@@ -7,7 +7,7 @@ phone run a Wavr Core, or only render one?"
 | | command | size | what it is |
 |---|---|---|---|
 | **Kiosk** (default) | `./gradlew assembleDebug` | ~4.3 MB | Full-screen WebView pointed at a Core that runs somewhere else. What shipped before ADR-0010. |
-| **Core** | `./gradlew assembleDebug -PwavrPython=true` | ~39 MB | The same app plus CPython 3.13 and the whole `backend/wavr` package, supervised by a foreground service. |
+| **Core** | `./gradlew assembleDebug -PwavrPython=true` | ~29 MB | The same app plus CPython 3.13 and the whole `backend/wavr` package, supervised by a foreground service. |
 
 The default is the kiosk deliberately: the Core build needs a host CPython on the
 build machine and is nine times the size, so it is a choice someone makes rather
@@ -32,8 +32,10 @@ Both builds:
 The Core build additionally needs:
 
 - **CPython 3.13 on the build machine**, matching the APK's interpreter, for
-  Chaquopy's `pip` step. Not 3.14 — Chaquopy's package repository tops out at
-  `cp313` for numpy, so 3.14 would trade a working numpy for a version number.
+  Chaquopy's `pip` step. Not 3.14: the choice was made when numpy was a base
+  requirement and Chaquopy's repository topped out at `cp313` for it. numpy is no
+  longer installed on Android (see ADR-0010, amendment 2026-09-23); whether
+  cryptography and cffi exist for `cp314` there has not been checked, so 3.13 stays.
   Auto-detected via `python3.13` / `python3` / `py -3.13`; if that fails, point at
   it:
   ```
@@ -59,8 +61,8 @@ The Core build additionally needs:
 - `app/src/main/python/wavr_android.py` → the only new Python: applies an
   environment, starts uvicorn, and forwards a manifest to
   `capabilities.recommend()`.
-- CPython 3.13 + fastapi / starlette / pydantic / uvicorn / websockets / numpy /
-  cryptography, **arm64-v8a only**.
+- CPython 3.13 + fastapi / starlette / pydantic / uvicorn / websockets /
+  cryptography, **arm64-v8a only**. No numpy since 2026-09-23.
 
 Verify a build actually carries them:
 
@@ -103,4 +105,4 @@ physical phone (see ADR-0010):
   shedding the camera actually bring it back down.
 - `BOOT_COMPLETED` recovery and the 15-minute `JobScheduler` watchdog.
 - CameraX bound to the *service* lifecycle with the screen off.
-- Real memory footprint of a CPython 3.13 + numpy Core in an Android process.
+- Real memory footprint of a CPython 3.13 Core in an Android process.
