@@ -77,6 +77,9 @@ class OccupancyLog:
         # (even with check_same_thread=False) is NOT safe under concurrent execute()
         # calls from multiple threads. Mirrors wavr.storage.Storage's own lock.
         self._lock = threading.Lock()
+        # Guards `_last` only, and is never held across I/O, so the event loop can
+        # take it (see `claim`) without waiting on a disk write.
+        self._mem_lock = threading.Lock()
         # WAL + synchronous=NORMAL: same trade as wavr.storage.Storage -- this table is
         # on the same hot fusion-publish write path, so fewer/smaller fsyncs is the
         # SD-card-wear/latency win on the G9, and this is DERIVED history (never the
@@ -98,8 +101,12 @@ class OccupancyLog:
         self._last: dict[str, dict] = {}
         with self._lock:
             rows = self._conn.execute(
-                "SELECT room, occupied, person_count, confidence, ts FROM occupancy_log"
-                " WHERE id IN (SELECT MAX(id) FROM occupancy_log GROUP BY room)").fetchall()
+                # Latest by `ts`, not by insertion id: two rows in flight at once
+                # may commit in either order (see `write`).
+                "SELECT o.room, o.occupied, o.person_count, o.confidence, o.ts"
+                " FROM occupancy_log o JOIN (SELECT room, MAX(ts) AS ts"
+                " FROM occupancy_log GROUP BY room) m ON o.room = m.room AND o.ts = m.ts"
+                " ORDER BY o.id").fetchall()
         for r in rows:
             self._last[r["room"]] = {"occupied": bool(r["occupied"]),
                                       "person_count": r["person_count"],
@@ -107,21 +114,59 @@ class OccupancyLog:
 
     # ---- write ----------------------------------------------------------------------
 
-    def would_append(self, room: str, occupied: bool, confidence: float,
-                     person_count: int | None) -> bool:
-        """Whether `append_if_changed` would write, answered from memory alone.
+    def claim(self, room: str, occupied: bool, confidence: float,
+              person_count: int | None, ts: str):
+        """Decide, from memory and atomically, whether this reading is a new row --
+        and if it is, make it the room's last row NOW, before anything is written.
 
-        Exists so the caller can stay on its event loop for the common answer.
-        `_publish` runs for every room on every re-fuse tick and every sensor
-        event, and it used to hand EVERY call to a worker thread just to have this
-        dictionary comparison say no. A stale read here is harmless: the worst it
-        can do is send one call to `append_if_changed`, which checks again.
+        Returns None for "unchanged", else a claim to hand to `write`. Cheap and
+        I/O-free, so the Core calls it on its event loop and pays for a worker
+        thread only when a row will actually be written: `_publish` runs for
+        every room on every re-fuse tick and every sensor event, and it used to
+        spend a thread hop on each just to be told "unchanged".
+
+        Recording the new last row at decision time is what makes it safe. The
+        check used to compare against `_last` as it stood when the PREVIOUS
+        insert had finished -- so a quick A -> B -> A, with B's write still in
+        flight, compared the return to A against the stale A, called it
+        unchanged, and the row that said the room went back to A was never
+        written. Deciding in publish order against the claimed state closes
+        that, and a write that fails puts the previous last row back.
         """
-        prev = self._last.get(room)
-        return (prev is None
-                or prev["occupied"] != bool(occupied)
-                or prev["person_count"] != person_count
-                or abs(prev["confidence"] - confidence) >= _CONFIDENCE_EPS)
+        with self._mem_lock:
+            prev = self._last.get(room)
+            if not (prev is None
+                    or prev["occupied"] != bool(occupied)
+                    or prev["person_count"] != person_count
+                    or abs(prev["confidence"] - confidence) >= _CONFIDENCE_EPS):
+                return None
+            row = {"occupied": bool(occupied), "person_count": person_count,
+                   "confidence": confidence, "ts": ts}
+            self._last[room] = row
+            return (prev, row)
+
+    def write(self, room: str, claim) -> None:
+        """Persist a row `claim` returned. Rows can commit out of claim order when
+        two are in flight at once; every reader orders by `ts`, not by insertion."""
+        prev, row = claim
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO occupancy_log (room, occupied, person_count, confidence, ts)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (room, int(row["occupied"]), row["person_count"],
+                     row["confidence"], row["ts"]),
+                )
+                self._prune_locked()
+                self._conn.commit()
+        except Exception:
+            with self._mem_lock:
+                if self._last.get(room) is row:     # nothing newer claimed since
+                    if prev is None:
+                        self._last.pop(room, None)
+                    else:
+                        self._last[room] = prev
+            raise
 
     def append_if_changed(self, room: str, occupied: bool, confidence: float,
                            person_count: int | None, ts: str) -> bool:
@@ -130,19 +175,11 @@ class OccupancyLog:
         room sitting steady at 82% occupied for hours logs exactly once, not once per
         fusion tick. Returns True iff a row was actually inserted. Safe to call on every
         published RoomState; the dedup is entirely internal (callers never need their own
-        change-detection)."""
-        if not self.would_append(room, occupied, confidence, person_count):
+        change-detection). `claim` + `write` in one call."""
+        c = self.claim(room, occupied, confidence, person_count, ts)
+        if c is None:
             return False
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO occupancy_log (room, occupied, person_count, confidence, ts)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (room, int(bool(occupied)), person_count, confidence, ts),
-            )
-            self._prune_locked()
-            self._conn.commit()
-        self._last[room] = {"occupied": bool(occupied), "person_count": person_count,
-                             "confidence": confidence, "ts": ts}
+        self.write(room, c)
         return True
 
     def _prune_locked(self) -> None:
