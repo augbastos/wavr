@@ -1987,11 +1987,25 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # disagreement against one that does not and concludes everything
         # changed. See `_with_disagreement`.
         new = _with_disagreement(rs.to_dict())
-        changed = prev is None or (
-            {k: v for k, v in new.items() if k != "ts"}
-            != {k: v for k, v in prev.items() if k != "ts"}
-        )
+        changed = prev is None or _claim(new) != _claim(prev)
         await _publish(rs, persist=changed)
+
+    def _claim(d: dict) -> dict:
+        """What a room state says about the room, without when it was looked at.
+
+        `ts` is per-event metadata, and so is every source's `age_s`: the
+        re-fuse tick stores an aged copy in `latest` every few seconds, so a
+        comparison that kept `age_s` saw the next identical reading (age 0) as a
+        change and wrote it -- every event of every steady source, forever. The
+        source's `health`, which the age drives, stays in: fresh -> stale is a
+        real change in what the room can claim.
+        """
+        out = {k: v for k, v in d.items() if k != "ts"}
+        if out.get("sources"):
+            out["sources"] = [
+                {k: v for k, v in s.items() if k != "age_s"} if isinstance(s, dict) else s
+                for s in out["sources"]]
+        return out
 
     async def _refuse_once():
         # One periodic re-fuse pass. Fusion is otherwise purely event-driven, so a
