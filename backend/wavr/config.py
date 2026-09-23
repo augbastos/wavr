@@ -415,7 +415,10 @@ def load_config() -> Config:
         net_scan_interval=float(os.getenv("WAVR_NET_SCAN_INTERVAL", "30.0")),
         net_inventory=os.getenv("WAVR_NET_INVENTORY", "").lower() in ("1", "true", "yes"),
         away_grace=int(os.getenv("WAVR_AWAY_GRACE", "3")),
-        ruview_url=os.getenv("WAVR_RUVIEW_URL", "ws://localhost:3000/ws/sensing"),
+        # No default URL. A RuView service is something an operator runs and then
+        # points Wavr at; defaulting to localhost:3000 registered a reconnect loop
+        # on every install whether or not the service existed (see RuViewSource).
+        ruview_url=os.getenv("WAVR_RUVIEW_URL", "").strip(),
         ruview_room=os.getenv("WAVR_RUVIEW_ROOM", "sala"),
         ruview_reconnect=float(os.getenv("WAVR_RUVIEW_RECONNECT", "3.0")),
         # A camera loop sleeps `cam_interval` between detections. Zero or

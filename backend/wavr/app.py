@@ -466,11 +466,11 @@ def _is_static_shell(path: str) -> bool:
 
 
 def _default_sources(cfg, ble_provider=None, net_provider=None, net_detail_provider=None):
-    """Plano A real-source set: network always-on ($0), ruview always-on (harmless
-    reconnect loop when the container is absent), sim off by default (toggle it on
+    """Plano A real-source set: network always-on ($0), ruview only when
+    WAVR_RUVIEW_URL names a service, sim off by default (toggle it on
     from the dashboard to populate the view when no real data is flowing). mmwave is
     only added when a serial port is configured (passive local serial, no frames
-    otherwise) — but then it's always-on, same as network/ruview.
+    otherwise) — but then it's always-on, same as network.
 
     `ble_provider`/`net_provider` are the LIVE consent-registry providers (callables
     returning the current {addr: person} map, env allowlist merged with the identity
@@ -484,10 +484,16 @@ def _default_sources(cfg, ble_provider=None, net_provider=None, net_detail_provi
             cfg.net_known_macs, interval=cfg.net_interval, grace=cfg.net_grace,
             known=cfg.net_known, emit_identity=cfg.identity_enabled,
             known_provider=net_provider, detail_provider=net_detail_provider), True),
-        ("ruview", lambda: RuViewSource(
-            cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True),
         ("sim", lambda: SimulatedSource(interval=cfg.sim_interval), False),
     ]
+    # RuView is an EXTERNAL service, registered only when an operator points Wavr
+    # at one. It used to be always-on against a default localhost URL: on the
+    # many installs with no RuView, the supervisor reported a task that had never
+    # connected as `running`/healthy, which let the runtime headline say
+    # "everything reporting" about a sensor that did not exist.
+    if cfg.ruview_url:
+        sources.insert(1, ("ruview", lambda: RuViewSource(
+            cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True))
     if cfg.mmwave_port:
         sources.append(
             ("mmwave", lambda: MmWaveSource(cfg.mmwave_room, cfg.mmwave_port), True))

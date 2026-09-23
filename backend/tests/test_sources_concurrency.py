@@ -34,14 +34,26 @@ async def test_slow_source_does_not_starve_fast_ones():
     assert all(not s["active"] for s in mgr.status()["sources"])
 
 
-def test_default_sources_lists_network_ruview_sim(monkeypatch):
+def test_default_sources_lists_network_and_sim_only(monkeypatch):
     monkeypatch.delenv("WAVR_NET_MACS", raising=False)
     # Clear the person-map envs too so the default set is deterministic regardless of
     # the operator's .env (a populated WAVR_BLE_KNOWN registers a 'ble' source).
     monkeypatch.delenv("WAVR_BLE_KNOWN", raising=False)
     monkeypatch.delenv("WAVR_NET_KNOWN", raising=False)
+    monkeypatch.delenv("WAVR_RUVIEW_URL", raising=False)
     from wavr.config import load_config
     from wavr.app import _default_sources
     srcs = _default_sources(load_config())
     enabled = {name: en for name, factory, en in srcs}
-    assert enabled == {"network": True, "ruview": True, "sim": False}
+    # No RuView unless one is named: an always-on reconnect loop to a service
+    # most installs do not run was reported as a healthy, reporting sensor.
+    assert enabled == {"network": True, "sim": False}
+
+
+def test_a_named_ruview_service_is_registered(monkeypatch):
+    monkeypatch.delenv("WAVR_BLE_KNOWN", raising=False)
+    monkeypatch.setenv("WAVR_RUVIEW_URL", "ws://ruview.lan:3000/ws/sensing")
+    from wavr.config import load_config
+    from wavr.app import _default_sources
+    enabled = {name: en for name, _f, en in _default_sources(load_config())}
+    assert enabled.get("ruview") is True

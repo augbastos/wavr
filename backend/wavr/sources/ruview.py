@@ -23,10 +23,23 @@ async def _default_connect(url: str) -> AsyncIterator[dict]:
                 continue
 
 
+# Longest wait between reconnect attempts while the service stays unreachable.
+_MAX_RECONNECT_DELAY_S = 60.0
+
+
 class RuViewSource:
     """WiFi CSI presence + vitals from a RuView sensing WebSocket. Reconnects
     forever on drop so a missing/rebooting container never crashes the manager.
-    Maps each 'sensing_update' frame via the shared normalize_ruview()."""
+    Maps each 'sensing_update' frame via the shared normalize_ruview().
+
+    Reconnects BACK OFF: the delay doubles from `reconnect_delay` up to a minute
+    while the service stays down, and resets the moment a frame arrives. It used
+    to retry every few seconds with a full traceback each time -- and because it
+    was registered on every install, whether or not anybody ran RuView, every
+    default Core logged a stack trace every seven seconds for its whole life.
+    It is now registered only when WAVR_RUVIEW_URL is set (see `_default_sources`),
+    and an unreachable service is logged once per outage, not once per attempt.
+    """
 
     def __init__(self, url: str, room: str = "sala",
                  connect: Callable[[str], AsyncIterator[dict]] | None = None,
@@ -37,10 +50,16 @@ class RuViewSource:
         self._delay = reconnect_delay
 
     async def events(self) -> AsyncIterator[SensingEvent]:
+        delay = self._delay
+        failing = False
         while True:
             try:
                 async with contextlib.aclosing(self._connect(self._url)) as stream:
                     async for frame in stream:
+                        if failing:
+                            logging.info("RuViewSource: %s is answering again", self._url)
+                            failing = False
+                        delay = self._delay
                         if not (isinstance(frame, dict) and frame.get("type") == "sensing_update"):
                             continue
                         try:
@@ -56,7 +75,16 @@ class RuViewSource:
                         yield ev
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logging.warning("RuViewSource connection error; reconnecting", exc_info=True)
-            if self._delay:
-                await asyncio.sleep(self._delay)
+            except Exception as exc:
+                # One line per outage at WARNING; the traceback, and every retry
+                # after the first, at DEBUG. An absent service is a state, not a
+                # new event every few seconds.
+                if not failing:
+                    logging.warning("RuViewSource: cannot reach %s (%s); retrying "
+                                    "with backoff up to %.0fs", self._url,
+                                    type(exc).__name__, _MAX_RECONNECT_DELAY_S)
+                    failing = True
+                logging.debug("RuViewSource connection error", exc_info=True)
+            if delay:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, _MAX_RECONNECT_DELAY_S)
