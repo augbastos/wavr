@@ -12,7 +12,7 @@ def test_make_publisher_calls_client_publish(monkeypatch):
         def publish(self, topic, payload, retain=False):
             calls.append((topic, payload, retain))
 
-    monkeypatch.setattr(mp, "_client", lambda host, port, prefix: FakeClient())
+    monkeypatch.setattr(mp, "_client", lambda host, port, prefix, *_creds: FakeClient())
     publish = mp.make_publisher("localhost", 1883)
     publish("wavr/rooms/sala/state", '{"occupied": true}', True)
     assert calls == [("wavr/rooms/sala/state", '{"occupied": true}', True)]
@@ -23,7 +23,7 @@ def test_publisher_never_raises_on_client_error(monkeypatch):
         def publish(self, *a, **k):
             raise RuntimeError("broker down")
 
-    monkeypatch.setattr(mp, "_client", lambda host, port, prefix: BadClient())
+    monkeypatch.setattr(mp, "_client", lambda host, port, prefix, *_creds: BadClient())
     publish = mp.make_publisher()
     publish("t", "p", False)   # must NOT raise — a dead broker can't crash the rules loop
 
@@ -35,7 +35,7 @@ def test_publish_failure_is_logged_not_silently_swallowed(monkeypatch, caplog):
         def publish(self, *a, **k):
             raise ValueError("Publish topic cannot contain wildcards.")
 
-    monkeypatch.setattr(mp, "_client", lambda host, port, prefix: BadClient())
+    monkeypatch.setattr(mp, "_client", lambda host, port, prefix, *_creds: BadClient())
     publish = mp.make_publisher()
     with caplog.at_level(logging.WARNING):
         publish("wavr/rooms/kids_1/state", "p", True)   # still must not raise
@@ -112,3 +112,37 @@ def test_client_is_a_singleton(monkeypatch):
     b = mp._client("h", 1, "wavr")
     assert a is b
     assert len(rec["instances"]) == 1            # connected exactly once
+
+
+def test_broker_credentials_reach_the_client_and_nothing_else(monkeypatch):
+    # Home Assistant's own broker refuses anonymous clients, so without this the
+    # publisher could only ever reach an open one.
+    seen = {}
+
+    class FakePaho:
+        def __init__(self, *a, **k):
+            pass
+
+        def will_set(self, *a, **k):
+            pass
+
+        def username_pw_set(self, user, password):
+            seen["creds"] = (user, password)
+
+        def connect_async(self, *a):
+            pass
+
+        def loop_start(self):
+            pass
+
+        def publish(self, *a, **k):
+            pass
+
+    client_mod = types.ModuleType("paho.mqtt.client")
+    client_mod.Client = FakePaho
+    monkeypatch.setitem(sys.modules, "paho", types.ModuleType("paho"))
+    monkeypatch.setitem(sys.modules, "paho.mqtt", types.ModuleType("paho.mqtt"))
+    monkeypatch.setitem(sys.modules, "paho.mqtt.client", client_mod)
+    monkeypatch.setattr(mp, "_CLIENT", None)
+    mp.make_publisher("broker.lan", 1883, "wavr", "wavr-core", "s3cret")("t", "p", False)
+    assert seen["creds"] == ("wavr-core", "s3cret")

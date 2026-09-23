@@ -9,7 +9,8 @@ _CLIENT = None
 _WARNED = False
 
 
-def _client(host: str, port: int, prefix: str = "wavr"):
+def _client(host: str, port: int, prefix: str = "wavr", username: str = "",
+            password: str = ""):
     """Lazily create + connect a paho MQTT client (once). Lazy import so paho is
     only needed on the real path; connect_async + loop_start means publish never
     blocks and reconnects on its own if the broker is down.
@@ -26,6 +27,10 @@ def _client(host: str, port: int, prefix: str = "wavr"):
         status = status_topic(prefix)
         c = mqtt.Client()
         c.will_set(status, "offline", qos=1, retain=True)   # MUST precede connect
+        if username:
+            # The broker Home Assistant ships (Mosquitto add-on) refuses anonymous
+            # clients; without this the publisher could only reach an open one.
+            c.username_pw_set(username, password or None)
 
         def _on_connect(client, *_args, **_kwargs):
             # Republish on every (re)connect so a broker restart re-announces us.
@@ -39,11 +44,13 @@ def _client(host: str, port: int, prefix: str = "wavr"):
 
 
 def make_publisher(host: str = "localhost", port: int = 1883,
-                   prefix: str = "wavr") -> Callable[[str, str, bool], None]:
+                   prefix: str = "wavr", username: str = "",
+                   password: str = "") -> Callable[[str, str, bool], None]:
     def publish(topic: str, payload: str, retain: bool) -> None:
         global _WARNED
         try:
-            _client(host, port, prefix).publish(topic, payload, retain=retain)
+            _client(host, port, prefix, username, password).publish(
+                topic, payload, retain=retain)
         except ImportError:
             # MQTT enabled but the optional dep isn't installed: warn once, then no-op.
             if not _WARNED:

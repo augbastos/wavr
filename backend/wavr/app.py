@@ -106,6 +106,8 @@ from wavr import wol, diagnostics, speedtest as speedtest_mod
 from wavr.sources.onvif import ONVIFProbe
 from wavr.ptz import CameraPTZ
 from wavr.sources.ble import BLESource
+from wavr.espresense import EspresenseConfig, EspresenseConfigError, EspresenseSource
+from wavr.frigate import FrigateConfig, FrigateConfigError, FrigateSource
 from wavr.identity_store import ROOT_DEVICE_ID, IdentityStore
 from wavr.routines import ActionExecutor, RoutineStore, RoutinesEngine
 from wavr.person_presence import DevicePresence, PersonPresence, RoomPresence
@@ -494,6 +496,27 @@ def _default_sources(cfg, ble_provider=None, net_provider=None, net_detail_provi
     if cfg.ruview_url:
         sources.insert(1, ("ruview", lambda: RuViewSource(
             cfg.ruview_url, room=cfg.ruview_room, reconnect_delay=cfg.ruview_reconnect), True))
+    # Other people's sensing systems, read over the operator's MQTT broker. Each is
+    # registered only when the operator mapped something to a room; an adapter
+    # with nothing mapped would subscribe to nothing and should not exist. A bad
+    # mapping is refused here, loudly, rather than turned into a subscription
+    # wider than the one asked for.
+    _mqtt = dict(host=cfg.mqtt_host, port=cfg.mqtt_port,
+                 username=cfg.mqtt_username, password=cfg.mqtt_password)
+    try:
+        esp = EspresenseConfig(devices=cfg.espresense_devices, rooms=cfg.espresense_rooms,
+                               max_distance_m=cfg.espresense_max_distance,
+                               timeout_s=cfg.espresense_timeout)
+        if esp.configured:
+            sources.append(("espresense", lambda: EspresenseSource(esp, **_mqtt), True))
+    except EspresenseConfigError as exc:
+        logging.error("ESPresense adapter not started: %s", exc)
+    try:
+        frig = FrigateConfig(names=cfg.frigate_names, prefix=cfg.frigate_prefix)
+        if frig.configured:
+            sources.append(("frigate", lambda: FrigateSource(frig, **_mqtt), True))
+    except FrigateConfigError as exc:
+        logging.error("Frigate adapter not started: %s", exc)
     if cfg.mmwave_port:
         sources.append(
             ("mmwave", lambda: MmWaveSource(cfg.mmwave_room, cfg.mmwave_port), True))
@@ -1368,7 +1391,8 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
     # (real paho publisher, lazily connected). Off by default -- no publisher, no engine.
     _rules_publish = rules_publish
     if _rules_publish is None and cfg.mqtt_enabled:
-        _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port, cfg.mqtt_prefix)
+        _rules_publish = make_publisher(cfg.mqtt_host, cfg.mqtt_port, cfg.mqtt_prefix,
+                                        cfg.mqtt_username, cfg.mqtt_password)
     # Audit fix (P1, same gap as `_notify` above): MQTT publish had no egress-master
     # check at all, even though the Egress screen's own row for it ("publishes events
     # to an MQTT broker") is listed as one of the paths the master switch claims to
