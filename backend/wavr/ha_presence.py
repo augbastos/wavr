@@ -384,6 +384,9 @@ class HomeAssistantSource:
         self._interval = max(0.5, float(interval))
         self._time = timebase or TimeBase()
         self._on_health = on_health
+        # entity_id -> the `last_changed` seen on the previous poll. Only a change
+        # between two polls is evidence about HA's clock (see `_observed_at`).
+        self._last_changed: dict[str, str | None] = {}
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:
@@ -415,12 +418,37 @@ class HomeAssistantSource:
         if not isinstance(state, dict):
             self._report(mapping, False)
             return None
-        stamp = self._time.normalize(
-            state.get("last_changed") or state.get("last_updated")
-            or datetime.now(timezone.utc),
-            source_id="home_assistant")
         self._report(mapping, True)
-        return to_event(state, mapping, at=stamp.at.isoformat())
+        return to_event(state, mapping, at=self._observed_at(mapping, state).isoformat())
+
+    def _observed_at(self, mapping: Mapping, state: dict) -> datetime:
+        """When the state this poll returned was TRUE -- which is now.
+
+        HA answers a poll with the state it holds at this moment. `last_changed`
+        is when that state BEGAN, and the two are only close for a change that
+        landed since the previous poll. Stamping every poll with `last_changed`
+        made a sensor that stayed on look like one that went quiet: fusion aged
+        it out after ~90 s while HA was confirming it every few seconds, and a
+        Bermuda area sensor -- one value for as long as somebody stays in a room
+        -- could never have held a room at all. Staleness is HA's call, and HA
+        makes it: a sensor that stops reporting becomes `unavailable`, which
+        `to_event` already turns into silence.
+
+        The clock estimate is fed ONLY by a change observed between two polls,
+        because only then is the lag a measurement of HA's clock. The first
+        sighting of a sensor that has been on for an hour is not a clock in the
+        wrong timezone, and used to be reported as one.
+        """
+        stated = state.get("last_changed") or state.get("last_updated")
+        previous = self._last_changed.get(mapping.entity_id)
+        self._last_changed[mapping.entity_id] = stated
+        if stated and previous is not None and stated != previous:
+            try:
+                return self._time.normalize(stated, source_id="home_assistant").at
+            except ValueError:      # timebase.TimeError: an unreadable stamp
+                _LOG.debug("ha_presence: %s has an unreadable last_changed",
+                           mapping.entity_id)
+        return self._time.now()
 
     def _report(self, mapping: Mapping, ok: bool) -> None:
         if self._on_health is None:

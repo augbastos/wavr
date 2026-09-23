@@ -274,6 +274,18 @@ async def test_an_unreachable_home_assistant_produces_no_event_not_a_false_one()
     await gen.aclose()
 
 
+class _Sequence(FakeHA):
+    """Answers each poll with the next row, then keeps repeating the last one."""
+
+    def __init__(self, *rows):
+        super().__init__()
+        self._rows = list(rows)
+
+    def get_state(self, entity_id):
+        self.asked.append(entity_id)
+        return self._rows.pop(0) if len(self._rows) > 1 else self._rows[0]
+
+
 @pytest.mark.asyncio
 async def test_a_slow_home_assistant_clock_is_corrected_not_discarded():
     """The whole reason timebase exists: HA's `last_changed` is stamped by HA's
@@ -281,11 +293,15 @@ async def test_a_slow_home_assistant_clock_is_corrected_not_discarded():
     means its evidence is silently thrown away."""
     store = HAPresenceStore(":memory:")
     store.map("binary_sensor.hall_motion", "hall", "pir")
+    # The change must be SEEN happening -- off on one poll, on the next -- for
+    # its stamp to say anything about HA's clock (see `_observed_at`).
     late = (T0 - timedelta(seconds=25)).isoformat()
-    ha = FakeHA({"binary_sensor.hall_motion": state("on", last_changed=late)})
+    ha = _Sequence(state("off", last_changed=(T0 - timedelta(hours=3)).isoformat()),
+                   state("on", last_changed=late))
     src = HomeAssistantSource(store, ha, interval=0.05,
                               timebase=TimeBase(now_fn=lambda: T0))
     gen = src.events()
+    await gen.__anext__()
     ev = await gen.__anext__()
     assert ev.ts == T0.isoformat(), "shifted forward by the measured offset"
     assert src.clocks()["clocks"][0]["source_id"] == "home_assistant"
@@ -297,14 +313,93 @@ async def test_a_timezone_sized_skew_is_reported_rather_than_absorbed():
     store = HAPresenceStore(":memory:")
     store.map("binary_sensor.hall_motion", "hall", "pir")
     wrong_tz = (T0 - timedelta(hours=1)).isoformat()
-    ha = FakeHA({"binary_sensor.hall_motion": state("on", last_changed=wrong_tz)})
+    ha = _Sequence(state("off", last_changed=(T0 - timedelta(hours=5)).isoformat()),
+                   state("on", last_changed=wrong_tz))
     src = HomeAssistantSource(store, ha, interval=0.05,
                               timebase=TimeBase(now_fn=lambda: T0))
     gen = src.events()
     await gen.__anext__()
+    await gen.__anext__()
     assert src.clocks()["unusable"] == ["home_assistant"]
     assert "timezone" in src.clocks()["clocks"][0]["note"]
     await gen.aclose()
+
+
+async def _poll_steadily(monkeypatch, rows_at, seconds, step=3.0):
+    """Drive HomeAssistantSource on a fake clock: one poll every `step` seconds
+    for `seconds`, each event fed into a FusionEngine on the same clock. Returns
+    the room's fused confidence after every poll."""
+    from wavr import ha_presence as mod
+    from wavr.fusion import FusionEngine
+
+    clock = [T0]
+
+    async def no_wait(_s):
+        return None
+
+    monkeypatch.setattr(mod.asyncio, "sleep", no_wait)
+    store = HAPresenceStore(":memory:")
+    store.map("binary_sensor.hall_motion", "hall", "node")
+
+    class ClockedHA(FakeHA):
+        def get_state(self, entity_id):
+            return rows_at(clock[0])
+
+    src = HomeAssistantSource(store, ClockedHA(), interval=step,
+                              timebase=TimeBase(now_fn=lambda: clock[0]))
+    fe = FusionEngine(now_fn=lambda: clock[0])
+    out = []
+    gen = src.events()
+    try:
+        for _ in range(int(seconds / step)):
+            ev = await gen.__anext__()
+            out.append(fe.update(ev).confidence)
+            clock[0] += timedelta(seconds=step)
+    finally:
+        await gen.aclose()
+    return out, src
+
+
+@pytest.mark.asyncio
+async def test_a_sensor_that_stays_on_is_still_evidence_minutes_later(monkeypatch):
+    """HA hands over the CURRENT state on every poll. A presence sensor that has
+    said "on" for three minutes is saying it now, and Wavr must keep believing it.
+
+    It did not: the event was stamped with `last_changed`, so a steady sensor aged
+    like a stale one and was discarded by fusion after ~90 s -- while HA was
+    confirming it every three seconds. A Bermuda area sensor, which holds one
+    value for as long as somebody stays in a room, could never have worked.
+    """
+    turned_on = T0 - timedelta(seconds=2)
+    confidences, _src = await _poll_steadily(
+        monkeypatch, lambda now: state("on", last_changed=turned_on.isoformat()),
+        seconds=240)
+    assert min(confidences) == pytest.approx(confidences[0]), confidences
+
+
+@pytest.mark.asyncio
+async def test_a_long_steady_state_is_not_mistaken_for_a_broken_clock(monkeypatch):
+    """A sensor that has been on for an hour when Wavr starts is not a clock in
+    the wrong timezone. Only a CHANGE observed between two polls says anything
+    about HA's clock; the first sighting of an old `last_changed` says nothing."""
+    an_hour_ago = (T0 - timedelta(hours=1)).isoformat()
+    _c, src = await _poll_steadily(
+        monkeypatch, lambda now: state("on", last_changed=an_hour_ago), seconds=30)
+    assert src.clocks()["unusable"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_change_seen_between_polls_still_measures_the_clock(monkeypatch):
+    """The skew estimate keeps working where it has something to measure: HA's
+    clock runs 40 s slow, and a change lands between two polls."""
+    def rows(now):
+        if now < T0 + timedelta(seconds=9):
+            return state("off", last_changed=(T0 - timedelta(hours=2)).isoformat())
+        return state("on", last_changed=(now - timedelta(seconds=41)).isoformat())
+    _c, src = await _poll_steadily(monkeypatch, rows, seconds=30)
+    clock = src.clocks()["clocks"][0]
+    assert clock["source_id"] == "home_assistant"
+    assert 38 <= clock["offset_s"] <= 44, clock
 
 
 # -- The API, and the wiring behind it -----------------------------------------
