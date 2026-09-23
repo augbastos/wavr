@@ -529,3 +529,179 @@ def test_a_wavr_entity_is_listed_with_the_reason_rather_than_hidden():
     assert len(rows) == 1
     assert rows[0]["suggested_room"] == ""
     assert "own evidence" in rows[0]["refused"]
+
+
+# -- Location mappings: a Bermuda area sensor --------------------------------------
+#
+# Bermuda (github.com/agittins/bermuda) publishes `sensor.<device>_area` whose
+# STATE is a Home Assistant area NAME ("Kitchen"), `unknown` when the device has
+# not been heard for ~30 s, and `unavailable` when the integration is down. Before
+# location mappings, "Kitchen" fell through `to_event` as NOT one of
+# "on", "home", "detected" or "true" -- i.e. as ABSENCE.
+
+from wavr.ha_presence import to_events  # noqa: E402
+
+AREAS = {"Kitchen": "kitchen", "Office": "office"}
+
+
+def area_state(value, **kw):
+    row = {"entity_id": "sensor.phone_area", "state": value,
+           "last_changed": T0.isoformat(),
+           "attributes": {"area_id": "kitchen", "area_name": value,
+                          "current_mac": "aa:bb:cc:dd:ee:ff",
+                          "device_class": "bermuda__custom_device_class"}}
+    row.update(kw)
+    return row
+
+
+def located(store=None):
+    store = store or HAPresenceStore(":memory:")
+    return store.map_location("sensor.phone_area", AREAS, label="Alex's phone")
+
+
+def by_room(events):
+    return {e.room: e.presence for e in events}
+
+
+def test_an_area_value_was_absence_before_and_is_presence_now():
+    binary = Mapping("sensor.phone_area", "kitchen", "node")
+    assert to_event(area_state("Kitchen"), binary, at=T0.isoformat()).presence is False, \
+        "the old reading of 'Kitchen', kept as the reason this mode exists"
+    evs = to_events(area_state("Kitchen"), located(), at=T0.isoformat())
+    assert by_room(evs) == {"kitchen": True, "office": False}
+    present = [e for e in evs if e.presence][0]
+    assert (present.modality, present.confidence, present.count) == ("ble", DEFAULT_CONFIDENCE, None)
+    assert all(e.confidence == 0.0 for e in evs if not e.presence)
+
+
+def test_a_move_releases_the_room_it_left_at_once():
+    m = located()
+    assert by_room(to_events(area_state("Kitchen"), m, at=T0.isoformat()))["kitchen"]
+    assert by_room(to_events(area_state("Office"), m, at=T0.isoformat())) == \
+        {"kitchen": False, "office": True}
+
+
+def test_area_names_match_as_a_person_reads_them():
+    assert by_room(to_events(area_state("  kitchen "), located(), at=T0.isoformat()))["kitchen"]
+
+
+def test_unknown_unavailable_none_and_an_invalid_area_say_nothing():
+    m = located()
+    for value in ("unknown", "unavailable", "none", "", None,
+                  "Invalid Area for Alex's phone"):
+        assert to_events(area_state(value), m, at=T0.isoformat()) == [], value
+
+
+def test_an_unmapped_area_creates_no_room_and_releases_the_mapped_ones():
+    evs = to_events(area_state("Garage"), located(), at=T0.isoformat())
+    assert by_room(evs) == {"kitchen": False, "office": False}
+    assert "garage" not in by_room(evs) and "Garage" not in by_room(evs)
+
+
+def test_the_payload_cannot_choose_the_room():
+    """`area_id`/`area_name` attributes are ignored; only the operator's table maps."""
+    evs = to_events(area_state("Office", attributes={"area_id": "kitchen",
+                                                     "area_name": "Kitchen"}),
+                    located(), at=T0.isoformat())
+    assert by_room(evs) == {"kitchen": False, "office": True}
+
+
+def test_a_location_mapping_needs_an_area_table_that_names_rooms():
+    store = HAPresenceStore(":memory:")
+    for bad in ({}, {"Kitchen": ""}, {"": "kitchen"}, "Kitchen"):
+        with pytest.raises(HAPresenceError):
+            store.map_location("sensor.phone_area", bad)
+    with pytest.raises(HAPresenceError):
+        store.map_location("sensor.wavr_kitchen_area", AREAS)
+    with pytest.raises(HAPresenceError):
+        store.map_location("sensor.phone_area", {"Kitchen": "kitchen", " kitchen": "office"})
+
+
+def test_a_location_mapping_round_trips_and_an_old_database_is_migrated(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE ha_presence_map (entity_id TEXT PRIMARY KEY, room TEXT NOT NULL,"
+                " modality TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,"
+                " label TEXT NOT NULL DEFAULT '', created_ts TEXT NOT NULL)")
+    con.execute("INSERT INTO ha_presence_map VALUES ('binary_sensor.hall_motion', 'hall',"
+                " 'pir', 1, '', '2026-09-01T00:00:00+00:00')")
+    con.commit()
+    con.close()
+    store = HAPresenceStore(path)
+    store.map_location("sensor.phone_area", AREAS)
+    rows = {m.entity_id: m for m in HAPresenceStore(path).list()}
+    assert rows["binary_sensor.hall_motion"].room == "hall"
+    assert not rows["binary_sensor.hall_motion"].is_location
+    assert dict(rows["sensor.phone_area"].areas) == {"kitchen": "kitchen", "office": "office"}
+    assert rows["sensor.phone_area"].to_dict()["areas"] == {"kitchen": "kitchen", "office": "office"}
+    # Remapping as an ordinary sensor drops the table rather than keeping two meanings.
+    store.map("sensor.phone_area", "hall", "node")
+    assert not HAPresenceStore(path).get("sensor.phone_area").is_location
+
+
+@pytest.mark.asyncio
+async def test_a_bermuda_area_held_for_minutes_keeps_the_room(monkeypatch):
+    """Stale-by-last_changed would have killed this after ~90 s (see
+    test_a_sensor_that_stays_on_is_still_evidence_minutes_later)."""
+    from wavr import ha_presence as mod
+    from wavr.fusion import FusionEngine
+    clock = [T0]
+
+    async def no_wait(_s):
+        return None
+
+    monkeypatch.setattr(mod.asyncio, "sleep", no_wait)
+    store = HAPresenceStore(":memory:")
+    store.map_location("sensor.phone_area", AREAS)
+    entered = (T0 - timedelta(seconds=5)).isoformat()
+
+    class ClockedHA(FakeHA):
+        def get_state(self, entity_id):
+            return area_state("Kitchen", last_changed=entered)
+
+    src = HomeAssistantSource(store, ClockedHA(), interval=3.0,
+                              timebase=TimeBase(now_fn=lambda: clock[0]))
+    fe = FusionEngine(now_fn=lambda: clock[0])
+    gen = src.events()
+    try:
+        for _ in range(80):                      # 4 minutes, two events per poll
+            for _ in range(2):
+                fe.update(await gen.__anext__())
+            clock[0] += timedelta(seconds=3)
+    finally:
+        await gen.aclose()
+    assert fe.state("kitchen").occupied and fe.state("kitchen").confidence > 0
+    assert not fe.state("office").occupied
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_entity_is_unreadable_not_empty():
+    """HA answers 404 for an entity_id that was renamed; the client raises, and
+    the mapping produces nothing (and reports itself unhealthy)."""
+    store = HAPresenceStore(":memory:")
+    store.map_location("sensor.phone_area", AREAS)
+    health = []
+
+    class Renamed(FakeHA):
+        def get_state(self, entity_id):
+            raise OSError("404: entity not found")
+
+    src = HomeAssistantSource(store, Renamed(), interval=0.5,
+                              on_health=lambda eid, ok: health.append((eid, ok)))
+    assert src._poll_one(store.get("sensor.phone_area")) == []
+    assert health == [("sensor.phone_area", False)]
+
+
+def test_mapping_a_bermuda_sensor_through_the_api(monkeypatch, tmp_path):
+    monkeypatch.setenv("WAVR_DB", str(tmp_path / "w.db"))
+    app, client = _app(monkeypatch)
+    with client as c:
+        r = c.put("/api/ha/presence/sensor.phone_area",
+                  json={"areas": {"Kitchen": "kitchen", "Office": "office"}})
+        assert r.status_code == 200, r.text
+        assert r.json()["areas"] == {"kitchen": "kitchen", "office": "office"}
+        names = {s["name"] for s in c.get("/api/system").json()["sources"]}
+        assert "home_assistant" in names
+        bad = c.put("/api/ha/presence/sensor.phone_area", json={"areas": {"Kitchen": ""}})
+        assert bad.status_code == 400

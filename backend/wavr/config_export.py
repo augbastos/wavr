@@ -84,7 +84,7 @@ CAMERA_FIELDS = ("name", "room", "level", "confidence")
 NODE_FIELDS = ("node_id", "label", "room", "sensor_type", "modality", "state",
                "transport")
 ANCHOR_FIELDS = ("name", "room", "level", "kind", "x", "y", "z", "note")
-HA_MAPPING_FIELDS = ("entity_id", "room", "modality", "enabled", "label")
+HA_MAPPING_FIELDS = ("entity_id", "room", "modality", "enabled", "label", "areas")
 PROVIDER_FIELDS = ("provider_id", "label", "kind", "reach", "modality",
                    "ceiling", "confidence", "enabled", "notes")
 
