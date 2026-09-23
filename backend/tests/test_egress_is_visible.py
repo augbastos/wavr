@@ -373,8 +373,11 @@ def test_the_reference_experience_comment_matches_the_route():
     header gate was removed. A comment that describes a gate the code does not
     have is how the next reader concludes the surface is safer than it is.
     """
-    src = Path(appmod.__file__).read_text(encoding="utf-8")
+    # The routes and their comment moved together into wavr.api_shell.
+    import wavr.api_shell as shellmod
+    src = Path(shellmod.__file__).read_text(encoding="utf-8")
     block = src[src.index("# -- Reference experiences, developer mode only"):]
-    block = block[:block.index("_EXPERIENCE_PAGES = (")]
+    block = block[:block.index("def _developer_file(")]
+    assert "no header check and no scope" in block, "the comment moved or was lost"
     assert "require_local" not in block, block
     assert "admin" not in block, block

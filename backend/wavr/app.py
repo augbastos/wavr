@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -78,6 +78,8 @@ from wavr.known_store import KnownStore
 from wavr.netinventory import _same_ip
 from wavr.anchors import AnchorStore, summarize as anchors_summary
 from wavr.api_anchors import build_router as build_anchors_router
+from wavr.api_shell import build_shell_router
+from wavr.api_ptz import build_ptz_router
 from wavr.api_developer import build_router as build_developer_router
 from wavr.api_provider_ingest import build_router as build_provider_ingest_router
 from wavr.api_config_export import build_router as build_config_export_router
@@ -547,9 +549,6 @@ def _default_sources(cfg, ble_provider=None, net_provider=None, net_detail_provi
 SOURCE_HEARTBEATS: dict[str, float] = {"mmwave": 30.0}
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-# ONVIF PTZ preset tokens (A4.3): the token is XML-escaped in the SOAP body anyway,
-# but reject obviously-junk tokens early so a hostile id can't reach a log/traceback.
-_PRESET_RE = re.compile(r"^[A-Za-z0-9_\-:.]{1,100}$")
 # Scheme is restricted to rtsp(s) -- the URL is handed straight to cv2.VideoCapture,
 # so allowing arbitrary schemes (http://, file://, etc.) would let a caller point it
 # at internal/metadata endpoints or the local filesystem (SSRF/LFI via camera add).
@@ -6260,77 +6259,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         except PrivacyControlNotImplemented as e:
             raise HTTPException(status_code=501, detail=str(e)) from None
 
-    # ------------------------------------------------------------------- #
     # ONVIF PTZ actuator routes (A4.3) -- opt-in (WAVR_PTZ) + require_local +
-    # master camera kill-switch. Creds come ONLY from the stored rtsp_url and
-    # NEVER appear in a request/response/log. No frame is ever read.
-    # ------------------------------------------------------------------- #
-    def _ptz_cam(camera_id: str) -> dict:
-        # Flag gate FIRST (default OFF -> 503 before any store lookup / ONVIF call).
-        if not cfg.ptz:
-            raise HTTPException(status_code=503, detail="PTZ disabled (set WAVR_PTZ=1)")
-        if not _NAME_RE.match(camera_id):
-            raise HTTPException(status_code=400, detail="camera id must be alphanumeric/_/-")
-        cam = _cameras.get(camera_id)
-        if not cam:
-            raise HTTPException(status_code=404, detail=f"unknown camera: {camera_id}")
-        return cam   # cam["rtsp_url"] carries the creds -- NEVER echo it back
-
-    def _camera_active(camera_id: str) -> bool:
-        # Master camera kill-switch coupling: PTZ may only actuate a camera the
-        # operator has explicitly turned ON (source task running). System kill or a
-        # per-source disable both flip `active` False -> every move short-circuits.
-        return any(s["name"] == camera_id and s["active"]
-                   for s in manager.status()["sources"])
-
-    @app.post("/api/ptz/{camera_id}/move")
-    async def ptz_move(camera_id: str,
-                       pan: float = Body(0.0), tilt: float = Body(0.0),
-                       zoom: float = Body(0.0), _=Depends(require_local),
-                       __=Depends(require_scope("control"))):
-        cam = _ptz_cam(camera_id)
-        if not _camera_active(camera_id):
-            # Camera off -> no ONVIF call at all (kill-switch dominates PTZ).
-            return {"ok": False, "reason": "camera off"}
-        ok = await _ptz.continuous_move(camera_id, cam["rtsp_url"], pan, tilt, zoom)
-        return {"ok": ok}
-
-    @app.post("/api/ptz/{camera_id}/stop")
-    async def ptz_stop(camera_id: str, _=Depends(require_local),
-                       __=Depends(require_scope("control"))):
-        cam = _ptz_cam(camera_id)
-        # Stop is always allowed (safety): even a just-disabled camera should halt.
-        return {"ok": await _ptz.stop(camera_id, cam["rtsp_url"])}
-
-    @app.get("/api/ptz/{camera_id}/presets")
-    async def ptz_presets(camera_id: str, _=Depends(require_scope("camera:view"))):
-        cam = _ptz_cam(camera_id)
-        return await _ptz.get_presets(camera_id, cam["rtsp_url"])
-
-    @app.post("/api/ptz/{camera_id}/preset/{token}")
-    async def ptz_goto_preset(camera_id: str, token: str, _=Depends(require_local),
-                              __=Depends(require_scope("control"))):
-        cam = _ptz_cam(camera_id)
-        if not _PRESET_RE.match(token):
-            raise HTTPException(status_code=400, detail="invalid preset token")
-        if not _camera_active(camera_id):
-            return {"ok": False, "reason": "camera off"}
-        return {"ok": await _ptz.goto_preset(camera_id, cam["rtsp_url"], token)}
-
-    @app.get("/api/ptz/{camera_id}/capabilities")
-    async def ptz_capabilities(camera_id: str, _=Depends(require_scope("camera:view"))):
-        cam = _ptz_cam(camera_id)
-        return await _ptz.capabilities(camera_id, cam["rtsp_url"])
-
-    @app.get("/api/ptz/{camera_id}/status")
-    async def ptz_status(camera_id: str, _=Depends(require_scope("camera:view"))):
-        # Read-only PTZ position (pan/tilt/zoom) -- the BEARING SEAM for person
-        # localization on a pan/tilt camera. Same gate/pattern as capabilities:
-        # WAVR_PTZ + loopback; reads ONLY ONVIF control metadata, NEVER a frame
-        # (ADR-0002). Creds come from the stored rtsp_url and never reach the response.
-        # None (non-PTZ/offline/faulting camera) surfaces as {"status": null}.
-        cam = _ptz_cam(camera_id)
-        return {"status": await _ptz.get_status(camera_id, cam["rtsp_url"])}
+    # master camera kill-switch; see wavr.api_ptz.
+    app.include_router(build_ptz_router(
+        enabled=cfg.ptz, cameras=_cameras, ptz=_ptz, sources_status=manager.status,
+        require_local=require_local, require_scope=require_scope, name_re=_NAME_RE))
 
     if cfg.multidevice:
         @app.post("/api/pair-code")
@@ -6634,154 +6567,12 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         finally:
             _events_hub.unsubscribe(q)
 
-    # -- Reference experiences, developer mode only -------------------------
-    #
-    # Served from the Core so they are one click away from the machine that has
-    # the data, rather than something a developer has to host themselves and
-    # then fight CORS over.
-    #
-    # Gated on the developer-mode switch and on a fixed list of names, and
-    # deliberately on NOTHING else -- no header check and no scope. An earlier
-    # version of this comment described a header-and-scope pair that the
-    # routes below do not carry and must not: a top-level browser navigation
-    # cannot send a custom header, so that gate made the pages impossible to
-    # open, which is the single thing they exist for (see `experience_page`,
-    # and the `/experiences/*` clause in `_is_static_shell`). They are static
-    # HTML carrying no data, exactly as "/" is; the Space stays behind the API
-    # they then call, which does send the header and is redacted per
-    # experience. A comment describing a gate the code does not have is how
-    # the next reader concludes a surface is safer than it is.
-
-    _EXPERIENCE_PAGES = ("spatial-web", "capability-aware", "anchor-demo")
-
-    def _developer_file(path):
-        """A file under the developer directories, or a 404 that says which.
-
-        `resolve()` and a containment check rather than trusting the name: these
-        segments come from a URL, and `..` in one of them would otherwise read
-        any file the process can. The names are also matched against a fixed
-        tuple above, which alone would be enough — this is the second lock,
-        because a future route that forgets the tuple should still be safe.
-        """
-        if not _developer_mode_on():
-            raise HTTPException(status_code=403,
-                                detail="Developer mode is off. Turn it on in Settings.")
-        try:
-            resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError):
-            raise HTTPException(status_code=404, detail="not bundled in this build")
-        root = _INDEX.parent.parent.resolve()
-        if root not in resolved.parents:
-            raise HTTPException(status_code=404, detail="not found")
-        if not resolved.is_file():
-            raise HTTPException(status_code=404, detail="not bundled in this build")
-        return FileResponse(resolved)
-
-    @app.get("/experiences/{name}/")
-    async def experience_page(name: str):
-        """A reference page, served like the dashboard shell.
-
-        No `require_local` and no scope, and that is not a relaxation — it is a
-        correction. A top-level browser navigation cannot send a custom header,
-        so requiring one made these pages impossible to open, which is the
-        single thing they exist for. They are static HTML carrying no data,
-        exactly as "/" is, and the Space stays behind the API they then call.
-
-        Still gated on developer mode, still restricted to a fixed set of names,
-        and still containment-checked before anything is read from disk.
-        """
-        if name not in _EXPERIENCE_PAGES:
-            raise HTTPException(status_code=404, detail=f"no experience {name!r}")
-        return _developer_file(_EXPERIENCES_DIR / name / "index.html")
-
-    @app.get("/sdk/javascript/wavr.js")
-    async def sdk_javascript():
-        """The SDK the reference pages import.
-
-        The real file, not a copy. A served copy would drift from the one in the
-        repository, and the drift would be discovered by whoever trusted the
-        page they were reading.
-        """
-        return _developer_file(_SDK_DIR / "javascript" / "wavr.js")
-
-    @app.get("/")
-    async def dashboard():
-        return FileResponse(_INDEX)
-
-    # sw.js precaches "./index.html" by name (Cache.addAll is all-or-nothing), but only
-    # "/" was ever registered -- so that entry 404'd and the service worker never
-    # installed on the live origin (H3 audit fix). Same response as "/"; exempted from
-    # the token gate the same way "/" is (see loopback_or_authed above).
-    @app.get("/index.html")
-    async def dashboard_index_html():
-        return FileResponse(_INDEX)
-
-    # PWA shell files, served same-origin so the app installs + caches without any
-    # external request (the SW registers, the manifest resolves, the icon loads). These
-    # are the static shell; like "/" they carry nothing sensitive.
-    _FRONTEND = _INDEX.parent
-
-    @app.get("/manifest.webmanifest")
-    async def manifest():
-        return FileResponse(_FRONTEND / "manifest.webmanifest",
-                            media_type="application/manifest+json")
-
-    @app.get("/sw.js")
-    async def service_worker():
-        return FileResponse(_FRONTEND / "sw.js", media_type="text/javascript")
-
-    @app.get("/icon.svg")
-    async def icon():
-        return FileResponse(_FRONTEND / "icon.svg", media_type="image/svg+xml")
-
-    # Every module lifted out of index.html, served by ONE route.
-    #
-    # This was eleven hand-written routes, one per file, under a comment
-    # arguing that "an allowlist of two filenames has no traversal surface".
-    # That was true at two. At eleven it had turned into a chore, and the chore
-    # gates something bigger than one script: a module the shell requests and
-    # the backend does not serve 404s, `Cache.addAll` is all-or-nothing, so the
-    # service worker's install fails as a unit and the whole OFFLINE shell goes
-    # with it. Forgetting a route costs offline launch, not one feature.
-    #
-    # The traversal surface is closed by construction rather than by
-    # enumeration. Two independent checks, either one sufficient:
-    #
-    #   * the name must be a bare lowercase filename ending in `.js` — no
-    #     slash, no dot-segment, no backslash, nothing encoded survives, and
-    #     Starlette percent-DECODES the path parameter before this sees it, so
-    #     the string being matched is the one that would reach the filesystem;
-    #   * the resolved path must be a direct child of `frontend/js` and a
-    #     regular file, checked AFTER resolution, so a symlink planted in that
-    #     directory and pointing elsewhere still opens nothing.
-    _JS_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.js$")
-    _JS_DIR = (_FRONTEND / "js").resolve()
-
-    @app.get("/js/{name}")
-    async def js_module(name: str):
-        """A shell script: markup and script, no data, no action.
-
-        Served without the `X-Wavr-Local` header, like the rest of the shell —
-        a browser navigating to the page cannot send a custom header, and a
-        script it cannot fetch is a blank screen with nothing to explain it.
-        Developer tooling is the same class: `developer.js` is inert on a
-        normal install (its first request comes back 403 and it renders
-        "developer mode is off"), and gating the FILE would take the offline
-        shell down for everybody to hide a script that already says no.
-        """
-        if not _JS_NAME.match(name):
-            raise HTTPException(status_code=404, detail="not found")
-        path = (_JS_DIR / name).resolve()
-        if path.parent != _JS_DIR or not path.is_file():
-            raise HTTPException(status_code=404, detail="not found")
-        return FileResponse(path, media_type="text/javascript")
-
-    # F2 phone-capture shell (WebXR, "Measure with your phone"). Static, carries nothing
-    # sensitive -- like "/" it is token/subnet-exempt so an unpaired LAN phone can load
-    # it; the data endpoint (PUT /api/house/room) still requires a central-role token.
-    @app.get("/measure.html")
-    async def measure_page():
-        return FileResponse(_FRONTEND / "measure.html", media_type="text/html")
+    # The dashboard shell and the developer-mode reference pages: static files,
+    # no data, token-exempt like "/" (see wavr.api_shell). Registered LAST, as
+    # the routes it replaced were.
+    app.include_router(build_shell_router(
+        index=_INDEX, experiences_dir=_EXPERIENCES_DIR, sdk_dir=_SDK_DIR,
+        developer_mode_on=_developer_mode_on))
 
     return app
 
