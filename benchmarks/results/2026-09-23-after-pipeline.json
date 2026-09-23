@@ -1,0 +1,105 @@
+{
+ "label": "2026-09-23-after-pipeline",
+ "environment": {
+  "when": "2026-09-23T21:21:14+00:00",
+  "git": "8fe6737",
+  "os_family": "Windows",
+  "core_python": "3.14.5",
+  "core_env": "dev",
+  "scope": "one development machine; compare runs from the same machine only"
+ },
+ "pipeline": {
+  "import_wavr_app_fresh_db_s": 14.356,
+  "python": "3.14.5",
+  "fusion_update_us": 20.43,
+  "fusion_state_us": 15.02,
+  "insert_state_ms": 3.415,
+  "recent_200": {
+   "n": 50,
+   "p50_us": 1584.8,
+   "p95_us": 2852.8,
+   "p99_us": null,
+   "mean_us": 1700.1
+  },
+  "create_app_existing_db_s": 0.3383,
+  "ingest_to_hub_changing": {
+   "n": 950,
+   "p50_us": 1102.6,
+   "p95_us": 2021.0,
+   "p99_us": 12510.3,
+   "mean_us": 11103.0
+  },
+  "ingest_to_hub_steady": {
+   "n": 950,
+   "p50_us": 167.8,
+   "p95_us": 339.1,
+   "p99_us": 1158.6,
+   "mean_us": 193.3
+  },
+  "payloads": {
+   "/api/state": {
+    "status": 200,
+    "bytes": 3862,
+    "n": 25,
+    "p50_us": 4034.3,
+    "p95_us": 6739.7,
+    "p99_us": null,
+    "mean_us": 4130.2
+   },
+   "/api/runtime": {
+    "status": 200,
+    "bytes": 377,
+    "n": 25,
+    "p50_us": 3346.8,
+    "p95_us": 4198.4,
+    "p99_us": null,
+    "mean_us": 3318.4
+   },
+   "/api/house-status": {
+    "status": 200,
+    "bytes": 101,
+    "n": 25,
+    "p50_us": 2173.4,
+    "p95_us": 2923.4,
+    "p99_us": null,
+    "mean_us": 2239.3
+   },
+   "/api/status": {
+    "status": 200,
+    "bytes": 904,
+    "n": 25,
+    "p50_us": 2397.7,
+    "p95_us": 3951.1,
+    "p99_us": null,
+    "mean_us": 2550.3
+   },
+   "/api/history": {
+    "status": 200,
+    "bytes": 59337,
+    "n": 25,
+    "p50_us": 11953.3,
+    "p95_us": 18565.7,
+    "p99_us": null,
+    "mean_us": 13233.3
+   },
+   "/api/attention": {
+    "status": 200,
+    "bytes": 150,
+    "n": 25,
+    "p50_us": 2175.5,
+    "p95_us": 2987.6,
+    "p99_us": null,
+    "mean_us": 2238.1
+   },
+   "/api/transparency": {
+    "status": 200,
+    "bytes": 450,
+    "n": 25,
+    "p50_us": 2693.4,
+    "p95_us": 4021.4,
+    "p99_us": null,
+    "mean_us": 2848.4
+   }
+  }
+ }
+}

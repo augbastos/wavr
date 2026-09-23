@@ -18,6 +18,9 @@ python benchmarks/bench.py --lan ...                    # also sweep the real lo
 | `_core.py` | Launches a real Core, faking only the hardware edge (ARP sweep, BLE radio) on request. |
 | `pipeline.py` | In-process: event → hub latency, fusion, SQLite, API payload size and latency. |
 | `footprint.py` | Installed size per distribution of the interpreter it runs in. |
+| `ab_imports.py` | Interleaved A/B of `import wavr.app` between two installs. |
+| `ab_pipeline.py` | Interleaved A/B of `pipeline.py` between two source trees. |
+| `native_footprint.py` | The native `wavr` binary: size, start-up beside Python, the Node role's RSS and CPU. |
 
 Scenarios (`--scenarios`): `base`, `network`, `inventory`, `ble`, `ha` (a fake Home
 Assistant served by the harness, four mapped entities), `sim`, `multi`. With `--lan`,
@@ -39,3 +42,9 @@ Core configured that way would.
 - Nothing here gates CI. Structural regressions (a heavy import creeping back into the
   base path, a disabled source doing work) are guarded by tests in `backend/tests`,
   because those can fail deterministically; a wall-clock threshold cannot.
+- **Wall-clock comparisons are interleaved.** Two runs taken minutes apart were not
+  comparable here: fusion, which had not changed, came out 60% slower in the second.
+  `ab_imports.py` and `ab_pipeline.py` alternate A and B round by round so drift lands
+  on both, and the pipeline A/B carries its own controls -- metrics whose code is
+  byte-identical in both trees. A difference smaller than the spread of those controls
+  is not a result.

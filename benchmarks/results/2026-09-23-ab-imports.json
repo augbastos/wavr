@@ -1,0 +1,36 @@
+{
+ "rounds": 20,
+ "A_is": "baseline install (numpy in base)",
+ "B_is": "after install (no numpy)",
+ "method": "benchmarks/ab_imports.py: interleaved, separate databases, one machine",
+ "A": {
+  "bare_interpreter_s": 0.051,
+  "import_wavr_app_s": 1.838,
+  "import_minus_interpreter_s": 1.781,
+  "top_packages_self_ms": {
+   "wavr": 720.9,
+   "fastapi": 182.1,
+   "numpy": 117.4,
+   "pydantic": 115.5,
+   "asyncio": 30.9,
+   "starlette": 26.9,
+   "pydantic_core": 18.9,
+   "anyio": 15.6
+  }
+ },
+ "B": {
+  "bare_interpreter_s": 0.07,
+  "import_wavr_app_s": 1.65,
+  "import_minus_interpreter_s": 1.565,
+  "top_packages_self_ms": {
+   "wavr": 696.6,
+   "fastapi": 187.1,
+   "pydantic": 106.1,
+   "asyncio": 35.7,
+   "starlette": 27.2,
+   "pydantic_core": 19.0,
+   "anyio": 14.9,
+   "email": 10.8
+  }
+ }
+}
