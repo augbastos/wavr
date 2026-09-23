@@ -49,6 +49,32 @@ def parse_ld2450_frame(frame: bytes) -> list[Target]:
     return out
 
 
+# Bytes kept while no header has been found, and what is kept when that bound is
+# passed: enough to hold a header split across two reads.
+_MAX_BUFFER = 4096
+_KEEP_ON_OVERFLOW = 64
+
+
+def take_ld2450_frame(buf: bytes) -> tuple[bytes | None, bytes]:
+    """The next 30-byte report frame in a serial byte stream, and what is left.
+
+    `(frame, rest)` when a whole frame starting at a header is buffered, else
+    `(None, buf)` -- trimmed to its last few bytes once it grows past
+    `_MAX_BUFFER` with no frame in it. Framing only: validity (the tail, the
+    slots) is `parse_ld2450_frame`'s job, here and on the Core for a node that
+    forwards raw frames.
+
+    Canonical: the native runtime (native/) frames a radar the same way, and
+    conformance/ld2450_framing.json, generated from this function, checks it.
+    """
+    i = buf.find(_HEADER)
+    if i >= 0 and len(buf) >= i + 30:
+        return buf[i:i + 30], buf[i + 30:]
+    if len(buf) > _MAX_BUFFER:
+        return None, buf[-_KEEP_ON_OVERFLOW:]
+    return None, buf
+
+
 async def _serial_frames(port: str) -> AsyncIterator[bytes]:
     """Default transport: read LD2450 frames from a local serial port.
     pyserial is a lazy optional dep ([mmwave] extra)."""
@@ -61,12 +87,10 @@ async def _serial_frames(port: str) -> AsyncIterator[bytes]:
         buf = leftover
         while True:
             buf += s.read(64)
-            i = buf.find(_HEADER)
-            if i >= 0 and len(buf) >= i + 30:
-                leftover = buf[i + 30:]
-                return buf[i: i + 30]
-            if len(buf) > 4096:
-                buf = buf[-64:]
+            frame, buf = take_ld2450_frame(buf)
+            if frame is not None:
+                leftover = buf
+                return frame
 
     # Opening (and closing) the port is a blocking syscall -- offload both off the
     # event loop, same class of fix as the RTSP capture open in sources/camera.py.

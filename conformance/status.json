@@ -1,0 +1,629 @@
+{
+ "cases": [
+  {
+   "attention": {
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 0,
+   "name": "healthy/clean",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "text": "Rooms updated 4 seconds ago."
+     },
+     {
+      "key": "sensors",
+      "text": "3 sensors reporting."
+     }
+    ],
+    "last_state_age_s": 4.2,
+    "role": "",
+    "space": "My Home",
+    "state": "healthy",
+    "uptime_s": 93784
+   },
+   "text_ascii": "Wavr\n  Space         My Home\n  Core          + Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         My Home\n  Core          ● Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": {
+    "headline": "1 thing needs you",
+    "total": 1
+   },
+   "exit_code": 1,
+   "name": "healthy/one",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "text": "Rooms updated 4 seconds ago."
+     },
+     {
+      "key": "sensors",
+      "text": "3 sensors reporting."
+     }
+    ],
+    "last_state_age_s": 4.2,
+    "role": "",
+    "space": "My Home",
+    "state": "healthy",
+    "uptime_s": 93784
+   },
+   "text_ascii": "Wavr\n  Space         My Home\n  Core          + Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     1 thing needs you",
+   "text_unicode": "Wavr\n  Space         My Home\n  Core          ● Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     1 thing needs you"
+  },
+  {
+   "attention": {
+    "could_not_check": [
+     "alerts"
+    ],
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "healthy/could_not_check",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "text": "Rooms updated 4 seconds ago."
+     },
+     {
+      "key": "sensors",
+      "text": "3 sensors reporting."
+     }
+    ],
+    "last_state_age_s": 4.2,
+    "role": "",
+    "space": "My Home",
+    "state": "healthy",
+    "uptime_s": 93784
+   },
+   "text_ascii": "Wavr\n  Space         My Home\n  Core          + Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         My Home\n  Core          ● Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": null,
+   "exit_code": 1,
+   "name": "healthy/unreadable",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "text": "Rooms updated 4 seconds ago."
+     },
+     {
+      "key": "sensors",
+      "text": "3 sensors reporting."
+     }
+    ],
+    "last_state_age_s": 4.2,
+    "role": "",
+    "space": "My Home",
+    "state": "healthy",
+    "uptime_s": 93784
+   },
+   "text_ascii": "Wavr\n  Space         My Home\n  Core          + Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     could not check",
+   "text_unicode": "Wavr\n  Space         My Home\n  Core          ● Healthy\n  Uptime        1d 2h\n  Last reading  4s ago\n  Sensors       3 sensors reporting.\n  Attention     could not check"
+  },
+  {
+   "attention": {
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 0,
+   "name": "starting/clean",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": null,
+    "space": "",
+    "state": "starting",
+    "uptime_s": 12
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          - Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         —\n  Core          ○ Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": {
+    "headline": "1 thing needs you",
+    "total": 1
+   },
+   "exit_code": 1,
+   "name": "starting/one",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": null,
+    "space": "",
+    "state": "starting",
+    "uptime_s": 12
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          - Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     1 thing needs you",
+   "text_unicode": "Wavr\n  Space         —\n  Core          ○ Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     1 thing needs you"
+  },
+  {
+   "attention": {
+    "could_not_check": [
+     "alerts"
+    ],
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "starting/could_not_check",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": null,
+    "space": "",
+    "state": "starting",
+    "uptime_s": 12
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          - Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         —\n  Core          ○ Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": null,
+   "exit_code": 1,
+   "name": "starting/unreadable",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": null,
+    "space": "",
+    "state": "starting",
+    "uptime_s": 12
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          - Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     could not check",
+   "text_unicode": "Wavr\n  Space         —\n  Core          ○ Starting\n  Uptime        12s\n  Last reading  none yet\n  Attention     could not check"
+  },
+  {
+   "attention": {
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "degraded/clean",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "degraded",
+      "text": "The kitchen radar is not reporting."
+     },
+     {
+      "key": "nodes",
+      "text": "1 of 2 nodes reporting."
+     }
+    ],
+    "last_state_age_s": 65,
+    "role": "primary",
+    "space": "Flat 2",
+    "state": "degraded",
+    "uptime_s": 7260
+   },
+   "text_ascii": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     Nothing needs your attention\n\n  The kitchen radar is not reporting.",
+   "text_unicode": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     Nothing needs your attention\n\n  The kitchen radar is not reporting."
+  },
+  {
+   "attention": {
+    "headline": "1 thing needs you",
+    "total": 1
+   },
+   "exit_code": 1,
+   "name": "degraded/one",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "degraded",
+      "text": "The kitchen radar is not reporting."
+     },
+     {
+      "key": "nodes",
+      "text": "1 of 2 nodes reporting."
+     }
+    ],
+    "last_state_age_s": 65,
+    "role": "primary",
+    "space": "Flat 2",
+    "state": "degraded",
+    "uptime_s": 7260
+   },
+   "text_ascii": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     1 thing needs you\n\n  The kitchen radar is not reporting.",
+   "text_unicode": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     1 thing needs you\n\n  The kitchen radar is not reporting."
+  },
+  {
+   "attention": {
+    "could_not_check": [
+     "alerts"
+    ],
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "degraded/could_not_check",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "degraded",
+      "text": "The kitchen radar is not reporting."
+     },
+     {
+      "key": "nodes",
+      "text": "1 of 2 nodes reporting."
+     }
+    ],
+    "last_state_age_s": 65,
+    "role": "primary",
+    "space": "Flat 2",
+    "state": "degraded",
+    "uptime_s": 7260
+   },
+   "text_ascii": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     Nothing needs your attention\n\n  The kitchen radar is not reporting.",
+   "text_unicode": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     Nothing needs your attention\n\n  The kitchen radar is not reporting."
+  },
+  {
+   "attention": null,
+   "exit_code": 1,
+   "name": "degraded/unreadable",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "degraded",
+      "text": "The kitchen radar is not reporting."
+     },
+     {
+      "key": "nodes",
+      "text": "1 of 2 nodes reporting."
+     }
+    ],
+    "last_state_age_s": 65,
+    "role": "primary",
+    "space": "Flat 2",
+    "state": "degraded",
+    "uptime_s": 7260
+   },
+   "text_ascii": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     could not check\n\n  The kitchen radar is not reporting.",
+   "text_unicode": "Wavr\n  Space         Flat 2\n  Core          ! Degraded\n  Role          primary\n  Uptime        2h 1m\n  Last reading  1m ago\n  Nodes         1 of 2 nodes reporting.\n  Attention     could not check\n\n  The kitchen radar is not reporting."
+  },
+  {
+   "attention": {
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "attention/clean",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "attention",
+      "text": "A camera needs a password."
+     }
+    ],
+    "last_state_age_s": 3,
+    "space": "Casa",
+    "state": "attention",
+    "uptime_s": 59
+   },
+   "text_ascii": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     Nothing needs your attention\n\n  A camera needs a password.",
+   "text_unicode": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     Nothing needs your attention\n\n  A camera needs a password."
+  },
+  {
+   "attention": {
+    "headline": "1 thing needs you",
+    "total": 1
+   },
+   "exit_code": 1,
+   "name": "attention/one",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "attention",
+      "text": "A camera needs a password."
+     }
+    ],
+    "last_state_age_s": 3,
+    "space": "Casa",
+    "state": "attention",
+    "uptime_s": 59
+   },
+   "text_ascii": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     1 thing needs you\n\n  A camera needs a password.",
+   "text_unicode": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     1 thing needs you\n\n  A camera needs a password."
+  },
+  {
+   "attention": {
+    "could_not_check": [
+     "alerts"
+    ],
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "attention/could_not_check",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "attention",
+      "text": "A camera needs a password."
+     }
+    ],
+    "last_state_age_s": 3,
+    "space": "Casa",
+    "state": "attention",
+    "uptime_s": 59
+   },
+   "text_ascii": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     Nothing needs your attention\n\n  A camera needs a password.",
+   "text_unicode": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     Nothing needs your attention\n\n  A camera needs a password."
+  },
+  {
+   "attention": null,
+   "exit_code": 1,
+   "name": "attention/unreadable",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "attention",
+      "text": "A camera needs a password."
+     }
+    ],
+    "last_state_age_s": 3,
+    "space": "Casa",
+    "state": "attention",
+    "uptime_s": 59
+   },
+   "text_ascii": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     could not check\n\n  A camera needs a password.",
+   "text_unicode": "Wavr\n  Space         Casa\n  Core          ! Attention\n  Uptime        59s\n  Last reading  3s ago\n  Attention     could not check\n\n  A camera needs a password."
+  },
+  {
+   "attention": {
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 2,
+   "name": "unavailable/clean",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "unavailable",
+      "text": "Nothing produced for an hour."
+     }
+    ],
+    "last_state_age_s": 3700,
+    "space": "",
+    "state": "unavailable",
+    "uptime_s": 4000
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          x Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     Nothing needs your attention\n\n  Nothing produced for an hour.",
+   "text_unicode": "Wavr\n  Space         —\n  Core          × Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     Nothing needs your attention\n\n  Nothing produced for an hour."
+  },
+  {
+   "attention": {
+    "headline": "1 thing needs you",
+    "total": 1
+   },
+   "exit_code": 2,
+   "name": "unavailable/one",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "unavailable",
+      "text": "Nothing produced for an hour."
+     }
+    ],
+    "last_state_age_s": 3700,
+    "space": "",
+    "state": "unavailable",
+    "uptime_s": 4000
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          x Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     1 thing needs you\n\n  Nothing produced for an hour.",
+   "text_unicode": "Wavr\n  Space         —\n  Core          × Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     1 thing needs you\n\n  Nothing produced for an hour."
+  },
+  {
+   "attention": {
+    "could_not_check": [
+     "alerts"
+    ],
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 2,
+   "name": "unavailable/could_not_check",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "unavailable",
+      "text": "Nothing produced for an hour."
+     }
+    ],
+    "last_state_age_s": 3700,
+    "space": "",
+    "state": "unavailable",
+    "uptime_s": 4000
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          x Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     Nothing needs your attention\n\n  Nothing produced for an hour.",
+   "text_unicode": "Wavr\n  Space         —\n  Core          × Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     Nothing needs your attention\n\n  Nothing produced for an hour."
+  },
+  {
+   "attention": null,
+   "exit_code": 2,
+   "name": "unavailable/unreadable",
+   "runtime": {
+    "findings": [
+     {
+      "key": "state",
+      "state": "unavailable",
+      "text": "Nothing produced for an hour."
+     }
+    ],
+    "last_state_age_s": 3700,
+    "space": "",
+    "state": "unavailable",
+    "uptime_s": 4000
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          x Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     could not check\n\n  Nothing produced for an hour.",
+   "text_unicode": "Wavr\n  Space         —\n  Core          × Unavailable\n  Uptime        1h 6m\n  Last reading  1h 1m ago\n  Attention     could not check\n\n  Nothing produced for an hour."
+  },
+  {
+   "attention": {
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 0,
+   "name": "paused/clean",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": 0.4,
+    "space": "Office",
+    "state": "paused",
+    "uptime_s": 360000
+   },
+   "text_ascii": "Wavr\n  Space         Office\n  Core          - Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         Office\n  Core          ○ Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": {
+    "headline": "1 thing needs you",
+    "total": 1
+   },
+   "exit_code": 1,
+   "name": "paused/one",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": 0.4,
+    "space": "Office",
+    "state": "paused",
+    "uptime_s": 360000
+   },
+   "text_ascii": "Wavr\n  Space         Office\n  Core          - Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     1 thing needs you",
+   "text_unicode": "Wavr\n  Space         Office\n  Core          ○ Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     1 thing needs you"
+  },
+  {
+   "attention": {
+    "could_not_check": [
+     "alerts"
+    ],
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "paused/could_not_check",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": 0.4,
+    "space": "Office",
+    "state": "paused",
+    "uptime_s": 360000
+   },
+   "text_ascii": "Wavr\n  Space         Office\n  Core          - Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         Office\n  Core          ○ Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": null,
+   "exit_code": 1,
+   "name": "paused/unreadable",
+   "runtime": {
+    "findings": [],
+    "last_state_age_s": 0.4,
+    "space": "Office",
+    "state": "paused",
+    "uptime_s": 360000
+   },
+   "text_ascii": "Wavr\n  Space         Office\n  Core          - Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     could not check",
+   "text_unicode": "Wavr\n  Space         Office\n  Core          ○ Paused\n  Uptime        4d 4h\n  Last reading  0s ago\n  Attention     could not check"
+  },
+  {
+   "attention": {
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 0,
+   "name": "unknown_state/clean",
+   "runtime": {
+    "findings": [],
+    "state": "reticulating",
+    "uptime_s": null
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": {
+    "headline": "1 thing needs you",
+    "total": 1
+   },
+   "exit_code": 1,
+   "name": "unknown_state/one",
+   "runtime": {
+    "findings": [],
+    "state": "reticulating",
+    "uptime_s": null
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     1 thing needs you",
+   "text_unicode": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     1 thing needs you"
+  },
+  {
+   "attention": {
+    "could_not_check": [
+     "alerts"
+    ],
+    "headline": "Nothing needs your attention",
+    "total": 0
+   },
+   "exit_code": 1,
+   "name": "unknown_state/could_not_check",
+   "runtime": {
+    "findings": [],
+    "state": "reticulating",
+    "uptime_s": null
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     Nothing needs your attention",
+   "text_unicode": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     Nothing needs your attention"
+  },
+  {
+   "attention": null,
+   "exit_code": 1,
+   "name": "unknown_state/unreadable",
+   "runtime": {
+    "findings": [],
+    "state": "reticulating",
+    "uptime_s": null
+   },
+   "text_ascii": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     could not check",
+   "text_unicode": "Wavr\n  Space         —\n  Core          • Reticulating\n  Uptime        never\n  Last reading  none yet\n  Attention     could not check"
+  }
+ ],
+ "exit_codes": {
+  "attention": 1,
+  "ok": 0,
+  "unreachable": 2
+ },
+ "source": "backend/wavr/status.py (exit_code, render)",
+ "unreachable_runtime": {
+  "findings": [
+   {
+    "detail": "no response from the local Core",
+    "key": "core",
+    "state": "unavailable",
+    "text": "Wavr is not answering on this machine. It may have stopped.",
+    "text_args": {},
+    "text_template": "Wavr is not answering on this machine. It may have stopped."
+   }
+  ],
+  "headline": "Wavr — not responding",
+  "headline_template": "Wavr — not responding",
+  "last_state_age_s": null,
+  "role": "",
+  "space": "",
+  "state": "unavailable",
+  "uptime_s": null
+ }
+}

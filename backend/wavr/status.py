@@ -294,6 +294,23 @@ def main(argv=None) -> int:
     elif not args.quiet:
         print(render(runtime, attention, marks_for(sys.stdout)))
 
+    code = exit_code(runtime, attention)
+    if (code == ATTENTION and not args.quiet and not args.json
+            and runtime.get("state") not in ("degraded", "attention")
+            and not (attention or {}).get("total")):
+        print("Wavr could not read everything that might need you, so this "
+              "is not a clean bill of health.", file=sys.stderr)
+    return code
+
+
+def exit_code(runtime: dict, attention: dict | None) -> int:
+    """The exit code for one answer from the Core -- the whole CLI contract.
+
+    A function of its own because it is shared: the native `wavr status`
+    (native/) must give the same answer for the same payload, and
+    conformance/status.json, generated from this function, is how that is
+    checked rather than hoped.
+    """
     state = runtime.get("state")
     if state == "unavailable":
         return UNREACHABLE
@@ -308,9 +325,6 @@ def main(argv=None) -> int:
     # it reports `could_not_check` rather than an empty list, and this is the
     # consumer that was ignoring it.
     if attention is None or attention.get("could_not_check"):
-        if not args.quiet and not args.json:
-            print("Wavr could not read everything that might need you, so this "
-                  "is not a clean bill of health.", file=sys.stderr)
         return ATTENTION
     return OK
 
