@@ -52,7 +52,7 @@ from wavr.sources.camera import CameraSource, yolo_pose_detect
 from wavr.sources.mmwave import MmWaveSource
 from wavr.camera_store import CameraStore
 from wavr.calib_store import CalibrationStore, validate_mount, CalibrationError
-from wavr.localize import make_localizer, floor_spots_for_room
+from wavr.localize import HomographyUnavailable, make_localizer, floor_spots_for_room
 from wavr.calib_sample import CalibSampleStore
 from wavr.calib_refine import solve_progressive
 from wavr.calib_session import CalibSessionStore, CalibSessionError, SessionState
@@ -5968,6 +5968,10 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
             # except also catches the store's own persistence-shape guards.
             try:
                 solve_progressive(_calib, name, image_points, floor_points, img_w, img_h)
+            except HomographyUnavailable as exc:
+                # The points may be perfect; this Core cannot solve with them.
+                # 501, not 422: re-marking the room would not help.
+                raise HTTPException(status_code=501, detail=str(exc))
             except ValueError as exc:
                 # Degenerate / non-finite / malformed correspondences, or an
                 # out-of-range persisted size -> 422, never a silently near-singular

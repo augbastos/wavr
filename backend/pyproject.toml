@@ -8,10 +8,11 @@ dependencies = [
   "uvicorn[standard]>=0.29",
   "python-dotenv>=1.0",
   "websockets>=12",
-  # numpy is imported unconditionally by wavr.app (via calib_store -> localize's homography
-  # math), so it is a real base requirement — not an optional camera extra. Keeping it out of
-  # base broke `pip install -e backend[dev]` in CI (ModuleNotFoundError: numpy on every app import).
-  "numpy>=1.24",
+  # numpy is NOT here, on purpose. It was, because wavr.app imported it at start
+  # (app -> calib_store -> localize), which made two thirds of a base install and an
+  # OpenBLAS thread pool the price of a Core with no camera. localize now imports it
+  # only to solve a homography, which is camera work, so it rides the [camera] extra.
+  # tests/test_the_base_core_stays_light.py fails if an import brings it back.
 ]
 
 [project.optional-dependencies]
@@ -19,12 +20,17 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "cryptography>=42",
        # test_ha_export_is_complete renders Home Assistant value_templates the
        # way HA itself does, which means Jinja. Undeclared, it took the whole
        # suite down at collection on a clean checkout.
-       "jinja2>=3.1"]
+       "jinja2>=3.1",
+       # The homography tests solve real calibrations; the base Core no longer
+       # carries numpy (see above), so the suite has to ask for it.
+       "numpy>=1.24"]
 # Development-only: benchmarks/bench.py measures a Core from outside with psutil,
 # and benchmarks/pipeline.py drives the API in-process with httpx. Never needed
 # to run Wavr.
 bench = ["psutil>=5.9", "httpx>=0.27"]
-camera = ["opencv-python>=4.9", "ultralytics>=8.2"]
+# numpy is listed although opencv brings it: calibration solves with it directly,
+# and an undeclared dependency is one a future opencv release can take away.
+camera = ["opencv-python>=4.9", "ultralytics>=8.2", "numpy>=1.24"]
 mqtt = ["paho-mqtt>=2.0"]
 genai = ["google-generativeai>=0.7"]
 mmwave = ["pyserial>=3.5"]

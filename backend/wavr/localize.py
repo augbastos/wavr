@@ -5,9 +5,19 @@ letter points at nothing — kept here only so an old reference resolves.)
 
 Turns a CV *feet pixel* (bottom-centre of a YOLO person box) into a *floor point*
 in the house-map's metre frame, so a camera can place a person AT an (x, y) on the
-maquette rather than only flagging the room. This module is PURE GEOMETRY + numpy
-(already a dep): no cv2, no frame, no I/O. It never reads or persists a video frame
-(ADR-0002) -- it only ever consumes a detection coordinate + a stored calibration.
+maquette rather than only flagging the room. This module is PURE GEOMETRY: no cv2,
+no frame, no I/O. It never reads or persists a video frame (ADR-0002) -- it only
+ever consumes a detection coordinate + a stored calibration.
+
+NUMPY IS NEEDED BY ONE FUNCTION, and imported there. Solving a homography is an
+SVD, and hand-rolling one is how a calibration silently goes wrong; everything
+else here is 3x3 and 3-vector arithmetic that plain floats do exactly. It used to
+be imported at the top, which made numpy -- two thirds of a base install by size,
+plus an OpenBLAS thread pool in every process -- a requirement of a Core with no
+camera at all, because `app -> calib_store -> localize` runs at import. Solving a
+homography is camera work, and the [camera] extra brings numpy with it; without
+it, `homography_from_points` raises `HomographyUnavailable` rather than a bare
+ImportError, and nothing else in this module notices.
 
 COORDINATE FRAMES (load-bearing -- everything here is metres unless named `_px`):
 
@@ -67,7 +77,14 @@ import math
 from collections import deque
 from dataclasses import dataclass
 
-import numpy as np
+
+class HomographyUnavailable(RuntimeError):
+    """A homography solve was asked for on a Core without numpy.
+
+    Deliberately NOT a ValueError: callers map ValueError to "your points are
+    bad" (422), and that would send an operator re-marking perfectly good points
+    for a problem that is an install, not an input.
+    """
 
 # Positional-quality hints per method. These scale a positioned Target's OWN
 # confidence (display / per-person), never the room's fused confidence. Deliberately
@@ -145,15 +162,22 @@ def _finite_point(p) -> bool:
 # Path 2 -- accurate: 4+-point homography (pure DLT, numpy SVD).
 # --------------------------------------------------------------------------- #
 
-def homography_from_points(image_pts, floor_pts) -> np.ndarray:
-    """Least-squares homography H (3x3) mapping IMAGE pixels -> FLOOR metres from
-    >=4 correspondences, via the Direct Linear Transform (SVD, no cv2).
+def homography_from_points(image_pts, floor_pts):
+    """Least-squares homography H (3x3 numpy array) mapping IMAGE pixels -> FLOOR
+    metres from >=4 correspondences, via the Direct Linear Transform (SVD, no cv2).
 
     Raises ValueError on: mismatched lengths, <4 points, any non-finite coord, or a
     near-degenerate (collinear / coincident) configuration whose DLT matrix is
     rank-deficient -- so a bad calibration is refused, never returned as a silent
-    near-singular transform that mislocates every later projection.
+    near-singular transform that mislocates every later projection. Raises
+    HomographyUnavailable when numpy is not installed (see the module docstring).
     """
+    try:
+        import numpy as np
+    except ImportError as exc:     # ModuleNotFoundError, or a broken numpy build
+        raise HomographyUnavailable(
+            "solving a camera calibration needs numpy, which comes with Wavr's "
+            "[camera] extra (pip install 'wavr[camera]')") from exc
     if len(image_pts) != len(floor_pts):
         raise ValueError("image_pts and floor_pts must be the same length")
     if len(image_pts) < 4:
@@ -187,21 +211,29 @@ def homography_from_points(image_pts, floor_pts) -> np.ndarray:
     return h / h[2, 2]
 
 
-def apply_h(h: np.ndarray, u: float, v: float) -> tuple[float, float] | None:
-    """Project one image pixel (u, v) to a floor point via homography `h`. Returns
-    None if the projective denominator is ~0 (point maps to infinity -- a ray parallel
-    to the floor), so a bad pixel yields no point rather than a garbage coordinate."""
-    vec = h @ np.array([float(u), float(v), 1.0])
-    w = vec[2]
+def _row3(h, i: int) -> tuple[float, float, float]:
+    """Row `i` of a 3x3 given as nested sequences or a 2-D numpy array."""
+    r = h[i]
+    return float(r[0]), float(r[1]), float(r[2])
+
+
+def apply_h(h, u: float, v: float) -> tuple[float, float] | None:
+    """Project one image pixel (u, v) to a floor point via homography `h` (a 3x3:
+    nested sequences or a numpy array). Returns None if the projective denominator
+    is ~0 (point maps to infinity -- a ray parallel to the floor), so a bad pixel
+    yields no point rather than a garbage coordinate."""
+    u, v = float(u), float(v)
+    (a, b, c), (d, e, f), (g, k, m) = _row3(h, 0), _row3(h, 1), _row3(h, 2)
+    w = g * u + k * v + m
     if abs(w) < 1e-12 or not math.isfinite(w):
         return None
-    x, y = vec[0] / w, vec[1] / w
+    x, y = (a * u + b * v + c) / w, (d * u + e * v + f) / w
     if not (math.isfinite(x) and math.isfinite(y)):
         return None
     return float(x), float(y)
 
 
-def homography_reprojection_error(h: np.ndarray, image_pts, floor_pts) -> float:
+def homography_reprojection_error(h, image_pts, floor_pts) -> float:
     """RMS reprojection error, in FLOOR METRES, of homography `h` against the SAME
     correspondences it was solved from: for each (image, floor) pair, project the
     image point through `h` and measure the distance to the actual floor point. This
@@ -247,6 +279,16 @@ def homography_quality(residual_m: float) -> float:
 # Path 1 -- approximate: monocular ground-plane ray from the mount prior.
 # --------------------------------------------------------------------------- #
 
+def _cross(a, b) -> tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def _norm(a) -> float:
+    return math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+
+
 def monocular_floor_point(u: float, v: float, img_w: float, img_h: float,
                           mount: MountPose) -> tuple[float, float] | None:
     """Intersect the ray through image pixel (u, v) with the floor plane (h = 0),
@@ -273,26 +315,25 @@ def monocular_floor_point(u: float, v: float, img_w: float, img_h: float,
     tilt = math.radians(mount.tilt_deg)
     yaw = math.radians(mount.yaw_deg)
     # Optical axis (unit): azimuth yaw in floor plane, depressed by tilt below level.
-    fwd = np.array([math.cos(tilt) * math.cos(yaw),
-                    math.cos(tilt) * math.sin(yaw),
-                    -math.sin(tilt)])
-    world_up = np.array([0.0, 0.0, 1.0])
-    right = np.cross(fwd, world_up)
-    n = np.linalg.norm(right)
+    fwd = (math.cos(tilt) * math.cos(yaw),
+           math.cos(tilt) * math.sin(yaw),
+           -math.sin(tilt))
+    right = _cross(fwd, (0.0, 0.0, 1.0))        # fwd x world-up
+    n = _norm(right)
     if n < 1e-9:
         # Looking straight up/down: pick an arbitrary horizontal right axis by yaw.
-        right = np.array([-math.sin(yaw), math.cos(yaw), 0.0])
+        right = (-math.sin(yaw), math.cos(yaw), 0.0)
     else:
-        right = right / n
-    cam_down = np.cross(fwd, right)  # image +v direction (right-handed x=right,y=down,z=fwd)
+        right = (right[0] / n, right[1] / n, right[2] / n)
+    cam_down = _cross(fwd, right)  # image +v direction (right-handed x=right,y=down,z=fwd)
 
     a = (float(u) - cx) / fx        # rightward pixel offset (focal units)
     b = (float(v) - cy) / fy        # downward pixel offset
-    ray = fwd + a * right + b * cam_down
-    rn = np.linalg.norm(ray)
+    ray = tuple(fwd[i] + a * right[i] + b * cam_down[i] for i in range(3))
+    rn = _norm(ray)
     if rn < 1e-9:
         return None
-    ray = ray / rn
+    ray = (ray[0] / rn, ray[1] / rn, ray[2] / rn)
     if ray[2] >= -1e-9:             # not pointing downward -> no floor hit ahead
         return None
     t = mount.height / (-ray[2])    # distance along ray to h = 0
@@ -342,7 +383,7 @@ def _frame_size_matches(img_size, calib_size) -> bool:
     return iw == cw and ih == ch
 
 
-def localize(feet_px, img_size, *, homography: np.ndarray | None = None,
+def localize(feet_px, img_size, *, homography=None,
              mount: MountPose | None = None,
              homography_img_size: tuple[float, float] | None = None,
              homography_quality: float | None = None) -> LocalizeResult | None:
@@ -377,6 +418,26 @@ def localize(feet_px, img_size, *, homography: np.ndarray | None = None,
     return None
 
 
+def _as_3x3(homography) -> tuple | None:
+    """A homography as a 3x3 tuple of floats, from a flat row-major 9-list (how the
+    CalibrationStore persists it), nested rows, or a numpy array. None -- never a
+    guess -- unless there are exactly nine finite numbers."""
+    flat: list[float] = []
+    try:
+        for item in homography:
+            try:
+                row = iter(item)
+            except TypeError:           # a scalar: the flat, persisted shape
+                flat.append(float(item))
+            else:
+                flat.extend(float(x) for x in row)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if len(flat) != 9 or not all(math.isfinite(x) for x in flat):
+        return None
+    return (tuple(flat[0:3]), tuple(flat[3:6]), tuple(flat[6:9]))
+
+
 def make_localizer(room_poly, *, homography=None, mount: MountPose | None = None,
                     calib_img_size: tuple | None = None,
                     homography_quality: float | None = None):
@@ -396,11 +457,7 @@ def make_localizer(room_poly, *, homography=None, mount: MountPose | None = None
     against it, and the homography path is rejected (never silently mislocating) on a
     mismatch. `homography_quality` is the per-camera MEASURED quality (0..1) computed
     at calibration time; omit it to fall back to the flat `Q_HOMOGRAPHY` default."""
-    h = None
-    if homography is not None:
-        arr = np.asarray(homography, dtype=float)
-        if arr.size == 9 and np.all(np.isfinite(arr)):
-            h = arr.reshape(3, 3)
+    h = _as_3x3(homography) if homography is not None else None
     if h is None and mount is None:
         return None
 
@@ -500,7 +557,7 @@ class MovementAccumulator:
         return len(self._samples) >= self._min_samples and \
             self.coverage() >= self._min_spread_px
 
-    def refine(self):  # -> np.ndarray | None
+    def refine(self):  # -> a 3x3 homography | None
         """SCAFFOLD: a walked-path homography fit would go here. Returns None (no
         fabricated matrix) until that estimator is built + verified. NOT VERIFIED."""
         return None
