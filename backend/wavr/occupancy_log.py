@@ -107,6 +107,22 @@ class OccupancyLog:
 
     # ---- write ----------------------------------------------------------------------
 
+    def would_append(self, room: str, occupied: bool, confidence: float,
+                     person_count: int | None) -> bool:
+        """Whether `append_if_changed` would write, answered from memory alone.
+
+        Exists so the caller can stay on its event loop for the common answer.
+        `_publish` runs for every room on every re-fuse tick and every sensor
+        event, and it used to hand EVERY call to a worker thread just to have this
+        dictionary comparison say no. A stale read here is harmless: the worst it
+        can do is send one call to `append_if_changed`, which checks again.
+        """
+        prev = self._last.get(room)
+        return (prev is None
+                or prev["occupied"] != bool(occupied)
+                or prev["person_count"] != person_count
+                or abs(prev["confidence"] - confidence) >= _CONFIDENCE_EPS)
+
     def append_if_changed(self, room: str, occupied: bool, confidence: float,
                            person_count: int | None, ts: str) -> bool:
         """Append a snapshot ONLY if it differs from the last logged row for this room
@@ -115,14 +131,7 @@ class OccupancyLog:
         fusion tick. Returns True iff a row was actually inserted. Safe to call on every
         published RoomState; the dedup is entirely internal (callers never need their own
         change-detection)."""
-        prev = self._last.get(room)
-        changed = (
-            prev is None
-            or prev["occupied"] != bool(occupied)
-            or prev["person_count"] != person_count
-            or abs(prev["confidence"] - confidence) >= _CONFIDENCE_EPS
-        )
-        if not changed:
+        if not self.would_append(room, occupied, confidence, person_count):
             return False
         with self._lock:
             self._conn.execute(

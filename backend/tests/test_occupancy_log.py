@@ -34,6 +34,20 @@ def test_unchanged_repeat_is_a_noop():
     assert len(log.timeline("sala")) == 1  # the repeat never landed a second row
 
 
+def test_would_append_predicts_append_if_changed_exactly():
+    # The Core asks `would_append` on its event loop and only then pays for a
+    # worker thread. If the two ever disagree, a real change is silently not
+    # logged -- so they are checked against each other over a mixed sequence.
+    log = _store()
+    seq = [(True, 0.9, 2), (True, 0.9, 2), (True, 0.905, 2), (True, 0.92, 2),
+           (True, 0.92, 3), (False, 0.92, 3), (False, 0.0, None), (False, 0.0, None)]
+    for i, (occ, conf, n) in enumerate(seq):
+        predicted = log.would_append("sala", occ, conf, n)
+        actual = log.append_if_changed("sala", occ, conf, n,
+                                       f"2026-07-01T10:00:{i:02d}+00:00")
+        assert predicted is actual, (i, occ, conf, n)
+
+
 def test_occupied_flip_inserts():
     log = _store()
     log.append_if_changed("sala", True, 0.9, 2, "2026-07-01T10:00:00+00:00")

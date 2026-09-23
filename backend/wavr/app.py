@@ -1879,7 +1879,11 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # every-5s no-op re-fuse passes never grow the table, but a genuine occupied/
         # confidence/person_count change is captured even on a `persist=False` tick pass.
         # None when disabled (WAVR_OCCUPANCY_LOG=0) -- identical to today's behaviour.
-        if _occupancy_log is not None:
+        # The dedup is answered in memory first: a thread hop per room per tick
+        # to be told "unchanged" was most of what a steady house cost.
+        _would = getattr(_occupancy_log, "would_append", None)
+        if _occupancy_log is not None and (_would is None or _would(
+                d["room"], d["occupied"], d["confidence"], d.get("person_count"))):
             await asyncio.to_thread(_occupancy_log.append_if_changed, d["room"],
                                     d["occupied"], d["confidence"],
                                     d.get("person_count"), d["ts"])
