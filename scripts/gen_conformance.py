@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO / "backend"))
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 
 from wavr import capabilities as cap  # noqa: E402
+from wavr import client_view as cv  # noqa: E402
 from wavr import status as st  # noqa: E402
 from wavr.runtime_status import unreachable  # noqa: E402
 from wavr.sources.mmwave import parse_ld2450_frame, take_ld2450_frame  # noqa: E402
@@ -197,6 +198,61 @@ def _loopback() -> dict:
             "cases": [{"url": u, "loopback": st.is_loopback(u)} for u in urls]}
 
 
+def _client_view() -> dict:
+    # The native client snapshot: well-formed answers, and every way an answer
+    # can arrive garbled. JSON has no NaN, so non-finite numbers are covered by
+    # the Python unit test instead.
+    healthy = {"state": "healthy", "headline": "Wavr is running", "space": "Home",
+               "role": "core", "uptime_s": 3600, "last_state_age_s": 4.5,
+               "findings": [{"key": "sensors", "state": "healthy", "text": "3 sensors",
+                             "text_template": "{n} sensors", "text_args": {"n": 3},
+                             "detail": None}]}
+    inbox = {"total": 1, "blocking": 0, "degraded": 1, "info": 0,
+             "headline": "1 thing needs your attention", "could_not_check": [],
+             "items": [{"key": "cam-url", "band": "degraded", "title": "Camera needs a URL",
+                        "detail": "Kitchen camera", "where": "kitchen", "action": "open",
+                        "since": "2026-09-24T10:00:00+00:00", "count": 1,
+                        "evidence": {"x": 1}}]}
+    empty_inbox = {"total": 0, "blocking": 0, "degraded": 0, "info": 0,
+                   "headline": "Nothing needs your attention", "could_not_check": [],
+                   "items": []}
+    room = {"occupied": True, "confidence": 0.87, "person_count": 1,
+            "precision_level": "position", "explanation": "mmwave: presence",
+            "ts": "2026-09-24T10:00:00+00:00", "vitals": {"hr": 60},
+            "targets": [{"x": 1, "y": 2}], "identities": ["alice"],
+            "sources": [{"modality": "mmwave", "sensor_id": "a", "presence": True,
+                         "confidence": 0.9, "age_s": 3, "health": "fresh", "count": 1,
+                         "reliability": 0.5}]}
+    watched = {**room, "targets": [], "identities": [], "vitals": {}, "watch": True,
+               "unrecognized": True}
+    garbled_room = {"occupied": "yes", "confidence": "0.9", "person_count": 1.5,
+                    "precision_level": 3, "explanation": None, "ts": 12,
+                    "watch": "true", "sources": [7, {"modality": 1, "presence": 1,
+                                                     "confidence": True, "age_s": "3",
+                                                     "health": None, "count": False}]}
+    rows = [
+        ("healthy_empty_inbox", healthy, empty_inbox, {"office": room, "bath": {**room, "occupied": False}}, True, None),
+        ("attention_item", healthy, inbox, {"office": room}, True, None),
+        ("watch_on", healthy, empty_inbox, {"office": watched}, True, None),
+        ("inbox_could_not_check", healthy, {**empty_inbox, "could_not_check": ["pairings", 7]}, {}, True, None),
+        ("inbox_wrong_shape", healthy, [], {}, True, None),
+        ("inbox_unreadable", healthy, None, {}, True, None),
+        ("degraded_runtime", {**healthy, "state": "degraded"}, empty_inbox, {}, True, None),
+        ("unavailable_runtime", {**healthy, "state": "unavailable"}, None, None, True, None),
+        ("runtime_wrong_shape", ["healthy"], empty_inbox, {}, True, None),
+        ("garbled_fields", {**healthy, "uptime_s": "long", "findings": [1, {"key": 2}]},
+         {**inbox, "total": "1", "items": ["x", {"count": True}]},
+         {"office": garbled_room, "bad": 5}, True, None),
+        ("state_wrong_shape", healthy, empty_inbox, ["office"], True, None),
+        ("core_not_answering", None, None, None, False, "cannot connect to 127.0.0.1:8000"),
+    ]
+    return {"source": "backend/wavr/client_view.py (snapshot)",
+            "cases": [{"name": n, "runtime": r, "attention": a, "state": s_,
+                       "reachable": ok, "error": err,
+                       "snapshot": cv.snapshot(r, a, s_, reachable=ok, error=err)}
+                      for n, r, a, s_, ok, err in rows]}
+
+
 FIXTURES = {
     "status.json": _status,
     "compute_tier.json": _tiers,
@@ -204,6 +260,7 @@ FIXTURES = {
     "ld2450_framing.json": _ld2450,
     "heartbeat.json": _heartbeat,
     "loopback.json": _loopback,
+    "client_view.json": _client_view,
 }
 
 

@@ -89,6 +89,12 @@ def test_plain_http_off_this_machine_is_refused_before_connecting(monkeypatch):
     assert opened == ["http://127.0.0.1:8000/api/runtime"]
 
 
+def test_a_password_in_the_url_is_never_printed():
+    from wavr.status import printable_url
+    assert printable_url("https://alice:hunter2@127.0.0.1:8000/x") == "https://***@127.0.0.1:8000/x"
+    assert printable_url("https://127.0.0.1:8000") == "https://127.0.0.1:8000"
+
+
 def test_the_doctor_tool_shares_this_rule_rather_than_keeping_its_own():
     """Two copies of a security decision is one copy that gets fixed and one
     that does not."""

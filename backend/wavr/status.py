@@ -89,6 +89,15 @@ def is_loopback(url: str) -> bool:
         return False
 
 
+def printable_url(url: str) -> str:
+    """The URL as it may be printed: a `user:password@` someone pasted into
+    --url is replaced, never echoed to a terminal, a log or --json output."""
+    parts = urllib.parse.urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urllib.parse.urlunsplit(parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1]))
+
+
 def context_for(url: str):
     """TLS settings, and the reason for them.
 
@@ -318,7 +327,7 @@ def main(argv=None) -> int:
             # by nobody and this file was quietly the second implementation.
             print(json.dumps({"runtime": unreachable().to_dict(),
                               "attention": None,
-                              "error": str(exc), "url": args.url}, indent=2))
+                              "error": str(exc), "url": printable_url(args.url)}, indent=2))
         elif not args.quiet:
             hint = ("  Start it with:  python -m wavr.serve"
                     if is_loopback(args.url) else
@@ -326,7 +335,7 @@ def main(argv=None) -> int:
                     "certificate is checked.\n"
                     "  A Core across the network needs one this machine already "
                     "trusts.")
-            print(f"Wavr is not answering at {args.url}.\n  {exc}\n{hint}",
+            print(f"Wavr is not answering at {printable_url(args.url)}.\n  {exc}\n{hint}",
                   file=sys.stderr)
         return UNREACHABLE
 
