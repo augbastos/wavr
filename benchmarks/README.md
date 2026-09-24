@@ -21,6 +21,8 @@ python benchmarks/bench.py --lan ...                    # also sweep the real lo
 | `ab_imports.py` | Interleaved A/B of `import wavr.app` between two installs. |
 | `ab_pipeline.py` | Interleaved A/B of `pipeline.py` between two source trees. |
 | `native_footprint.py` | The native `wavr` binary: size, start-up beside Python, the Node role's RSS and CPU. |
+| `onnx_spike.py` | Person detection through onnxruntime instead of torch/ultralytics: decision parity per image and threshold, raw-output parity, egress, installed size. Needs its own venv with `ultralytics`, `onnxruntime`, `onnx`, `onnxslim`, `psutil`. |
+| `onnx_ab.py` | Interleaved cold start, latency and RSS of the two detection paths, reusing `onnx_spike.py`'s work directory. |
 
 Scenarios (`--scenarios`): `base`, `network`, `inventory`, `ble`, `ha` (a fake Home
 Assistant served by the harness, four mapped entities), `sim`, `multi`. With `--lan`,
