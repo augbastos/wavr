@@ -1,0 +1,68 @@
+name: native
+
+# The portable C++ runtime (native/). Path-filtered like firmware.yml: it runs
+# only when something it can observe changed -- the runtime, the answer key it
+# is checked against, the firmware file it shares, or this workflow.
+#
+# What it proves, and what it does not: the host job RUNS the conformance
+# answer key on Linux x86_64. The cross job only COMPILES for the other
+# targets -- a successful build there says the code is portable, never that
+# it runs (docs/PLATFORMS.md keeps the two apart).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "native/**"
+      - "conformance/**"
+      - "firmware/wavr_node/src/fingerprint_fmt.*"
+      - ".github/workflows/native.yml"
+  pull_request:
+    paths:
+      - "native/**"
+      - "conformance/**"
+      - "firmware/wavr_node/src/fingerprint_fmt.*"
+      - ".github/workflows/native.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_URL: https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+  # From https://ziglang.org/download/index.json for that exact file.
+  ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Build and run the conformance answer key
+        run: |
+          cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Install Zig (pinned by hash)
+        run: |
+          curl -sSfL "$ZIG_URL" -o zig.tar.xz
+          echo "$ZIG_SHA256  zig.tar.xz" | sha256sum -c -
+          mkdir zig && tar -xJf zig.tar.xz -C zig --strip-components=1
+      - name: Build for every target (compile only)
+        run: |
+          for t in aarch64-linux-musl arm-linux-musleabihf mipsel-linux-musleabi \
+                   aarch64-windows-gnu aarch64-macos x86_64-macos; do
+            cmake -S native -B "build-$t" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_TOOLCHAIN_FILE=native/cmake/zig-toolchain.cmake \
+              -DZIG="$PWD/zig/zig" -DZIG_TARGET="$t"
+            cmake --build "build-$t"
+          done

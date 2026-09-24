@@ -181,12 +181,28 @@ def _heartbeat() -> dict:
                       for n, s, b, ns, why in rows]}
 
 
+def _loopback() -> dict:
+    # Who counts as THIS machine decides where certificate checks may be skipped
+    # and where plain HTTP may carry the local token. The hostile rows are the
+    # point: names that merely start like a loopback address.
+    urls = ["http://127.0.0.1:8000", "https://127.0.0.5:8000", "https://127.255.255.254",
+            "https://localhost:8000", "https://LOCALHOST", "https://[::1]:8000",
+            "https://127.0.0.1.attacker.example:8000", "https://127.evil.example",
+            "https://localhost.attacker.example", "https://127.0.0.1@attacker.example",
+            "https://192.168.1.57:8000", "https://10.0.0.9", "https://0.0.0.0:8000",
+            "https://128.0.0.1", "https://[::2]:8000", "https://127.1",
+            "https://core.example.com"]
+    return {"source": "backend/wavr/status.py (is_loopback)",
+            "cases": [{"url": u, "loopback": st.is_loopback(u)} for u in urls]}
+
+
 FIXTURES = {
     "status.json": _status,
     "compute_tier.json": _tiers,
     "vocabulary.json": _vocabulary,
     "ld2450_framing.json": _ld2450,
     "heartbeat.json": _heartbeat,
+    "loopback.json": _loopback,
 }
 
 

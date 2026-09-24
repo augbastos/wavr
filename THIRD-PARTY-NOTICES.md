@@ -169,6 +169,14 @@ DENSO WAVE INCORPORATED.
 
   Versions whose interfaces were read: ESPresense firmware v4.0.6, ESPresense-companion
   v2.2.2, Bermuda v0.8.7, Frigate 0.18.0 (2026-09-23).
+- **The native runtime's dependencies** (`native/`) are fetched at configure time,
+  pinned by version and SHA-256, and not vendored: **mbedTLS 3.6.7** (dual-licensed
+  Apache-2.0 OR GPL-2.0-or-later; Wavr uses it under Apache-2.0) and **nlohmann/json
+  3.12.0** (MIT). Both are linked statically into the `wavr` binary, so **anyone who
+  distributes a built binary** must ship their notices with it, together with those of
+  the C/C++ runtime the toolchain linked in (musl, MIT, for the Zig Linux builds; the
+  mingw-w64 runtime for Windows builds). No binary is distributed from this repository
+  today.
 - The IEEE OUI data and the device heuristics in `backend/wavr/data/` are compiled from
   public registry data and from this project's own observations, not copied from any
   commercial device-identification product. See
