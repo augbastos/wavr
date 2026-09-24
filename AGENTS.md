@@ -31,6 +31,10 @@ Breaking one is not a style regression — it makes a claim the README makes unt
 | `desktop/` | Tauri v2 (Rust) shell around the loopback Core. See ADR-0007. |
 | `mobile/` | Capacitor Android companion app, plus its Kotlin plugins. |
 | `core-launcher/` | Android kiosk / Core launcher. A *client* by default; becoming a Core is an explicit act. |
+| `firmware/` | The ESP32 Node (PlatformIO). |
+| `native/` | The portable C++ runtime: `wavr` CLI, the Node role, the C ABI. **Not** a second Core. |
+| `conformance/` | Answer key generated from the Python (`scripts/gen_conformance.py`); `native/` is tested against it. Never hand-edit. |
+| `benchmarks/` | The performance harness and its results. Wall-clock comparisons are interleaved A/B only. |
 | `site/` | The marketing site. **Never deployed.** |
 | `scripts/` | Launchers, generators, and `publication_gate.py`. |
 | `docs/adr/` | Architecture decisions, including the ones that supersede each other. |
@@ -67,6 +71,8 @@ python -m pytest backend/tests -q                          # full suite; all har
 cd desktop; npm run dev                                    # Tauri dev (needs Rust MSVC + Node 18+)
 powershell scripts/wavr-desktop.ps1                        # zero-Rust launcher (backend + browser)
 python scripts/publication_gate.py                         # pre-publication safety check
+cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release; cmake --build build/native; ctest --test-dir build/native   # native runtime + answer key
+python scripts/gen_conformance.py                          # regenerate conformance/ after changing a behaviour it covers
 ```
 
 The browser tests inside the suite drive a real Chromium and take the largest
