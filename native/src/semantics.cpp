@@ -101,7 +101,11 @@ std::string human_duration(const json& seconds) {
   if (seconds.is_null()) return "never";
   long long s = 0;
   if (seconds.is_number_float()) {
-    s = static_cast<long long>(std::trunc(seconds.get<double>()));   // int(4.9) == 4
+    const double d = std::trunc(seconds.get<double>());   // int(4.9) == 4
+    // Out of range (or NaN) is undefined behaviour in the cast; no real
+    // uptime is anywhere near, so clamp rather than guess.
+    s = !(d == d) ? 0 : d >= 9.2e18 ? 9200000000000000000LL : d <= -9.2e18 ? -9200000000000000000LL
+                                                                         : static_cast<long long>(d);
   } else if (seconds.is_number()) {
     s = seconds.get<long long>();
   } else if (seconds.is_boolean()) {

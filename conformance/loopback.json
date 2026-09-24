@@ -65,6 +65,14 @@
    "url": "https://127.1"
   },
   {
+   "loopback": true,
+   "url": "https://[::ffff:127.0.0.1]:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://[::ffff:10.0.0.1]:8000"
+  },
+  {
    "loopback": false,
    "url": "https://core.example.com"
   }

@@ -50,6 +50,11 @@ stays dynamic, because a static glibc binary still loads NSS at run time.
 Run the answer key on another device by passing the fixture directory:
 `wavr_conformance /path/to/conformance`.
 
+The Node keeps its bearer token in its state file (`--state`, default
+`wavr-node.json` in the working directory). On Linux, Android and macOS it is
+written owner-only (0600) and replaced atomically; on Windows it inherits the
+directory's permissions, so keep it in a per-user directory.
+
 ## Verify against a real Core
 
 ```sh

@@ -1,5 +1,6 @@
 #include "node.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -65,22 +66,41 @@ bool load(const std::string& path, State* s, std::string* error) {
 
 // Written to a temporary file and moved into place, and readable by the owner
 // only: it holds the node's bearer token.
-bool save(const std::string& path, const State& s) {
+bool save(const std::string& path, const State& in) {
+  // seq and press_count only ever go up (the Core rejects a repeat). A second
+  // process -- `wavr node reactivate` while `run` holds an older copy -- may
+  // have written a higher value; never write it back down.
+  State s = in, disk;
+  std::string ignored;
+  if (load(path, &disk, &ignored)) {
+    s.seq = std::max(s.seq, disk.seq);
+    s.press_count = std::max(s.press_count, disk.press_count);
+  }
   json j = {{"url", s.url},     {"node_id", s.node_id}, {"token", s.token},
             {"pin", s.pin},     {"state", s.state},     {"seq", s.seq},
             {"press_count", s.press_count}};
   const std::string tmp = path + ".tmp";
   {
+#if !defined(_WIN32)
+    const mode_t old_mask = umask(077);   // born owner-only, not chmod-ed afterwards
+#endif
     std::ofstream f(tmp, std::ios::trunc);
+#if !defined(_WIN32)
+    umask(old_mask);
+#endif
     if (!f) return false;
     f << j.dump(1) << "\n";
     if (!f) return false;
   }
-#if !defined(_WIN32)
-  chmod(tmp.c_str(), 0600);
-#endif
+#if defined(_WIN32)
+  // rename() does not replace an existing file on Windows. There the file
+  // inherits its directory's ACL (no 0600): run the node, or point --state,
+  // inside a per-user directory, never a shared one. native/README.md says so.
   std::remove(path.c_str());
-  return std::rename(tmp.c_str(), path.c_str()) == 0;
+#else
+  chmod(tmp.c_str(), 0600);   // also tightens a .tmp left behind by an older build
+#endif
+  return std::rename(tmp.c_str(), path.c_str()) == 0;   // atomic replace on POSIX
 }
 
 net::Result call(const State& s, const std::string& path, const std::string& body) {

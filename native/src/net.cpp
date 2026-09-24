@@ -298,7 +298,7 @@ bool parse_response(const std::string& raw, Result* out) {
       unsigned long n = std::strtoul(body.c_str() + pos, nullptr, 16);
       pos = eol + 2;
       if (n == 0) break;
-      if (pos + n > body.size()) return false;
+      if (n > body.size() - pos) return false;   // no pos + n: a huge n would wrap
       decoded.append(body, pos, n);
       pos += n + 2;
     }
@@ -307,7 +307,8 @@ bool parse_response(const std::string& raw, Result* out) {
     size_t cl = headers.find("\r\ncontent-length:");
     if (cl != std::string::npos) {
       unsigned long n = std::strtoul(headers.c_str() + cl + 17, nullptr, 10);
-      if (n < body.size()) body.resize(n);
+      if (n > body.size()) return false;   // the connection ended mid-answer
+      body.resize(n);
     }
   }
   out->body = std::move(body);
@@ -354,7 +355,12 @@ bool is_loopback_host(const std::string& host) {
   in_addr v4{};
   if (inet_pton(AF_INET, h.c_str(), &v4) == 1) return (ntohl(v4.s_addr) >> 24) == 127;
   in6_addr v6{};
-  if (inet_pton(AF_INET6, h.c_str(), &v6) == 1) return IN6_IS_ADDR_LOOPBACK(&v6);
+  if (inet_pton(AF_INET6, h.c_str(), &v6) == 1) {
+    const unsigned char* b = reinterpret_cast<const unsigned char*>(&v6);
+    static const unsigned char mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    if (std::memcmp(b, mapped, 12) == 0) return b[12] == 127;   // ::ffff:127.x.y.z
+    return IN6_IS_ADDR_LOOPBACK(&v6);
+  }
   return false;
 }
 

@@ -191,6 +191,7 @@ def _loopback() -> dict:
             "https://localhost.attacker.example", "https://127.0.0.1@attacker.example",
             "https://192.168.1.57:8000", "https://10.0.0.9", "https://0.0.0.0:8000",
             "https://128.0.0.1", "https://[::2]:8000", "https://127.1",
+            "https://[::ffff:127.0.0.1]:8000", "https://[::ffff:10.0.0.1]:8000",
             "https://core.example.com"]
     return {"source": "backend/wavr/status.py (is_loopback)",
             "cases": [{"url": u, "loopback": st.is_loopback(u)} for u in urls]}

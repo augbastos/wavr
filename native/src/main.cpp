@@ -148,7 +148,8 @@ int cmd_status(const Args& a) {
   auto ra = get(*url, "/api/attention", token, a.get("--pin"));
   if (ra.ok && ra.status == 200) {
     attention = ojson::parse(ra.body, nullptr, false);
-    if (attention.is_discarded()) attention = nullptr;
+    // status.py: an answer of the wrong shape is "could not check".
+    if (!attention.is_object()) attention = nullptr;
   }
   if (as_json) {
     std::cout << ojson{{"runtime", runtime}, {"attention", attention}}.dump(2, ' ', true)
