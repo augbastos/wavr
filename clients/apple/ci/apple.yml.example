@@ -1,0 +1,34 @@
+# Example only. Copy into .github/workflows/ after ABI 1.1, Xcode targets,
+# and the XCFramework build are implemented and verified on a Mac.
+name: Apple foundation
+on: [push, pull_request]
+jobs:
+  apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check copied C ABI header
+        run: diff -u native/include/wavr/wavr.h clients/apple/Sources/CWavr/include/wavr.h
+      - name: Build native device slices
+        run: |
+          cmake -S native -B build/apple-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_ARCHITECTURES=arm64 -DWAVR_STATIC=OFF
+          cmake --build build/apple-ios --config Release --target wavr_native
+          cmake -S native -B build/apple-macos -G Xcode -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DWAVR_STATIC=OFF
+          cmake --build build/apple-macos --config Release --target wavr_native
+          cmake -S native -B build/apple-tvos -G Xcode -DCMAKE_SYSTEM_NAME=tvOS -DCMAKE_OSX_SYSROOT=appletvos -DCMAKE_OSX_ARCHITECTURES=arm64 -DWAVR_STATIC=OFF
+          cmake --build build/apple-tvos --config Release --target wavr_native
+      - name: Assemble XCFramework
+        run: |
+          # Replace <slice> with actual CMake output paths; verify ABI exports.
+          xcodebuild -create-xcframework \
+            -library <ios-slice>/libwavr_native.dylib -headers native/include/wavr \
+            -library <macos-slice>/libwavr_native.dylib -headers native/include/wavr \
+            -library <tvos-slice>/libwavr_native.dylib -headers native/include/wavr \
+            -output clients/apple/WavrNative.xcframework
+      - name: Test pure Swift models
+        working-directory: clients/apple
+        run: swift test --filter SnapshotTests
+      - name: Build iOS simulator app
+        run: xcodebuild -project clients/apple/WavrApple.xcodeproj -scheme Wavr-iOS -destination 'generic/platform=iOS Simulator' build
+      - name: Build tvOS simulator app
+        run: xcodebuild -project clients/apple/WavrApple.xcodeproj -scheme Wavr-tvOS -destination 'generic/platform=tvOS Simulator' build
