@@ -64,6 +64,7 @@ DEFAULT_CONFIDENCE = 0.75
 REASSERT_S = 10.0
 # A count cannot be negative and a household camera does not see thousands.
 _MAX_COUNT = 1000
+_MAX_PAYLOAD_BYTES = 4096
 
 _FORBIDDEN = ("/", "+", "#")
 
@@ -125,7 +126,8 @@ class FrigateTracker:
 
     def on_message(self, topic: str, payload: bytes, now: datetime) -> list[SensingEvent]:
         if topic == DISCONNECTED:
-            # The broker is gone, so nothing Wavr holds is current any more.
+            # A dead camera cannot assert an empty room. Stop reasserting its
+            # count and let fusion retire the previous event by age.
             self._available = None
             self._counts.clear()
             self._detect.clear()
@@ -133,12 +135,21 @@ class FrigateTracker:
         if topic == CONNECTED:
             return []
         p = self.cfg.prefix
-        text = payload.decode("utf-8", "replace").strip()
+        if len(payload) > _MAX_PAYLOAD_BYTES:
+            self.dropped["malformed"] += 1
+            return []
+        try:
+            text = payload.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            self.dropped["malformed"] += 1
+            return []
         if topic == f"{p}/available":
+            if text.lower() not in ("online", "offline", "stopped"):
+                self.dropped["malformed"] += 1
+                return []
             self._available = text.lower()
             if self._available != "online":
-                # Stopped or gone: the last counts describe a Frigate that is
-                # no longer looking. Forget them; emit nothing.
+                # Stopped or gone: forget counts without claiming an empty room.
                 self._counts.clear()
                 self._detect.clear()
             return []
@@ -157,11 +168,10 @@ class FrigateTracker:
             return []
         if levels[2:] != [LABEL]:
             return []
-        try:
-            count = int(text)
-        except ValueError:
+        if not text or not text.isascii() or not text.isdecimal():
             self.dropped["malformed"] += 1
             return []
+        count = int(text)
         if not 0 <= count <= _MAX_COUNT:
             self.dropped["malformed"] += 1
             return []

@@ -171,13 +171,16 @@ def test_motion_is_a_pir_and_its_off_cannot_clear_a_room():
     assert [e.presence for e in t.tick(at(30))] == [False], "held state is re-asserted"
 
 
-def test_a_lost_broker_is_silence_not_absence():
+def test_a_lost_broker_is_silence_not_absence_and_reconnects_cleanly():
     t = EspresenseTracker(cfg())
     t.on_message(*dev("watch:darrell", "office", CAPTURE_OFFICE), at(0))
     t.on_message("espresense/rooms/kitchen/motion", b"ON", at(0))
+    # Wavr stopped hearing; nobody said the room emptied. Fusion decays it.
     assert t.on_message(DISCONNECTED, b"", at(1)) == []
     assert t.tick(at(2)) == [], "nothing is re-asserted from a broker Wavr cannot hear"
     assert t.on_message(CONNECTED, b"", at(3)) == []
+    assert [e.presence for e in t.on_message(
+        *dev("watch:darrell", "office", CAPTURE_OFFICE), at(4))] == [True]
 
 
 def test_ble_is_room_precision_and_cannot_count():

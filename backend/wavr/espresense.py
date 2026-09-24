@@ -163,11 +163,14 @@ class EspresenseTracker:
 
     def on_message(self, topic: str, payload: bytes, now: datetime) -> list[SensingEvent]:
         if topic == DISCONNECTED:
-            # The broker is gone: Wavr no longer knows. Forget, and emit nothing
-            # -- silence decays in fusion; a claim of absence would be a lie.
+            # The broker is gone: Wavr no longer HEARS -- the boards may still
+            # see the device. Forget, and emit nothing: silence decays in fusion;
+            # a release would claim something no sensor said. (A device timing
+            # out is different: there ESPresense's own silence is the signal.)
             self._readings.clear()
             self._current.clear()
             self._motion.clear()
+            self._online.clear()
             return []
         if topic == CONNECTED:
             return []
@@ -179,7 +182,14 @@ class EspresenseTracker:
             if slug not in self.cfg.rooms:
                 self.dropped["unknown_room"] += 1
                 return []
-            text = payload.decode("utf-8", "replace").strip()
+            if len(payload) > _MAX_PAYLOAD_BYTES:
+                self.dropped["malformed"] += 1
+                return []
+            try:
+                text = payload.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                self.dropped["malformed"] += 1
+                return []
             if kind == "status":
                 return self._status(slug, text.lower(), now)
             if kind == "motion":
@@ -201,11 +211,14 @@ class EspresenseTracker:
             return []
         try:
             body = json.loads(payload)
-            distance = float(body["distance"])
+            distance = body["distance"]
         except (ValueError, TypeError, KeyError, UnicodeDecodeError, RecursionError):
             # RecursionError: deeply nested JSON from whoever can publish on the
             # enrolled topic. Found in review; it used to escape and restart
             # the whole adapter on every such message.
+            self.dropped["malformed"] += 1
+            return []
+        if isinstance(distance, bool) or not isinstance(distance, (int, float)):
             self.dropped["malformed"] += 1
             return []
         if not (math.isfinite(distance) and distance >= 0):
@@ -242,7 +255,7 @@ class EspresenseTracker:
     def tick(self, now: datetime) -> list[SensingEvent]:
         """Re-assert held state and release what has timed out."""
         out: list[SensingEvent] = []
-        for device_id in list(self._current):
+        for device_id in list(self._readings):
             out += self._reconcile(device_id, now)
         for slug in self._motion:
             if self._online.get(slug, True):
@@ -252,12 +265,16 @@ class EspresenseTracker:
     # -- evidence --------------------------------------------------------------
 
     def _reconcile(self, device_id: str, now: datetime) -> list[SensingEvent]:
+        readings = self._readings.get(device_id, {})
+        for slug, (_, at) in list(readings.items()):
+            if (now - at).total_seconds() > self.cfg.timeout_s or not self._online.get(slug, True):
+                del readings[slug]
+        if not readings:
+            self._readings.pop(device_id, None)
         fresh = {
             slug: dist
-            for slug, (dist, at) in self._readings.get(device_id, {}).items()
-            if (now - at).total_seconds() <= self.cfg.timeout_s
-            and dist <= self.cfg.max_distance_m
-            and self._online.get(slug, True)
+            for slug, (dist, _) in readings.items()
+            if dist <= self.cfg.max_distance_m
         }
         room = self.cfg.rooms[min(fresh, key=fresh.get)] if fresh else None
         previous = self._current.get(device_id)

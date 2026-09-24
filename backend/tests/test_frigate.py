@@ -109,6 +109,7 @@ def test_a_frigate_that_stops_or_drops_leaves_nothing_standing():
         t = online(FrigateTracker(cfg()))
         t.on_message("frigate/front_door/person", b"2", at(1))
         assert t.on_message("frigate/available", value, at(2)) == []
+        assert t._counts == {} and t._detect == {}
         assert t.tick(at(3)) == [], value
 
 
@@ -132,8 +133,10 @@ def test_a_lost_broker_forgets_everything():
     t = online(FrigateTracker(cfg()))
     t.on_message("frigate/front_door/person", b"1", at(1))
     assert t.on_message(DISCONNECTED, b"", at(2)) == []
+    assert t._counts == {} and t._detect == {}
     assert t.tick(at(3)) == []
     assert t.on_message(CONNECTED, b"", at(4)) == []
+    assert t.tick(at(5)) == []
 
 
 def test_the_declaration_is_lan_reach_and_a_count_ceiling():

@@ -466,7 +466,9 @@ def to_events(state: dict, mapping: Mapping, *, at: str,
     if not mapping.enabled:
         return []
     raw = state.get("state") if isinstance(state, dict) else None
-    value = str(raw).strip().lower() if raw is not None else None
+    if raw is not None and (not isinstance(raw, str) or len(raw) > 4096):
+        return []
+    value = raw.strip().lower() if raw is not None else None
     # "Invalid Area for <device>" is Bermuda reporting a registry fault, not a
     # place.
     if value in NOT_REPORTING or value.startswith("invalid area"):
