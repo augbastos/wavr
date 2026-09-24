@@ -195,9 +195,11 @@ def main() -> int:
         check(py.returncode == nat.returncode, f"status exit code (py {py.returncode}, "
                                                f"native {nat.returncode})")
         pj, nj = json.loads(py.stdout), json.loads(nat.stdout)
-        check(pj["runtime"].get("state") == nj["runtime"].get("state")
-              and pj["runtime"].get("headline") == nj["runtime"].get("headline"),
-              "status state and headline")
+        pr, nr = (pj.get("runtime") or {}), (nj.get("runtime") or {})
+        check(pr.get("state") == nr.get("state") and pr.get("headline") == nr.get("headline"),
+              f"status state and headline (py {pr.get('state')!r}/{pr.get('headline')!r}, "
+              f"native {nr.get('state')!r}/{nr.get('headline')!r}; py error {pj.get('error')!r}, "
+              f"native error {nj.get('error')!r})")
 
         # -- enroll -----------------------------------------------------------------
         code, minted = api(base, "POST", "/api/nodes/enroll-code",

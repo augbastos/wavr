@@ -30,6 +30,17 @@ inline long long int_field(const json& j, const char* key, long long fallback = 
   return it != j.end() && it->is_number_integer() ? it->get<long long>() : fallback;
 }
 
+// Serialise without throwing. nlohmann::json::dump() throws on a string that
+// is not valid UTF-8 -- and strings here come from uname, the device tree, a
+// command line -- so every serialisation goes through this, which substitutes
+// U+FFFD instead. An exception must never reach a C caller or end the CLI.
+// ascii = true escapes everything outside ASCII (as Python's json.dumps does by
+// default): what a CLI prints to a console or pipe of unknown encoding.
+template <typename J>
+std::string dump(const J& j, int indent = -1, bool ascii = false) {
+  return j.dump(indent, ' ', ascii, J::error_handler_t::replace);
+}
+
 // -- backend/wavr/status.py ----------------------------------------------------
 
 constexpr int kExitOk = 0;

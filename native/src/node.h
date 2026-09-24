@@ -18,6 +18,18 @@ struct NodeOptions {
   double run_seconds = 0;        // 0 = forever; >0 bounds a run (tests, benchmarks)
 };
 
+// What a node keeps between runs (the state file). Holds its bearer token.
+struct NodeState {
+  std::string url, node_id, token, pin, state = "active";
+  long long seq = 0;
+  long long press_count = 0;
+};
+
+// Parse a state file's text. False (and *s untouched) unless it names a Core
+// and carries a token; every other field falls back to its default when
+// missing or of the wrong type. Never throws.
+bool parse_node_state(const std::string& text, NodeState* s);
+
 // Exit codes, so a service manager can tell the cases apart.
 constexpr int kNodeOk = 0;
 constexpr int kNodeUsage = 64;

@@ -281,6 +281,8 @@ std::string lower(std::string s) {
   return s;
 }
 
+}  // namespace
+
 bool parse_response(const std::string& raw, Result* out) {
   size_t head_end = raw.find("\r\n\r\n");
   if (head_end == std::string::npos || raw.compare(0, 5, "HTTP/") != 0) return false;
@@ -316,8 +318,6 @@ bool parse_response(const std::string& raw, Result* out) {
   return true;
 }
 
-}  // namespace
-
 std::optional<Url> parse_url(const std::string& text) {
   Url u;
   std::string rest;
@@ -343,6 +343,12 @@ std::optional<Url> parse_url(const std::string& text) {
   u.port = colon == std::string::npos ? (u.https ? 443 : 80)
                                       : std::atoi(rest.c_str() + colon + 1);
   if (u.host.empty() || u.port <= 0 || u.port > 65535) return std::nullopt;
+  // A host is a name or an address: no control bytes (an embedded NUL was
+  // accepted and then silently cut by every C API after it), no spaces, and no
+  // userinfo -- "127.0.0.1@elsewhere" is not a URL this client should read.
+  for (unsigned char c : u.host) {
+    if (c <= 0x20 || c == 0x7f || c == '@' || c == '\\' || c == '?' || c == '#') return std::nullopt;
+  }
   return u;
 }
 

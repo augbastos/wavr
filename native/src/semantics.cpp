@@ -59,7 +59,7 @@ std::string py_str(const json& v) {
     if (s.find_first_of(".eEn") == std::string::npos) s += ".0";   // 5.0, not 5
     return s;
   }
-  return v.dump();
+  return dump(v);
 }
 
 // str.capitalize(): first character upper, the rest lower (ASCII letters).

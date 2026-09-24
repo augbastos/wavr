@@ -1,14 +1,14 @@
 # native/ — the portable C++ runtime
 
-A second implementation of the parts of Wavr that small and closed devices need,
-in C++17 with no runtime dependencies:
+A second implementation of the parts of Wavr that small, closed and client
+devices need, in C++17 with no runtime dependencies:
 
-- **`wavr`**, one static executable: `status` (the same answer as
-  `python -m wavr.status`), `capabilities` (this device's manifest), and the
-  **Node role** — enrol with a Core, pin its certificate, stream LD2450 frames,
-  obey disable/reactivate/revoke — speaking the current Node Protocol v1.
-- **`libwavr_native`**, a stable C ABI (`include/wavr/wavr.h`) that a Kotlin,
-  Swift or C# client binds to instead of re-implementing Wavr semantics.
+- **`wavr`**, one executable (static where the platform allows): the CLI, and
+  the **Node role** -- enrol with a Core, pin its certificate, stream LD2450
+  frames, obey disable/reactivate/revoke -- speaking Node Protocol v1.
+- **`libwavr_native`**, a stable C ABI (`include/wavr/wavr.h`, version 1.1) that
+  the Android (JNI), Apple (Swift) and desktop (Rust) clients bind to instead of
+  re-implementing Wavr semantics. On Android it ships as `libwavr_native_jni.so`.
 
 It is **not** a port of the Core. Fusion, storage, the API and every provider
 stay in Python, which remains the canonical definition of every behaviour.
@@ -16,15 +16,57 @@ stay in Python, which remains the canonical definition of every behaviour.
 ## Why it cannot drift
 
 Each semantic function here has a canonical Python definition, named beside it
-in `src/semantics.h`. `scripts/gen_conformance.py` runs that Python and writes
-the answer key to `conformance/*.json`; `tests/conformance.cpp` checks this
-library against it, through the C ABI wherever one exists, so the boundary other
-languages call is the thing under test. `backend/tests/test_conformance_fixtures_are_current.py`
-fails when the Python changes and the fixtures were not regenerated.
+in `src/semantics.h` / `src/client_view.h`. `scripts/gen_conformance.py` runs
+that Python and writes the answer key to `conformance/*.json`;
+`tests/conformance.cpp` checks this library against it through the C ABI, so
+the boundary other languages call is the thing under test.
+`backend/tests/test_conformance_fixtures_are_current.py` fails when the Python
+changes and the fixtures were not regenerated. Covered today: `wavr status`
+rendering and exit codes, compute tiers, the vocabulary, LD2450 framing, the
+heartbeat state machine, the loopback rule, and the client snapshot.
 
-The one piece of logic shared outright rather than re-implemented is the
-certificate fingerprint format, compiled from `firmware/wavr_node/src/fingerprint_fmt.cpp`
-so the ESP32 node and this runtime print the same string an operator compares by eye.
+The certificate fingerprint format is shared outright with the ESP32 firmware
+(`firmware/wavr_node/src/fingerprint_fmt.cpp`).
+
+## The C ABI (1.1)
+
+- `wavr_abi_compatible(WAVR_ABI_VERSION_MAJOR, WAVR_ABI_VERSION_MINOR)` first.
+  MINOR grows when functions are added; MAJOR changes when any existing one does.
+- Plain C types; stateful things are opaque handles with create/free
+  (`wavr_framer`, `wavr_snapshot`); a handle is used by one thread at a time;
+  everything else is reentrant.
+- Every output goes into a caller-owned buffer; the return value is the size
+  needed (call with `NULL, 0` to size). Nothing is allocated for the caller.
+- **No C++ exception crosses the boundary**: every entry point is guarded, and
+  a failure inside is `WAVR_ERR_INTERNAL` (or NULL from a constructor).
+- `tests/c_consumer.c` is an outside consumer -- plain C, the public header
+  only, linked against the shared library -- run by `ctest` on every build.
+
+## CLI
+
+| Command | What | Exit codes |
+|---|---|---|
+| `wavr status [--url] [--token] [--pin] [--json] [-q] [--ascii]` | Is Wavr running, does anything need you -- same rendering and codes as `python -m wavr.status` | 0 nothing needs you · 1 something does, or could not be checked · 2 no answer |
+| `wavr snapshot [--url] [--token] [--pin]` | The native client view model as JSON (`docs/NATIVE-CLIENT.md`) | same as `status` |
+| `wavr doctor [--url] [--token] [--pin]` | The Core's diagnostic report (as `python -m wavr.doctor`) | 0 printed · 2 no answer · 3 answered without a report |
+| `wavr capabilities` | This device's capability manifest | 0 |
+| `wavr node enroll --url https://CORE:PORT --code CODE [--state F]` | Enrol, pinning the certificate the Core presents | 0 · 1 refused · 64 usage |
+| `wavr node run --sensor ld2450:PORT\|replay:FILE\|stdin [--state F] [--seconds N]` | Run the Node | 0 · 3 revoked (state erased) · 64 usage |
+| `wavr node reactivate [--state F]` | The node-initiated way back from disabled | 0 · 1 refused |
+| `wavr node status [--state F]` | What the node knows (never the token) | 0 · 64 |
+| `wavr version` | Runtime and C ABI version | 0 |
+
+Unpinned requests are allowed to a loopback Core only; plain HTTP likewise.
+`--sensor stdin` reads raw LD2450 bytes from any program that can reach the
+radar (a serial bridge, `nc`); they are framed here and parsed only by the Core.
+Tuning for tests and slow links: `--telemetry-ms` (floor 50),
+`--heartbeat-ms` and `--disabled-heartbeat-ms` (floor 100).
+
+The Node keeps its bearer token in its state file (`--state`, default
+`wavr-node.json` in the working directory): owner-only (0600) from birth and
+replaced atomically on Linux, Android and macOS; on Windows it inherits the
+directory's permissions, so keep it in a per-user directory. Repeated failures
+are logged once and then summarised at most once a minute.
 
 ## Build
 
@@ -33,7 +75,7 @@ mbedTLS 3.6.7 LTS (Apache-2.0) and nlohmann/json 3.12.0 (MIT). Offline:
 `-DWAVR_MBEDTLS_TARBALL=<path>` and `-DWAVR_JSON_HPP=<path>`.
 
 ```sh
-# This machine (GCC or Clang)
+# This machine (GCC, Clang or MinGW)
 cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native && ctest --test-dir build/native --output-on-failure
 
@@ -41,60 +83,59 @@ cmake --build build/native && ctest --test-dir build/native --output-on-failure
 cmake -S native -B build/native-aarch64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=native/cmake/zig-toolchain.cmake \
   -DZIG=/path/to/zig -DZIG_TARGET=aarch64-linux-musl
+
+# Android (bionic): the JNI library for the app, and the CLI
+cmake -S native -B build/android-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26
+# then copy libwavr_native_jni.so to core-launcher/app/src/main/jniLibs/arm64-v8a/
 ```
 
-The Zig Linux targets link statically against musl: one file, no libc to match,
-and the same file runs on an Android device's shell. A host build against glibc
-stays dynamic, because a static glibc binary still loads NSS at run time.
+Zig's Linux targets and MinGW link statically (one file, no runtime to match;
+the Windows DLL needs only system DLLs). A glibc host build stays dynamic,
+because a static glibc binary still loads NSS at run time. Release builds are
+stripped and carry no build-machine paths (`-ffile-prefix-map`).
 
-Run the answer key on another device by passing the fixture directory:
-`wavr_conformance /path/to/conformance`.
-
-The Node keeps its bearer token in its state file (`--state`, default
-`wavr-node.json` in the working directory). On Linux, Android and macOS it is
-written owner-only (0600) and replaced atomically; on Windows it inherits the
-directory's permissions, so keep it in a per-user directory.
-
-## Verify against a real Core
+## Test it
 
 ```sh
-python native/tests/e2e_node.py --wavr build/native/wavr            # this machine
-python native/tests/e2e_node.py --wavr build/aarch64/wavr --adb SERIAL   # an Android phone
+ctest --test-dir build/native                                  # answer key + C consumer
+python native/tests/e2e_node.py --wavr build/native/wavr       # Node lifecycle vs a real Core
+python native/tests/e2e_node.py --wavr build/aarch64/wavr --adb SERIAL   # the same, on a phone
+python native/tests/soak_node.py --wavr build/native/wavr --minutes 10   # chaos soak
 ```
 
-Starts a multidevice Core on loopback in a throwaway directory and drives the
-binary through enrol → telemetry into fusion → a wrong certificate pin →
-disable → reactivate → revoke, checking each step on the Core's side, with a
-control before the first frame. With `--adb` the phone reaches the Core through
-`adb reverse` on one port; nothing is exposed on the network.
+`soak_node.py` runs a fake Core that cycles through garbage bodies, HTTP 500,
+stale-sequence 409s, stalls longer than the node's timeout, the Core gone, a
+different certificate, disable, and finally revocation -- and fails if a
+request ever reaches a server with the wrong certificate, if telemetry is sent
+while the node knows it is disabled, if the node does not exit 3 on revocation,
+or if memory, handles or threads grow.
 
-## What has been checked, and how
+### Fuzzing
 
-Status words are the ones `docs/PLATFORMS.md` defines. "Builds" proves the code
-is portable to a target; it proves nothing about running there.
+`fuzz/targets.cpp` holds one libFuzzer target per boundary that reads bytes the
+runtime did not produce: HTTP responses, the snapshot inputs, `wavr status`
+inputs, LD2450 bytes, the node state file, URLs, heartbeat answers. Each checks
+invariants beyond "does not crash" (valid JSON of the fixed schema out; no
+positions or identities through the view model; a network error never revokes).
 
-| Target | Build | Conformance | Node e2e vs real Core |
-|---|---|---|---|
-| Windows x86_64 (MinGW-w64) | yes | passes | passes |
-| Linux x86_64 (musl, static) | yes | passes (WSL2) | not run |
-| Android arm64 (aarch64 musl, static) | yes | passes on a phone | passes on a phone |
-| Android / Linux armv7 (musl, static) | yes | passes on a phone (32-bit userspace) | not run |
-| Linux x86 32-bit (musl, static) | yes | passes (WSL2) | not run |
-| Linux / OpenWrt MIPS, little- and big-endian (musl, static) | yes | not run (no device, no emulator) | not run |
-| Linux x86_64, glibc + GCC (dynamic) | yes | passes (WSL2), also under ASan + UBSan | not run |
-| Windows ARM64 (Zig) | yes | not run (no device) | not run |
-| macOS arm64 / x86_64 (Zig) | yes | not run (no Mac) | not run |
+```sh
+# clang: real libFuzzer
+cmake -S native -B build/fuzz -DWAVR_FUZZ=ON -DWAVR_LIBFUZZER=ON -DWAVR_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+# GCC/MinGW: the seeded mutation driver in fuzz/driver.cpp (not coverage-guided)
+cmake -S native -B build/fuzz -DWAVR_FUZZ=ON -DWAVR_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+python scripts/gen_fuzz_corpus.py corpus        # seeds from conformance/
+./build/fuzz/fuzz_snapshot --seconds 60 corpus/fuzz_snapshot
+```
 
-Found and fixed by running on real devices rather than by reading: a 32-bit
-build reporting 2 of 8 CPUs (musl counts the process's affinity; the manifest
-now counts the machine's online CPUs, as Python does), and a phone reported as
-having **no** battery because SELinux refuses every read under
-`/sys/class/power_supply` — fixed in the Python as well, since it had the same bug.
+## Packaging (local only)
 
-## Cost
+`scripts/package_native.py --out dist TARGET=BUILD_DIR ...` writes one archive
+per target with the binaries, the header, the licence, third-party notices, a
+`manifest.json` (version, ABI, file hashes, build command), a CycloneDX SBOM,
+and `SHA256SUMS` -- after scanning every file for build paths, user names and
+private keys, and refusing to package if one is found. Nothing is uploaded.
 
-`benchmarks/native_footprint.py` measures it; results describe one machine.
-On the development machine: a stripped Windows binary of about 2.5 MB (about
-1.6 MB for Linux arm64/x86_64), `wavr status` answering in tens of milliseconds
-where the Python CLI takes hundreds, and the Node role holding about 6 MB of RSS
-at well under 1% of one core while streaming.
+See `docs/PLATFORMS.md` and `docs/platform-matrix.json` for what has been
+built, run and tested where.

@@ -48,6 +48,10 @@ struct Result {
   std::string peer_fingerprint;     // "AB:CD:..." when TLS was used
 };
 
+// Parse one raw HTTP/1.x response (status line, headers, Content-Length or
+// chunked body). False for anything malformed or truncated. Exposed for tests.
+bool parse_response(const std::string& raw, Result* out);
+
 Result send(const Url& url, const Request& req, Tls tls = Tls::Pin,
             const std::string& pin = "", int timeout_ms = 6000);
 

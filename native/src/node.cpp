@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -19,6 +22,11 @@
 
 #if !defined(_WIN32)
 #  include <sys/stat.h>
+#  include <unistd.h>
+#else
+#  include <fcntl.h>
+#  include <io.h>
+#  include <process.h>
 #endif
 
 namespace wavr {
@@ -37,30 +45,24 @@ long long unix_ms() {
       .count();
 }
 
-struct State {
-  std::string url, node_id, token, pin, state = "active";
-  long long seq = 0;
-  long long press_count = 0;
-};
+using State = NodeState;
+
+// A state file is a few hundred bytes; anything far larger is not one.
+constexpr std::streamsize kMaxStateFile = 64 * 1024;
 
 bool load(const std::string& path, State* s, std::string* error) {
-  std::ifstream f(path);
+  std::ifstream f(path, std::ios::binary);
   if (!f) {
     *error = "no node state at " + path + " -- enrol first (wavr node enroll)";
     return false;
   }
-  json j = json::parse(f, nullptr, false);
-  if (str_field(j, "token").empty() || str_field(j, "url").empty()) {
+  std::string text(static_cast<size_t>(kMaxStateFile) + 1, '\0');
+  f.read(text.data(), kMaxStateFile + 1);
+  text.resize(static_cast<size_t>(f.gcount()));
+  if (f.gcount() > kMaxStateFile || !parse_node_state(text, s)) {
     *error = path + " is not a node state file";
     return false;
   }
-  s->url = str_field(j, "url");
-  s->node_id = str_field(j, "node_id");
-  s->token = str_field(j, "token");
-  s->pin = str_field(j, "pin");
-  s->state = str_field(j, "state", "active");
-  s->seq = int_field(j, "seq");
-  s->press_count = int_field(j, "press_count");
   return true;
 }
 
@@ -79,7 +81,15 @@ bool save(const std::string& path, const State& in) {
   json j = {{"url", s.url},     {"node_id", s.node_id}, {"token", s.token},
             {"pin", s.pin},     {"state", s.state},     {"seq", s.seq},
             {"press_count", s.press_count}};
-  const std::string tmp = path + ".tmp";
+  // One temp file per process (run and reactivate may overlap), removed first
+  // so it is always CREATED here -- an existing file keeps its old mode, and
+  // umask only governs creation.
+#if defined(_WIN32)
+  const std::string tmp = path + ".tmp." + std::to_string(_getpid());
+#else
+  const std::string tmp = path + ".tmp." + std::to_string(getpid());
+#endif
+  std::remove(tmp.c_str());
   {
 #if !defined(_WIN32)
     const mode_t old_mask = umask(077);   // born owner-only, not chmod-ed afterwards
@@ -89,7 +99,7 @@ bool save(const std::string& path, const State& in) {
     umask(old_mask);
 #endif
     if (!f) return false;
-    f << j.dump(1) << "\n";
+    f << dump(j, 1) << "\n";
     if (!f) return false;
   }
 #if defined(_WIN32)
@@ -98,7 +108,7 @@ bool save(const std::string& path, const State& in) {
   // inside a per-user directory, never a shared one. native/README.md says so.
   std::remove(path.c_str());
 #else
-  chmod(tmp.c_str(), 0600);   // also tightens a .tmp left behind by an older build
+  chmod(tmp.c_str(), 0600);   // belt and braces: it was created 0600 already
 #endif
   return std::rename(tmp.c_str(), path.c_str()) == 0;   // atomic replace on POSIX
 }
@@ -198,8 +208,74 @@ class ReplayFrames : public FrameSource {
   size_t next_ = 0;
 };
 
+// Raw LD2450 bytes on standard input, from any program that can reach the radar
+// (a serial bridge, `nc`, a script on another bus). Framed here exactly like a
+// local UART; the Core stays the only parser. A reader thread fills a bounded
+// buffer (oldest bytes dropped past 64 KiB -- a stalled Core never grows it).
+class StdinFrames : public FrameSource {
+ public:
+  // The reader thread cannot be joined (a blocking fread has no portable
+  // cancel), so it must never touch this object: it owns a shared_ptr to the
+  // state instead, which outlives the StdinFrames that created it.
+  StdinFrames() : shared_(std::make_shared<Shared>()) {
+    std::thread([st = shared_] { run(st); }).detach();
+  }
+  void collect(std::vector<std::string>* out, int budget_ms) override {
+    std::vector<uint8_t> bytes;
+    {
+      std::unique_lock<std::mutex> lock(shared_->mu);
+      shared_->cv.wait_for(lock, std::chrono::milliseconds(budget_ms),
+                           [this] { return !shared_->pending.empty(); });
+      bytes.swap(shared_->pending);
+    }
+    framer_.feed(bytes.data(), bytes.size());
+    // Drain every complete frame so the framer never grows; keep the newest
+    // 32 (live radar data: a backlog is worth less than the latest reading).
+    std::vector<std::string> frames;
+    while (auto f = framer_.next()) {
+      frames.push_back(to_hex(f->data(), f->size()));
+      if (frames.size() > kMaxFramesPerCollect) frames.erase(frames.begin());
+    }
+    out->insert(out->end(), frames.begin(), frames.end());
+  }
+
+ private:
+  static constexpr size_t kMaxPending = 64 * 1024;
+  static constexpr size_t kMaxFramesPerCollect = 32;
+  struct Shared {
+    std::mutex mu;
+    std::condition_variable cv;
+    std::vector<uint8_t> pending;
+  };
+  static void run(std::shared_ptr<Shared> st) {
+    uint8_t buf[512];
+    for (;;) {
+      size_t n = std::fread(buf, 1, sizeof buf, stdin);
+      if (n == 0) {   // EOF or error: the Core sees silence, and decays
+        std::cerr << "wavr node: standard input closed; no more sensor data\n";
+        return;
+      }
+      std::lock_guard<std::mutex> lock(st->mu);
+      st->pending.insert(st->pending.end(), buf, buf + n);
+      if (st->pending.size() > kMaxPending) {
+        st->pending.erase(st->pending.begin(),
+                          st->pending.end() - static_cast<long>(kMaxPending));
+      }
+      st->cv.notify_one();
+    }
+  }
+  std::shared_ptr<Shared> shared_;
+  Ld2450Framer framer_;
+};
+
 std::unique_ptr<FrameSource> open_sensor(const std::string& spec, std::string* error) {
   if (spec.rfind("ld2450:", 0) == 0) return std::make_unique<SerialFrames>(spec.substr(7));
+  if (spec == "stdin") {
+#if defined(_WIN32)
+    _setmode(_fileno(stdin), _O_BINARY);   // bytes, not text: no CRLF translation
+#endif
+    return std::make_unique<StdinFrames>();
+  }
   if (spec.rfind("replay:", 0) == 0) {
     std::ifstream f(spec.substr(7));
     if (!f) {
@@ -225,6 +301,19 @@ std::unique_ptr<FrameSource> open_sensor(const std::string& spec, std::string* e
 
 }  // namespace
 
+bool parse_node_state(const std::string& text, NodeState* s) {
+  json j = json::parse(text, nullptr, false);
+  if (str_field(j, "token").empty() || str_field(j, "url").empty()) return false;
+  s->url = str_field(j, "url");
+  s->node_id = str_field(j, "node_id");
+  s->token = str_field(j, "token");
+  s->pin = str_field(j, "pin");
+  s->state = str_field(j, "state", "active");
+  s->seq = int_field(j, "seq");
+  s->press_count = int_field(j, "press_count");
+  return true;
+}
+
 int node_enroll(const std::string& url_text, const std::string& code, const NodeOptions& opt) {
   auto url = net::parse_url(url_text);
   if (!url || !url->https) {
@@ -235,7 +324,7 @@ int node_enroll(const std::string& url_text, const std::string& code, const Node
   req.method = "POST";
   req.path = "/api/nodes/enroll";
   req.headers = {{"Content-Type", "application/json"}};
-  req.body = json{{"code", code}, {"cert_fingerprint", ""}}.dump();
+  req.body = dump(json{{"code", code}, {"cert_fingerprint", ""}});
   // The one trust-on-first-use moment of NODE_PROTOCOL.md: no verification,
   // and the certificate presented here becomes the pin for every later call.
   auto r = net::send(*url, req, net::Tls::Capture);
@@ -266,6 +355,51 @@ int node_enroll(const std::string& url_text, const std::string& code, const Node
   return kNodeOk;
 }
 
+// Failure lines, rate-limited. A node on a flaky link used to write one line
+// per failed request -- ten a second in a soak, one a second in normal use --
+// into whatever collects stderr (syslog on flash, a pipe nobody drains). A new
+// message prints at once; the same message again prints at most once a minute,
+// with how many times it happened in between.
+class ErrorLog {
+ public:
+  void report(const std::string& line) {
+    auto now = Clock::now();
+    auto it = seen_.find(line);
+    if (it != seen_.end() && now - it->second.printed < std::chrono::seconds(60)) {
+      ++it->second.suppressed;   // heartbeat and telemetry failures interleave:
+      return;                    // one entry per message, not just the last one
+    }
+    if (it != seen_.end() && it->second.suppressed) {
+      std::cerr << "wavr node: " << line << " (" << it->second.suppressed
+                << " more times in the last minute)\n";
+    } else {
+      std::cerr << "wavr node: " << line << "\n";
+    }
+    if (it == seen_.end()) {
+      if (seen_.size() >= kMaxMessages) seen_.clear();   // bounded: never grows
+      it = seen_.emplace(line, Entry{}).first;
+    }
+    it->second.printed = now;
+    it->second.suppressed = 0;
+  }
+  void flush() {
+    for (const auto& [line, e] : seen_) {
+      if (e.suppressed) {
+        std::cerr << "wavr node: " << line << " (" << e.suppressed << " more times)\n";
+      }
+    }
+    seen_.clear();
+  }
+
+ private:
+  static constexpr size_t kMaxMessages = 32;
+  struct Entry {
+    Clock::time_point printed{};
+    long long suppressed = 0;
+  };
+  std::map<std::string, Entry> seen_;
+};
+
 int node_run(const NodeOptions& opt) {
   State s;
   std::string err;
@@ -282,6 +416,7 @@ int node_run(const NodeOptions& opt) {
   std::signal(SIGTERM, on_signal);
 
   const auto started = Clock::now();
+  ErrorLog errors;
   auto next_heartbeat = started;          // heartbeat first: learn the state
   auto next_save = started + std::chrono::seconds(60);
   auto next_seq = [&] { return s.seq = std::max(s.seq + 1, unix_ms()); };
@@ -297,8 +432,9 @@ int node_run(const NodeOptions& opt) {
       auto r = call(s, "/api/nodes/heartbeat", "");
       auto next = heartbeat_next_state(r.ok ? std::optional<int>(r.status) : std::nullopt,
                                        r.body);
-      if (!r.ok) std::cerr << "wavr node: heartbeat: " << r.error << "\n";
+      if (!r.ok) errors.report("heartbeat: " + r.error);
       if (next == NodeNext::Revoked) {
+        errors.flush();
         std::cerr << "wavr node: this node was revoked. Its state is erased; "
                      "enrol it again to bring it back.\n";
         std::remove(opt.state_path.c_str());
@@ -323,16 +459,21 @@ int node_run(const NodeOptions& opt) {
     sensor->collect(&frames, opt.telemetry_ms);
     if (!frames.empty()) {
       json body = {{"seq", next_seq()}, {"ld2450_frames", frames}};
-      auto r = call(s, "/api/nodes/telemetry", body.dump());
+      auto r = call(s, "/api/nodes/telemetry", dump(body));
       if (!r.ok) {
-        std::cerr << "wavr node: telemetry: " << r.error << "\n";
+        errors.report("telemetry: " + r.error);
       } else if (r.status == 423) {
         s.state = "disabled";            // the heartbeat will say so too
         save(opt.state_path, s);
       } else if (r.status == 409) {
         s.seq = std::max(s.seq, unix_ms());   // stale seq: jump past it
+      } else if (r.status == 401 || r.status == 403) {
+        // Probably revoked. The heartbeat is what decides that (as in the
+        // firmware); ask it now instead of sending on with a dead token.
+        next_heartbeat = Clock::now();
+        errors.report("telemetry answered HTTP " + std::to_string(r.status));
       } else if (r.status != 200) {
-        std::cerr << "wavr node: telemetry answered HTTP " << r.status << "\n";
+        errors.report("telemetry answered HTTP " + std::to_string(r.status));
       }
     }
     if (Clock::now() >= next_save) {
@@ -340,6 +481,7 @@ int node_run(const NodeOptions& opt) {
       next_save = Clock::now() + std::chrono::seconds(60);
     }
   }
+  errors.flush();
   save(opt.state_path, s);
   return exit_code;
 }
@@ -359,7 +501,7 @@ int node_reactivate(const NodeOptions& opt) {
     std::cerr << "wavr node: cannot write " << opt.state_path << "\n";
     return kNodeFailed;
   }
-  auto r = call(s, "/api/nodes/reactivate", json{{"press_count", s.press_count}}.dump());
+  auto r = call(s, "/api/nodes/reactivate", dump(json{{"press_count", s.press_count}}));
   if (!r.ok) {
     std::cerr << "wavr node: " << r.error << "\n";
     return kNodeFailed;

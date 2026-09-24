@@ -173,6 +173,30 @@ void loopback() {
   }
 }
 
+void client_view() {
+  json fx = load("client_view.json");
+  auto text = [](const json& j) { return j.is_null() ? std::string() : j.dump(); };
+  for (const auto& c : fx["cases"]) {
+    std::string rt = text(c["runtime"]), at = text(c["attention"]), st = text(c["state"]);
+    std::string err = c["error"].is_string() ? c["error"].get<std::string>() : "";
+    wavr_snapshot* s = wavr_snapshot_from_answers(
+        c["runtime"].is_null() ? nullptr : rt.c_str(),
+        c["attention"].is_null() ? nullptr : at.c_str(),
+        c["state"].is_null() ? nullptr : st.c_str(), c["reachable"].get<bool>() ? 1 : 0,
+        err.empty() ? nullptr : err.c_str());
+    int n = wavr_snapshot_json(s, nullptr, 0);
+    std::vector<char> buf(static_cast<size_t>(n) + 1);
+    wavr_snapshot_json(s, buf.data(), buf.size());
+    json got = json::parse(buf.data());
+    bool ok = got == c["snapshot"];
+    if (!ok) std::cerr << "--- want\n" << c["snapshot"].dump() << "\n--- got\n" << got.dump() << "\n";
+    check(ok, "client view: " + c["name"].get<std::string>());
+    check(wavr_snapshot_exit_code(s) == c["snapshot"]["exit_code"].get<int>(),
+          "client view exit code: " + c["name"].get<std::string>());
+    wavr_snapshot_free(s);
+  }
+}
+
 void fingerprint() {
   // SHA-256 of the empty string, formatted as backend/wavr/tls.py does for an
   // empty DER (the same vector the firmware's native test uses).
@@ -197,6 +221,7 @@ int main(int argc, char** argv) {
   framing();
   heartbeat();
   loopback();
+  client_view();
   manifest();
   fingerprint();
   // Native-only probe helper (Python asks os.cpu_count(); this reads what it reads).

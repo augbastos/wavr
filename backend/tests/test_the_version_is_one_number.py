@@ -117,6 +117,24 @@ def test_the_core_launcher_agrees():
         f"VERSION says {VERSAO}")
 
 
+def test_the_native_runtime_reads_the_version_file():
+    """`wavr version` printed 0.1.0 inside an archive named 0.4.0: the native
+    CMake project carried its own number. It now reads VERSION; this keeps it
+    from growing a literal again."""
+    fonte = ler("native/CMakeLists.txt")
+    assert re.search(r'file\(STRINGS "\$\{CMAKE_CURRENT_SOURCE_DIR\}/\.\./VERSION"', fonte)
+    projeto = re.search(r"^project\(wavr_native VERSION (\S+)", fonte, re.M)
+    assert projeto and projeto.group(1) == "${_wavr_version}", (
+        f"native/CMakeLists.txt pins version {projeto and projeto.group(1)}")
+
+
+def test_the_desktop_client_agrees():
+    fonte = ler("clients/desktop/Cargo.toml")
+    achado = re.search(r'^version\s*=\s*"([^"]+)"', fonte, re.M)
+    assert achado and achado.group(1) == VERSAO, (
+        f"clients/desktop says {achado and achado.group(1)}, VERSION says {VERSAO}")
+
+
 @pytest.mark.parametrize("rel", ["mobile/android/app/build.gradle",
                                  "core-launcher/app/build.gradle"])
 def test_the_android_version_code_orders_with_the_product_version(rel):
