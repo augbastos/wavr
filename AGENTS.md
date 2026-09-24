@@ -35,6 +35,8 @@ Breaking one is not a style regression — it makes a claim the README makes unt
 | `native/` | The portable C++ runtime: `wavr` CLI, the Node role, the C ABI. **Not** a second Core. |
 | `conformance/` | Answer key generated from the Python (`scripts/gen_conformance.py`); `native/` is tested against it. Never hand-edit. |
 | `benchmarks/` | The performance harness and its results. Wall-clock comparisons are interleaved A/B only. |
+| `clients/` | Native client surfaces over the C ABI: `desktop/` (Rust + Slint), `apple/` (SwiftUI, build unverified). They render the snapshot (`docs/NATIVE-CLIENT.md`); they never decide. |
+| `design/` | `tokens.json`: the dashboard's visual language as neutral tokens. Generated -- never hand-edit. |
 | `site/` | The marketing site. **Never deployed.** |
 | `scripts/` | Launchers, generators, and `publication_gate.py`. |
 | `docs/adr/` | Architecture decisions, including the ones that supersede each other. |
@@ -73,6 +75,9 @@ powershell scripts/wavr-desktop.ps1                        # zero-Rust launcher 
 python scripts/publication_gate.py                         # pre-publication safety check
 cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release; cmake --build build/native; ctest --test-dir build/native   # native runtime + answer key
 python scripts/gen_conformance.py                          # regenerate conformance/ after changing a behaviour it covers
+python scripts/gen_design_tokens.py                        # regenerate design/tokens.json + the clients' token files
+cd core-launcher; ./gradlew :app:assembleDebug :app:testDebugUnitTest   # Android app incl. native (Compose) + TV activities
+cd clients/desktop; cargo build --release; cargo test --release          # desktop client (set WAVR_NATIVE_LIB to test against the library)
 ```
 
 The browser tests inside the suite drive a real Chromium and take the largest

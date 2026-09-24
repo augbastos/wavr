@@ -1,0 +1,333 @@
+{
+ "$schema_version": 1,
+ "$doc": "Canonical, machine-readable support matrix. docs/PLATFORMS.md explains it. Each surface on each target records evidence separately: compiles, unit_tested, simulation_tested, hardware_tested, ui_tested. Values: true (done, with `how`), false (not done), \"blocked\" (needs something this project lacks), \"n/a\". A cross-compile is never hardware support.",
+ "$as_of": "2026-09-24",
+ "surfaces": {
+  "core": "Python Core (fusion, API, providers)",
+  "native_runtime": "native/ wavr CLI + Node role + C ABI",
+  "native_ui": "native client (Compose / SwiftUI / Slint)",
+  "firmware": "ESP32 Node firmware"
+ },
+ "targets": [
+  {
+   "id": "windows-x64",
+   "os": "Windows",
+   "arch": "x86_64",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": true,
+    "simulation_tested": true,
+    "hardware_tested": true,
+    "how": "MinGW-w64; conformance + C consumer; e2e vs real Core; 10-min chaos soak; this dev PC"
+   },
+   "native_ui": {
+    "compiles": true,
+    "unit_tested": true,
+    "ui_tested": false,
+    "how": "clients/desktop (Rust + Slint) builds and tests, incl. against the real DLL; never launched on screen"
+   },
+   "core": {
+    "compiles": "n/a",
+    "unit_tested": true,
+    "hardware_tested": true,
+    "how": "full test suite on the dev PC"
+   }
+  },
+  {
+   "id": "windows-arm64",
+   "os": "Windows",
+   "arch": "aarch64",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": false,
+    "hardware_tested": false,
+    "how": "Zig cross-build only"
+   },
+   "native_ui": {
+    "compiles": false
+   },
+   "core": {
+    "unit_tested": false
+   }
+  },
+  {
+   "id": "linux-x64",
+   "os": "Linux",
+   "arch": "x86_64",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": true,
+    "simulation_tested": true,
+    "hardware_tested": false,
+    "how": "musl static (Zig) and glibc (GCC); conformance under WSL2, also ASan+UBSan; fuzzing under sanitizers in WSL2"
+   },
+   "native_ui": {
+    "compiles": "blocked",
+    "why": "local Linux build needs libfontconfig1-dev (sudo); clients.yml installs it in CI, never run"
+   },
+   "core": {
+    "unit_tested": true,
+    "how": "install-matrix CI VMs (Debian, Ubuntu, Fedora, Alpine)"
+   }
+  },
+  {
+   "id": "linux-x86",
+   "os": "Linux",
+   "arch": "i386",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": true,
+    "hardware_tested": false,
+    "how": "musl static; conformance under WSL2"
+   }
+  },
+  {
+   "id": "linux-arm64",
+   "os": "Linux",
+   "arch": "aarch64",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": true,
+    "hardware_tested": "partial",
+    "how": "the musl static binary runs on an Android arm64 kernel (phone): conformance + e2e; never on a Pi"
+   },
+   "core": {
+    "simulation_tested": true,
+    "how": "Debian arm64 under QEMU in CI"
+   }
+  },
+  {
+   "id": "linux-armv7",
+   "os": "Linux",
+   "arch": "armv7",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": true,
+    "hardware_tested": "partial",
+    "how": "musl static; conformance on a phone's 32-bit userspace"
+   }
+  },
+  {
+   "id": "openwrt-mipsel",
+   "os": "OpenWrt/Linux",
+   "arch": "mipsel",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": false,
+    "hardware_tested": false,
+    "how": "Zig cross-build only; no device, no emulator"
+   },
+   "core": {
+    "supported": false,
+    "why": "too small for the Core"
+   }
+  },
+  {
+   "id": "openwrt-mips",
+   "os": "OpenWrt/Linux",
+   "arch": "mips",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": false,
+    "hardware_tested": false,
+    "how": "Zig cross-build only"
+   }
+  },
+  {
+   "id": "android-arm64",
+   "os": "Android",
+   "arch": "arm64-v8a",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": true,
+    "hardware_tested": true,
+    "how": "NDK r30 bionic: conformance + C consumer on a phone; musl build: e2e vs real Core on a phone"
+   },
+   "native_ui": {
+    "compiles": true,
+    "unit_tested": true,
+    "ui_tested": "emulator",
+    "how": "Compose phone UI; parser vs conformance/client_view.json; native/tests/android_ui_smoke.py on an x86_64 emulator against a real Core (JNI loaded, state, rooms); not on a physical phone"
+   },
+   "core": {
+    "compiles": true,
+    "hardware_tested": false,
+    "how": "embedded-CPython APK (ADR-0010); on-device run pending"
+   }
+  },
+  {
+   "id": "android-armv7",
+   "os": "Android",
+   "arch": "armeabi-v7a",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": true,
+    "hardware_tested": true,
+    "how": "NDK bionic: conformance + C consumer on a phone"
+   },
+   "native_ui": {
+    "compiles": true,
+    "ui_tested": false
+   }
+  },
+  {
+   "id": "android-x86_64",
+   "os": "Android (emulator, Chromebook)",
+   "arch": "x86_64",
+   "native_runtime": {
+    "compiles": true,
+    "ui_tested": "emulator",
+    "how": "NDK JNI library, exercised by the UI smoke test on an x86_64 emulator"
+   }
+  },
+  {
+   "id": "android-tv",
+   "os": "Android TV / Google TV",
+   "arch": "arm64-v8a + armeabi-v7a",
+   "native_runtime": {
+    "compiles": true,
+    "hardware_tested": false,
+    "how": "same .so as Android"
+   },
+   "native_ui": {
+    "compiles": true,
+    "ui_tested": "emulator",
+    "how": "TvStatusActivity rendered and D-pad focus verified on an emulator (phone and TV geometry); no TV hardware"
+   }
+  },
+  {
+   "id": "macos-arm64",
+   "os": "macOS",
+   "arch": "arm64",
+   "native_runtime": {
+    "compiles": true,
+    "unit_tested": false,
+    "hardware_tested": false,
+    "how": "Zig cross-build only (no Mac)"
+   },
+   "native_ui": {
+    "compiles": "blocked",
+    "why": "SwiftUI sources in clients/apple; BUILD UNVERIFIED — requires macOS/Xcode"
+   }
+  },
+  {
+   "id": "macos-x64",
+   "os": "macOS",
+   "arch": "x86_64",
+   "native_runtime": {
+    "compiles": true,
+    "hardware_tested": false,
+    "how": "Zig cross-build only"
+   },
+   "native_ui": {
+    "compiles": "blocked"
+   }
+  },
+  {
+   "id": "ios-arm64",
+   "os": "iOS / iPadOS",
+   "arch": "arm64",
+   "native_runtime": {
+    "compiles": "blocked",
+    "why": "needs Xcode for an XCFramework"
+   },
+   "native_ui": {
+    "compiles": "blocked",
+    "why": "SwiftUI sources exist; needs a Mac and the Apple Developer Program to run on a device"
+   },
+   "core": {
+    "supported": false,
+    "why": "no background runtime to keep alive"
+   }
+  },
+  {
+   "id": "tvos-arm64",
+   "os": "tvOS",
+   "arch": "arm64",
+   "native_runtime": {
+    "compiles": "blocked"
+   },
+   "native_ui": {
+    "compiles": "blocked",
+    "why": "SwiftUI is the only path (no WebView on tvOS); needs macOS/Xcode"
+   }
+  },
+  {
+   "id": "raspberry-pi",
+   "os": "Raspberry Pi OS",
+   "arch": "aarch64 / armv7",
+   "native_runtime": {
+    "compiles": true,
+    "hardware_tested": false,
+    "how": "the linux-arm64 / linux-armv7 binaries; never run on a Pi"
+   },
+   "core": {
+    "simulation_tested": true,
+    "hardware_tested": false
+   }
+  },
+  {
+   "id": "esp32",
+   "os": "ESP32 (Arduino/ESP-IDF)",
+   "arch": "xtensa",
+   "firmware": {
+    "compiles": true,
+    "unit_tested": true,
+    "hardware_tested": false,
+    "how": "pio run (3 envs) + native unit test; no board flashed"
+   }
+  },
+  {
+   "id": "embedded-linux",
+   "os": "Linux (Yocto/Buildroot class)",
+   "arch": "arm / arm64 / x86",
+   "native_runtime": {
+    "compiles": true,
+    "hardware_tested": false,
+    "how": "the static musl binaries need only a Linux kernel"
+   }
+  }
+ ],
+ "closed_platforms": [
+  {
+   "id": "tizen-tv",
+   "status": "vendor-gated",
+   "why": "Samsung partnership outside the US; no public native C/C++ path found"
+  },
+  {
+   "id": "webos-tv",
+   "status": "native path unavailable publicly",
+   "why": "web apps only"
+  },
+  {
+   "id": "roku",
+   "status": "vendor-gated",
+   "why": "native NDK is partner-only; otherwise a BrightScript rewrite"
+  },
+  {
+   "id": "vidaa-tv",
+   "status": "vendor-gated",
+   "why": "partnership"
+  },
+  {
+   "id": "fire-tv-vega-os",
+   "status": "native path unavailable publicly",
+   "why": "React Native or web only (Fire OS devices use the Android TV app)"
+  },
+  {
+   "id": "xbox",
+   "status": "not currently practical",
+   "why": "only a separate UWP app via retail Dev Mode"
+  },
+  {
+   "id": "playstation",
+   "status": "vendor-gated",
+   "why": "NDA programme aimed at games"
+  },
+  {
+   "id": "nintendo",
+   "status": "vendor-gated",
+   "why": "NDA programme aimed at games"
+  }
+ ]
+}

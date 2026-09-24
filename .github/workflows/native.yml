@@ -4,10 +4,10 @@ name: native
 # only when something it can observe changed -- the runtime, the answer key it
 # is checked against, the firmware file it shares, or this workflow.
 #
-# What it proves, and what it does not: the host job RUNS the conformance
-# answer key on Linux x86_64. The cross job only COMPILES for the other
-# targets -- a successful build there says the code is portable, never that
-# it runs (docs/PLATFORMS.md keeps the two apart).
+# What each job proves: `host` and `sanitizers` RUN the answer key and the C
+# consumer on Linux x86_64; `fuzz` runs real libFuzzer (clang) briefly over
+# every parser boundary; `cross` and `android` only COMPILE -- a successful
+# build says the code is portable, never that it runs (docs/PLATFORMS.md).
 on:
   push:
     branches: [main]
@@ -15,12 +15,14 @@ on:
       - "native/**"
       - "conformance/**"
       - "firmware/wavr_node/src/fingerprint_fmt.*"
+      - "scripts/gen_fuzz_corpus.py"
       - ".github/workflows/native.yml"
   pull_request:
     paths:
       - "native/**"
       - "conformance/**"
       - "firmware/wavr_node/src/fingerprint_fmt.*"
+      - "scripts/gen_fuzz_corpus.py"
       - ".github/workflows/native.yml"
 
 permissions:
@@ -41,11 +43,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get install -y --no-install-recommends ninja-build
-      - name: Build and run the conformance answer key
+      - name: Build, then run the answer key and the outside C consumer
         run: |
           cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
           ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Answer key under ASan + UBSan
+        run: |
+          cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DWAVR_SANITIZE=ON
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends ninja-build clang
+      - name: libFuzzer, 30 s per boundary, seeded from the answer key
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DWAVR_FUZZ=ON -DWAVR_LIBFUZZER=ON -DWAVR_SANITIZE=ON
+          cmake --build build --target fuzz_http_response fuzz_snapshot fuzz_status \
+            fuzz_framer fuzz_node_state fuzz_url fuzz_heartbeat
+          python3 scripts/gen_fuzz_corpus.py corpus
+          for t in http_response snapshot status framer node_state url heartbeat; do
+            ./build/fuzz_$t -max_total_time=30 -max_len=65536 -timeout=5 corpus/fuzz_$t
+          done
 
   cross:
     runs-on: ubuntu-latest
@@ -59,10 +91,24 @@ jobs:
           mkdir zig && tar -xJf zig.tar.xz -C zig --strip-components=1
       - name: Build for every target (compile only)
         run: |
-          for t in aarch64-linux-musl arm-linux-musleabihf mipsel-linux-musleabi \
-                   aarch64-windows-gnu aarch64-macos x86_64-macos; do
+          for t in aarch64-linux-musl arm-linux-musleabihf x86-linux-musl mipsel-linux-musleabi \
+                   mips-linux-musleabi aarch64-windows-gnu aarch64-macos x86_64-macos; do
             cmake -S native -B "build-$t" -G Ninja -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_TOOLCHAIN_FILE=native/cmake/zig-toolchain.cmake \
               -DZIG="$PWD/zig/zig" -DZIG_TARGET="$t"
             cmake --build "build-$t"
+          done
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends ninja-build
+      - name: NDK build of the JNI library (the runner ships an NDK)
+        run: |
+          for abi in arm64-v8a armeabi-v7a; do
+            cmake -S native -B "build-$abi" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI=$abi -DANDROID_PLATFORM=android-26
+            cmake --build "build-$abi" --target wavr_native_jni wavr
           done

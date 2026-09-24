@@ -1,0 +1,71 @@
+name: clients
+
+# The native client surfaces (docs/NATIVE-CLIENT.md). Separate from
+# native.yml and path-filtered per client, because these builds are the heavy
+# ones (Gradle, Rust + Slint) and CI minutes are scarce.
+#
+# Proves: the Android app (phone + TV) compiles and its unit tests pass,
+# including the parser against conformance/client_view.json; the desktop client
+# compiles and tests on Linux. Apple is NOT here: it needs macOS runners, and
+# clients/apple/ci/apple.yml.example is a design that has never run.
+on:
+  pull_request:
+    paths:
+      - "core-launcher/**"
+      - "clients/desktop/**"
+      - "native/include/**"
+      - "conformance/client_view.json"
+      - ".github/workflows/clients.yml"
+  push:
+    branches: [main]
+    paths:
+      - "core-launcher/**"
+      - "clients/desktop/**"
+      - "native/include/**"
+      - "conformance/client_view.json"
+      - ".github/workflows/clients.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clients-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('core-launcher/**/*.gradle', 'core-launcher/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Build the app and run its unit tests (kiosk build; no native .so bundled)
+        working-directory: core-launcher
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain
+
+  desktop-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            clients/desktop/target
+          key: cargo-${{ hashFiles('clients/desktop/Cargo.lock') }}
+      - name: Build and test the Slint client
+        working-directory: clients/desktop
+        run: |
+          cargo build --release
+          cargo test --release
