@@ -119,13 +119,31 @@ def context_for(url: str):
     return ctx
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A Core never redirects its API. Following one would carry the token to
+    wherever `Location` points, with the TLS decision made for the ORIGINAL
+    host -- so a redirect is an error, not a hop."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def open_url(req: urllib.request.Request, timeout: float):
+    """urlopen with this module's TLS rule for `req`'s own URL, and no redirects.
+    The one way wavr status and wavr doctor reach a Core."""
+    ctx = context_for(req.full_url)
+    handlers = [_NoRedirect()]
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    return urllib.request.build_opener(*handlers).open(req, timeout=timeout)
+
+
 def _get(base: str, path: str, token: str | None, timeout: float = 6.0):
     req = urllib.request.Request(base.rstrip("/") + path,
                                  headers={"X-Wavr-Local": "1"})
     if token:
         req.add_header("X-Wavr-Token", token)
-    with urllib.request.urlopen(req, timeout=timeout,
-                                context=context_for(base)) as r:
+    with open_url(req, timeout) as r:
         return json.loads(r.read())
 
 
@@ -318,6 +336,8 @@ def main(argv=None) -> int:
         attention = _get(args.url, "/api/attention", args.token)
     except Exception:                             # noqa: BLE001
         attention = None
+    if not isinstance(attention, dict):
+        attention = None      # an answer of the wrong shape is no answer: "could not check"
 
     if args.json:
         print(json.dumps({"runtime": runtime, "attention": attention}, indent=2))

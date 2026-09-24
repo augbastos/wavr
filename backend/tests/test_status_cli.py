@@ -77,8 +77,8 @@ def test_plain_http_off_this_machine_is_refused_before_connecting(monkeypatch):
     import wavr.status as status
 
     opened = []
-    monkeypatch.setattr(status.urllib.request, "urlopen",
-                        lambda req, **kw: opened.append(req.full_url) or (_ for _ in ()).throw(OSError("stub")))
+    monkeypatch.setattr(status.urllib.request.OpenerDirector, "open",
+                        lambda self, req, **kw: opened.append(req.full_url) or (_ for _ in ()).throw(OSError("stub")))
     with pytest.raises(ValueError):
         status._get("http://192.168.1.57:8000", "/api/runtime", "secret-token")
     with pytest.raises(ValueError):
@@ -192,6 +192,61 @@ def test_a_partially_read_inbox_is_not_a_clean_bill_either(monkeypatch):
 
     mod = _serve(answer, monkeypatch)
     assert mod.main(["--url", "http://x", "-q"]) == ATTENTION
+
+
+@pytest.mark.parametrize("wrong_shape", [[], "ok", 0, True])
+def test_an_inbox_answer_of_the_wrong_shape_is_not_a_clean_bill(monkeypatch, wrong_shape):
+    """Found by an independent review of the native port: `[]` crashed
+    exit_code here, and the native CLI read it as "nothing needs you"."""
+    def answer(path):
+        if path == "/api/runtime":
+            return _healthy_runtime()
+        return wrong_shape
+
+    mod = _serve(answer, monkeypatch)
+    assert mod.main(["--url", "http://x", "-q"]) == ATTENTION
+
+
+def test_a_redirect_is_refused_and_the_token_goes_nowhere_else():
+    """urlopen followed redirects with the token attached, and with the TLS
+    decision made for the ORIGINAL host. A Core never redirects its API."""
+    import http.server
+    import threading
+
+    import wavr.status as status
+
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.server.server_port, self.headers.get("X-Wavr-Token")))
+            if self.path == "/api/runtime":
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{other.server_port}/elsewhere")
+                self.end_headers()
+            else:
+                body = b"{}"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    first = http.server.HTTPServer(("127.0.0.1", 0), H)
+    other = http.server.HTTPServer(("127.0.0.1", 0), H)
+    for s in (first, other):
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(Exception):
+            status._get(f"http://127.0.0.1:{first.server_port}", "/api/runtime", "secret")
+        assert seen == [(first.server_port, "secret")], "the redirect was followed"
+        # Control: the same client does reach a server that answers directly.
+        assert status._get(f"http://127.0.0.1:{other.server_port}", "/x", None) == {}
+    finally:
+        first.shutdown()
+        other.shutdown()
 
 
 def test_a_fully_read_empty_inbox_is_still_a_clean_zero(monkeypatch):

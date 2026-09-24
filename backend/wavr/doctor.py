@@ -16,7 +16,7 @@ import os
 import sys
 import urllib.request
 
-from wavr.status import context_for, is_loopback
+from wavr.status import context_for, is_loopback, open_url
 
 
 def fetch_doctor(base_url: str, token: str | None = None, timeout: float = 40.0) -> dict:
@@ -30,8 +30,7 @@ def fetch_doctor(base_url: str, token: str | None = None, timeout: float = 40.0)
     # certificate was offered. A claimed scope that nothing enforces is the
     # failure this codebase keeps finding; `wavr.status.context_for` enforces it,
     # so this uses that rather than keeping a second, weaker copy.
-    ctx = context_for(url)
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+    with open_url(req, timeout) as resp:      # context_for + no redirects
         return json.loads(resp.read().decode("utf-8"))
 
 
