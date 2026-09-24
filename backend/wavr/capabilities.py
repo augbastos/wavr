@@ -277,6 +277,7 @@ def _has_battery() -> bool | None:
             supplies = os.listdir("/sys/class/power_supply")
         except OSError:
             return None
+        unreadable = False
         for name in supplies:
             try:
                 with open(f"/sys/class/power_supply/{name}/type", "r",
@@ -284,8 +285,11 @@ def _has_battery() -> bool | None:
                     if fh.read().strip().lower() == "battery":
                         return True
             except OSError:
-                continue
-        return False       # the directory listed and held no Battery-type supply
+                # Android's SELinux lists these and refuses every read: a phone
+                # then looked like a mains-powered box. Unread is not "no".
+                unreadable = True
+        # The directory listed and held no Battery-type supply -- if we read them all.
+        return None if unreadable else False
     if sys.platform == "win32":
         try:
             import ctypes
