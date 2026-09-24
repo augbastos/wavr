@@ -33,6 +33,7 @@ talking to itself in front of a person.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import ssl
@@ -69,14 +70,23 @@ OK = 0
 ATTENTION = 1
 UNREACHABLE = 2
 
-# Hosts where a self-signed certificate is the EXPECTED answer, because the Core
-# generated it on this machine and the packet never reaches a network.
-_LOOPBACK = {"127.0.0.1", "::1", "localhost", "[::1]"}
-
 
 def is_loopback(url: str) -> bool:
+    """Is this URL's host THIS machine -- where a self-signed certificate is the
+    expected answer, because the Core generated it here and the packet never
+    reaches a network?
+
+    An address, parsed, or the name `localhost`. It used to be any host that
+    merely STARTED with "127.", which a DNS name can do: `127.0.0.1.example.com`
+    resolves wherever its owner points it, and was then trusted with
+    verification off and the local token attached."""
     host = (urllib.parse.urlsplit(url).hostname or "").lower()
-    return host in _LOOPBACK or host.startswith("127.")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def context_for(url: str):
@@ -95,6 +105,12 @@ def context_for(url: str):
     why, rather than being quietly downgraded to no protection at all.
     """
     if not url.lower().startswith("https"):
+        if not is_loopback(url):
+            # No certificate at all, so the request -- and the token riding on
+            # it -- would cross the network in clear text. A Core across the
+            # network speaks HTTPS; plain HTTP is for the one on this machine.
+            raise ValueError(f"refusing plain HTTP to {url}: a Core across the "
+                             "network is reached over HTTPS")
         return None
     ctx = ssl.create_default_context()
     if is_loopback(url):
@@ -288,8 +304,8 @@ def main(argv=None) -> int:
         elif not args.quiet:
             hint = ("  Start it with:  python -m wavr.serve"
                     if is_loopback(args.url) else
-                    "  This is not a loopback address, so the certificate was "
-                    "checked.\n"
+                    "  This is not this machine, so only HTTPS is used and the "
+                    "certificate is checked.\n"
                     "  A Core across the network needs one this machine already "
                     "trusts.")
             print(f"Wavr is not answering at {args.url}.\n  {exc}\n{hint}",

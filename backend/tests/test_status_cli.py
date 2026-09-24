@@ -55,6 +55,40 @@ def test_anything_off_loopback_still_verifies(url):
     assert ctx.check_hostname is True
 
 
+@pytest.mark.parametrize("url", [
+    "https://127.0.0.1.attacker.example:8000",   # a NAME that starts like an address
+    "https://127.evil.example",
+    "https://localhost.attacker.example",
+    "https://127.0.0.1@attacker.example",        # userinfo, the host is after the @
+])
+def test_a_name_that_looks_like_loopback_is_not_loopback(url):
+    """Found by review of the native port, which had copied the rule: any host
+    that merely started with "127." was trusted with verification off and the
+    local token attached. `127.0.0.1.attacker.example` is a DNS name its owner
+    points anywhere."""
+    assert not is_loopback(url)
+    assert context_for(url).verify_mode != ssl.CERT_NONE
+
+
+def test_plain_http_off_this_machine_is_refused_before_connecting(monkeypatch):
+    """No certificate means the token would cross the network in clear text.
+    Refused before a socket is opened -- the control proves loopback still
+    goes through."""
+    import wavr.status as status
+
+    opened = []
+    monkeypatch.setattr(status.urllib.request, "urlopen",
+                        lambda req, **kw: opened.append(req.full_url) or (_ for _ in ()).throw(OSError("stub")))
+    with pytest.raises(ValueError):
+        status._get("http://192.168.1.57:8000", "/api/runtime", "secret-token")
+    with pytest.raises(ValueError):
+        status._get("http://127.0.0.1.attacker.example:8000", "/api/runtime", "secret-token")
+    assert opened == []
+    with pytest.raises(OSError):
+        status._get("http://127.0.0.1:8000", "/api/runtime", None)
+    assert opened == ["http://127.0.0.1:8000/api/runtime"]
+
+
 def test_the_doctor_tool_shares_this_rule_rather_than_keeping_its_own():
     """Two copies of a security decision is one copy that gets fixed and one
     that does not."""
