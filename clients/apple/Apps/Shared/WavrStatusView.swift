@@ -3,8 +3,12 @@ import WavrKit
 
 public struct WavrStatusView: View {
     public let snapshot: Snapshot?
+    public let errorMessage: String?
 
-    public init(snapshot: Snapshot?) { self.snapshot = snapshot }
+    public init(snapshot: Snapshot?, errorMessage: String? = nil) {
+        self.snapshot = snapshot
+        self.errorMessage = errorMessage
+    }
 
     public var body: some View {
         ScrollView {
@@ -12,7 +16,7 @@ public struct WavrStatusView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(snapshot?.runtime?.space ?? "Space unavailable")
                         .font(.largeTitle.bold())
-                    Text(snapshot?.runtime?.headline ?? snapshot?.error ?? "Waiting for Wavr")
+                    Text(snapshot?.runtime?.headline ?? errorMessage ?? snapshot?.error ?? "Waiting for Wavr")
                         .foregroundStyle(WavrTokens.dim)
                     HStack {
                         Circle()
@@ -47,6 +51,10 @@ public struct WavrStatusView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Attention").font(.title2.bold())
                         Text(attention.headline ?? "No attention summary")
+                        if attention.items == nil {
+                            Text("Attention items unavailable")
+                                .foregroundStyle(WavrTokens.dim)
+                        }
                         ForEach(Array((attention.items ?? []).enumerated()), id: \.offset) { entry in
                             Text(entry.element.title ?? "Untitled item")
                                 .padding()
@@ -55,6 +63,9 @@ public struct WavrStatusView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                     }
+                } else {
+                    Text("Attention could not be read")
+                        .foregroundStyle(WavrTokens.dim)
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)

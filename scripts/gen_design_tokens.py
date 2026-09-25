@@ -146,7 +146,8 @@ def swift(t: dict) -> str:
         a = int(h[7:9], 16) / 255 if len(h) == 9 else 1
         return (f"Color(.sRGB, red: {r} / 255.0, green: {g} / 255.0, blue: {b} / 255.0, "
                 f"opacity: {round(a, 4)})")
-    lines = [f"// {HEADER}", "import SwiftUI", "", "public enum WavrTokens {"]
+    # WavrState (the state enum colour(for:) takes) lives in WavrModels.
+    lines = [f"// {HEADER}", "import SwiftUI", "import WavrModels", "", "public enum WavrTokens {"]
     for k, v in t["color"].items():
         lines.append(f"    public static let {_camel(k)} = {col(v)}")
     lines.append("    public static let dim = textDim")

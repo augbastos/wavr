@@ -1,5 +1,34 @@
 import Foundation
 
+// An invalid element is unknown; it must not erase valid siblings in a Core array.
+private struct KnownObjects<Element: Decodable>: Decodable {
+    let values: [Element]
+
+    init(from decoder: Decoder) throws {
+        var array = try decoder.unkeyedContainer()
+        var values: [Element] = []
+        while !array.isAtEnd {
+            let element = try array.superDecoder()
+            if let value = try? Element(from: element) { values.append(value) }
+        }
+        self.values = values
+    }
+}
+
+private struct NullableStrings: Decodable {
+    let values: [String?]
+
+    init(from decoder: Decoder) throws {
+        var array = try decoder.unkeyedContainer()
+        var values: [String?] = []
+        while !array.isAtEnd {
+            let element = try array.superDecoder()
+            values.append(try? element.singleValueContainer().decode(String.self))
+        }
+        self.values = values
+    }
+}
+
 public enum WavrState: String, Codable, Equatable, Sendable {
     case healthy, starting, updating, paused, degraded, attention, unavailable
     case unknown
@@ -34,7 +63,7 @@ public struct Snapshot: Codable, Sendable {
         exitCode = try? c.decodeIfPresent(Int.self, forKey: .exitCode)
         runtime = try? c.decodeIfPresent(Runtime.self, forKey: .runtime)
         attention = try? c.decodeIfPresent(Attention.self, forKey: .attention)
-        rooms = try? c.decodeIfPresent([Room].self, forKey: .rooms)
+        rooms = (try? c.decodeIfPresent(KnownObjects<Room>.self, forKey: .rooms))?.values
         roomsReadable = try? c.decodeIfPresent(Bool.self, forKey: .roomsReadable)
         privacy = try? c.decodeIfPresent(Privacy.self, forKey: .privacy)
     }
@@ -62,7 +91,7 @@ public struct Runtime: Codable, Sendable {
         role = try? c.decodeIfPresent(String.self, forKey: .role)
         uptimeSeconds = try? c.decodeIfPresent(Double.self, forKey: .uptimeSeconds)
         lastStateAgeSeconds = try? c.decodeIfPresent(Double.self, forKey: .lastStateAgeSeconds)
-        findings = try? c.decodeIfPresent([Finding].self, forKey: .findings)
+        findings = (try? c.decodeIfPresent(KnownObjects<Finding>.self, forKey: .findings))?.values
     }
 }
 
@@ -87,7 +116,7 @@ public struct Attention: Codable, Sendable {
     public let degraded: Int?
     public let info: Int?
     public let headline: String?
-    public let couldNotCheck: [String]?
+    public let couldNotCheck: [String?]?
     public let items: [AttentionItem]?
 
     private enum CodingKeys: String, CodingKey {
@@ -102,8 +131,8 @@ public struct Attention: Codable, Sendable {
         degraded = try? c.decodeIfPresent(Int.self, forKey: .degraded)
         info = try? c.decodeIfPresent(Int.self, forKey: .info)
         headline = try? c.decodeIfPresent(String.self, forKey: .headline)
-        couldNotCheck = try? c.decodeIfPresent([String].self, forKey: .couldNotCheck)
-        items = try? c.decodeIfPresent([AttentionItem].self, forKey: .items)
+        couldNotCheck = (try? c.decodeIfPresent(NullableStrings.self, forKey: .couldNotCheck))?.values
+        items = (try? c.decodeIfPresent(KnownObjects<AttentionItem>.self, forKey: .items))?.values
     }
 }
 
@@ -163,7 +192,7 @@ public struct Room: Codable, Sendable {
         timestamp = try? c.decodeIfPresent(String.self, forKey: .timestamp)
         watch = try? c.decodeIfPresent(Bool.self, forKey: .watch)
         unrecognized = try? c.decodeIfPresent(Bool.self, forKey: .unrecognized)
-        sources = try? c.decodeIfPresent([Source].self, forKey: .sources)
+        sources = (try? c.decodeIfPresent(KnownObjects<Source>.self, forKey: .sources))?.values
     }
 }
 
