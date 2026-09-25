@@ -2,7 +2,7 @@
 
     python onnx_ab.py <workdir> [rounds]
 
-Reuses child.py and ort_path.py written by onnx_spike.py. Alternates the two
+Reuses child.py written by onnx_spike.py and the product detector. Alternates the two
 paths round by round (as benchmarks/ab_*.py do) so machine drift lands on both;
 reports medians plus every run's audit events and sampled connections.
 """
@@ -22,7 +22,7 @@ MODELS = {"torch": WORK / "yolov8n.pt", "ort": WORK / "yolov8n.onnx"}
 
 def one(mode):
     p = psutil.Popen([sys.executable, str(WORK / "child.py"), mode, str(MODELS[mode]),
-                      str(WORK / "sample.jpg"), str(WORK / "ort_path.py")],
+                      str(WORK / "sample.jpg"), str(Path(__file__).resolve().parents[1] / "backend")],
                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     conns, peak, seen = set(), 0, set()
     while p.poll() is None:

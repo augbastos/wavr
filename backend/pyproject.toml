@@ -1,6 +1,6 @@
 [project]
 name = "wavr"
-version = "0.4.0"
+version = "0.5.0"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-or-later" }
 dependencies = [
@@ -31,6 +31,7 @@ bench = ["psutil>=5.9", "httpx>=0.27"]
 # numpy is listed although opencv brings it: calibration solves with it directly,
 # and an undeclared dependency is one a future opencv release can take away.
 camera = ["opencv-python>=4.9", "ultralytics>=8.2", "numpy>=1.24"]
+camera-lite = ["onnxruntime>=1.30", "opencv-python-headless>=4.9", "numpy>=1.24"]
 mqtt = ["paho-mqtt>=2.0"]
 genai = ["google-generativeai>=0.7"]
 mmwave = ["pyserial>=3.5"]
@@ -51,6 +52,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["wavr*"]
+
+[tool.setuptools.package-data]
+wavr = ["models/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

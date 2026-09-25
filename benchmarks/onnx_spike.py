@@ -29,64 +29,11 @@ os.environ.update({"YOLO_OFFLINE": "1", "YOLO_AUTOINSTALL": "False", "ORT_DISABL
 WORK = Path(sys.argv[1])
 PT = Path(sys.argv[2])
 THRESHOLDS = (0.25, 0.4, 0.6)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 
-# -- the ORT path, as Wavr would ship it (numpy + onnxruntime + cv2 only) ------
-ORT_PATH_SRC = r'''
-import numpy as np, cv2, onnxruntime as ort
-
-def letterbox(img, size=640, stride=32):
-    # ultralytics LetterBox(auto=True): the minimum rectangle, padded to the
-    # stride -- what its predictor uses for a .pt or a dynamic ONNX model.
-    h, w = img.shape[:2]
-    r = min(size / h, size / w)
-    nw, nh = round(w * r), round(h * r)
-    dw, dh = ((size - nw) % stride) / 2, ((size - nh) % stride) / 2
-    if (w, h) != (nw, nh):
-        img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
-    top, bottom = round(dh - 0.1), round(dh + 0.1)
-    left, right = round(dw - 0.1), round(dw + 0.1)
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT,
-                             value=(114, 114, 114))
-    x = img[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
-    return np.ascontiguousarray(x)
-
-def nms(boxes, scores, iou=0.7):
-    order = scores.argsort()[::-1]
-    keep = []
-    while order.size:
-        i = order[0]
-        keep.append(i)
-        xx1 = np.maximum(boxes[i, 0], boxes[order[1:], 0]); yy1 = np.maximum(boxes[i, 1], boxes[order[1:], 1])
-        xx2 = np.minimum(boxes[i, 2], boxes[order[1:], 2]); yy2 = np.minimum(boxes[i, 3], boxes[order[1:], 3])
-        inter = np.clip(xx2 - xx1, 0, None) * np.clip(yy2 - yy1, 0, None)
-        a = (boxes[i, 2] - boxes[i, 0]) * (boxes[i, 3] - boxes[i, 1])
-        b = (boxes[order[1:], 2] - boxes[order[1:], 0]) * (boxes[order[1:], 3] - boxes[order[1:], 1])
-        order = order[1:][inter / (a + b - inter + 1e-9) <= iou]
-    return keep
-
-class OrtDetector:
-    def __init__(self, path):
-        so = ort.SessionOptions()
-        so.log_severity_level = 3
-        self.s = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
-        self.name = self.s.get_inputs()[0].name
-
-    def persons(self, frame, floor=0.01):
-        out = self.s.run(None, {self.name: letterbox(frame)})[0][0]   # (84, 8400)
-        cls = out[4:]
-        best = cls.argmax(0)
-        conf = cls.max(0)
-        # ultralytics NMS is class-aware over all classes; a person box competes
-        # only with other person boxes, so keep class-0 candidates, then NMS.
-        m = (best == 0) & (conf >= floor)
-        if not m.any():
-            return []
-        cx, cy, w, h = out[0, m], out[1, m], out[2, m], out[3, m]
-        boxes = np.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], 1)
-        sc = conf[m]
-        return sorted((float(sc[i]) for i in nms(boxes, sc)), reverse=True)
-'''
+# The benchmark imports the production detector in both processes.
+from wavr.person_onnx import OrtDetector, letterbox
 
 
 def images():
@@ -182,7 +129,8 @@ if mode == "torch":
     m = YOLO(model)
     run = lambda: m(img, verbose=False, conf=0.01)
 else:
-    exec(open(sys.argv[4]).read())
+    sys.path.insert(0, sys.argv[4])
+    from wavr.person_onnx import OrtDetector
     import onnxruntime as ort
     try: ort.disable_telemetry_events()
     except Exception: pass
@@ -201,11 +149,11 @@ print(json.dumps({"cold_s": round(cold, 3), "p50_ms": round(sorted(lat)[20] * 10
 '''
 
 
-def child(mode, model, img_path, ort_src):
+def child(mode, model, img_path, backend_path):
     import psutil
     script = WORK / "child.py"
     script.write_text(CHILD)
-    p = psutil.Popen([sys.executable, str(script), mode, str(model), str(img_path), str(ort_src)],
+    p = psutil.Popen([sys.executable, str(script), mode, str(model), str(img_path), str(backend_path)],
                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     conns = set()
     while p.poll() is None:
@@ -237,11 +185,8 @@ def main():
     import cv2
     model = YOLO(str(PT))
     onnx_path = Path(model.export(format="onnx", imgsz=640, simplify=True, dynamic=True))
-    ort_src = WORK / "ort_path.py"
-    ort_src.write_text(ORT_PATH_SRC)
-    ns: dict = {}
-    exec(ORT_PATH_SRC, ns)
-    det = ns["OrtDetector"](str(onnx_path))
+    backend_path = str(Path(__file__).resolve().parents[1] / "backend")
+    det = OrtDetector(str(onnx_path))
 
     imgs = images()
     # Export fidelity on its own: the SAME preprocessed tensor into both runtimes.
@@ -249,7 +194,7 @@ def main():
     tm = model.model.float().eval()
     raw_max = 0.0
     for img in imgs.values():
-        x = ns["letterbox"](img)
+        x = letterbox(img)
         with torch.no_grad():
             y = tm(torch.from_numpy(x))
         y = (y[0] if isinstance(y, (list, tuple)) else y).numpy()
@@ -281,8 +226,8 @@ def main():
         "count_agreement": {str(t): f"{agree[t]}/{len(imgs)}" for t in THRESHOLDS},
         "max_top_conf_abs_diff": round(maxdiff, 4),
         "per_image": per,
-        "torch_run": child("torch", PT, sample, ort_src),
-        "ort_run": child("ort", onnx_path, sample, ort_src),
+        "torch_run": child("torch", PT, sample, backend_path),
+        "ort_run": child("ort", onnx_path, sample, backend_path),
         "footprint_mb": {
             "torch_stack": footprint(["ultralytics", "torch", "torchvision", "opencv-python"])[0],
             "ort_stack": footprint(["onnxruntime", "numpy", "opencv-python-headless"])[0],

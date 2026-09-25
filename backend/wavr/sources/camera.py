@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -95,7 +96,7 @@ class CameraSource:
         self._confidence = confidence
         # An injected `detect` is responsible for its own thresholding — the
         # confidence param is only applied on the real (yolo_detect) path below.
-        self._detect = detect or (lambda f: yolo_detect(f, self._confidence))
+        self._detect = detect or (lambda f: person_detect(f, self._confidence))
         self._interval = interval
         self._reconnect = reconnect_delay
         # Opt-in posture pass: off by default -> zero behavior change (Camera
@@ -239,6 +240,10 @@ class CameraSource:
 
 _YOLO_MODEL = None
 _POSE_MODEL = None
+_ORT_MODEL = None
+_ORT_PATH = None
+_MODEL_REASON = None
+_ORT_REFUSED = None                # (path, mtime) of a model that failed verification
 _ACTIVE = 0                       # count of running CameraSource.events() loops
 _MODEL_LOCK = threading.Lock()    # guards the lazy YOLO load (called from to_thread workers)
 
@@ -359,10 +364,12 @@ def release_model() -> None:
     the driver. Safe with torch absent (suppressed). Called when the last
     camera stops so the GPU isn't held while no camera is running (e.g. so
     games get the VRAM back)."""
-    global _YOLO_MODEL, _POSE_MODEL
+    global _YOLO_MODEL, _POSE_MODEL, _ORT_MODEL, _ORT_PATH
     with _MODEL_LOCK:
         _YOLO_MODEL = None
         _POSE_MODEL = None
+        _ORT_MODEL = None
+        _ORT_PATH = None
     with contextlib.suppress(Exception):
         import torch
         torch.cuda.empty_cache()
@@ -419,6 +426,53 @@ async def rtsp_frames(url: str) -> "AsyncIterator[object]":
                 "RTSP session opened but produced no frames (privacy-mode candidate)")
     finally:
         _release(cap)
+
+
+def person_detect(frame, conf_threshold: float = 0.0) -> Detection:
+    """Prefer a verified local ONNX export; leave pose on its existing path."""
+    global _ORT_MODEL, _ORT_PATH, _MODEL_REASON, _ORT_REFUSED
+    from wavr.person_onnx import OrtDetector, PersonModelError, model_path
+
+    path = model_path()
+    stamp = (path, path.stat().st_mtime) if path.is_file() else None
+    if stamp is not None and stamp == _ORT_REFUSED:
+        # Refused once already: never loaded, never re-hashed every frame. A new
+        # or replaced file (new mtime) is checked again.
+        reason = _MODEL_REASON
+    elif path.is_file():
+        # A model that fails verification is NEVER loaded. Detection falls back
+        # to the unchanged legacy path below -- different weights, not a bypass
+        # of the check -- and the reason is logged once. Raising here instead
+        # turned into a reconnect loop (a traceback every cycle, no detections)
+        # while the camera still reported healthy.
+        reason = _MODEL_REASON   # if another thread swapped the model meanwhile
+        try:
+            os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+            import onnxruntime  # noqa: F401 - optional, tested at the use site
+        except ImportError:
+            reason = "onnxruntime unavailable; install wavr[camera-lite]"
+        else:
+            if _ORT_MODEL is None or _ORT_PATH != path:
+                with _MODEL_LOCK:
+                    if _ORT_MODEL is None or _ORT_PATH != path:
+                        try:
+                            _ORT_MODEL = OrtDetector(path)
+                            _ORT_PATH = path
+                        except PersonModelError as exc:
+                            _ORT_MODEL, _ORT_PATH, _ORT_REFUSED = None, None, stamp
+                            reason = f"{exc}; using the legacy detector"
+            if _ORT_MODEL is not None and _ORT_PATH == path:
+                scores = _ORT_MODEL.persons(frame)
+                scores = [score for score in scores if score >= conf_threshold]
+                return Detection(len(scores), max(scores, default=0.0))
+    else:
+        reason = ("person model not provisioned: run python "
+                  "scripts/provision_person_model.py --pt <local-yolov8n.pt>")
+
+    if reason != _MODEL_REASON:
+        logging.warning("Camera person detector: %s", reason)
+        _MODEL_REASON = reason
+    return yolo_detect(frame, conf_threshold)
 
 
 def yolo_detect(frame, conf_threshold: float = 0.0) -> Detection:

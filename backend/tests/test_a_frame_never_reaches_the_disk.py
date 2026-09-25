@@ -46,6 +46,7 @@ BACKEND = REPO / "backend" / "wavr"
 # an exemption, and an exemption list is how a guard dies.
 VISION_PATHS = [
     BACKEND / "sources" / "camera.py",
+    BACKEND / "person_onnx.py",
     BACKEND / "localize.py",
     BACKEND / "calib_store.py",
 ]

@@ -1,0 +1,8 @@
+{
+  "filename": "yolov8n.onnx",
+  "sha256": null,
+  "sha256_note": "The exact spike export is not present under benchmarks; pin its hash before vendoring weights.",
+  "size_bytes": 13309063,
+  "license": "AGPL-3.0",
+  "provenance": "Ultralytics yolov8n.pt, exported with format=onnx, imgsz=640, simplify=True, dynamic=True"
+}
