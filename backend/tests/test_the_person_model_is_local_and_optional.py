@@ -149,5 +149,11 @@ def test_the_detector_turns_ort_telemetry_off_before_the_session(tmp_path, monke
         return types.SimpleNamespace(get_inputs=lambda: [types.SimpleNamespace(name="images")])
     ort.InferenceSession = session
     monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    # The release manifest pins the shipped model: a same-named file without its
+    # sidecar is held to that hash and refused before ORT is touched.
+    with pytest.raises(person_onnx.PersonModelError, match="SHA-256 mismatch"):
+        person_onnx.OrtDetector(model)
+    assert calls == []
+    model.with_suffix(".onnx.json").write_text(json.dumps({"sha256": hashlib.sha256(b"synthetic").hexdigest()}))
     person_onnx.OrtDetector(model)
     assert calls == ["telemetry off", ("session", "1")]

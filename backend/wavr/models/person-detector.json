@@ -1,7 +1,7 @@
 {
   "filename": "yolov8n.onnx",
-  "sha256": null,
-  "sha256_note": "The exact spike export is not present under benchmarks; pin its hash before vendoring weights.",
+  "sha256": "30c9cf7df272d957c0ee27f60a7d0312eb83e3d7559e500257be50d2879e1cd8",
+  "sha256_note": "The export measured in benchmarks/results/2026-09-24-onnx-ab.json (13,309,063 bytes), attached to the release; a local export carries its own sidecar hash instead.",
   "size_bytes": 13309063,
   "license": "AGPL-3.0",
   "provenance": "Ultralytics yolov8n.pt, exported with format=onnx, imgsz=640, simplify=True, dynamic=True"
