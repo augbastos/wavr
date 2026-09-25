@@ -57,6 +57,7 @@ def main(argv: list[str]) -> int:
     edits = [
         ("backend/pyproject.toml", r'^version = "[^"]+"', f'version = "{v}"'),
         ("backend/wavr/__init__.py", r'^__version__ = "[^"]+"', f'__version__ = "{v}"'),
+        ("project.json", r'^(    "version": )"[^"]+"', rf'\g<1>"{v}"'),
         ("desktop/package.json", r'^(  "version": )"[^"]+"', rf'\g<1>"{v}"'),
         ("desktop/src-tauri/tauri.conf.json", r'^(  "version": )"[^"]+"', rf'\g<1>"{v}"'),
         ("mobile/package.json", r'^(  "version": )"[^"]+"', rf'\g<1>"{v}"'),

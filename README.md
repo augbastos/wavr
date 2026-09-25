@@ -18,7 +18,10 @@ says so instead of reporting empty. You draw the floor plan; Wavr fills it in.
 No account. No telemetry. No cloud service is required for anything Wavr does — the only paths off
 the machine are individually switched on, and the AI narrator can point at a model running on the same
 box. One exception, named rather than buried: camera person-detection downloads its model weights the
-first time it runs, because they are not vendored here.
+first time it runs, because they are not vendored here. The optional `camera-lite` extra runs a local
+ONNX model instead and never fetches one. You supply `yolov8n.pt` yourself and convert it once with
+`scripts/provision_person_model.py`, which needs `ultralytics` installed; until that is done,
+`camera-lite` alone detects nothing.
 
 ---
 
@@ -89,6 +92,8 @@ what you need; add more later.
 | **Mobile** | [`mobile/`](mobile/) — an Android companion that pairs to a central over certificate-pinned TLS. Discovery goes through Android's own resolver instead of an in-process mDNS browse, because a phone VPN swallows the app's own multicast query — the failure was measured on a handset with a commercial VPN. |
 | **Core** | [`core-launcher/`](core-launcher/) — an always-on appliance that *is* the hub: ambient panel, mDNS discovery, kiosk launcher. It has run on a dedicated Android phone; a mini PC or Raspberry Pi is a supported install route that has never been exercised on that hardware ([`docs/INSTALL.md`](docs/INSTALL.md)). |
 | **MCP** | [`backend/wavr/mcp_serve.py`](backend/wavr/) — read-only presence for your own agents, over stdio or HTTP. |
+| **Native runtime** | [`native/`](native/) — a small C++ runtime: the `wavr` binary (a Core's status and commands, the sensor-Node role) and `libwavr_native`, the C ABI the native clients share. Generated fixtures hold it to the Python Core for the behaviour they share. |
+| **Native clients** (preview) | [`clients/desktop/`](clients/desktop/) (Slint) and a Compose screen in `core-launcher/` show a Core's status and run part of its management (approvals, switches, diagnosis) through that runtime. They have been tested headless and on an emulator, not yet on a physical screen or phone. The SwiftUI sources in [`clients/apple/`](clients/apple/) have never been built. None of them replaces a WebView surface yet. |
 
 ![The same Space view on a phone in portrait: the state headline, the map, and the rooms beneath it, with a bottom tab bar](docs/img/mobile.png)
 
@@ -186,6 +191,8 @@ accordingly.
 - [`docs/VOCABULARY.md`](docs/VOCABULARY.md) — the words this project uses on purpose
 - [`docs/mcp-connect.md`](docs/mcp-connect.md) — connecting an agent over stdio or HTTP
 - [`docs/NODE-ONBOARDING.md`](docs/NODE-ONBOARDING.md) — flashing and enrolling an ESP32 node
+- [`docs/PLATFORMS.md`](docs/PLATFORMS.md) — what has actually run on which platform, and how that was checked
+- [`docs/NATIVE-CLIENT.md`](docs/NATIVE-CLIENT.md) — the snapshot and command contract the native clients use
 - [`docs/adr/`](docs/adr/) — the decisions and their trade-offs · [`docs/deploy/`](docs/deploy/) —
   hardening, Docker, hardware tiers · [`docs/network-fixes/`](docs/network-fixes/) — why LAN discovery
   fails, per router

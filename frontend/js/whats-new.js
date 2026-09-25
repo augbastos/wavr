@@ -27,8 +27,14 @@
 // Newest entry FIRST. Dates are ISO `YYYY-MM-DD` and are the day the notes were
 // written; a date must never be in the future (the same test checks).
 // ============================================================================
-window.WAVR_APP_VERSION = "0.4.0";
+window.WAVR_APP_VERSION = "0.5.0";
 window.WAVR_WHATS_NEW = [
+  // 0.5.0: most of this release is below the dashboard -- the native runtime,
+  // the preview native clients, an optional local ONNX person detector. Those
+  // are in the release notes, not here; this list is what a household SEES.
+  { version: "0.5.0", date: "2026-09-25", items: [
+    WavrT("🔒 Only an administrator can let a new sensor into your Space. Before this release, any device paired on your network could approve one."),
+  ] },
   // 0.4.0: what a household can SEE. The connector reach
   // vocabulary, the pinned test addresses and the offline producer
   // are real work in this release and are not release notes.

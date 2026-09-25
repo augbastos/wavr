@@ -6,7 +6,7 @@ devices need, in C++17 with no runtime dependencies:
 - **`wavr`**, one executable (static where the platform allows): the CLI, and
   the **Node role** -- enrol with a Core, pin its certificate, stream LD2450
   frames, obey disable/reactivate/revoke -- speaking Node Protocol v1.
-- **`libwavr_native`**, a stable C ABI (`include/wavr/wavr.h`, version 1.1) that
+- **`libwavr_native`**, a stable C ABI (`include/wavr/wavr.h`, version 1.2) that
   the Android (JNI), Apple (Swift) and desktop (Rust) clients bind to instead of
   re-implementing Wavr semantics. On Android it ships as `libwavr_native_jni.so`.
 
