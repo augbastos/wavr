@@ -69,6 +69,15 @@ Push-Location $Repo
 try {
     $py = (& $Python -c "import sys; print(sys.version_info >= (3, 11))" 2>$null)
     if ($py -ne "True") { throw "no Python 3.11+ at '$Python' (pass -Python)" }
+    # A build dir configured from another checkout rebuilds THAT checkout's sources: every
+    # native step would then pass or fail on code that is not this tree's.
+    $cache = Join-Path $BuildDir "CMakeCache.txt"
+    if (Test-Path $cache) {
+        $src = (Select-String -Path $cache -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=(.+)$').Matches[0].Groups[1].Value
+        if ((Resolve-Path $src).Path -ne (Resolve-Path native).Path) {
+            throw "-BuildDir $BuildDir was configured from $src, not from this tree's native/ (pass another -BuildDir)"
+        }
+    }
 
     # -- generated files and the publication gate ----------------------------------
     Step "conformance fixtures current" 1 { & $Python scripts/gen_conformance.py --check }
