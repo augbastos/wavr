@@ -1,8 +1,7 @@
 name: native
 
-# The portable C++ runtime (native/). Path-filtered like firmware.yml: it runs
-# only when something it can observe changed -- the runtime, the answer key it
-# is checked against, the firmware file it shares, or this workflow.
+# The host build runs on every PR and main push. Cross builds run for relevant
+# changes and every release candidate; sanitizer and fuzz jobs are release-only.
 #
 # What each job proves: `host` and `sanitizers` RUN the answer key and the C
 # consumer on Linux x86_64; `fuzz` runs real libFuzzer (clang) briefly over
@@ -11,19 +10,8 @@ name: native
 on:
   push:
     branches: [main]
-    paths:
-      - "native/**"
-      - "conformance/**"
-      - "firmware/wavr_node/src/fingerprint_fmt.*"
-      - "scripts/gen_fuzz_corpus.py"
-      - ".github/workflows/native.yml"
   pull_request:
-    paths:
-      - "native/**"
-      - "conformance/**"
-      - "firmware/wavr_node/src/fingerprint_fmt.*"
-      - "scripts/gen_fuzz_corpus.py"
-      - ".github/workflows/native.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,6 +26,45 @@ env:
   ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 
 jobs:
+  changes:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$HEAD_REF" == release/* ]]; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "platform=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! changed=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}"); then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -qE '^(native/|clients/|core-launcher/|conformance/|firmware/wavr_node/src/fingerprint_fmt\.|\.github/workflows/native\.yml$)'; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "platform=false" >> "$GITHUB_OUTPUT"
+          fi
+
   host:
     runs-on: ubuntu-latest
     steps:
@@ -50,6 +77,7 @@ jobs:
           ctest --test-dir build --output-on-failure
 
   sanitizers:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +89,7 @@ jobs:
           ctest --test-dir build --output-on-failure
 
   fuzz:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +109,8 @@ jobs:
           done
 
   cross:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +131,8 @@ jobs:
           done
 
   android:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
