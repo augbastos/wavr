@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -31,14 +30,15 @@ import androidx.lifecycle.ViewModelProvider
 
 class NativeStatusActivity : ComponentActivity() {
     private val model by lazy { ViewModelProvider(this)[StatusViewModel::class.java] }
+    private val manage by lazy { ViewModelProvider(this)[ManageViewModel::class.java] }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { PhoneStatus(model) }
+        setContent { PhoneStatus(model, manage) }
     }
 
     override fun onStart() { super.onStart(); model.start() }
-    override fun onStop() { model.stop(); super.onStop() }
+    override fun onStop() { model.stop(); manage.stopDiscovery(this); super.onStop() }
 }
 
 internal fun known(value: Any?): String = when (value) {
@@ -51,11 +51,11 @@ internal fun known(value: Any?): String = when (value) {
 internal fun percent(value: Double?): String = value?.let { "${(it * 100).toInt()}%" } ?: "unknown"
 
 @Composable
-private fun PhoneStatus(model: StatusViewModel) {
+private fun PhoneStatus(model: StatusViewModel, manage: ManageViewModel) {
     val state by model.state.collectAsState()
     var page by remember { mutableIntStateOf(0) }
-    val pages = listOf("Status", "Rooms", "Attention", "Device")
-    MaterialTheme {
+    val pages = listOf("Status", "Rooms", "Attention", "Manage", "Device")
+    WavrTheme {
         Scaffold(
             containerColor = WavrTokens.background,
             bottomBar = {
@@ -83,7 +83,8 @@ private fun PhoneStatus(model: StatusViewModel) {
                     0 -> StatusPanel(state.snapshot)
                     1 -> RoomsPanel(state.snapshot)
                     2 -> AttentionPanel(state.snapshot)
-                    3 -> DevicePanel(state.manifest)
+                    3 -> ManagePanel(manage)
+                    4 -> DevicePanel(state.manifest)
                 }
             }
         }

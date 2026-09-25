@@ -1,6 +1,7 @@
 package dev.wavr.core.nativeui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -17,10 +18,12 @@ data class StatusUiState(
     val message: String? = null
 )
 
-class StatusViewModel : ViewModel() {
+class StatusViewModel(app: Application) : AndroidViewModel(app) {
+    private val store = ConnectionStore(app)
     private val mutableState = MutableStateFlow(StatusUiState())
     val state = mutableState.asStateFlow()
     private var polling: Job? = null
+    private var connection: Connection? = null   // resolved once; again after a miss
 
     fun start() {
         if (polling?.isActive == true) return
@@ -32,12 +35,16 @@ class StatusViewModel : ViewModel() {
             while (true) {
                 try {
                     val next = withContext(Dispatchers.IO) {
-                        if (!WavrNative.abiCompatible(1, 0)) {
+                        // 1.2: the command contract (Manage) is part of what this app calls.
+                        if (!WavrNative.abiCompatible(1, 2)) {
                             StatusUiState(message = "Native runtime ABI is incompatible")
                         } else {
+                            // The joined Core (pinned, with its token), else a Core on this device.
+                            val c = connection ?: store.load().also { connection = it }
+                            val snap = Snapshot.parse(WavrNative.snapshotFetch(c.url, c.token, c.pin, 6000))
+                            if (snap.reachable != true) connection = null
                             StatusUiState(
-                                snapshot = Snapshot.parse(WavrNative.snapshotFetch(
-                                    "http://127.0.0.1:8000", null, null, 6000)),
+                                snapshot = snap,
                                 manifest = DeviceManifest.parse(WavrNative.capabilityManifest())
                             )
                         }

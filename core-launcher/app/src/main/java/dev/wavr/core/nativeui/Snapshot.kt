@@ -59,19 +59,19 @@ data class DeviceManifest(
     }
 }
 
-private fun JSONObject.value(key: String): Any? = if (has(key)) opt(key).takeUnless { it == JSONObject.NULL } else null
-private fun JSONObject.string(key: String): String? = value(key) as? String
-private fun JSONObject.bool(key: String): Boolean? = value(key) as? Boolean
-private fun JSONObject.int(key: String): Int? = when (val number = value(key)) {
+internal fun JSONObject.value(key: String): Any? = if (has(key)) opt(key).takeUnless { it == JSONObject.NULL } else null
+internal fun JSONObject.string(key: String): String? = value(key) as? String
+internal fun JSONObject.bool(key: String): Boolean? = value(key) as? Boolean
+internal fun JSONObject.int(key: String): Int? = when (val number = value(key)) {
     is Int -> number
     is Long -> number.takeIf { it >= Int.MIN_VALUE.toLong() && it <= Int.MAX_VALUE.toLong() }?.toInt()
     else -> null
 }
-private fun JSONObject.double(key: String): Double? = (value(key) as? Number)?.toDouble()?.takeIf { it.isFinite() }
-private fun JSONObject.obj(key: String): JSONObject? = value(key) as? JSONObject
-private fun JSONObject.array(key: String): JSONArray? = value(key) as? JSONArray
-private fun JSONArray.strings(): List<String?> = (0 until length()).map { opt(it) as? String }
-private fun <T> JSONArray.objects(parse: (JSONObject) -> T): List<T> =
+internal fun JSONObject.double(key: String): Double? = (value(key) as? Number)?.toDouble()?.takeIf { it.isFinite() }
+internal fun JSONObject.obj(key: String): JSONObject? = value(key) as? JSONObject
+internal fun JSONObject.array(key: String): JSONArray? = value(key) as? JSONArray
+internal fun JSONArray.strings(): List<String?> = (0 until length()).map { opt(it) as? String }
+internal fun <T> JSONArray.objects(parse: (JSONObject) -> T): List<T> =
     (0 until length()).mapNotNull { (opt(it) as? JSONObject)?.let(parse) }
 
 private fun parseRuntime(o: JSONObject) = RuntimeStatus(

@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import ssl
 import urllib.request
 from pathlib import Path
 
@@ -42,13 +43,23 @@ def check(ok: bool, what: str) -> None:
 
 
 def adb(serial, *args, text=True, timeout=120):
+    # adb prints UTF-8; on Windows the default decoder is the ANSI code page.
+    kw = {"encoding": "utf-8", "errors": "replace"} if text else {}
     return subprocess.run(["adb", "-s", serial, *args], capture_output=True, text=text,
-                          timeout=timeout)
+                          timeout=timeout, **kw)
 
 
 def ui(serial) -> str:
-    adb(serial, "shell", "uiautomator", "dump", "/sdcard/wavr-ui.xml")
-    return adb(serial, "shell", "cat", "/sdcard/wavr-ui.xml").stdout
+    for _ in range(3):
+        adb(serial, "shell", "uiautomator", "dump", "/sdcard/wavr-ui.xml")
+        xml = adb(serial, "shell", "cat", "/sdcard/wavr-ui.xml").stdout
+        # A slow emulator raises "System UI isn't responding" over whatever is on
+        # screen; it is not the app under test. Answer "Wait" and look again.
+        if "isn&apos;t responding" not in xml and "isn't responding" not in xml:
+            return xml
+        tap_text(serial, xml, "Wait")
+        time.sleep(3)
+    return xml
 
 
 def texts(xml: str) -> list[str]:
@@ -65,6 +76,32 @@ def tap_text(serial, xml: str, label: str) -> bool:
                 adb(serial, "shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
                 return True
     return False
+
+
+def node_of(xml: str, prefix: str):
+    """Bounds of the first node whose text starts with `prefix`."""
+    for node in re.findall(r"<node [^>]*>", xml):
+        m = re.search(r'text="([^"]*)"', node)
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node)
+        if m and b and m.group(1).startswith(prefix):
+            return tuple(map(int, b.groups()))
+    return None
+
+
+def find(serial, prefix: str, tries: int = 10):
+    """Scroll down until a node starting with `prefix` is on screen."""
+    for _ in range(tries):
+        xml = ui(serial)
+        b = node_of(xml, prefix)
+        if b:
+            return xml, b
+        adb(serial, "shell", "input", "swipe", "500", "1500", "500", "700", "400")
+        time.sleep(1.5)
+    return ui(serial), None
+
+
+def tap(serial, x: int, y: int) -> None:
+    adb(serial, "shell", "input", "tap", str(x), str(y))
 
 
 def shot(serial, out: Path, name: str) -> None:
@@ -86,19 +123,25 @@ def main() -> int:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     env = {k: v for k, v in os.environ.items() if not k.startswith("WAVR_")}
+    # LAN access on: the Core then serves HTTPS on loopback too, which is what a
+    # phone that IS the Core sees -- and pairing approvals exist only in this mode.
     env.update(WAVR_PORT=str(port), WAVR_DB=str(tmp / "w.db"), WAVR_HOUSE_MAP=str(tmp / "h.json"),
                WAVR_FRONTEND=str(REPO / "frontend"), PYTHONPATH=str(REPO / "backend"),
-               PYTHON_DOTENV_DISABLED="1")
+               PYTHON_DOTENV_DISABLED="1", WAVR_MULTIDEVICE="1", WAVR_BIND="127.0.0.1",
+               WAVR_TLS_CERT=str(tmp / "cert.pem"), WAVR_TLS_KEY=str(tmp / "key.pem"))
     log = open(tmp / "core.log", "w")
     core = subprocess.Popen([sys.executable, "-m", "wavr.serve"], env=env, cwd=tmp,
                             stdout=log, stderr=subprocess.STDOUT)
-    base = f"http://127.0.0.1:{port}"
+    base = f"https://127.0.0.1:{port}"
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE      # loopback, a Core of our own making
 
     def api(method, path, body=None):
         req = urllib.request.Request(base + path, method=method, headers={
             "X-Wavr-Local": "1", "Content-Type": "application/json"},
             data=json.dumps(body).encode() if body is not None else None)
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
             return json.loads(r.read() or b"{}")
 
     try:
@@ -106,7 +149,7 @@ def main() -> int:
             try:
                 api("GET", "/api/runtime")
                 break
-            except OSError:
+            except (OSError, ssl.SSLError):
                 time.sleep(0.5)
         api("POST", "/api/sources/sim/toggle", {"enabled": True})
         rooms: list[str] = []
@@ -121,6 +164,11 @@ def main() -> int:
         adb(a.serial, "reverse", "tcp:8000", f"tcp:{port}")
         r = adb(a.serial, "install", "-r", "-t", a.apk, timeout=300)
         check("Success" in r.stdout, "APK installs")
+        if a.serial.startswith("emulator-"):
+            # A previous run may have left the app joined to a Core that no longer
+            # exists. Only on an emulator: on a real device this would wipe the
+            # owner's own app data.
+            adb(a.serial, "shell", "pm", "clear", PKG)
 
         # -- phone ------------------------------------------------------------
         adb(a.serial, "shell", "am", "start", "-W", "-n", f"{PKG}/.nativeui.NativeStatusActivity")
@@ -139,6 +187,118 @@ def main() -> int:
             check(len(shown) >= 1, f"Rooms tab lists the Core's rooms ({len(shown)}/{len(rooms)} visible)")
         else:
             check(False, "a Rooms tab to tap")
+
+        # -- phone: Manage (the write side, through the command contract) -------
+        width = int(re.search(r"(\d+)x\d+", adb(a.serial, "shell", "wm", "size").stdout).group(1))
+        joiner = api("POST", "/api/pair-request", {"requester_name": "smoke-phone", "platform": "test"})
+        xml = ui(a.serial)
+        check(tap_text(a.serial, xml, "Manage"), "a Manage tab to tap")
+        time.sleep(6)
+        xml, watch = find(a.serial, "Watch (")
+        shot(a.serial, out, "phone-manage")
+        check(watch is not None, "Manage shows the Watch switch")
+        if watch:
+            tap(a.serial, width - 90, (watch[1] + watch[3]) // 2)
+            for _ in range(10):
+                time.sleep(1)
+                if api("GET", "/api/watch").get("on") is True:
+                    break
+            check(api("GET", "/api/watch").get("on") is True, "tapping Watch turns it on in the Core")
+            api("POST", "/api/watch", {"on": False})
+        xml, who = find(a.serial, "smoke-phone")
+        check(who is not None, "Manage lists the device asking to join")
+        xml, field = find(a.serial, "Code shown on that device")
+        if field:
+            tap(a.serial, (field[0] + field[2]) // 2, (field[1] + field[3]) // 2)
+            time.sleep(1)
+            adb(a.serial, "shell", "input", "text", joiner["compare_code"])
+            adb(a.serial, "shell", "input", "keyevent", "KEYCODE_BACK")   # close the keyboard
+            time.sleep(1)
+            xml, go = find(a.serial, "Let it in", tries=4)
+            shot(a.serial, out, "phone-approve")
+            if go:
+                tap(a.serial, (go[0] + go[2]) // 2, (go[1] + go[3]) // 2)
+            status = {}
+            for _ in range(10):
+                time.sleep(1)
+                status = api("POST", "/api/pair-request/status", {"request_id": joiner["request_id"]})
+                if status.get("status") != "pending":
+                    break
+            check(status.get("status") == "approved",
+                  f"typing the device's code and 'Let it in' approves it ({status.get('status')})")
+        else:
+            check(False, "a code field for the pending device")
+        xml, doc = find(a.serial, "Run the Core's checks")
+        if doc:
+            tap(a.serial, (doc[0] + doc[2]) // 2, (doc[1] + doc[3]) // 2)
+            time.sleep(10)
+            xml, _ = find(a.serial, "Run the Core's checks", tries=1)
+            adb(a.serial, "shell", "input", "swipe", "500", "1500", "500", "700", "400")
+            time.sleep(1.5)
+            xml = ui(a.serial)
+            shot(a.serial, out, "phone-doctor")
+            t = " | ".join(texts(xml))
+            ids = [c.get("id") for c in api("GET", "/api/health/doctor").get("checks", [])]
+            shown = [i for i in ids if i and i in t]
+            check(bool(shown) and "Not allowed" not in t,
+                  f"the Core's checks are listed ({len(shown)} of {len(ids)} ids on screen)")
+        else:
+            check(False, "a diagnosis button")
+
+        # -- phone: joining a Space (probe -> ask -> code -> approved -> token) --
+        devices_before = len(api("GET", "/api/devices").get("devices", []))
+        for _ in range(8):   # back to the top of Manage, where Join is
+            adb(a.serial, "shell", "input", "swipe", "500", "700", "500", "1600", "300")
+        time.sleep(1)
+        xml, field = find(a.serial, "Core address")
+        if field:
+            tap(a.serial, (field[0] + field[2]) // 2, (field[1] + field[3]) // 2)
+            time.sleep(1)
+            adb(a.serial, "shell", "input", "keyevent", "KEYCODE_MOVE_END")
+            adb(a.serial, "shell", "input", "text", "127.0.0.1:8000")
+            adb(a.serial, "shell", "input", "keyevent", "KEYCODE_BACK")
+            time.sleep(1)
+        xml, chk = find(a.serial, "Check its certificate")
+        if chk:
+            tap(a.serial, (chk[0] + chk[2]) // 2, (chk[1] + chk[3]) // 2)
+            time.sleep(4)
+        xml, ask = find(a.serial, "They match: ask to join")
+        check(ask is not None, "the certificate is shown for comparison before joining")
+        code = None
+        if ask:
+            tap(a.serial, (ask[0] + ask[2]) // 2, (ask[1] + ask[3]) // 2)
+            for _ in range(8):
+                time.sleep(1.5)
+                m = re.search(r'content-desc="Compare code (\d{6})"', ui(a.serial))
+                if m:
+                    code = m.group(1)
+                    break
+                # The code renders below the certificate: bring it on screen.
+                adb(a.serial, "shell", "input", "swipe", "500", "1500", "500", "900", "300")
+        shot(a.serial, out, "phone-join-code")
+        check(code is not None, "the app shows a compare code for the person at the Core")
+        if code:
+            pending = [r for r in api("GET", "/api/pending-pairings").get("requests", [])
+                       if r.get("platform") == "android"]
+            check(len(pending) == 1 and pending[0].get("compare_code") == code,
+                  "the code on the phone is the Core's own compare code")
+            if pending:
+                api("POST", f"/api/pending-pairings/{pending[0]['request_id']}/approve",
+                    {"role": "user", "confirm_code": code})
+            joined = None
+            for _ in range(10):
+                time.sleep(2)
+                xml, joined = find(a.serial, "Certificate pin", tries=2)
+                if joined:
+                    break
+            shot(a.serial, out, "phone-joined")
+            check(joined is not None, "once approved the app holds a pinned connection")
+            devices = api("GET", "/api/devices").get("devices", [])
+            check(len(devices) == devices_before + 1, "the Core issued this device one credential")
+            xml, forget = find(a.serial, "Forget this Core")
+            if forget:   # leave the emulator as it was found
+                tap(a.serial, (forget[0] + forget[2]) // 2, (forget[1] + forget[3]) // 2)
+                time.sleep(2)
 
         # -- TV ---------------------------------------------------------------
         adb(a.serial, "shell", "am", "start", "-W", "-n", f"{PKG}/.nativeui.TvStatusActivity")
