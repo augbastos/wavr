@@ -47,7 +47,7 @@ extern "C" {
 #endif
 
 #define WAVR_ABI_VERSION_MAJOR 1
-#define WAVR_ABI_VERSION_MINOR 1
+#define WAVR_ABI_VERSION_MINOR 2
 /* Kept for callers built against 1.0, which compared this to wavr_abi_version(). */
 #define WAVR_ABI_VERSION WAVR_ABI_VERSION_MAJOR
 
@@ -158,6 +158,43 @@ WAVR_API int wavr_snapshot_json(const wavr_snapshot* s, char* out, size_t out_le
 /* The `wavr status` exit code of this snapshot: 0, 1 or 2. */
 WAVR_API int wavr_snapshot_exit_code(const wavr_snapshot* s);
 WAVR_API void wavr_snapshot_free(wavr_snapshot* s);
+
+/*
+ * Commands and replies (ABI 1.2).
+ *
+ * A command asks the Core to act: pair this device, approve a waiting device,
+ * switch Watch or sensing, turn a source off, change a setting. Each command
+ * is one row of backend/wavr/client_commands.py -- a name, the existing Core
+ * route it maps to, its arguments -- and conformance/client_commands.json holds
+ * this library to it. The Core alone decides who may do what; this library
+ * checks only the SHAPE of the arguments. wavr_command_table writes the table.
+ *
+ * wavr_command_run sends one command and returns a reply. A malformed call or a
+ * Core that did not answer is a reply with ok = false, never NULL; NULL means
+ * only that memory ran out, or `url` / `name` was NULL. The reply's JSON is
+ *   {ok, status, error, detail, data}
+ * where `error` is one stable word -- bad_call, unreachable, unauthorized,
+ * forbidden, not_found, conflict, invalid, locked, throttled, refused, server --
+ * `detail` is the Core's own sentence (or, for bad_call, which rule the call
+ * broke) and `data` is the Core's answer. args_json NULL or "" means no
+ * arguments. Onboarding commands never send the token. Blocking.
+ *
+ * wavr_probe connects WITHOUT verifying the certificate and returns a reply
+ *   {ok, https, fingerprint, status, error}
+ * with the fingerprint the Core presented, for a person to compare with the
+ * one the Core shows before pairing (trust on first use). Blocking.
+ */
+typedef struct wavr_reply wavr_reply;
+WAVR_API int wavr_command_table(char* out, size_t out_len);
+WAVR_API wavr_reply* wavr_command_run(const char* url, const char* token, const char* pin,
+                                      const char* name, const char* args_json,
+                                      int timeout_ms);
+WAVR_API wavr_reply* wavr_probe(const char* url, int timeout_ms);
+/* The reply as JSON: bytes needed excluding the NUL, or WAVR_ERR_ARGUMENT. */
+WAVR_API int wavr_reply_json(const wavr_reply* r, char* out, size_t out_len);
+/* 1 when the command succeeded (or the probe saw a certificate), else 0. */
+WAVR_API int wavr_reply_ok(const wavr_reply* r);
+WAVR_API void wavr_reply_free(wavr_reply* r);
 
 #ifdef __cplusplus
 }

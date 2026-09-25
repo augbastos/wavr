@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO / "backend"))
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 
 from wavr import capabilities as cap  # noqa: E402
+from wavr import client_commands as cc  # noqa: E402
 from wavr import client_view as cv  # noqa: E402
 from wavr import status as st  # noqa: E402
 from wavr.runtime_status import unreachable  # noqa: E402
@@ -253,6 +254,82 @@ def _client_view() -> dict:
                       for n, r, a, s_, ok, err in rows]}
 
 
+def _sample(type_):
+    return {"string": "x", "bool": True, "int": 1, "strings": ["a"], "any": {"k": [1, "v"]}}[type_]
+
+
+def _client_commands() -> dict:
+    # The command contract: every command with its required arguments, then
+    # every way a call can be malformed, then every way the Core can answer.
+    calls = []
+    for name, spec in cc.COMMANDS.items():
+        args = {k: _sample(a["type"]) for k, a in spec["args"].items() if a["required"]}
+        calls.append((name + ":required", name, args))
+        full = {k: _sample(a["type"]) for k, a in spec["args"].items()}
+        if full != args:
+            calls.append((name + ":all", name, full))
+    odd = [
+        ("unknown_command", "nope.nope", {}),
+        ("name_not_string", 7, {}),
+        ("args_not_object", "watch.set", [True]),
+        ("unknown_argument", "watch.set", {"on": True, "off": False}),
+        ("missing_required", "watch.set", {}),
+        ("null_required", "watch.set", {"on": None}),
+        ("null_optional_dropped", "pairings.approve",
+         {"id": "r1", "confirm_code": "123456", "role": None}),
+        ("bool_as_string", "watch.set", {"on": "true"}),
+        ("bool_as_int", "watch.set", {"on": 1}),
+        ("string_as_int", "pair.status", {"request_id": 5}),
+        ("strings_with_int", "setup.create_space", {"name": "Home", "functions": ["core", 1]}),
+        ("strings_not_list", "setup.create_space", {"name": "Home", "functions": "core"}),
+        ("any_is_passed_through", "setting.set",
+         {"key": "k", "value": [1, {"a": None}, "s", 2.5, False]}),
+        ("any_null_is_missing", "setting.set", {"key": "k", "value": None}),
+        ("path_slash", "source.set", {"name": "a/b", "enabled": False}),
+        ("path_query_fragment", "source.set", {"name": "a?b#c", "enabled": False}),
+        ("path_percent_space", "source.set", {"name": "50% on", "enabled": True}),
+        ("path_unicode", "device.revoke", {"id": "café-☃"}),
+        ("path_unreserved_kept", "device.revoke", {"id": "Az09-._~"}),
+        ("path_dotdot", "device.revoke", {"id": ".."}),
+        ("path_dot", "device.revoke", {"id": "."}),
+        ("path_empty", "device.revoke", {"id": ""}),
+        ("path_traversal_encoded", "device.revoke", {"id": "../../api/block"}),
+        ("two_faults_first_sorted_wins", "node.approve", {"id": "n1", "name": 3, "room": 4}),
+    ]
+    requests = []
+    for label, name, args in calls + odd:
+        try:
+            expect = {"request": cc.request_for(name, args)}
+        except cc.CommandError as exc:
+            expect = {"error": exc.code}
+        requests.append({"name": label, "command": name, "args": args, **expect})
+    answers = [
+        ("ok_json", 200, '{"approved": "n1", "collected": false}'),
+        ("created", 201, '{"id": 1}'),
+        ("no_content", 204, ""),
+        ("ok_not_json", 200, "<html>"),
+        ("bad_request", 400, '{"detail": "bad"}'),
+        ("unauthorized", 401, '{"detail": "local token required"}'),
+        ("forbidden", 403, '{"detail": "central role required"}'),
+        ("not_found", 404, '{"detail": "unknown or non-pending node"}'),
+        ("conflict", 409, '{"detail": "already"}'),
+        ("validation_list_detail", 422,
+         '{"detail": [{"loc": ["body", "on"], "msg": "field required"}]}'),
+        ("locked", 423, '{"detail": "locked"}'),
+        ("throttled", 429, '{"detail": "slow down"}'),
+        ("teapot_is_refused", 418, '{"detail": 7}'),
+        ("server_error", 500, "Internal Server Error"),
+        ("bad_gateway", 502, '{"detail": "upstream"}'),
+        ("detail_not_object", 403, '["x"]'),
+    ]
+    results = [{"name": n, "status": code, "body": b, "result": cc.result_for(code, b)}
+               for n, code, b in answers]
+    msg = "cannot connect to 127.0.0.1:8000"
+    return {"source": "backend/wavr/client_commands.py (command contract)",
+            "requests": requests, "results": results,
+            "transport_failure": {"message": msg, "result": cc.transport_failure(msg)}}
+
+
 FIXTURES = {
     "status.json": _status,
     "compute_tier.json": _tiers,
@@ -261,24 +338,39 @@ FIXTURES = {
     "heartbeat.json": _heartbeat,
     "loopback.json": _loopback,
     "client_view.json": _client_view,
+    "client_commands.json": _client_commands,
 }
 
 
-def render_all() -> dict[str, str]:
-    return {name: json.dumps(fn(), indent=1, ensure_ascii=False, sort_keys=True) + "\n"
-            for name, fn in FIXTURES.items()}
+# The command table, embedded in the native runtime so both sides read the
+# same rows. Generated source, checked in (a native build needs no Python).
+TABLE_INC = REPO / "native" / "src" / "client_commands_table.inc"
+
+
+def _table_inc() -> str:
+    body = json.dumps(cc.table(), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    assert ")wavrjson" not in body
+    return ("// GENERATED by scripts/gen_conformance.py from backend/wavr/client_commands.py.\n"
+            "// Do not edit: change the Python table and regenerate.\n"
+            'R"wavrjson(' + body + ')wavrjson"\n')
+
+
+def render_all() -> dict[Path, str]:
+    out = {OUT / name: json.dumps(fn(), indent=1, ensure_ascii=False, sort_keys=True) + "\n"
+           for name, fn in FIXTURES.items()}
+    out[TABLE_INC] = _table_inc()
+    return out
 
 
 def main(argv=None) -> int:
     check = "--check" in (argv or sys.argv[1:])
     stale = []
-    for name, text in render_all().items():
-        path = OUT / name
+    for path, text in render_all().items():
         current = path.read_text(encoding="utf-8") if path.exists() else None
         if current != text:
-            stale.append(name)
+            stale.append(path.name)
             if not check:
-                OUT.mkdir(exist_ok=True)
+                path.parent.mkdir(exist_ok=True)
                 path.write_text(text, encoding="utf-8", newline="\n")
     if check and stale:
         print("stale conformance fixtures (run scripts/gen_conformance.py): "

@@ -23,18 +23,26 @@ the boundary other languages call is the thing under test.
 `backend/tests/test_conformance_fixtures_are_current.py` fails when the Python
 changes and the fixtures were not regenerated. Covered today: `wavr status`
 rendering and exit codes, compute tiers, the vocabulary, LD2450 framing, the
-heartbeat state machine, the loopback rule, and the client snapshot.
+heartbeat state machine, the loopback rule, the client snapshot, and the
+client command contract (the command table itself is the Python's, embedded as
+the generated `src/client_commands_table.inc`).
 
 The certificate fingerprint format is shared outright with the ESP32 firmware
 (`firmware/wavr_node/src/fingerprint_fmt.cpp`).
 
-## The C ABI (1.1)
+## The C ABI (1.2)
 
-- `wavr_abi_compatible(WAVR_ABI_VERSION_MAJOR, WAVR_ABI_VERSION_MINOR)` first.
+- `wavr_abi_compatible(major, minor)` first, with the lowest version whose
+  functions the caller uses (a client that only reads snapshots asks for 1.1).
   MINOR grows when functions are added; MAJOR changes when any existing one does.
+- 1.1: the snapshot (`wavr_snapshot_*`). 1.2: commands and replies --
+  `wavr_command_run` (one row of `backend/wavr/client_commands.py`),
+  `wavr_probe` (the certificate a Core presents, for trust on first use),
+  `wavr_reply_*`, `wavr_command_table`. A network call cannot be repeated just to
+  size a buffer, so its result is a handle (`wavr_reply`) read like a snapshot.
 - Plain C types; stateful things are opaque handles with create/free
-  (`wavr_framer`, `wavr_snapshot`); a handle is used by one thread at a time;
-  everything else is reentrant.
+  (`wavr_framer`, `wavr_snapshot`, `wavr_reply`); a handle is used by one thread
+  at a time; everything else is reentrant.
 - Every output goes into a caller-owned buffer; the return value is the size
   needed (call with `NULL, 0` to size). Nothing is allocated for the caller.
 - **No C++ exception crosses the boundary**: every entry point is guarded, and
@@ -48,6 +56,8 @@ The certificate fingerprint format is shared outright with the ESP32 firmware
 |---|---|---|
 | `wavr status [--url] [--token] [--pin] [--json] [-q] [--ascii]` | Is Wavr running, does anything need you -- same rendering and codes as `python -m wavr.status` | 0 nothing needs you · 1 something does, or could not be checked · 2 no answer |
 | `wavr snapshot [--url] [--token] [--pin]` | The native client view model as JSON (`docs/NATIVE-CLIENT.md`) | same as `status` |
+| `wavr command NAME [--args JSON] [--url] [--token] [--pin] [--reveal]` | Run one command of the client command contract (`wavr command --list` prints the table). A credential the Core hands out is printed as `***` unless `--reveal` | 0 done · 1 the Core refused it · 2 no answer · 64 malformed call |
+| `wavr probe --url https://CORE:PORT` | The certificate fingerprint a Core presents, unverified -- compare it with the Core's own screen before trusting it | 0 a certificate was seen · 2 none |
 | `wavr doctor [--url] [--token] [--pin]` | The Core's diagnostic report (as `python -m wavr.doctor`) | 0 printed · 2 no answer · 3 answered without a report |
 | `wavr capabilities` | This device's capability manifest | 0 |
 | `wavr node enroll --url https://CORE:PORT --code CODE [--state F]` | Enrol, pinning the certificate the Core presents | 0 · 1 refused · 64 usage |
@@ -103,7 +113,17 @@ ctest --test-dir build/native                                  # answer key + C 
 python native/tests/e2e_node.py --wavr build/native/wavr       # Node lifecycle vs a real Core
 python native/tests/e2e_node.py --wavr build/aarch64/wavr --adb SERIAL   # the same, on a phone
 python native/tests/soak_node.py --wavr build/native/wavr --minutes 10   # chaos soak
+python native/tests/e2e_commands.py --wavr build/native/wavr   # command contract vs a real Core, across the LAN
 ```
+
+`e2e_commands.py` starts a throwaway multidevice Core on this machine's LAN
+address and plays both sides: the Core's own screen (loopback) and a new device
+(the LAN address). It checks the certificate probe, approve-on-the-Core pairing
+(a wrong code is refused), that the device token works over pinned TLS and a
+wrong pin stops the request before the token is sent, that a `user` cannot
+switch Watch or approve anything while a `central` can switch Watch, that a
+path-shaped argument stays one path segment, that no LAN device can approve a
+sensor Node, and that a revoked token reads nothing.
 
 `soak_node.py` runs a fake Core that cycles through garbage bodies, HTTP 500,
 stale-sequence 409s, stalls longer than the node's timeout, the Core gone, a

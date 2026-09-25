@@ -10,6 +10,7 @@
 #include <string>
 
 #include "capabilities.h"
+#include "client_commands.h"
 #include "client_view.h"
 #include "fingerprint_fmt.h"
 #include "semantics.h"
@@ -62,6 +63,11 @@ struct wavr_snapshot {
   int exit_code = WAVR_ERR_INTERNAL;
 };
 
+struct wavr_reply {
+  std::string text;   // serialised once, at construction
+  int ok = 0;
+};
+
 namespace {
 
 wavr_snapshot* make_snapshot(wavr::json doc) {
@@ -70,6 +76,13 @@ wavr_snapshot* make_snapshot(wavr::json doc) {
   s->exit_code = doc["exit_code"].get<int>();
   s->doc = std::move(doc);
   return s.release();
+}
+
+wavr_reply* make_reply(const wavr::json& doc) {
+  auto r = std::make_unique<wavr_reply>();
+  r->text = wavr::dump(doc);
+  r->ok = doc.value("ok", false) ? 1 : 0;
+  return r.release();
 }
 
 }  // namespace
@@ -204,5 +217,35 @@ int wavr_snapshot_exit_code(const wavr_snapshot* s) {
 }
 
 void wavr_snapshot_free(wavr_snapshot* s) { delete s; }
+
+int wavr_command_table(char* out, size_t out_len) {
+  return guarded(WAVR_ERR_INTERNAL,
+                 [&] { return copy_out(wavr::dump(wavr::command_table()), out, out_len); });
+}
+
+wavr_reply* wavr_command_run(const char* url, const char* token, const char* pin,
+                             const char* name, const char* args_json, int timeout_ms) {
+  return guarded<wavr_reply*>(nullptr, [&]() -> wavr_reply* {
+    if (!url || !name) return nullptr;
+    return make_reply(wavr::command_run(url, token ? token : "", pin ? pin : "", name,
+                                        args_json ? args_json : "", timeout_ms));
+  });
+}
+
+wavr_reply* wavr_probe(const char* url, int timeout_ms) {
+  return guarded<wavr_reply*>(nullptr, [&]() -> wavr_reply* {
+    if (!url) return nullptr;
+    return make_reply(wavr::probe_core(url, timeout_ms));
+  });
+}
+
+int wavr_reply_json(const wavr_reply* r, char* out, size_t out_len) {
+  if (!r) return WAVR_ERR_ARGUMENT;
+  return copy_out(r->text, out, out_len);
+}
+
+int wavr_reply_ok(const wavr_reply* r) { return r ? r->ok : WAVR_ERR_ARGUMENT; }
+
+void wavr_reply_free(wavr_reply* r) { delete r; }
 
 }  // extern "C"

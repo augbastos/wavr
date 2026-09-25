@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 
 #include "capabilities.h"
+#include "client_commands.h"
 #include "client_view.h"
 #include "generated/unreachable.h"
 #include "net.h"
@@ -61,7 +62,7 @@ struct Args {
 };
 
 Args parse(int argc, char** argv, int from) {
-  static const char* kFlags[] = {"--json", "-q", "--quiet", "--ascii"};
+  static const char* kFlags[] = {"--json", "-q", "--quiet", "--ascii", "--reveal", "--list"};
   Args a;
   for (int i = from; i < argc; ++i) {
     std::string s = argv[i];
@@ -111,7 +112,9 @@ wavr::net::Result get(const wavr::net::Url& url, const std::string& path,
   wavr::net::Request req;
   req.path = path;
   req.headers = {{"X-Wavr-Local", "1"}};
-  if (!token.empty()) req.headers.emplace_back("X-Wavr-Token", token);
+  // Bearer: the only credential a Core accepts from across the network
+  // (X-Wavr-Token is read on loopback only).
+  if (!token.empty()) req.headers.emplace_back("Authorization", "Bearer " + token);
   auto tls = pin.empty() ? wavr::net::Tls::Unverified : wavr::net::Tls::Pin;
   return wavr::net::send(url, req, tls, pin);
 }
@@ -270,6 +273,52 @@ int cmd_doctor(const Args& a) {
   return 0;
 }
 
+// A credential the Core hands out once (pair.status, pair.redeem) is printed as
+// "***" unless --reveal is given: a terminal scrollback is not a key store.
+void redact(wavr::json& j) {
+  if (j.is_object()) {
+    for (auto it = j.begin(); it != j.end(); ++it) {
+      if (it.key() == "token" && it->is_string()) *it = "***";
+      else redact(*it);
+    }
+  } else if (j.is_array()) {
+    for (auto& x : j) redact(x);
+  }
+}
+
+// `wavr command NAME --args JSON`: one row of backend/wavr/client_commands.py.
+// Exit 0 done, 1 the Core refused it, 2 the Core did not answer, 64 malformed.
+int cmd_command(const Args& a) {
+  if (a.has("--list")) {
+    for (auto it = wavr::command_table()["commands"].begin();
+         it != wavr::command_table()["commands"].end(); ++it)
+      std::cout << it.key() << "  " << (*it)["method"].get<std::string>() << " "
+                << (*it)["path"].get<std::string>() << "\n";
+    return 0;
+  }
+  if (a.positional.empty()) {
+    std::cerr << "usage: wavr command NAME [--args JSON] [--url URL] [--token T] [--pin FP] "
+                 "[--reveal] | wavr command --list\n";
+    return 64;
+  }
+  wavr::json reply = wavr::command_run(a.get("--url", default_url()),
+                                       a.get("--token", env("WAVR_LOCAL_TOKEN")), a.get("--pin"),
+                                       a.positional[0], a.get("--args"));
+  if (!a.has("--reveal")) redact(reply);
+  std::cout << wavr::dump(reply, 2, true) << "\n";
+  if (reply["ok"].get<bool>()) return 0;
+  if (reply["error"] == "bad_call") return 64;
+  return reply["error"] == "unreachable" ? 2 : 1;
+}
+
+// `wavr probe --url https://CORE:PORT`: the certificate fingerprint the Core
+// presents, unverified, for a person to compare before trusting it.
+int cmd_probe(const Args& a) {
+  wavr::json r = wavr::probe_core(a.get("--url", default_url()));
+  std::cout << wavr::dump(r, 2, true) << "\n";
+  return r["ok"].get<bool>() ? 0 : 2;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -278,6 +327,8 @@ int main(int argc, char** argv) {
   if (cmd == "node") return cmd_node(parse(argc, argv, 2));
   if (cmd == "snapshot") return cmd_snapshot(parse(argc, argv, 2));
   if (cmd == "doctor") return cmd_doctor(parse(argc, argv, 2));
+  if (cmd == "command") return cmd_command(parse(argc, argv, 2));
+  if (cmd == "probe") return cmd_probe(parse(argc, argv, 2));
   if (cmd == "capabilities") {
     std::cout << wavr::dump(wavr::probe_manifest(), 2, true) << "\n";
     return 0;
@@ -287,6 +338,6 @@ int main(int argc, char** argv) {
               << "." << WAVR_ABI_VERSION_MINOR << ")\n";
     return 0;
   }
-  std::cerr << "usage: wavr status | snapshot | doctor | capabilities | node ... | version\n";
+  std::cerr << "usage: wavr status | snapshot | command ... | probe | doctor | capabilities | node ... | version\n";
   return cmd.empty() || cmd == "help" || cmd == "--help" ? 0 : 64;
 }

@@ -389,6 +389,21 @@ Result send(const Url& url, const Request& req, Tls tls, const std::string& pin,
     r.error = "no certificate pin for " + url.host + "; enrol first";
     return r;
   }
+  // A header is written verbatim into the request. A control byte in a name or
+  // value (a CR/LF in a token a hostile Core handed out at pairing) would split
+  // the request and inject headers -- refuse before connecting. The path is
+  // checked too: callers build it, but this is the one place every request passes.
+  auto has_ctl = [](const std::string& t) {
+    for (unsigned char c : t)
+      if (c < 0x20 || c == 0x7F) return true;
+    return false;
+  };
+  bool bad = has_ctl(req.method) || has_ctl(req.path);
+  for (const auto& [k, v] : req.headers) bad = bad || has_ctl(k) || has_ctl(v);
+  if (bad) {
+    r.error = "refusing a request with a control character in its method, path or headers";
+    return r;
+  }
 #if !WAVR_TLS
   if (url.https) {
     r.error = "this build has no TLS support";

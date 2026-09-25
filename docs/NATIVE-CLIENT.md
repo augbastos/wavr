@@ -75,6 +75,53 @@ as `false`, `0` or "healthy". `person_count: null` is "not counted", not zero.
 **Never in a snapshot:** per-person positions, identities, vitals. The view
 model does not carry them at all, Watch on or off.
 
+## SpaceScene
+
+`GET /api/scene` (command `scene.get`) returns schema 1 Space geometry and
+RoomState verdicts for native Space renderers (`backend/wavr/space_scene.py`):
+sorted levels and rooms, polygons and centroids in house units, bounds keyed by
+string level, unplaced room names (the house-level aggregate is not one), the
+rooms an attention item names (from its `title_args.room`; an item's `where` is
+a screen, not a room), and the attention sources that could not be read. An
+absent RoomState has `occupied: null` and `confidence: null`; it does not mean
+Empty. `watch` is `true` only where the Watch projection flagged the room.
+Bounds for a level without a valid room polygon are `null`.
+
+The route uses the same `presence:read` gate and Watch-projected RoomStates as
+`GET /api/state`; a test proves a paired device without that scope is refused
+both. It never carries per-person positions, identities or vitals; those are
+live-only and consent-gated. Renderers draw from this projection and do not
+compute occupancy. The current house document has no camera or sensor anchors,
+so the scene does not invent any.
+
+## Commands (the write side)
+
+A native client never builds an HTTP request itself. Each action is one row of
+`backend/wavr/client_commands.py` -- a name, the existing Core route it maps
+to, and its arguments -- run by the native runtime (`wavr_command_run`, C ABI
+1.2; `wavr command NAME --args JSON` on the command line). The runtime checks
+only the SHAPE of the arguments and escapes each path argument as one segment;
+the Core decides who may do what and whether a value is acceptable.
+
+A reply is always `{ok, status, error, detail, data}`. `error` is one stable
+word a client can switch on -- `bad_call` (the call was malformed and never left
+the device), `unreachable`, `unauthorized`, `forbidden`, `not_found`,
+`conflict`, `invalid`, `locked`, `throttled`, `refused`, `server` -- `detail`
+is the Core's own sentence, and `data` is the Core's answer.
+
+Onboarding commands (`pair.request`, `pair.status`, `pair.redeem`) are sent
+without the token even when the client holds one. Joining a Space:
+`wavr_probe` the Core's certificate and show it to the person; `pair.request`
+over a connection pinned to that fingerprint (the reply's `cert_fingerprint`
+must equal it); show the reply's `compare_code`, which the person at the Core
+types to approve; poll `pair.status` until `approved`; keep the token and the pin.
+
+Held by: `conformance/client_commands.json` (runtime vs Python),
+`backend/tests/test_native_clients_speak_the_cores_language.py` (every row names
+a real route; tokenless rows are exactly the onboarding routes) and
+`native/tests/e2e_commands.py` (the whole write path against a real Core across
+the LAN).
+
 ## Visual language
 
 Colours and roles come from the design tokens (`design/tokens.json`,

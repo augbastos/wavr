@@ -161,7 +161,9 @@ json client_fetch(const std::string& url_text, const std::string& token, const s
     net::Request req;
     req.path = path;
     req.headers = {{"X-Wavr-Local", "1"}};
-    if (!token.empty()) req.headers.emplace_back("X-Wavr-Token", token);
+    // Bearer: the only credential a Core accepts from across the network
+    // (X-Wavr-Token is read on loopback only).
+    if (!token.empty()) req.headers.emplace_back("Authorization", "Bearer " + token);
     return net::send(*url, req, pin.empty() ? net::Tls::Unverified : net::Tls::Pin, pin,
                      timeout_ms);
   };

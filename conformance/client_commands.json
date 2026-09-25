@@ -1,0 +1,1181 @@
+{
+ "requests": [
+  {
+   "args": {
+    "requester_name": "x"
+   },
+   "command": "pair.request",
+   "name": "pair.request:required",
+   "request": {
+    "auth": "none",
+    "body": {
+     "requester_name": "x"
+    },
+    "method": "POST",
+    "path": "/api/pair-request"
+   }
+  },
+  {
+   "args": {
+    "device_key": "x",
+    "platform": "x",
+    "reported_fp": "x",
+    "requester_name": "x"
+   },
+   "command": "pair.request",
+   "name": "pair.request:all",
+   "request": {
+    "auth": "none",
+    "body": {
+     "device_key": "x",
+     "platform": "x",
+     "reported_fp": "x",
+     "requester_name": "x"
+    },
+    "method": "POST",
+    "path": "/api/pair-request"
+   }
+  },
+  {
+   "args": {
+    "request_id": "x"
+   },
+   "command": "pair.status",
+   "name": "pair.status:required",
+   "request": {
+    "auth": "none",
+    "body": {
+     "request_id": "x"
+    },
+    "method": "POST",
+    "path": "/api/pair-request/status"
+   }
+  },
+  {
+   "args": {
+    "code": "x",
+    "device_name": "x"
+   },
+   "command": "pair.redeem",
+   "name": "pair.redeem:required",
+   "request": {
+    "auth": "none",
+    "body": {
+     "code": "x",
+     "device_name": "x"
+    },
+    "method": "POST",
+    "path": "/api/pair"
+   }
+  },
+  {
+   "args": {
+    "code": "x",
+    "device_key": "x",
+    "device_name": "x"
+   },
+   "command": "pair.redeem",
+   "name": "pair.redeem:all",
+   "request": {
+    "auth": "none",
+    "body": {
+     "code": "x",
+     "device_key": "x",
+     "device_name": "x"
+    },
+    "method": "POST",
+    "path": "/api/pair"
+   }
+  },
+  {
+   "args": {},
+   "command": "pairings.list",
+   "name": "pairings.list:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/pending-pairings"
+   }
+  },
+  {
+   "args": {
+    "confirm_code": "x",
+    "id": "x"
+   },
+   "command": "pairings.approve",
+   "name": "pairings.approve:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "confirm_code": "x"
+    },
+    "method": "POST",
+    "path": "/api/pending-pairings/x/approve"
+   }
+  },
+  {
+   "args": {
+    "confirm_code": "x",
+    "id": "x",
+    "role": "x"
+   },
+   "command": "pairings.approve",
+   "name": "pairings.approve:all",
+   "request": {
+    "auth": "token",
+    "body": {
+     "confirm_code": "x",
+     "role": "x"
+    },
+    "method": "POST",
+    "path": "/api/pending-pairings/x/approve"
+   }
+  },
+  {
+   "args": {
+    "id": "x"
+   },
+   "command": "pairings.deny",
+   "name": "pairings.deny:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "POST",
+    "path": "/api/pending-pairings/x/deny"
+   }
+  },
+  {
+   "args": {},
+   "command": "pair.code",
+   "name": "pair.code:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "POST",
+    "path": "/api/pair-code"
+   }
+  },
+  {
+   "args": {
+    "person_id": "x",
+    "role": "x"
+   },
+   "command": "pair.code",
+   "name": "pair.code:all",
+   "request": {
+    "auth": "token",
+    "body": {
+     "person_id": "x",
+     "role": "x"
+    },
+    "method": "POST",
+    "path": "/api/pair-code"
+   }
+  },
+  {
+   "args": {},
+   "command": "devices.list",
+   "name": "devices.list:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/devices"
+   }
+  },
+  {
+   "args": {
+    "id": "x"
+   },
+   "command": "device.revoke",
+   "name": "device.revoke:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "DELETE",
+    "path": "/api/devices/x"
+   }
+  },
+  {
+   "args": {
+    "id": "x",
+    "role": "x"
+   },
+   "command": "device.role",
+   "name": "device.role:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "role": "x"
+    },
+    "method": "POST",
+    "path": "/api/devices/x/role"
+   }
+  },
+  {
+   "args": {},
+   "command": "watch.get",
+   "name": "watch.get:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/watch"
+   }
+  },
+  {
+   "args": {
+    "on": true
+   },
+   "command": "watch.set",
+   "name": "watch.set:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "on": true
+    },
+    "method": "POST",
+    "path": "/api/watch"
+   }
+  },
+  {
+   "args": {
+    "on": true
+   },
+   "command": "sensing.set",
+   "name": "sensing.set:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "on": true
+    },
+    "method": "POST",
+    "path": "/api/system/toggle"
+   }
+  },
+  {
+   "args": {},
+   "command": "sources.list",
+   "name": "sources.list:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/system"
+   }
+  },
+  {
+   "args": {
+    "enabled": true,
+    "name": "x"
+   },
+   "command": "source.set",
+   "name": "source.set:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "enabled": true
+    },
+    "method": "POST",
+    "path": "/api/sources/x/toggle"
+   }
+  },
+  {
+   "args": {
+    "name": "x"
+   },
+   "command": "source.restart",
+   "name": "source.restart:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "POST",
+    "path": "/api/sources/x/restart"
+   }
+  },
+  {
+   "args": {},
+   "command": "nodes.list",
+   "name": "nodes.list:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/nodes"
+   }
+  },
+  {
+   "args": {},
+   "command": "nodes.pending",
+   "name": "nodes.pending:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/nodes/pending"
+   }
+  },
+  {
+   "args": {
+    "id": "x",
+    "name": "x",
+    "room": "x",
+    "sensor_type": "x"
+   },
+   "command": "node.approve",
+   "name": "node.approve:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "name": "x",
+     "room": "x",
+     "sensor_type": "x"
+    },
+    "method": "POST",
+    "path": "/api/nodes/x/approve"
+   }
+  },
+  {
+   "args": {
+    "id": "x",
+    "name": "x",
+    "room": "x",
+    "sensor_type": "x",
+    "transport": "x"
+   },
+   "command": "node.approve",
+   "name": "node.approve:all",
+   "request": {
+    "auth": "token",
+    "body": {
+     "name": "x",
+     "room": "x",
+     "sensor_type": "x",
+     "transport": "x"
+    },
+    "method": "POST",
+    "path": "/api/nodes/x/approve"
+   }
+  },
+  {
+   "args": {
+    "id": "x"
+   },
+   "command": "node.deny",
+   "name": "node.deny:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "POST",
+    "path": "/api/nodes/x/deny"
+   }
+  },
+  {
+   "args": {
+    "id": "x"
+   },
+   "command": "node.disable",
+   "name": "node.disable:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "POST",
+    "path": "/api/nodes/x/disable"
+   }
+  },
+  {
+   "args": {
+    "id": "x"
+   },
+   "command": "node.revoke",
+   "name": "node.revoke:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "DELETE",
+    "path": "/api/nodes/x"
+   }
+  },
+  {
+   "args": {
+    "name": "x",
+    "room": "x",
+    "sensor_type": "x"
+   },
+   "command": "node.enroll_code",
+   "name": "node.enroll_code:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "name": "x",
+     "room": "x",
+     "sensor_type": "x"
+    },
+    "method": "POST",
+    "path": "/api/nodes/enroll-code"
+   }
+  },
+  {
+   "args": {
+    "name": "x",
+    "room": "x",
+    "sensor_type": "x",
+    "transport": "x"
+   },
+   "command": "node.enroll_code",
+   "name": "node.enroll_code:all",
+   "request": {
+    "auth": "token",
+    "body": {
+     "name": "x",
+     "room": "x",
+     "sensor_type": "x",
+     "transport": "x"
+    },
+    "method": "POST",
+    "path": "/api/nodes/enroll-code"
+   }
+  },
+  {
+   "args": {},
+   "command": "space.get",
+   "name": "space.get:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/space"
+   }
+  },
+  {
+   "args": {
+    "name": "x"
+   },
+   "command": "space.rename",
+   "name": "space.rename:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "name": "x"
+    },
+    "method": "PUT",
+    "path": "/api/space"
+   }
+  },
+  {
+   "args": {
+    "kind": "x",
+    "name": "x"
+   },
+   "command": "space.rename",
+   "name": "space.rename:all",
+   "request": {
+    "auth": "token",
+    "body": {
+     "kind": "x",
+     "name": "x"
+    },
+    "method": "PUT",
+    "path": "/api/space"
+   }
+  },
+  {
+   "args": {},
+   "command": "settings.list",
+   "name": "settings.list:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/settings"
+   }
+  },
+  {
+   "args": {
+    "key": "x",
+    "value": {
+     "k": [
+      1,
+      "v"
+     ]
+    }
+   },
+   "command": "setting.set",
+   "name": "setting.set:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "value": {
+      "k": [
+       1,
+       "v"
+      ]
+     }
+    },
+    "method": "PUT",
+    "path": "/api/settings/x"
+   }
+  },
+  {
+   "args": {
+    "consent": "x",
+    "key": "x",
+    "value": {
+     "k": [
+      1,
+      "v"
+     ]
+    }
+   },
+   "command": "setting.set",
+   "name": "setting.set:all",
+   "request": {
+    "auth": "token",
+    "body": {
+     "consent": "x",
+     "value": {
+      "k": [
+       1,
+       "v"
+      ]
+     }
+    },
+    "method": "PUT",
+    "path": "/api/settings/x"
+   }
+  },
+  {
+   "args": {
+    "key": "x"
+   },
+   "command": "setting.reset",
+   "name": "setting.reset:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "DELETE",
+    "path": "/api/settings/x"
+   }
+  },
+  {
+   "args": {},
+   "command": "setup.status",
+   "name": "setup.status:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/setup/status"
+   }
+  },
+  {
+   "args": {
+    "name": "x"
+   },
+   "command": "setup.create_space",
+   "name": "setup.create_space:required",
+   "request": {
+    "auth": "token",
+    "body": {
+     "name": "x"
+    },
+    "method": "POST",
+    "path": "/api/setup/create-space"
+   }
+  },
+  {
+   "args": {
+    "functions": [
+     "a"
+    ],
+    "kind": "x",
+    "name": "x",
+    "owner_name": "x",
+    "room": "x"
+   },
+   "command": "setup.create_space",
+   "name": "setup.create_space:all",
+   "request": {
+    "auth": "token",
+    "body": {
+     "functions": [
+      "a"
+     ],
+     "kind": "x",
+     "name": "x",
+     "owner_name": "x",
+     "room": "x"
+    },
+    "method": "POST",
+    "path": "/api/setup/create-space"
+   }
+  },
+  {
+   "args": {},
+   "command": "discoveries.list",
+   "name": "discoveries.list:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/discoveries"
+   }
+  },
+  {
+   "args": {
+    "id": "x"
+   },
+   "command": "discovery.accept",
+   "name": "discovery.accept:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "POST",
+    "path": "/api/discoveries/x/accept"
+   }
+  },
+  {
+   "args": {
+    "id": "x"
+   },
+   "command": "discovery.dismiss",
+   "name": "discovery.dismiss:required",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "POST",
+    "path": "/api/discoveries/x/dismiss"
+   }
+  },
+  {
+   "args": {},
+   "command": "scene.get",
+   "name": "scene.get:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/scene"
+   }
+  },
+  {
+   "args": {},
+   "command": "doctor.run",
+   "name": "doctor.run:required",
+   "request": {
+    "auth": "token",
+    "body": null,
+    "method": "GET",
+    "path": "/api/health/doctor"
+   }
+  },
+  {
+   "args": {},
+   "command": "nope.nope",
+   "error": "unknown_command",
+   "name": "unknown_command"
+  },
+  {
+   "args": {},
+   "command": 7,
+   "error": "unknown_command",
+   "name": "name_not_string"
+  },
+  {
+   "args": [
+    true
+   ],
+   "command": "watch.set",
+   "error": "not_object",
+   "name": "args_not_object"
+  },
+  {
+   "args": {
+    "off": false,
+    "on": true
+   },
+   "command": "watch.set",
+   "error": "unknown_argument",
+   "name": "unknown_argument"
+  },
+  {
+   "args": {},
+   "command": "watch.set",
+   "error": "missing_argument",
+   "name": "missing_required"
+  },
+  {
+   "args": {
+    "on": null
+   },
+   "command": "watch.set",
+   "error": "missing_argument",
+   "name": "null_required"
+  },
+  {
+   "args": {
+    "confirm_code": "123456",
+    "id": "r1",
+    "role": null
+   },
+   "command": "pairings.approve",
+   "name": "null_optional_dropped",
+   "request": {
+    "auth": "token",
+    "body": {
+     "confirm_code": "123456"
+    },
+    "method": "POST",
+    "path": "/api/pending-pairings/r1/approve"
+   }
+  },
+  {
+   "args": {
+    "on": "true"
+   },
+   "command": "watch.set",
+   "error": "wrong_type",
+   "name": "bool_as_string"
+  },
+  {
+   "args": {
+    "on": 1
+   },
+   "command": "watch.set",
+   "error": "wrong_type",
+   "name": "bool_as_int"
+  },
+  {
+   "args": {
+    "request_id": 5
+   },
+   "command": "pair.status",
+   "error": "wrong_type",
+   "name": "string_as_int"
+  },
+  {
+   "args": {
+    "functions": [
+     "core",
+     1
+    ],
+    "name": "Home"
+   },
+   "command": "setup.create_space",
+   "error": "wrong_type",
+   "name": "strings_with_int"
+  },
+  {
+   "args": {
+    "functions": "core",
+    "name": "Home"
+   },
+   "command": "setup.create_space",
+   "error": "wrong_type",
+   "name": "strings_not_list"
+  },
+  {
+   "args": {
+    "key": "k",
+    "value": [
+     1,
+     {
+      "a": null
+     },
+     "s",
+     2.5,
+     false
+    ]
+   },
+   "command": "setting.set",
+   "name": "any_is_passed_through",
+   "request": {
+    "auth": "token",
+    "body": {
+     "value": [
+      1,
+      {
+       "a": null
+      },
+      "s",
+      2.5,
+      false
+     ]
+    },
+    "method": "PUT",
+    "path": "/api/settings/k"
+   }
+  },
+  {
+   "args": {
+    "key": "k",
+    "value": null
+   },
+   "command": "setting.set",
+   "error": "missing_argument",
+   "name": "any_null_is_missing"
+  },
+  {
+   "args": {
+    "enabled": false,
+    "name": "a/b"
+   },
+   "command": "source.set",
+   "name": "path_slash",
+   "request": {
+    "auth": "token",
+    "body": {
+     "enabled": false
+    },
+    "method": "POST",
+    "path": "/api/sources/a%2Fb/toggle"
+   }
+  },
+  {
+   "args": {
+    "enabled": false,
+    "name": "a?b#c"
+   },
+   "command": "source.set",
+   "name": "path_query_fragment",
+   "request": {
+    "auth": "token",
+    "body": {
+     "enabled": false
+    },
+    "method": "POST",
+    "path": "/api/sources/a%3Fb%23c/toggle"
+   }
+  },
+  {
+   "args": {
+    "enabled": true,
+    "name": "50% on"
+   },
+   "command": "source.set",
+   "name": "path_percent_space",
+   "request": {
+    "auth": "token",
+    "body": {
+     "enabled": true
+    },
+    "method": "POST",
+    "path": "/api/sources/50%25%20on/toggle"
+   }
+  },
+  {
+   "args": {
+    "id": "café-☃"
+   },
+   "command": "device.revoke",
+   "name": "path_unicode",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "DELETE",
+    "path": "/api/devices/caf%C3%A9-%E2%98%83"
+   }
+  },
+  {
+   "args": {
+    "id": "Az09-._~"
+   },
+   "command": "device.revoke",
+   "name": "path_unreserved_kept",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "DELETE",
+    "path": "/api/devices/Az09-._~"
+   }
+  },
+  {
+   "args": {
+    "id": ".."
+   },
+   "command": "device.revoke",
+   "error": "bad_path_segment",
+   "name": "path_dotdot"
+  },
+  {
+   "args": {
+    "id": "."
+   },
+   "command": "device.revoke",
+   "error": "bad_path_segment",
+   "name": "path_dot"
+  },
+  {
+   "args": {
+    "id": ""
+   },
+   "command": "device.revoke",
+   "error": "bad_path_segment",
+   "name": "path_empty"
+  },
+  {
+   "args": {
+    "id": "../../api/block"
+   },
+   "command": "device.revoke",
+   "name": "path_traversal_encoded",
+   "request": {
+    "auth": "token",
+    "body": {},
+    "method": "DELETE",
+    "path": "/api/devices/..%2F..%2Fapi%2Fblock"
+   }
+  },
+  {
+   "args": {
+    "id": "n1",
+    "name": 3,
+    "room": 4
+   },
+   "command": "node.approve",
+   "error": "wrong_type",
+   "name": "two_faults_first_sorted_wins"
+  }
+ ],
+ "results": [
+  {
+   "body": "{\"approved\": \"n1\", \"collected\": false}",
+   "name": "ok_json",
+   "result": {
+    "data": {
+     "approved": "n1",
+     "collected": false
+    },
+    "detail": null,
+    "error": null,
+    "ok": true,
+    "status": 200
+   },
+   "status": 200
+  },
+  {
+   "body": "{\"id\": 1}",
+   "name": "created",
+   "result": {
+    "data": {
+     "id": 1
+    },
+    "detail": null,
+    "error": null,
+    "ok": true,
+    "status": 201
+   },
+   "status": 201
+  },
+  {
+   "body": "",
+   "name": "no_content",
+   "result": {
+    "data": null,
+    "detail": null,
+    "error": null,
+    "ok": true,
+    "status": 204
+   },
+   "status": 204
+  },
+  {
+   "body": "<html>",
+   "name": "ok_not_json",
+   "result": {
+    "data": null,
+    "detail": null,
+    "error": null,
+    "ok": true,
+    "status": 200
+   },
+   "status": 200
+  },
+  {
+   "body": "{\"detail\": \"bad\"}",
+   "name": "bad_request",
+   "result": {
+    "data": {
+     "detail": "bad"
+    },
+    "detail": "bad",
+    "error": "invalid",
+    "ok": false,
+    "status": 400
+   },
+   "status": 400
+  },
+  {
+   "body": "{\"detail\": \"local token required\"}",
+   "name": "unauthorized",
+   "result": {
+    "data": {
+     "detail": "local token required"
+    },
+    "detail": "local token required",
+    "error": "unauthorized",
+    "ok": false,
+    "status": 401
+   },
+   "status": 401
+  },
+  {
+   "body": "{\"detail\": \"central role required\"}",
+   "name": "forbidden",
+   "result": {
+    "data": {
+     "detail": "central role required"
+    },
+    "detail": "central role required",
+    "error": "forbidden",
+    "ok": false,
+    "status": 403
+   },
+   "status": 403
+  },
+  {
+   "body": "{\"detail\": \"unknown or non-pending node\"}",
+   "name": "not_found",
+   "result": {
+    "data": {
+     "detail": "unknown or non-pending node"
+    },
+    "detail": "unknown or non-pending node",
+    "error": "not_found",
+    "ok": false,
+    "status": 404
+   },
+   "status": 404
+  },
+  {
+   "body": "{\"detail\": \"already\"}",
+   "name": "conflict",
+   "result": {
+    "data": {
+     "detail": "already"
+    },
+    "detail": "already",
+    "error": "conflict",
+    "ok": false,
+    "status": 409
+   },
+   "status": 409
+  },
+  {
+   "body": "{\"detail\": [{\"loc\": [\"body\", \"on\"], \"msg\": \"field required\"}]}",
+   "name": "validation_list_detail",
+   "result": {
+    "data": {
+     "detail": [
+      {
+       "loc": [
+        "body",
+        "on"
+       ],
+       "msg": "field required"
+      }
+     ]
+    },
+    "detail": null,
+    "error": "invalid",
+    "ok": false,
+    "status": 422
+   },
+   "status": 422
+  },
+  {
+   "body": "{\"detail\": \"locked\"}",
+   "name": "locked",
+   "result": {
+    "data": {
+     "detail": "locked"
+    },
+    "detail": "locked",
+    "error": "locked",
+    "ok": false,
+    "status": 423
+   },
+   "status": 423
+  },
+  {
+   "body": "{\"detail\": \"slow down\"}",
+   "name": "throttled",
+   "result": {
+    "data": {
+     "detail": "slow down"
+    },
+    "detail": "slow down",
+    "error": "throttled",
+    "ok": false,
+    "status": 429
+   },
+   "status": 429
+  },
+  {
+   "body": "{\"detail\": 7}",
+   "name": "teapot_is_refused",
+   "result": {
+    "data": {
+     "detail": 7
+    },
+    "detail": null,
+    "error": "refused",
+    "ok": false,
+    "status": 418
+   },
+   "status": 418
+  },
+  {
+   "body": "Internal Server Error",
+   "name": "server_error",
+   "result": {
+    "data": null,
+    "detail": null,
+    "error": "server",
+    "ok": false,
+    "status": 500
+   },
+   "status": 500
+  },
+  {
+   "body": "{\"detail\": \"upstream\"}",
+   "name": "bad_gateway",
+   "result": {
+    "data": {
+     "detail": "upstream"
+    },
+    "detail": "upstream",
+    "error": "server",
+    "ok": false,
+    "status": 502
+   },
+   "status": 502
+  },
+  {
+   "body": "[\"x\"]",
+   "name": "detail_not_object",
+   "result": {
+    "data": [
+     "x"
+    ],
+    "detail": null,
+    "error": "forbidden",
+    "ok": false,
+    "status": 403
+   },
+   "status": 403
+  }
+ ],
+ "source": "backend/wavr/client_commands.py (command contract)",
+ "transport_failure": {
+  "message": "cannot connect to 127.0.0.1:8000",
+  "result": {
+   "data": null,
+   "detail": "cannot connect to 127.0.0.1:8000",
+   "error": "unreachable",
+   "ok": false,
+   "status": null
+  }
+ }
+}

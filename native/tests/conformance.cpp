@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include "capabilities.h"
+#include "client_commands.h"
 #include "net.h"
 #include "semantics.h"
 #include "wavr/wavr.h"
@@ -197,6 +198,67 @@ void client_view() {
   }
 }
 
+std::string reply_text(wavr_reply* r) {
+  int n = wavr_reply_json(r, nullptr, 0);
+  std::vector<char> buf(static_cast<size_t>(n) + 1);
+  wavr_reply_json(r, buf.data(), buf.size());
+  return std::string(buf.data());
+}
+
+void client_commands() {
+  json fx = load("client_commands.json");
+  for (const auto& c : fx["requests"]) {
+    json want = c.contains("error") ? json{{"error", c["error"]}} : json{{"request", c["request"]}};
+    json got = wavr::command_request(c["command"], c["args"]);
+    if (got != want) std::cerr << "--- want\n" << want.dump() << "\n--- got\n" << got.dump() << "\n";
+    check(got == want, "command request: " + c["name"].get<std::string>());
+  }
+  for (const auto& c : fx["results"]) {
+    json got = wavr::command_result(c["status"].get<int>(), c["body"].get<std::string>());
+    if (got != c["result"]) std::cerr << "--- want\n" << c["result"].dump() << "\n--- got\n" << got.dump() << "\n";
+    check(got == c["result"], "command result: " + c["name"].get<std::string>());
+  }
+  const auto& tf = fx["transport_failure"];
+  check(wavr::command_transport_failure(tf["message"].get<std::string>()) == tf["result"],
+        "command transport failure");
+
+  // Through the ABI: the table as other languages read it, and the two replies
+  // that need no Core -- a malformed call never reaches the network, and a Core
+  // that is not there is a reply, not a NULL.
+  int n = wavr_command_table(nullptr, 0);
+  std::vector<char> buf(static_cast<size_t>(n) + 1);
+  wavr_command_table(buf.data(), buf.size());
+  check(json::parse(buf.data()) == wavr::command_table(), "command table through the ABI");
+  wavr_reply* bad = wavr_command_run("http://127.0.0.1:9", nullptr, nullptr, "watch.set", "{}", 500);
+  json b = json::parse(reply_text(bad));
+  check(wavr_reply_ok(bad) == 0 && b["error"] == "bad_call" && b["detail"] == "missing_argument",
+        "malformed command is a bad_call reply");
+  wavr_reply_free(bad);
+  wavr_reply* gone = wavr_command_run("http://127.0.0.1:9", nullptr, nullptr, "watch.set",
+                                      "{\"on\": true}", 500);
+  json g = json::parse(reply_text(gone));
+  check(wavr_reply_ok(gone) == 0 && g["error"] == "unreachable" && g["status"].is_null(),
+        "absent Core is an unreachable reply");
+  wavr_reply_free(gone);
+  // A token a hostile Core handed out at pairing, with CR/LF in it: refused before
+  // any connection (the detail says why), never written into a header.
+  wavr_reply* smuggle = wavr_command_run("http://127.0.0.1:9", "tok\r\nX-Injected: 1", nullptr,
+                                         "sources.list", nullptr, 500);
+  json sm = json::parse(reply_text(smuggle));
+  check(wavr_reply_ok(smuggle) == 0 && sm["detail"].get<std::string>().find("control character") !=
+                                           std::string::npos,
+        "a control character in a header value is refused before connecting");
+  wavr_reply_free(smuggle);
+  wavr_reply* probe = wavr_probe("http://127.0.0.1:9", 500);
+  json pr = json::parse(reply_text(probe));
+  check(wavr_reply_ok(probe) == 0 && pr["fingerprint"].is_null(), "plain HTTP has nothing to probe");
+  wavr_reply_free(probe);
+  check(wavr_command_run(nullptr, nullptr, nullptr, "x", nullptr, 0) == nullptr &&
+            wavr_reply_ok(nullptr) == WAVR_ERR_ARGUMENT && wavr_reply_json(nullptr, nullptr, 0) == WAVR_ERR_ARGUMENT,
+        "reply API rejects NULL");
+  check(wavr_abi_compatible(1, 2) == 1 && wavr_abi_compatible(1, 3) == 0, "ABI 1.2");
+}
+
 void fingerprint() {
   // SHA-256 of the empty string, formatted as backend/wavr/tls.py does for an
   // empty DER (the same vector the firmware's native test uses).
@@ -222,6 +284,7 @@ int main(int argc, char** argv) {
   heartbeat();
   loopback();
   client_view();
+  client_commands();
   manifest();
   fingerprint();
   // Native-only probe helper (Python asks os.cpu_count(); this reads what it reads).

@@ -93,6 +93,7 @@ add_library(wavr_core STATIC
   src/serial.cpp
   src/node.cpp
   src/client_view.cpp
+  src/client_commands.cpp
   # Shared with the ESP32 firmware: ONE implementation of the certificate
   # fingerprint format an operator compares by eye (firmware/wavr_node).
   ${WAVR_REPO}/firmware/wavr_node/src/fingerprint_fmt.cpp)

@@ -11,12 +11,41 @@
 
 namespace {
 
+// UTF-16 -> standard UTF-8. GetStringUTFChars would give *modified* UTF-8, in
+// which a character outside the BMP (an emoji in a room name inside a command's
+// JSON) becomes two encoded surrogates -- not UTF-8, and the JSON would not parse.
 std::string from_java(JNIEnv* env, jstring s) {
   if (!s) return {};
-  const char* utf = env->GetStringUTFChars(s, nullptr);
-  if (!utf) return {};
-  std::string out(utf);   // modified UTF-8 of a URL/credential: ASCII in practice
-  env->ReleaseStringUTFChars(s, utf);
+  const jsize n = env->GetStringLength(s);
+  const jchar* u = env->GetStringChars(s, nullptr);
+  if (!u) return {};
+  std::string out;
+  out.reserve(static_cast<size_t>(n));
+  for (jsize i = 0; i < n; ++i) {
+    uint32_t cp = u[i];
+    if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF) {
+      cp = 0x10000 + ((cp - 0xD800) << 10) + (u[i + 1] - 0xDC00);
+      ++i;
+    } else if (cp >= 0xD800 && cp <= 0xDFFF) {
+      cp = 0xFFFD;   // a lone surrogate is not a character
+    }
+    if (cp < 0x80) {
+      out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+      out += static_cast<char>(0xC0 | (cp >> 6));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+      out += static_cast<char>(0xE0 | (cp >> 12));
+      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+      out += static_cast<char>(0xF0 | (cp >> 18));
+      out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+  }
+  env->ReleaseStringChars(s, u);
   return out;
 }
 
@@ -104,6 +133,36 @@ JNIEXPORT jstring JNICALL Java_dev_wavr_core_nativeui_WavrNative_capabilityManif
   return guarded(env, [&] {
     return to_java(env, read_json([](char* out, size_t len) {
                      return wavr_capability_manifest(out, len);
+                   }));
+  });
+}
+
+JNIEXPORT jstring JNICALL Java_dev_wavr_core_nativeui_WavrNative_commandRun(
+    JNIEnv* env, jobject, jstring url, jstring token, jstring pin, jstring name,
+    jstring args_json, jint timeout_ms) {
+  return guarded(env, [&] {
+    const std::string u = from_java(env, url), t = from_java(env, token),
+                      p = from_java(env, pin), n = from_java(env, name),
+                      a = from_java(env, args_json);
+    std::unique_ptr<wavr_reply, void (*)(wavr_reply*)> r(
+        wavr_command_run(u.c_str(), t.c_str(), p.c_str(), n.c_str(), a.c_str(), timeout_ms),
+        wavr_reply_free);
+    if (!r) return to_java(env, "");
+    return to_java(env, read_json([&](char* out, size_t len) {
+                     return wavr_reply_json(r.get(), out, len);
+                   }));
+  });
+}
+
+JNIEXPORT jstring JNICALL Java_dev_wavr_core_nativeui_WavrNative_probe(
+    JNIEnv* env, jobject, jstring url, jint timeout_ms) {
+  return guarded(env, [&] {
+    const std::string u = from_java(env, url);
+    std::unique_ptr<wavr_reply, void (*)(wavr_reply*)> r(wavr_probe(u.c_str(), timeout_ms),
+                                                         wavr_reply_free);
+    if (!r) return to_java(env, "");
+    return to_java(env, read_json([&](char* out, size_t len) {
+                     return wavr_reply_json(r.get(), out, len);
                    }));
   });
 }
