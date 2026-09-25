@@ -132,6 +132,7 @@ from wavr.api_identity import build_identity_router
 from wavr.api_routines import build_routines_router
 from wavr.devices import DeviceStore, VALID_CONSENT, _is_expired
 from wavr.space_store import SpaceStore
+from wavr.space_scene import scene as space_scene
 from wavr.core_registry import (CoreRegistry, LEASE_SECONDS, VERDICT_CONTESTED,
                                 VERDICT_YIELD)
 from wavr.discovery_inbox import KIND_PEER_CORE
@@ -4517,6 +4518,13 @@ def create_app(sources=None, storage=None, hub=None, fusion=None, camera_store=N
         # Watch-projected: when Watch is on, family geometry/identity/vitals are stripped
         # here too, so the dashboard is suppressed exactly like every other egress.
         return _project_all()
+
+    @app.get("/api/scene")
+    async def get_scene(_=Depends(require_scope("presence:read"))):
+        attention_items, missed = _attention_items()
+        return space_scene(_house, _project_all(),
+                           attention=summarise_attention(attention_items),
+                           attention_missed=missed)
 
     @app.get("/api/house")
     async def house(_=Depends(require_scope("presence:read"))):
