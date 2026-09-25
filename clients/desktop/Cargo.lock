@@ -4669,9 +4669,10 @@ dependencies = [
 
 [[package]]
 name = "wavr-desktop-native"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "libloading",
+ "png",
  "serde",
  "serde_json",
  "slint",

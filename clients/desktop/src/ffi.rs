@@ -10,6 +10,14 @@ type Json = unsafe extern "C" fn(*const c_void, *mut c_char, usize) -> c_int;
 type ExitCode = unsafe extern "C" fn(*const c_void) -> c_int;
 type Free = unsafe extern "C" fn(*mut c_void);
 type Manifest = unsafe extern "C" fn(*mut c_char, usize) -> c_int;
+type CommandRun = unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, c_int) -> *mut c_void;
+
+/// ABI 1.2: the command contract (backend/wavr/client_commands.py). Absent on a 1.1 library.
+struct Commands {
+    run: CommandRun,
+    json: Json,
+    free: Free,
+}
 
 pub struct NativeRuntime {
     _library: Library,
@@ -19,6 +27,7 @@ pub struct NativeRuntime {
     exit_code: ExitCode,
     free: Free,
     manifest: Manifest,
+    commands: Option<Commands>,
 }
 
 pub struct Snapshot<'a> {
@@ -67,7 +76,7 @@ impl NativeRuntime {
     }
 
     pub fn load_from(path: &Path) -> Result<Self, String> {
-        // SAFETY: Symbol signatures match wavr.h ABI 1.1. The library is retained in Self.
+        // SAFETY: Symbol signatures match wavr.h ABI 1.1 (and 1.2 when the library has it). The library is retained in Self.
         unsafe {
             let library = Library::new(path)
                 .map_err(|e| format!("Cannot load Wavr native library {}: {e}", path.display()))?;
@@ -88,7 +97,16 @@ impl NativeRuntime {
             let exit_code = symbol!("wavr_snapshot_exit_code", ExitCode);
             let free = symbol!("wavr_snapshot_free", Free);
             let manifest = symbol!("wavr_capability_manifest", Manifest);
-            Ok(Self { _library: library, version, fetch, json, exit_code, free, manifest })
+            let commands = if compatible(1, 2) != 0 {
+                Some(Commands {
+                    run: symbol!("wavr_command_run", CommandRun),
+                    json: symbol!("wavr_reply_json", Json),
+                    free: symbol!("wavr_reply_free", Free),
+                })
+            } else {
+                None
+            };
+            Ok(Self { _library: library, version, fetch, json, exit_code, free, manifest, commands })
         }
     }
 
@@ -110,6 +128,31 @@ impl NativeRuntime {
         } else {
             Ok(Snapshot { handle, runtime: self })
         }
+    }
+
+    /// Run one command; the reply JSON is {ok, status, error, detail, data}. Blocking.
+    pub fn command(&self, url: &str, token: Option<&str>, pin: Option<&str>, name: &str, args_json: &str) -> Result<String, String> {
+        let c = self.commands.as_ref().ok_or("Wavr native library predates ABI 1.2 (no commands)")?;
+        let text = |v: &str, what: &str| CString::new(v).map_err(|_| format!("{what} contains a NUL byte"));
+        let (url, name, args) = (text(url, "URL")?, text(name, "Command")?, text(args_json, "Arguments")?);
+        let token = token.map(|t| text(t, "Token")).transpose()?;
+        let pin = pin.map(|p| text(p, "PIN")).transpose()?;
+        // SAFETY: all pointers remain valid for the call; NULL optionals are permitted.
+        let handle = unsafe {
+            (c.run)(url.as_ptr(), token.as_ref().map_or(ptr::null(), |v| v.as_ptr()),
+                    pin.as_ref().map_or(ptr::null(), |v| v.as_ptr()), name.as_ptr(), args.as_ptr(), 6000)
+        };
+        self.take_reply(c, handle)
+    }
+
+    fn take_reply(&self, c: &Commands, handle: *mut c_void) -> Result<String, String> {
+        if handle.is_null() {
+            return Err("Wavr native library could not allocate a reply".into());
+        }
+        let out = self.read_json(|o, l| unsafe { (c.json)(handle, o, l) });
+        // SAFETY: the library returned this handle; it is freed exactly once, here.
+        unsafe { (c.free)(handle) };
+        out
     }
 
     pub fn capability_manifest(&self) -> Result<String, String> {
@@ -159,7 +202,11 @@ mod tests {
     /// does not answer arriving as a snapshot with exit code 2 -- never a panic.
     #[test]
     fn real_library_binds_and_reports_an_absent_core() {
-        let Ok(path) = std::env::var("WAVR_NATIVE_LIB") else { return };
+        // Unset or empty = no library to test against (a CI step exports it empty).
+        let path = std::env::var("WAVR_NATIVE_LIB").unwrap_or_default();
+        if path.is_empty() {
+            return;
+        }
         let rt = NativeRuntime::load_from(Path::new(&path)).expect("the library must load");
         assert!(rt.version().is_some_and(|v| !v.is_empty()));
         let snap = rt.fetch("http://127.0.0.1:9", None, None).expect("a snapshot, not an error");
@@ -168,5 +215,9 @@ mod tests {
         let parsed = crate::snapshot::Snapshot::parse(&json).expect("parses");
         assert_eq!(parsed.reachable, Some(false));
         assert!(rt.capability_manifest().expect("manifest").contains("\"protocol_version\":1"));
+        let reply = rt.command("http://127.0.0.1:9", None, None, "watch.set", "{}").expect("a reply");
+        assert!(reply.contains("\"bad_call\""), "a malformed call is refused locally: {reply}");
+        let reply = rt.command("http://127.0.0.1:9", None, None, "watch.set", "{\"on\":true}").expect("a reply");
+        assert!(reply.contains("\"unreachable\""), "an absent Core is unreachable: {reply}");
     }
 }
