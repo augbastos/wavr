@@ -8,7 +8,9 @@ Each archive `wavr-native-<version>-<target>.(tar.gz|zip)` holds the `wavr`
 executable, the shared library when the build has one, the C header, the
 licence, third-party notices, `manifest.json` (version, ABI, file hashes, the
 exact build command) and `sbom.cdx.json` (CycloneDX 1.5). A `SHA256SUMS` file
-covers every archive.
+covers every archive, and `release-manifest.json` says for each target what
+docs/platform-matrix.json can show was run there -- hardware tested, runtime
+tested, simulation tested, compile only or unverified.
 
 Before anything is archived, every file is scanned for things that must never
 ship: build-machine paths, a user name, private keys, credential-shaped
@@ -116,6 +118,54 @@ def sbom(target: str, version: str, files: dict) -> dict:
             "components": comps}
 
 
+# Package target -> the row of docs/platform-matrix.json that records its evidence.
+MATRIX_IDS = {
+    "x86_64-windows-gnu": "windows-x64", "aarch64-windows-gnu": "windows-arm64",
+    "x86_64-linux-musl": "linux-x64", "x86-linux-musl": "linux-x86",
+    "aarch64-linux-musl": "linux-arm64", "arm-linux-musleabihf": "linux-armv7",
+    "mipsel-linux-musleabi": "openwrt-mipsel", "mips-linux-musleabi": "openwrt-mips",
+    "aarch64-macos": "macos-arm64", "x86_64-macos": "macos-x64",
+    "android-arm64-v8a": "android-arm64", "android-armeabi-v7a": "android-armv7",
+    "android-x86_64": "android-x86_64",
+}
+
+
+def evidence(entry: dict | None) -> str:
+    """The strongest thing the matrix can show for a runtime, in words a release
+    note can repeat. A cross-compile is never more than "compile only"."""
+    rt = (entry or {}).get("native_runtime") or {}
+    hw = rt.get("hardware_tested")
+    if hw is True:
+        return "hardware tested"
+    if hw == "partial":
+        return "hardware tested (partial)"
+    if rt.get("simulation_tested") is True:
+        return "simulation tested"
+    if rt.get("unit_tested") is True:
+        return "runtime tested"
+    if rt.get("compiles") is True:
+        return "compile only"
+    return "unverified"
+
+
+def release_manifest(version: str, c_abi: str | None, made: list[Path]) -> dict:
+    matrix = json.loads((REPO / "docs" / "platform-matrix.json").read_text(encoding="utf-8"))
+    rows = {t["id"]: t for t in matrix["targets"]}
+    targets = []
+    for arc in made:
+        target = arc.name[len(f"wavr-native-{version}-"):].rsplit(".tar.gz", 1)[0].rsplit(".zip", 1)[0]
+        mid = MATRIX_IDS.get(target)
+        entry = rows.get(mid)
+        targets.append({"target": target, "archive": arc.name,
+                        "sha256": hashlib.sha256(arc.read_bytes()).hexdigest(),
+                        "platform_matrix_id": mid, "evidence": evidence(entry),
+                        "how": ((entry or {}).get("native_runtime") or {}).get("how")})
+    return {"schema": 1, "product": "wavr-native", "version": version, "c_abi": c_abi,
+            "published": False, "evidence_source": "docs/platform-matrix.json",
+            "note": "Evidence is what was run, not what is supported: compile only is never support.",
+            "targets": targets}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
@@ -187,6 +237,9 @@ def main() -> int:
         sums.append(f"{hashlib.sha256(arc.read_bytes()).hexdigest()}  {arc.name}")
     # LF even on Windows: `sha256sum -c` reads a CR as part of the file name.
     (out / "SHA256SUMS").write_bytes(("\n".join(sums) + "\n").encode())
+    c_abi = f"{abi.group(1).decode()}.{abi.group(2).decode()}" if abi else None
+    (out / "release-manifest.json").write_bytes(
+        json.dumps(release_manifest(version, c_abi, made), indent=1).encode())
     print("\n".join(f"{a.name}  {a.stat().st_size} bytes" for a in made))
     return 0
 

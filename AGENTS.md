@@ -78,7 +78,16 @@ python scripts/gen_conformance.py                          # regenerate conforma
 python scripts/gen_design_tokens.py                        # regenerate design/tokens.json + the clients' token files
 cd core-launcher; ./gradlew :app:assembleDebug :app:testDebugUnitTest   # Android app incl. native (Compose) + TV activities
 cd clients/desktop; cargo build --release; cargo test --release          # desktop client (set WAVR_NATIVE_LIB to test against the library)
+./scripts/validate-dev.ps1 -Python <python>                 # every local check in one run (-Fast default, -Full, -Release)
+python native/tests/e2e_commands.py --wavr build/native/wavr.exe   # native command contract vs a real Core across the LAN
+python native/tests/android_ui_smoke.py --serial emulator-5554 --apk core-launcher/app/build/outputs/apk/debug/app-debug.apk   # native Android UI on an EMULATOR
+python scripts/set_version.py X.Y.Z                         # move the product version everywhere it is declared
 ```
+
+`validate-dev.ps1` sets `PYTHONPATH` to this checkout's `backend/` and a private
+pytest `--basetemp` itself. Run by hand, pytest needs both when the interpreter
+has Wavr installed editable from another checkout (it silently tests that one)
+or when the shared `pytest-of-<user>` directory is held by another process.
 
 The browser tests inside the suite drive a real Chromium and take the largest
 share of the wall clock. To skip them while iterating, `--ignore` the modules
@@ -169,6 +178,11 @@ this repository.
   them. Read the owner before changing it from the outside.
 
 ## Before publication
+
+A release is prepared on a `release/vX.Y.Z` branch and merged into `main`
+through a pull request, after `scripts/validate-dev.ps1 -Release` and the
+publication gate pass. Owner runbooks, ledgers and agent working files never
+enter the tree.
 
 `python scripts/publication_gate.py` reports blockers (things whose disclosure cannot be
 undone) and passages that are true today but become false the moment the repository is
