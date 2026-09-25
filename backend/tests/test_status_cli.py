@@ -225,7 +225,7 @@ def test_a_redirect_is_refused_and_the_token_goes_nowhere_else():
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            seen.append((self.server.server_port, self.headers.get("X-Wavr-Token")))
+            seen.append((self.server.server_port, self.headers.get("Authorization")))
             if self.path == "/api/runtime":
                 self.send_response(302)
                 self.send_header("Location", f"http://127.0.0.1:{other.server_port}/elsewhere")
@@ -247,7 +247,7 @@ def test_a_redirect_is_refused_and_the_token_goes_nowhere_else():
     try:
         with pytest.raises(Exception):
             status._get(f"http://127.0.0.1:{first.server_port}", "/api/runtime", "secret")
-        assert seen == [(first.server_port, "secret")], "the redirect was followed"
+        assert seen == [(first.server_port, "Bearer secret")], "the redirect was followed"
         # Control: the same client does reach a server that answers directly.
         assert status._get(f"http://127.0.0.1:{other.server_port}", "/x", None) == {}
     finally:

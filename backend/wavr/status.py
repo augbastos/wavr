@@ -151,7 +151,10 @@ def _get(base: str, path: str, token: str | None, timeout: float = 6.0):
     req = urllib.request.Request(base.rstrip("/") + path,
                                  headers={"X-Wavr-Local": "1"})
     if token:
-        req.add_header("X-Wavr-Token", token)
+        # Bearer: the one credential a Core accepts from across the network, and
+        # it accepts it on loopback too. X-Wavr-Token is read on loopback only,
+        # so `--url https://<LAN Core>` with a device token was always refused.
+        req.add_header("Authorization", f"Bearer {token}")
     with open_url(req, timeout) as r:
         return json.loads(r.read())
 
