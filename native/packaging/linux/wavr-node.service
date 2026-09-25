@@ -1,0 +1,40 @@
+[Unit]
+Description=Wavr native sensor Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wavr-node
+Group=wavr-node
+SupplementaryGroups=dialout
+StateDirectory=wavr-node
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/wavr-node
+ExecStart=/usr/local/bin/wavr node run --sensor ld2450:/dev/ttyUSB0 --state /var/lib/wavr-node/node.json
+Restart=on-failure
+RestartSec=10s
+# 3 = revoked (the node wiped its state: stay stopped); 64 = usage, e.g. started
+# before `wavr node enroll` wrote the state file -- restarting cannot fix either.
+RestartPreventExitStatus=3 64
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+DevicePolicy=closed
+# USB serial adapters by device class, not by path: an adapter that enumerates
+# after this unit starts is still allowed. (Reasoned from systemd.resource-control,
+# not run on a device.) Change --sensor above to the adapter's real path.
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyACM rw
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

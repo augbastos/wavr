@@ -1,7 +1,7 @@
 {
  "$schema_version": 1,
  "$doc": "Canonical, machine-readable support matrix. docs/PLATFORMS.md explains it. Each surface on each target records evidence separately: compiles, unit_tested, simulation_tested, hardware_tested, ui_tested. Values: true (done, with `how`), false (not done), \"blocked\" (needs something this project lacks), \"n/a\". A cross-compile is never hardware support.",
- "$as_of": "2026-09-24",
+ "$as_of": "2026-09-25",
  "surfaces": {
   "core": "Python Core (fusion, API, providers)",
   "native_runtime": "native/ wavr CLI + Node role + C ABI",
@@ -23,8 +23,8 @@
    "native_ui": {
     "compiles": true,
     "unit_tested": true,
-    "ui_tested": false,
-    "how": "clients/desktop (Rust + Slint) builds and tests, incl. against the real DLL; never launched on screen"
+    "ui_tested": "headless",
+    "how": "clients/desktop (Rust + Slint) builds and tests, incl. against the real DLL; Manage tab; a headless render test (Slint software renderer, no window) paints the snapshot and never paints core_not_answering as healthy; never shown on a physical screen"
    },
    "core": {
     "compiles": "n/a",
@@ -62,8 +62,10 @@
     "how": "musl static (Zig) and glibc (GCC); conformance under WSL2, also ASan+UBSan; fuzzing under sanitizers in WSL2"
    },
    "native_ui": {
-    "compiles": "blocked",
-    "why": "local Linux build needs libfontconfig1-dev (sudo); clients.yml installs it in CI, never run"
+    "compiles": true,
+    "unit_tested": true,
+    "ui_tested": "headless",
+    "how": "clients/desktop builds and its tests pass under WSL2 (user sysroot, no sudo), incl. against the real libwavr.so and the headless render test; never shown on a physical screen"
    },
    "core": {
     "unit_tested": true,
@@ -147,7 +149,7 @@
     "compiles": true,
     "unit_tested": true,
     "ui_tested": "emulator",
-    "how": "Compose phone UI; parser vs conformance/client_view.json; native/tests/android_ui_smoke.py on an x86_64 emulator against a real Core (JNI loaded, state, rooms); not on a physical phone"
+    "how": "Compose phone UI with a Manage tab; parser vs conformance/client_view.json and conformance/client_commands.json; native/tests/android_ui_smoke.py on an x86_64 emulator against a real Core, incl. writes (Watch on, approve a joiner by code, join a Core over a pinned connection); not on a physical phone"
    },
    "core": {
     "compiles": true,
