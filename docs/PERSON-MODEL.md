@@ -15,8 +15,8 @@ Install one of the two extras, not both: they bring different OpenCV packages
 
 Put `yolov8n.onnx` next to the Wavr database, or point `WAVR_PERSON_MODEL` at it.
 
-- **From a release:** releases from 0.5.0 attach the exact `yolov8n.onnx` whose SHA-256 is
-  pinned in `backend/wavr/models/person-detector.json`.
+- **From a release:** each release attaches the exact `yolov8n.onnx` whose SHA-256 is pinned
+  in `backend/wavr/models/person-detector.json`.
 - **Exported locally:** `python scripts/provision_person_model.py --pt <local-yolov8n.pt>`
   converts a `yolov8n.pt` you already have. It needs `ultralytics` installed once, blocks
   network access while it runs, and writes a SHA-256 sidecar (`yolov8n.onnx.json`) next to
