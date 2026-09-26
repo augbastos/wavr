@@ -19,9 +19,9 @@ No account. No telemetry. No cloud service is required for anything Wavr does â€
 the machine are individually switched on, and the AI narrator can point at a model running on the same
 box. One exception, named rather than buried: camera person-detection downloads its model weights the
 first time it runs, because they are not vendored here. The optional `camera-lite` extra runs a local
-ONNX model instead and never fetches one. You supply `yolov8n.pt` yourself and convert it once with
-`scripts/provision_person_model.py`, which needs `ultralytics` installed; until that is done,
-`camera-lite` alone detects nothing.
+ONNX model instead and never fetches one: use the verified model attached to the release, or convert
+a `yolov8n.pt` you already have ([`docs/PERSON-MODEL.md`](docs/PERSON-MODEL.md)). Until one is in
+place, `camera-lite` alone detects nothing.
 
 ---
 
