@@ -1,0 +1,4 @@
+module CWavr [system] {
+    header "include/wavr.h"
+    export *
+}

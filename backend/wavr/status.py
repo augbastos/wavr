@@ -33,6 +33,7 @@ talking to itself in front of a person.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import ssl
@@ -48,7 +49,20 @@ import urllib.request
 # guarantee in its docstring was held by nobody.
 from wavr.runtime_status import unreachable
 
-DEFAULT_URL = "https://127.0.0.1:8000"
+
+def default_url() -> str:
+    """Where THIS machine's own Core answers, from the settings it reads.
+
+    This was a constant, `https://127.0.0.1:8000` -- but a Core without LAN
+    access (the default) serves plain HTTP, so on exactly the headless machine
+    this command exists for it answered "Wavr is not answering" about a Core
+    that was running and healthy, and exited 2. HTTPS only when multidevice is
+    on; the port the Core was told to use.
+    """
+    from wavr.config import load_config
+    cfg = load_config()
+    return f"{'https' if cfg.multidevice else 'http'}://127.0.0.1:{cfg.port}"
+
 
 # Exit codes, which are part of the interface. Chosen so `wavr status && …`
 # reads correctly: success means "nothing needs you".
@@ -56,14 +70,32 @@ OK = 0
 ATTENTION = 1
 UNREACHABLE = 2
 
-# Hosts where a self-signed certificate is the EXPECTED answer, because the Core
-# generated it on this machine and the packet never reaches a network.
-_LOOPBACK = {"127.0.0.1", "::1", "localhost", "[::1]"}
-
 
 def is_loopback(url: str) -> bool:
+    """Is this URL's host THIS machine -- where a self-signed certificate is the
+    expected answer, because the Core generated it here and the packet never
+    reaches a network?
+
+    An address, parsed, or the name `localhost`. It used to be any host that
+    merely STARTED with "127.", which a DNS name can do: `127.0.0.1.example.com`
+    resolves wherever its owner points it, and was then trusted with
+    verification off and the local token attached."""
     host = (urllib.parse.urlsplit(url).hostname or "").lower()
-    return host in _LOOPBACK or host.startswith("127.")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def printable_url(url: str) -> str:
+    """The URL as it may be printed: a `user:password@` someone pasted into
+    --url is replaced, never echoed to a terminal, a log or --json output."""
+    parts = urllib.parse.urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urllib.parse.urlunsplit(parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1]))
 
 
 def context_for(url: str):
@@ -82,6 +114,12 @@ def context_for(url: str):
     why, rather than being quietly downgraded to no protection at all.
     """
     if not url.lower().startswith("https"):
+        if not is_loopback(url):
+            # No certificate at all, so the request -- and the token riding on
+            # it -- would cross the network in clear text. A Core across the
+            # network speaks HTTPS; plain HTTP is for the one on this machine.
+            raise ValueError(f"refusing plain HTTP to {url}: a Core across the "
+                             "network is reached over HTTPS")
         return None
     ctx = ssl.create_default_context()
     if is_loopback(url):
@@ -90,13 +128,34 @@ def context_for(url: str):
     return ctx
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A Core never redirects its API. Following one would carry the token to
+    wherever `Location` points, with the TLS decision made for the ORIGINAL
+    host -- so a redirect is an error, not a hop."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def open_url(req: urllib.request.Request, timeout: float):
+    """urlopen with this module's TLS rule for `req`'s own URL, and no redirects.
+    The one way wavr status and wavr doctor reach a Core."""
+    ctx = context_for(req.full_url)
+    handlers = [_NoRedirect()]
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    return urllib.request.build_opener(*handlers).open(req, timeout=timeout)
+
+
 def _get(base: str, path: str, token: str | None, timeout: float = 6.0):
     req = urllib.request.Request(base.rstrip("/") + path,
                                  headers={"X-Wavr-Local": "1"})
     if token:
-        req.add_header("X-Wavr-Token", token)
-    with urllib.request.urlopen(req, timeout=timeout,
-                                context=context_for(base)) as r:
+        # Bearer: the one credential a Core accepts from across the network, and
+        # it accepts it on loopback too. X-Wavr-Token is read on loopback only,
+        # so `--url https://<LAN Core>` with a device token was always refused.
+        req.add_header("Authorization", f"Bearer {token}")
+    with open_url(req, timeout) as r:
         return json.loads(r.read())
 
 
@@ -240,8 +299,9 @@ def main(argv=None) -> int:
         prog="wavr status",
         description="Is Wavr running, and is anything waiting for you.")
     ap.add_argument("--url",
-                    default=os.environ.get("WAVR_DOCTOR_URL", DEFAULT_URL),
-                    help=f"Core base URL (default {DEFAULT_URL})")
+                    default=os.environ.get("WAVR_DOCTOR_URL") or default_url(),
+                    help="Core base URL (default: this machine's Core, http or "
+                         "https as its LAN setting says)")
     ap.add_argument("--token", default=os.environ.get("WAVR_LOCAL_TOKEN"),
                     help="local API token, if the Core requires one")
     ap.add_argument("--json", action="store_true",
@@ -270,15 +330,15 @@ def main(argv=None) -> int:
             # by nobody and this file was quietly the second implementation.
             print(json.dumps({"runtime": unreachable().to_dict(),
                               "attention": None,
-                              "error": str(exc), "url": args.url}, indent=2))
+                              "error": str(exc), "url": printable_url(args.url)}, indent=2))
         elif not args.quiet:
             hint = ("  Start it with:  python -m wavr.serve"
                     if is_loopback(args.url) else
-                    "  This is not a loopback address, so the certificate was "
-                    "checked.\n"
+                    "  This is not this machine, so only HTTPS is used and the "
+                    "certificate is checked.\n"
                     "  A Core across the network needs one this machine already "
                     "trusts.")
-            print(f"Wavr is not answering at {args.url}.\n  {exc}\n{hint}",
+            print(f"Wavr is not answering at {printable_url(args.url)}.\n  {exc}\n{hint}",
                   file=sys.stderr)
         return UNREACHABLE
 
@@ -288,12 +348,31 @@ def main(argv=None) -> int:
         attention = _get(args.url, "/api/attention", args.token)
     except Exception:                             # noqa: BLE001
         attention = None
+    if not isinstance(attention, dict):
+        attention = None      # an answer of the wrong shape is no answer: "could not check"
 
     if args.json:
         print(json.dumps({"runtime": runtime, "attention": attention}, indent=2))
     elif not args.quiet:
         print(render(runtime, attention, marks_for(sys.stdout)))
 
+    code = exit_code(runtime, attention)
+    if (code == ATTENTION and not args.quiet and not args.json
+            and runtime.get("state") not in ("degraded", "attention")
+            and not (attention or {}).get("total")):
+        print("Wavr could not read everything that might need you, so this "
+              "is not a clean bill of health.", file=sys.stderr)
+    return code
+
+
+def exit_code(runtime: dict, attention: dict | None) -> int:
+    """The exit code for one answer from the Core -- the whole CLI contract.
+
+    A function of its own because it is shared: the native `wavr status`
+    (native/) must give the same answer for the same payload, and
+    conformance/status.json, generated from this function, is how that is
+    checked rather than hoped.
+    """
     state = runtime.get("state")
     if state == "unavailable":
         return UNREACHABLE
@@ -308,9 +387,6 @@ def main(argv=None) -> int:
     # it reports `could_not_check` rather than an empty list, and this is the
     # consumer that was ignoring it.
     if attention is None or attention.get("could_not_check"):
-        if not args.quiet and not args.json:
-            print("Wavr could not read everything that might need you, so this "
-                  "is not a clean bill of health.", file=sys.stderr)
         return ATTENTION
     return OK
 

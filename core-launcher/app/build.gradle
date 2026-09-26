@@ -1,5 +1,6 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
 // ===========================================================================
 // Embedded Wavr Core runtime (ADR-0010) — OPT-IN, off by default.
@@ -11,7 +12,8 @@ apply plugin: 'kotlin-android'
 //   1. Chaquopy's pip step needs a HOST CPython 3.13 on the build machine.
 //      Making that mandatory would stop every contributor who only wants to
 //      build the kiosk, which today needs nothing but the Android SDK.
-//   2. The Core build is ~34 MB against the kiosk's ~2 MB. That is the right
+//   2. The Core build is ~29 MB against the kiosk's ~4 MB (measured 2026-09-23,
+//      debug, arm64-v8a, clean build). That is the right
 //      price for a Core and the wrong one for a WebView, so it is a choice
 //      someone makes, not a thing that happens to them.
 //
@@ -33,20 +35,24 @@ android {
     namespace = "dev.wavr.core"
     compileSdk = 35
 
+    buildFeatures {
+        compose true
+    }
+
     defaultConfig {
         applicationId "dev.wavr.core"
         minSdkVersion 26
         targetSdkVersion 35
-        versionCode 400
-        versionName "0.4.0"
+        versionCode 500
+        versionName "0.5.0"
 
         if (wavrPython) {
             ndk {
                 // arm64 ONLY. Every extra ABI adds another full copy of
-                // libpython + OpenSSL + SQLite + numpy (~10 MB compressed each),
-                // and every device this Core is meant for — the Moto G Power
-                // included — is arm64. armeabi-v7a would also cap numpy at an
-                // older wheel set for nobody's benefit.
+                // libpython + OpenSSL + SQLite (~11 MB, stored uncompressed) plus
+                // the native extensions of the stdlib, cryptography and cffi, and
+                // every device this Core is meant for — the Moto G Power
+                // included — is arm64.
                 abiFilters "arm64-v8a"
             }
 
@@ -90,11 +96,13 @@ android {
                     install "websockets==17.1"
                     install "python-dotenv==1.2.3"
 
-                    // numpy is a BASE requirement of wavr.app (calib_store ->
-                    // localize's homography maths), not a camera extra. The whole
-                    // backend's numpy surface is array/asarray/all/cross/isfinite/
-                    // linalg/ndarray — all 1.x API, so 1.26.2 is not a compromise.
-                    install "numpy==1.26.2"
+                    // numpy is deliberately NOT installed. backend/wavr/localize.py
+                    // imports it only inside homography_from_points(), i.e. camera
+                    // calibration, which rides the [camera] extra the Android Core
+                    // does not enable (ADR-0010 decision 3). Without it that one
+                    // call raises HomographyUnavailable (the calibration route
+                    // answers 501) and nothing else notices. Leaving it out also
+                    // drops the OpenBLAS, libgfortran and libc++ it pulled in.
 
                     // The [tls] extra. Needed the moment the operator turns on LAN
                     // mode, because that path generates a self-signed cert.
@@ -191,7 +199,14 @@ dependencies {
     // touching JSONObject fails with a misleading UnsupportedOperationException
     // unless a real implementation is on the test classpath ahead of it.
     testImplementation "junit:junit:4.13.2"
-    testImplementation "org.json:json:20231013"
+    testImplementation "org.json:json:20240303"
+
+    implementation platform("androidx.compose:compose-bom:2025.09.01")
+    implementation "androidx.compose.ui:ui"
+    implementation "androidx.compose.foundation:foundation"
+    implementation "androidx.compose.material3:material3"
+    implementation "androidx.activity:activity-compose:1.10.1"
+    implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.2"
 
     // FragmentActivity host required by BiometricPrompt. Pinned to the cached
     // modern versions so the framework NoActionBar theme keeps working (a plain

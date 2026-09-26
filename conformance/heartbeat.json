@@ -1,0 +1,93 @@
+{
+ "cases": [
+  {
+   "body": null,
+   "http_status": null,
+   "name": "network_error",
+   "next_state": "keep",
+   "rule": "no HTTP response at all: keep state, retry next tick"
+  },
+  {
+   "body": {
+    "command": "ok",
+    "state": "active"
+   },
+   "http_status": 200,
+   "name": "ok",
+   "next_state": "active",
+   "rule": "ok = sense normally"
+  },
+  {
+   "body": {
+    "command": "run"
+   },
+   "http_status": 200,
+   "name": "run_legacy",
+   "next_state": "active",
+   "rule": "legacy synonym of ok"
+  },
+  {
+   "body": {
+    "command": "sleep",
+    "state": "disabled"
+   },
+   "http_status": 200,
+   "name": "sleep",
+   "next_state": "disabled",
+   "rule": "operator disabled: stop the sensor, slow heartbeat"
+  },
+  {
+   "body": {
+    "command": "revoked"
+   },
+   "http_status": 200,
+   "name": "revoked_body",
+   "next_state": "revoked",
+   "rule": "token dead: factory-reset and re-enroll"
+  },
+  {
+   "body": {
+    "detail": "missing node bearer token"
+   },
+   "http_status": 401,
+   "name": "unauthorized",
+   "next_state": "revoked",
+   "rule": "a 401 on heartbeat is identical to revoked"
+  },
+  {
+   "body": {
+    "detail": "invalid or revoked node token"
+   },
+   "http_status": 403,
+   "name": "forbidden",
+   "next_state": "revoked",
+   "rule": "a 403 on heartbeat is identical to revoked"
+  },
+  {
+   "body": {
+    "detail": "boom"
+   },
+   "http_status": 500,
+   "name": "server_error",
+   "next_state": "keep",
+   "rule": "not a kill signal; retry next tick"
+  },
+  {
+   "body": {
+    "command": "dance"
+   },
+   "http_status": 200,
+   "name": "unknown_command",
+   "next_state": "keep",
+   "rule": "an unknown command changes nothing"
+  },
+  {
+   "body": "not json",
+   "http_status": 200,
+   "name": "garbage_body",
+   "next_state": "keep",
+   "rule": "an unparseable 200 changes nothing"
+  }
+ ],
+ "source": "firmware/NODE_PROTOCOL.md (spec table, hand-written: the Core has no node client to generate this from)"
+}

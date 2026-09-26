@@ -1,0 +1,29 @@
+{
+ "rounds": 15,
+ "A_is": "tree before this work (main)",
+ "B_is": "tree after",
+ "method": "benchmarks/ab_pipeline.py: interleaved by PYTHONPATH, 600 events per run, one machine",
+ "controls": "recent_200, fusion_update_us and insert_state_ms run code that is byte-identical in A and B; their spread is the noise floor",
+ "A": {
+  "ingest_to_hub_changing.p50_us": 676.5,
+  "ingest_to_hub_steady.p50_us": 312.6,
+  "recent_200.p50_us": 840.4,
+  "fusion_update_us": 13.03,
+  "insert_state_ms": 0.21,
+  "create_app_existing_db_s": 0.24,
+  "/api/state.p50_us": 2185.9,
+  "/api/runtime.p50_us": 2246.4,
+  "/api/history.p50_us": 8350.3
+ },
+ "B": {
+  "ingest_to_hub_changing.p50_us": 631.5,
+  "ingest_to_hub_steady.p50_us": 98.5,
+  "recent_200.p50_us": 786.5,
+  "fusion_update_us": 11.5,
+  "insert_state_ms": 0.184,
+  "create_app_existing_db_s": 0.203,
+  "/api/state.p50_us": 2128.7,
+  "/api/runtime.p50_us": 2131.8,
+  "/api/history.p50_us": 8351.7
+ }
+}

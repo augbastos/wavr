@@ -1,0 +1,69 @@
+{
+ "label": "np-base",
+ "environment": {
+  "when": "2026-09-24T15:38:50+00:00",
+  "git": "f55360f+dirty-backend",
+  "os_family": "Windows",
+  "core_python": "3.14.5",
+  "core_env": "base-np",
+  "scope": "one development machine; compare runs from the same machine only"
+ },
+ "idle": {
+  "base": {
+   "window_s": 60.0,
+   "cpu_s_per_min": 0.047,
+   "cpu_pct_one_core": 0.08,
+   "rss_mb": 79.2,
+   "uss_mb": 61.8,
+   "private_mb": 64.8,
+   "threads": 5,
+   "handles_or_fds": 242,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 0.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 21.3
+  },
+  "network": {
+   "window_s": 60.0,
+   "cpu_s_per_min": 0.109,
+   "cpu_pct_one_core": 0.18,
+   "rss_mb": 79.3,
+   "uss_mb": 61.8,
+   "private_mb": 64.8,
+   "threads": 5,
+   "handles_or_fds": 242,
+   "children_spawned_per_min": 0.0,
+   "children_cpu_s_per_min_lower_bound": 0.0,
+   "db_rows_written_per_min": 0.0,
+   "ha_requests_per_min": null,
+   "system_cpu_pct_during_window": 23.9
+  }
+ },
+ "footprint": {
+  "total_mb": 25.5,
+  "distributions": 19,
+  "by_distribution_mb": {
+   "pip": 11.28,
+   "wavr": 5.59,
+   "pydantic_core": 5.42,
+   "pydantic": 3.94,
+   "websockets": 1.76,
+   "fastapi": 1.57,
+   "anyio": 1.38,
+   "click": 0.99,
+   "watchfiles": 0.86,
+   "uvicorn": 0.81,
+   "pyyaml": 0.71,
+   "starlette": 0.69,
+   "idna": 0.61,
+   "typing_extensions": 0.35,
+   "python-dotenv": 0.23,
+   "httptools": 0.22,
+   "h11": 0.2,
+   "typing-inspection": 0.09,
+   "annotated-types": 0.07,
+   "annotated-doc": 0.01
+  }
+ }
+}

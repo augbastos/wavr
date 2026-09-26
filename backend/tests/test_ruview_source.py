@@ -93,3 +93,34 @@ async def test_ruview_closes_inner_connect_generator_deterministically():
     assert ev.modality == "wifi_csi"
     await agen.aclose()
     assert closed["v"] is True
+
+async def test_an_unreachable_service_is_retried_with_backoff_and_logged_once(
+        monkeypatch, caplog):
+    # It used to retry every 3 s forever with a traceback each time, on every
+    # install. The delay now doubles to a cap and resets when frames flow again.
+    import asyncio
+    import logging
+    from wavr.sources import ruview as mod
+
+    waits = []
+
+    async def fake_sleep(s):
+        waits.append(s)
+
+    monkeypatch.setattr(mod.asyncio, "sleep", fake_sleep)
+    calls = {"n": 0}
+
+    async def connect(url):
+        calls["n"] += 1
+        if calls["n"] <= 7:
+            raise ConnectionRefusedError("nobody home")
+        yield FRAME
+
+    caplog.set_level(logging.WARNING)
+    src = RuViewSource("ws://x", room="sala", connect=connect, reconnect_delay=3.0)
+    [ev] = await _first_n(src, 1)
+    assert ev.modality == "wifi_csi"
+    assert waits == [3.0, 6.0, 12.0, 24.0, 48.0, 60.0, 60.0]
+    outage_lines = [r for r in caplog.records if "cannot reach" in r.getMessage()]
+    assert len(outage_lines) == 1, "one warning per outage, not one per attempt"
+    assert outage_lines[0].exc_info is None, "the traceback belongs at DEBUG"

@@ -771,6 +771,44 @@ def test_ingest_skips_persist_when_fused_state_is_unchanged():
     assert len(rows) == 1                                # 2nd/3rd identical frames NOT persisted
 
 
+def test_a_refuse_tick_between_two_identical_readings_does_not_force_a_write():
+    # The gate above was defeated in production by the periodic re-fuse. A tick
+    # ages every source and stores that age (`sources[].age_s`) in `latest`; the
+    # next identical reading has age 0 again, so the comparison saw a change and
+    # wrote a row. Every steady source was persisted once per event, forever --
+    # measured at 4 rows a minute on a Core with NOTHING configured (the network
+    # source's own "nobody known" beat), and one per event per room for anything
+    # steadier. An age is a property of when you look, not of the room.
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    clock = [datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)]
+    storage = Storage(":memory:")
+    app = create_app(
+        sources=[], storage=storage, hub=Hub(),
+        fusion=FusionEngine(weights={"camera": 1.0}, now_fn=lambda: clock[0]),
+        camera_store=CameraStore(":memory:"),
+    )
+
+    def _cam():
+        return SensingEvent(room="sala", modality="camera", presence=True, motion=1.0,
+                            breathing_bpm=None, heart_bpm=None, confidence=0.9,
+                            ts=clock[0].isoformat())
+
+    async def drive():
+        await app.state.ingest(_cam())
+        clock[0] += timedelta(seconds=5)
+        await app.state.refuse_once()           # ages the source to 5 s in `latest`
+        await app.state.ingest(_cam())          # same reading, age 0 again
+        clock[0] += timedelta(seconds=5)
+        await app.state.refuse_once()
+        await app.state.ingest(_cam())
+
+    asyncio.run(drive())
+    rows = [r for r in storage.recent(100) if r["room"] == "sala"]
+    assert len(rows) == 1, [r["sources"] for r in rows]
+
+
 def test_ingest_persists_when_person_count_changes_even_if_occupied_and_confidence_hold():
     # The gate compares the FULL derived state, not just occupied/confidence (unlike
     # the periodic re-fuse tick's narrower changed-check) -- a person_count-only

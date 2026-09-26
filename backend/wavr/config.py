@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
@@ -327,6 +327,21 @@ class Config:
     # into GET /api/alerts. Set to 1 to make the house-level signal loud (emit that alert).
     # The per-room intrusion signal (more reliable, less double-count) is ALWAYS emitted.
     watch_intrusion_loud: bool
+    # Credentials for the operator's MQTT broker, shared by the publisher and by
+    # the adapters that subscribe (ESPresense, Frigate). The password is a secret:
+    # never logged, never returned, never exported (config_export.SECRET_SETTINGS).
+    mqtt_username: str = ""
+    mqtt_password: str = ""
+    # ESPresense (wavr.espresense). Both maps come from the operator: the device
+    # ids they enrolled (id -> label) and which Wavr room each board is in (board
+    # room slug -> Wavr room). Empty = the adapter is not registered at all.
+    espresense_devices: dict = field(default_factory=dict)
+    espresense_rooms: dict = field(default_factory=dict)
+    espresense_max_distance: float = 5.0
+    espresense_timeout: float = 30.0
+    # Frigate (wavr.frigate): camera-or-zone name -> Wavr room. Empty = off.
+    frigate_names: dict = field(default_factory=dict)
+    frigate_prefix: str = "frigate"
 
 
 def _bind_host() -> str:
@@ -415,7 +430,10 @@ def load_config() -> Config:
         net_scan_interval=float(os.getenv("WAVR_NET_SCAN_INTERVAL", "30.0")),
         net_inventory=os.getenv("WAVR_NET_INVENTORY", "").lower() in ("1", "true", "yes"),
         away_grace=int(os.getenv("WAVR_AWAY_GRACE", "3")),
-        ruview_url=os.getenv("WAVR_RUVIEW_URL", "ws://localhost:3000/ws/sensing"),
+        # No default URL. A RuView service is something an operator runs and then
+        # points Wavr at; defaulting to localhost:3000 registered a reconnect loop
+        # on every install whether or not the service existed (see RuViewSource).
+        ruview_url=os.getenv("WAVR_RUVIEW_URL", "").strip(),
         ruview_room=os.getenv("WAVR_RUVIEW_ROOM", "sala"),
         ruview_reconnect=float(os.getenv("WAVR_RUVIEW_RECONNECT", "3.0")),
         # A camera loop sleeps `cam_interval` between detections. Zero or
@@ -628,4 +646,50 @@ def load_config() -> Config:
         fall_dwell_s=float(os.getenv("WAVR_FALL_DWELL_S", "60")),
         watch_intrusion_loud=os.getenv("WAVR_WATCH_INTRUSION_LOUD", "").strip().lower()
             in ("1", "true", "yes", "on"),
+        mqtt_username=os.getenv("WAVR_MQTT_USERNAME", "").strip(),
+        mqtt_password=os.getenv("WAVR_MQTT_PASSWORD", ""),
+        espresense_devices=_pairs("WAVR_ESPRESENSE_DEVICES", value_required=False),
+        espresense_rooms=_pairs("WAVR_ESPRESENSE_ROOMS", value_required=True),
+        espresense_max_distance=_positive_float("WAVR_ESPRESENSE_MAX_DISTANCE", 5.0),
+        espresense_timeout=_positive_float("WAVR_ESPRESENSE_TIMEOUT", 30.0),
+        frigate_names=_pairs("WAVR_FRIGATE_CAMERAS", value_required=True),
+        frigate_prefix=os.getenv("WAVR_FRIGATE_PREFIX", "frigate").strip() or "frigate",
     )
+
+
+def _pairs(var: str, *, value_required: bool) -> dict:
+    """`key=value,key2=value2` from one variable, keys and values kept verbatim.
+
+    An ESPresense id or a Frigate camera name is case-sensitive and may contain
+    `:` -- unlike the MAC maps above, nothing here is normalised. A pair whose
+    value is required and missing is dropped with a warning rather than guessed:
+    a board with no room must not land in a default one.
+    """
+    out: dict = {}
+    for pair in os.getenv(var, "").split(","):
+        key, _, value = pair.partition("=")
+        key, value = key.strip(), value.strip()
+        if not key:
+            continue
+        if value_required and not value:
+            log.warning("%s: %r has no value after '='; ignored", var, key)
+            continue
+        out[key] = value
+    return out
+
+
+def _positive_float(var: str, default: float) -> float:
+    """A positive number from `var`, or the default -- a typo must not become 0,
+    which for a distance limit or a timeout would silently switch the feature off."""
+    raw = os.getenv(var, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("%s=%r is not a number; using %s", var, raw, default)
+        return default
+    if not (value > 0 and value < float("inf")):
+        log.warning("%s=%r must be positive; using %s", var, raw, default)
+        return default
+    return value

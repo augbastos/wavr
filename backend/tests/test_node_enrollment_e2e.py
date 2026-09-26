@@ -229,6 +229,49 @@ def test_approve_and_deny_are_loopback_only(core):
         assert client.post(f"/api/nodes/{node_id}/deny").status_code == 403
 
 
+def test_a_lan_token_of_any_role_cannot_approve_a_node(core):
+    """The control the test above lacks: it sends no token, so the middleware
+    refuses it before any route gate is consulted and it could not fail for the
+    reason it names. Here the device DOES authenticate -- as user, guest and
+    even central -- and the Node must still stay pending. Before the gate was
+    put on these routes, every one of these calls succeeded."""
+    build, db = core
+    from wavr.devices import DeviceStore
+    store = DeviceStore(db)
+    try:
+        tokens = {role: store.add(f"phone-{role}", role)[1]
+                  for role in ("user", "guest", "central")}
+    finally:
+        store.close()
+    client, _app = build(client=LAN)
+    with client:
+        node_id = client.post("/api/nodes/request",
+                              json={"name_hint": "x"}).json()["node_id"]
+        for role, token in tokens.items():
+            auth = {"Authorization": f"Bearer {token}"}
+            assert client.get("/api/devices/me", headers=auth).status_code == 200, (
+                f"{role}: the token must authenticate, or this proves nothing")
+            assert client.get("/api/nodes/pending", headers=auth).status_code == 403, role
+            assert client.post(f"/api/nodes/{node_id}/approve", headers=auth, json={
+                "name": "x", "sensor_type": "pir", "room": "y"}).status_code == 403, role
+            assert client.post(f"/api/nodes/{node_id}/deny", headers=auth).status_code == 403, role
+    assert [n.state for n in _nodes(db) if n.node_id == node_id] == [STATE_PENDING]
+
+
+def test_the_loopback_screen_needs_its_csrf_header_to_decide(core):
+    """A page open in a browser on the Core's machine can reach loopback; the
+    X-Wavr-Local header is what separates the dashboard from a drive-by POST."""
+    build, db = core
+    client, _app = build()
+    with client:
+        node_id = client.post("/api/nodes/request",
+                              json={"name_hint": "x"}).json()["node_id"]
+        assert client.post(f"/api/nodes/{node_id}/approve", json={
+            "name": "x", "sensor_type": "pir", "room": "y"}).status_code == 403
+        assert client.post(f"/api/nodes/{node_id}/deny").status_code == 403
+    assert [n.state for n in _nodes(db) if n.node_id == node_id] == [STATE_PENDING]
+
+
 def test_approving_without_a_room_is_refused(core):
     build, _ = core
     client, _app = build()

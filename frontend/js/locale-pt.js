@@ -2718,6 +2718,8 @@
     "fine": "tudo bem",
     "not known": "não se sabe",
     "struggling": "com dificuldade",
+    // The 0.5.0 release notes.
+    "🔒 Only an administrator can let a new sensor into your Space. Before this release, any device paired on your network could approve one.": "🔒 Só um administrador pode deixar um sensor novo entrar no seu Espaço. Antes desta versão, qualquer aparelho pareado na sua rede podia aprovar um.",
     // The 0.4.0 release notes, shown once on first launch and
     // permanently re-readable in Settings.
     "📱 The phone app speaks your language. Every screen in the companion — finding your hub, checking its certificate, choosing what the device does — follows the language you picked, instead of staying in English.": "📱 O app do celular fala a sua língua. Todas as telas do companion — achar o seu hub, conferir o certificado, escolher o que o aparelho faz — seguem a língua que você escolheu, em vez de ficarem em inglês.",

@@ -13,6 +13,9 @@ out/
 build/
 app/build/
 
+# Native runtime built from ../native with the NDK (see BUILD.md) -- an artifact
+app/src/main/jniLibs/
+
 # Gradle
 .gradle/
 

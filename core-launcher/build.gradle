@@ -12,6 +12,7 @@ buildscript {
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.0'
+        classpath 'org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.2.0'
 
         // Embedded CPython for the Wavr Core (ADR-0010). Added to the classpath
         // ONLY for `-PwavrPython=true`, so the kiosk build resolves exactly the

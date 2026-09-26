@@ -1,0 +1,47 @@
+{
+ "capability_keys": [
+  "wifi",
+  "ethernet",
+  "ble",
+  "bluetooth",
+  "uwb",
+  "nfc",
+  "camera",
+  "microphone",
+  "gps",
+  "accelerometer",
+  "mmwave",
+  "wifi_csi",
+  "gpu",
+  "display",
+  "battery",
+  "permanent_power",
+  "usb",
+  "docker",
+  "mdns",
+  "network_scan",
+  "raw_socket",
+  "serial_port_support"
+ ],
+ "compute_tiers": [
+  "micro",
+  "low",
+  "medium",
+  "high"
+ ],
+ "device_functions": [
+  "client",
+  "core",
+  "node"
+ ],
+ "platforms": [
+  "windows",
+  "linux",
+  "macos",
+  "android",
+  "ios",
+  "esp32",
+  "unknown"
+ ],
+ "source": "backend/wavr/capabilities.py"
+}

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Read-only by default. Nothing in this workflow writes to the repository, and a
 # workflow triggered by `pull_request` runs code the head branch controls. On a
@@ -54,8 +55,16 @@ jobs:
           fetch-depth: 0
       - id: olhar
         shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ] && [[ "$HEAD_REF" == release/* ]]; then
+            echo "release candidate - running browser tests"
+            echo "browser=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -101,7 +110,13 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install (base + dev only — camera/mmwave/mqtt/genai stay lazy)
-        run: pip install -e "backend[dev]"
+        run: pip install -e "backend[dev]" PyYAML
+      - name: Check generated conformance and design files
+        run: |
+          python scripts/gen_conformance.py --check
+          python scripts/gen_design_tokens.py --check
+      - name: Check publication safety
+        run: python scripts/publication_gate.py
       # `mobile/www` is the dashboard packaged for the phone, produced from
       # `frontend/` by a script that needs nothing but Node. Without it six
       # tests skip with "not built in this checkout" — and this packaging step
@@ -188,6 +203,8 @@ jobs:
   # minutes rather than the twenty a full suite would. The timeout is a stop for
   # a hung subprocess, not a budget.
   guarantees:
+    # Every PR and push, as before the tiers: it exists because it "ran nowhere",
+    # and jules-automerge.yml counts a skipped job as passing.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -230,6 +247,11 @@ jobs:
       - name: Run SDK tests
         run: node --test sdk/javascript/test.mjs
 
+  # A required status check on the public main branch: the ruleset names this job, so it
+  # must exist on every PR. JVM unit tests only -- no emulator, no device. What genuinely
+  # needs hardware is not in this job and is tracked as owner-blocked instead of faked.
+  # No local.properties: the runner exports ANDROID_HOME, which the Android Gradle plugin
+  # reads when that file is absent.
   sdk-kotlin:
     runs-on: ubuntu-latest
     steps:
@@ -238,14 +260,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      # JVM unit tests only — no emulator, no device. The Spatial SDK is plain
-      # Kotlin over HttpURLConnection and org.json, so its contract is testable
-      # anywhere the repo builds. What genuinely needs hardware (CameraX with
-      # the screen off, Doze survival, thermal shedding) is not in this job and
-      # is tracked as owner-blocked instead of being faked here.
-      #
-      # No local.properties: the runner exports ANDROID_HOME, which the Android
-      # Gradle plugin reads when that file is absent.
       - name: Run the Android unit tests
         working-directory: core-launcher
         run: ./gradlew --no-daemon :app:testDebugUnitTest

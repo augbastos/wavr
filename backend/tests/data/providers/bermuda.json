@@ -1,0 +1,8 @@
+[
+  {"state": "Kitchen", "attributes": {"area_id": "wrong", "current_mac": "aa:bb:cc:dd:ee:ff"}, "expected": {"kitchen": true, "office": false}},
+  {"state": "Office", "expected": {"kitchen": false, "office": true}},
+  {"state": "Garage", "expected": {"kitchen": false, "office": false}},
+  {"state": "unknown", "expected": {}},
+  {"state": "unavailable", "expected": {}},
+  {"state": "Invalid Area for phone", "expected": {}}
+]

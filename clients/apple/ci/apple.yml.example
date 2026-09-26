@@ -1,0 +1,62 @@
+# Example only: inactive until copied to .github/workflows/ after Mac validation.
+# App jobs deliberately fail if the missing Xcode project has not been created.
+name: Apple client validation
+on: [push, pull_request]
+jobs:
+  apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check toolchain and copied ABI header
+        run: |
+          xcodebuild -version
+          cmp native/include/wavr/wavr.h clients/apple/Sources/CWavr/include/wavr.h
+      - name: Compile Swift targets and test canonical fixture
+        run: |
+          swift build --package-path clients/apple --target WavrModels
+          swift build --package-path clients/apple --target WavrKit
+          swift build --package-path clients/apple
+          swift test --package-path clients/apple --filter SnapshotTests
+      - name: Build native Apple device and simulator slices
+        run: |
+          cmake -S native -B build/apple-macos -G Xcode -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DWAVR_STATIC=OFF
+          cmake --build build/apple-macos --config Release --target wavr_native
+          cmake -S native -B build/apple-ios-device -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_ARCHITECTURES=arm64 -DWAVR_STATIC=OFF
+          cmake --build build/apple-ios-device --config Release --target wavr_native
+          cmake -S native -B build/apple-ios-simulator -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DWAVR_STATIC=OFF
+          cmake --build build/apple-ios-simulator --config Release --target wavr_native
+          cmake -S native -B build/apple-tvos-device -G Xcode -DCMAKE_SYSTEM_NAME=tvOS -DCMAKE_OSX_SYSROOT=appletvos -DCMAKE_OSX_ARCHITECTURES=arm64 -DWAVR_STATIC=OFF
+          cmake --build build/apple-tvos-device --config Release --target wavr_native
+          cmake -S native -B build/apple-tvos-simulator -G Xcode -DCMAKE_SYSTEM_NAME=tvOS -DCMAKE_OSX_SYSROOT=appletvsimulator -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DWAVR_STATIC=OFF
+          cmake --build build/apple-tvos-simulator --config Release --target wavr_native
+      - name: Check symbols and assemble XCFramework
+        run: |
+          lib() { find "$1" -type f -name libwavr_native.dylib -print -quit; }
+          mac=$(lib build/apple-macos)
+          ios=$(lib build/apple-ios-device)
+          ios_sim=$(lib build/apple-ios-simulator)
+          tvos=$(lib build/apple-tvos-device)
+          tvos_sim=$(lib build/apple-tvos-simulator)
+          test -n "$mac" && test -n "$ios" && test -n "$ios_sim" && test -n "$tvos" && test -n "$tvos_sim"
+          for binary in "$mac" "$ios" "$ios_sim" "$tvos" "$tvos_sim"; do
+            for symbol in abi_compatible error_string snapshot_fetch snapshot_json snapshot_exit_code snapshot_free; do
+              nm -gU "$binary" | grep -q "_wavr_${symbol}$"
+            done
+          done
+          xcodebuild -create-xcframework \
+            -library "$mac" -headers native/include/wavr \
+            -library "$ios" -headers native/include/wavr \
+            -library "$ios_sim" -headers native/include/wavr \
+            -library "$tvos" -headers native/include/wavr \
+            -library "$tvos_sim" -headers native/include/wavr \
+            -output clients/apple/WavrNative.xcframework
+      - name: Require real Xcode app targets
+        run: test -f clients/apple/WavrApple.xcodeproj/project.pbxproj
+      - name: Build iOS simulator app
+        run: xcodebuild -project clients/apple/WavrApple.xcodeproj -scheme Wavr-iOS -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - name: Build macOS window app
+        run: xcodebuild -project clients/apple/WavrApple.xcodeproj -scheme Wavr-macOS -configuration Debug -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
+      - name: Build macOS menu bar app
+        run: xcodebuild -project clients/apple/WavrApple.xcodeproj -scheme Wavr-macOSMenuBar -configuration Debug -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
+      - name: Build tvOS simulator app
+        run: xcodebuild -project clients/apple/WavrApple.xcodeproj -scheme Wavr-tvOS -configuration Debug -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO build

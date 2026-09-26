@@ -1,0 +1,10 @@
+[
+  {"topic": "frigate/available", "payload": "online", "room": null, "present": null},
+  {"topic": "frigate/front_door/detect/state", "payload": "ON", "room": null, "present": null},
+  {"topic": "frigate/front_door/person", "payload": "1", "room": "hall", "present": true},
+  {"topic": "frigate/front_door/person", "payload": "0", "room": "hall", "present": false},
+  {"topic": "frigate/front_door/person/snapshot", "payload": "jpeg", "room": null, "present": null},
+  {"topic": "frigate/garage/person", "payload": "1", "room": null, "present": null},
+  {"topic": "frigate/front_door/person", "payload": "1", "room": "hall", "present": true},
+  {"topic": "frigate/available", "payload": "offline", "room": null, "present": null}
+]

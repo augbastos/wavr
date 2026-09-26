@@ -539,7 +539,7 @@ def main() -> int:
                          "repository (or set WAVR_PRIVATE_DENYLIST)")
     args = ap.parse_args()
 
-    if not os.path.isdir(".git"):
+    if not os.path.exists(".git"):   # a directory, or a file in a linked worktree
         print("run this from the repository root", file=sys.stderr)
         return 2
 

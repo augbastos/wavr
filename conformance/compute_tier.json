@@ -1,0 +1,3030 @@
+{
+ "cases": [
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "linux",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "linux",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "linux",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "linux",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "linux",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "linux",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "windows",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "windows",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "windows",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "windows",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "windows",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "windows",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "android",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "android",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "android",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "android",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "android",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "android",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "macos",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "macos",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "macos",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "macos",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "macos",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "macos",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "esp32",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "esp32",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "esp32",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "esp32",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "esp32",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "esp32",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": null
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 128
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": false,
+   "compute_tier": "micro",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 449
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 450
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 512
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 900
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "low",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 1799
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 1800
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 4096
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 6999
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 7000
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": null,
+   "platform": "unknown",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 1,
+   "platform": "unknown",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 2,
+   "platform": "unknown",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "medium",
+   "cpu_count": 3,
+   "platform": "unknown",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 4,
+   "platform": "unknown",
+   "ram_mb": 16384
+  },
+  {
+   "can_be_core": true,
+   "compute_tier": "high",
+   "cpu_count": 8,
+   "platform": "unknown",
+   "ram_mb": 16384
+  }
+ ],
+ "min_core_ram_mb": 450,
+ "source": "backend/wavr/capabilities.py (_compute_tier, _can_be_core)"
+}

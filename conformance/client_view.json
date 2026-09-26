@@ -1,0 +1,1010 @@
+{
+ "cases": [
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [],
+    "degraded": 0,
+    "headline": "Nothing needs your attention",
+    "info": 0,
+    "items": [],
+    "total": 0
+   },
+   "error": null,
+   "name": "healthy_empty_inbox",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": {
+     "blocking": 0,
+     "could_not_check": [],
+     "degraded": 0,
+     "headline": "Nothing needs your attention",
+     "info": 0,
+     "items": [],
+     "total": 0
+    },
+    "error": null,
+    "exit_code": 0,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [
+     {
+      "confidence": 0.87,
+      "explanation": "mmwave: presence",
+      "occupied": false,
+      "person_count": 1,
+      "precision_level": "position",
+      "room": "bath",
+      "sources": [
+       {
+        "age_s": 3,
+        "confidence": 0.9,
+        "count": 1,
+        "health": "fresh",
+        "modality": "mmwave",
+        "presence": true,
+        "sensor_id": "a"
+       }
+      ],
+      "ts": "2026-09-24T10:00:00+00:00",
+      "unrecognized": false,
+      "watch": false
+     },
+     {
+      "confidence": 0.87,
+      "explanation": "mmwave: presence",
+      "occupied": true,
+      "person_count": 1,
+      "precision_level": "position",
+      "room": "office",
+      "sources": [
+       {
+        "age_s": 3,
+        "confidence": 0.9,
+        "count": 1,
+        "health": "fresh",
+        "modality": "mmwave",
+        "presence": true,
+        "sensor_id": "a"
+       }
+      ],
+      "ts": "2026-09-24T10:00:00+00:00",
+      "unrecognized": false,
+      "watch": false
+     }
+    ],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": {
+    "bath": {
+     "confidence": 0.87,
+     "explanation": "mmwave: presence",
+     "identities": [
+      "alice"
+     ],
+     "occupied": false,
+     "person_count": 1,
+     "precision_level": "position",
+     "sources": [
+      {
+       "age_s": 3,
+       "confidence": 0.9,
+       "count": 1,
+       "health": "fresh",
+       "modality": "mmwave",
+       "presence": true,
+       "reliability": 0.5,
+       "sensor_id": "a"
+      }
+     ],
+     "targets": [
+      {
+       "x": 1,
+       "y": 2
+      }
+     ],
+     "ts": "2026-09-24T10:00:00+00:00",
+     "vitals": {
+      "hr": 60
+     }
+    },
+    "office": {
+     "confidence": 0.87,
+     "explanation": "mmwave: presence",
+     "identities": [
+      "alice"
+     ],
+     "occupied": true,
+     "person_count": 1,
+     "precision_level": "position",
+     "sources": [
+      {
+       "age_s": 3,
+       "confidence": 0.9,
+       "count": 1,
+       "health": "fresh",
+       "modality": "mmwave",
+       "presence": true,
+       "reliability": 0.5,
+       "sensor_id": "a"
+      }
+     ],
+     "targets": [
+      {
+       "x": 1,
+       "y": 2
+      }
+     ],
+     "ts": "2026-09-24T10:00:00+00:00",
+     "vitals": {
+      "hr": 60
+     }
+    }
+   }
+  },
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [],
+    "degraded": 1,
+    "headline": "1 thing needs your attention",
+    "info": 0,
+    "items": [
+     {
+      "action": "open",
+      "band": "degraded",
+      "count": 1,
+      "detail": "Kitchen camera",
+      "evidence": {
+       "x": 1
+      },
+      "key": "cam-url",
+      "since": "2026-09-24T10:00:00+00:00",
+      "title": "Camera needs a URL",
+      "where": "kitchen"
+     }
+    ],
+    "total": 1
+   },
+   "error": null,
+   "name": "attention_item",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": {
+     "blocking": 0,
+     "could_not_check": [],
+     "degraded": 1,
+     "headline": "1 thing needs your attention",
+     "info": 0,
+     "items": [
+      {
+       "action": "open",
+       "band": "degraded",
+       "count": 1,
+       "detail": "Kitchen camera",
+       "key": "cam-url",
+       "since": "2026-09-24T10:00:00+00:00",
+       "title": "Camera needs a URL",
+       "where": "kitchen"
+      }
+     ],
+     "total": 1
+    },
+    "error": null,
+    "exit_code": 1,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [
+     {
+      "confidence": 0.87,
+      "explanation": "mmwave: presence",
+      "occupied": true,
+      "person_count": 1,
+      "precision_level": "position",
+      "room": "office",
+      "sources": [
+       {
+        "age_s": 3,
+        "confidence": 0.9,
+        "count": 1,
+        "health": "fresh",
+        "modality": "mmwave",
+        "presence": true,
+        "sensor_id": "a"
+       }
+      ],
+      "ts": "2026-09-24T10:00:00+00:00",
+      "unrecognized": false,
+      "watch": false
+     }
+    ],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": {
+    "office": {
+     "confidence": 0.87,
+     "explanation": "mmwave: presence",
+     "identities": [
+      "alice"
+     ],
+     "occupied": true,
+     "person_count": 1,
+     "precision_level": "position",
+     "sources": [
+      {
+       "age_s": 3,
+       "confidence": 0.9,
+       "count": 1,
+       "health": "fresh",
+       "modality": "mmwave",
+       "presence": true,
+       "reliability": 0.5,
+       "sensor_id": "a"
+      }
+     ],
+     "targets": [
+      {
+       "x": 1,
+       "y": 2
+      }
+     ],
+     "ts": "2026-09-24T10:00:00+00:00",
+     "vitals": {
+      "hr": 60
+     }
+    }
+   }
+  },
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [],
+    "degraded": 0,
+    "headline": "Nothing needs your attention",
+    "info": 0,
+    "items": [],
+    "total": 0
+   },
+   "error": null,
+   "name": "watch_on",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": {
+     "blocking": 0,
+     "could_not_check": [],
+     "degraded": 0,
+     "headline": "Nothing needs your attention",
+     "info": 0,
+     "items": [],
+     "total": 0
+    },
+    "error": null,
+    "exit_code": 0,
+    "privacy": {
+     "watch": true
+    },
+    "reachable": true,
+    "rooms": [
+     {
+      "confidence": 0.87,
+      "explanation": "mmwave: presence",
+      "occupied": true,
+      "person_count": 1,
+      "precision_level": "position",
+      "room": "office",
+      "sources": [
+       {
+        "age_s": 3,
+        "confidence": 0.9,
+        "count": 1,
+        "health": "fresh",
+        "modality": "mmwave",
+        "presence": true,
+        "sensor_id": "a"
+       }
+      ],
+      "ts": "2026-09-24T10:00:00+00:00",
+      "unrecognized": true,
+      "watch": true
+     }
+    ],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": {
+    "office": {
+     "confidence": 0.87,
+     "explanation": "mmwave: presence",
+     "identities": [],
+     "occupied": true,
+     "person_count": 1,
+     "precision_level": "position",
+     "sources": [
+      {
+       "age_s": 3,
+       "confidence": 0.9,
+       "count": 1,
+       "health": "fresh",
+       "modality": "mmwave",
+       "presence": true,
+       "reliability": 0.5,
+       "sensor_id": "a"
+      }
+     ],
+     "targets": [],
+     "ts": "2026-09-24T10:00:00+00:00",
+     "unrecognized": true,
+     "vitals": {},
+     "watch": true
+    }
+   }
+  },
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [
+     "pairings",
+     7
+    ],
+    "degraded": 0,
+    "headline": "Nothing needs your attention",
+    "info": 0,
+    "items": [],
+    "total": 0
+   },
+   "error": null,
+   "name": "inbox_could_not_check",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": {
+     "blocking": 0,
+     "could_not_check": [
+      "pairings"
+     ],
+     "degraded": 0,
+     "headline": "Nothing needs your attention",
+     "info": 0,
+     "items": [],
+     "total": 0
+    },
+    "error": null,
+    "exit_code": 1,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": {}
+  },
+  {
+   "attention": [],
+   "error": null,
+   "name": "inbox_wrong_shape",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": null,
+    "error": null,
+    "exit_code": 1,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": {}
+  },
+  {
+   "attention": null,
+   "error": null,
+   "name": "inbox_unreadable",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": null,
+    "error": null,
+    "exit_code": 1,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": {}
+  },
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [],
+    "degraded": 0,
+    "headline": "Nothing needs your attention",
+    "info": 0,
+    "items": [],
+    "total": 0
+   },
+   "error": null,
+   "name": "degraded_runtime",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "degraded",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": {
+     "blocking": 0,
+     "could_not_check": [],
+     "degraded": 0,
+     "headline": "Nothing needs your attention",
+     "info": 0,
+     "items": [],
+     "total": 0
+    },
+    "error": null,
+    "exit_code": 1,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "degraded",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": {}
+  },
+  {
+   "attention": null,
+   "error": null,
+   "name": "unavailable_runtime",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "unavailable",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": null,
+    "error": null,
+    "exit_code": 2,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [],
+    "rooms_readable": false,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "unavailable",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": null
+  },
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [],
+    "degraded": 0,
+    "headline": "Nothing needs your attention",
+    "info": 0,
+    "items": [],
+    "total": 0
+   },
+   "error": null,
+   "name": "runtime_wrong_shape",
+   "reachable": true,
+   "runtime": [
+    "healthy"
+   ],
+   "snapshot": {
+    "attention": {
+     "blocking": 0,
+     "could_not_check": [],
+     "degraded": 0,
+     "headline": "Nothing needs your attention",
+     "info": 0,
+     "items": [],
+     "total": 0
+    },
+    "error": null,
+    "exit_code": 2,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": false,
+    "rooms": [],
+    "rooms_readable": true,
+    "runtime": null,
+    "schema": 1
+   },
+   "state": {}
+  },
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [],
+    "degraded": 1,
+    "headline": "1 thing needs your attention",
+    "info": 0,
+    "items": [
+     "x",
+     {
+      "count": true
+     }
+    ],
+    "total": "1"
+   },
+   "error": null,
+   "name": "garbled_fields",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     1,
+     {
+      "key": 2
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": "long"
+   },
+   "snapshot": {
+    "attention": null,
+    "error": null,
+    "exit_code": 1,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [
+     {
+      "confidence": null,
+      "explanation": null,
+      "occupied": null,
+      "person_count": null,
+      "precision_level": null,
+      "room": "office",
+      "sources": [
+       {
+        "age_s": null,
+        "confidence": null,
+        "count": null,
+        "health": null,
+        "modality": null,
+        "presence": null,
+        "sensor_id": null
+       }
+      ],
+      "ts": null,
+      "unrecognized": false,
+      "watch": false
+     }
+    ],
+    "rooms_readable": true,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": null,
+       "state": null,
+       "text": null
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": null
+    },
+    "schema": 1
+   },
+   "state": {
+    "bad": 5,
+    "office": {
+     "confidence": "0.9",
+     "explanation": null,
+     "occupied": "yes",
+     "person_count": 1.5,
+     "precision_level": 3,
+     "sources": [
+      7,
+      {
+       "age_s": "3",
+       "confidence": true,
+       "count": false,
+       "health": null,
+       "modality": 1,
+       "presence": 1
+      }
+     ],
+     "ts": 12,
+     "watch": "true"
+    }
+   }
+  },
+  {
+   "attention": {
+    "blocking": 0,
+    "could_not_check": [],
+    "degraded": 0,
+    "headline": "Nothing needs your attention",
+    "info": 0,
+    "items": [],
+    "total": 0
+   },
+   "error": null,
+   "name": "state_wrong_shape",
+   "reachable": true,
+   "runtime": {
+    "findings": [
+     {
+      "detail": null,
+      "key": "sensors",
+      "state": "healthy",
+      "text": "3 sensors",
+      "text_args": {
+       "n": 3
+      },
+      "text_template": "{n} sensors"
+     }
+    ],
+    "headline": "Wavr is running",
+    "last_state_age_s": 4.5,
+    "role": "core",
+    "space": "Home",
+    "state": "healthy",
+    "uptime_s": 3600
+   },
+   "snapshot": {
+    "attention": {
+     "blocking": 0,
+     "could_not_check": [],
+     "degraded": 0,
+     "headline": "Nothing needs your attention",
+     "info": 0,
+     "items": [],
+     "total": 0
+    },
+    "error": null,
+    "exit_code": 0,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": true,
+    "rooms": [],
+    "rooms_readable": false,
+    "runtime": {
+     "findings": [
+      {
+       "detail": null,
+       "key": "sensors",
+       "state": "healthy",
+       "text": "3 sensors"
+      }
+     ],
+     "headline": "Wavr is running",
+     "last_state_age_s": 4.5,
+     "role": "core",
+     "space": "Home",
+     "state": "healthy",
+     "uptime_s": 3600
+    },
+    "schema": 1
+   },
+   "state": [
+    "office"
+   ]
+  },
+  {
+   "attention": null,
+   "error": "cannot connect to 127.0.0.1:8000",
+   "name": "core_not_answering",
+   "reachable": false,
+   "runtime": null,
+   "snapshot": {
+    "attention": null,
+    "error": "cannot connect to 127.0.0.1:8000",
+    "exit_code": 2,
+    "privacy": {
+     "watch": false
+    },
+    "reachable": false,
+    "rooms": [],
+    "rooms_readable": false,
+    "runtime": null,
+    "schema": 1
+   },
+   "state": null
+  }
+ ],
+ "source": "backend/wavr/client_view.py (snapshot)"
+}

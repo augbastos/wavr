@@ -30,14 +30,14 @@ async def resolve_source_mac(ip: str,
                              ) -> "str | None":
     """Resolve `ip` to a MAC via the local ARP table. `arp_transport` is the
     injectable () -> Awaitable[str] returning raw `arp -a` text (tests inject
-    canned output; the default calls the real `arp -a` subprocess, the same
-    transport wavr.sources.network / wavr.netinventory use). Never raises --
+    canned output; the default reads the same neighbour table
+    wavr.sources.network / wavr.netinventory use). Never raises --
     an unreachable/unavailable ARP transport or an IP absent from the table
     both resolve to None, so a caller can only ever get an HONEST "can't
     resolve", never a guessed/fabricated MAC."""
     if not ip:
         return None
-    transport = arp_transport or (lambda: network._run("arp", "-a"))
+    transport = arp_transport or network.neighbour_table
     try:
         raw = await transport()
     except Exception:

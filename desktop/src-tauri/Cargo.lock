@@ -4340,7 +4340,7 @@ dependencies = [
 
 [[package]]
 name = "wavr-desktop"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "rustls",
  "rustls-pemfile",

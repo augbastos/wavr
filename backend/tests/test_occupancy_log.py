@@ -34,6 +34,49 @@ def test_unchanged_repeat_is_a_noop():
     assert len(log.timeline("sala")) == 1  # the repeat never landed a second row
 
 
+def test_claim_then_write_logs_exactly_what_append_if_changed_logs():
+    # The Core claims on its event loop and writes in a worker thread. The split
+    # must decide exactly as the one-call form does, over a mixed sequence.
+    split, whole = _store(), _store()
+    seq = [(True, 0.9, 2), (True, 0.9, 2), (True, 0.905, 2), (True, 0.92, 2),
+           (True, 0.92, 3), (False, 0.92, 3), (False, 0.0, None), (False, 0.0, None)]
+    for i, (occ, conf, n) in enumerate(seq):
+        ts = f"2026-07-01T10:00:{i:02d}+00:00"
+        c = split.claim("sala", occ, conf, n, ts)
+        if c is not None:
+            split.write("sala", c)
+        assert (c is not None) is whole.append_if_changed("sala", occ, conf, n, ts), i
+    assert split.timeline("sala") == whole.timeline("sala")
+
+
+def test_a_quick_flicker_is_not_lost_while_a_write_is_in_flight():
+    # Found in review: A -> B -> A with B's write still running. The old check
+    # compared the return to A against the last row as of the previous COMPLETED
+    # write (A), called it unchanged, and never logged it. Claims are taken in
+    # publish order against the claimed state, so all three edges are kept.
+    log = _store()
+    ts = lambda s: f"2026-07-01T10:00:{s:02d}+00:00"  # noqa: E731
+    log.append_if_changed("sala", False, 0.0, None, ts(0))
+    b = log.claim("sala", True, 0.9, 1, ts(1))            # B claimed, not yet written
+    a_again = log.claim("sala", False, 0.0, None, ts(2))  # back to A before B lands
+    assert b is not None and a_again is not None
+    log.write("sala", a_again)                            # the later one commits first
+    log.write("sala", b)
+    assert [r["occupied"] for r in log.timeline("sala")] == [False, True, False]
+
+
+def test_a_failed_write_gives_the_room_its_last_row_back():
+    log = _store()
+    log.append_if_changed("sala", False, 0.0, None, "2026-07-01T10:00:00+00:00")
+    c = log.claim("sala", True, 0.9, 1, "2026-07-01T10:00:01+00:00")
+    log._conn.close()                          # the disk goes away
+    try:
+        log.write("sala", c)
+    except Exception:
+        pass
+    assert log._last["sala"]["occupied"] is False, "the unwritten row must not dedup the next one"
+
+
 def test_occupied_flip_inserts():
     log = _store()
     log.append_if_changed("sala", True, 0.9, 2, "2026-07-01T10:00:00+00:00")

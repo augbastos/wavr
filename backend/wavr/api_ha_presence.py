@@ -76,12 +76,19 @@ def build_router(*, store, ha_client_fn, rooms_fn, require_local,
                          "puts people in the wrong room.")}
 
     @router.put("/api/ha/presence/{entity_id}")
-    async def upsert(entity_id: str, room: str = Body(...),
+    async def upsert(entity_id: str, room: str = Body(""),
                      modality: str = Body("pir"), label: str = Body(""),
+                     areas: dict | None = Body(None),
                      _=Depends(require_local),
                      __=Depends(require_scope("admin"))):
+        # `areas` makes it a LOCATION mapping -- an entity whose state is an HA
+        # area name, such as a Bermuda area sensor -- and is then the only source
+        # of rooms. Without it, `room` is required exactly as before.
         try:
-            m = store.map(entity_id, room, modality, label)
+            if areas is not None:
+                m = store.map_location(entity_id, areas, label)
+            else:
+                m = store.map(entity_id, room, modality, label)
         except HAPresenceError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         await _changed()

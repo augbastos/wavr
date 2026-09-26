@@ -1,0 +1,81 @@
+{
+ "cases": [
+  {
+   "loopback": true,
+   "url": "http://127.0.0.1:8000"
+  },
+  {
+   "loopback": true,
+   "url": "https://127.0.0.5:8000"
+  },
+  {
+   "loopback": true,
+   "url": "https://127.255.255.254"
+  },
+  {
+   "loopback": true,
+   "url": "https://localhost:8000"
+  },
+  {
+   "loopback": true,
+   "url": "https://LOCALHOST"
+  },
+  {
+   "loopback": true,
+   "url": "https://[::1]:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://127.0.0.1.attacker.example:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://127.evil.example"
+  },
+  {
+   "loopback": false,
+   "url": "https://localhost.attacker.example"
+  },
+  {
+   "loopback": false,
+   "url": "https://127.0.0.1@attacker.example"
+  },
+  {
+   "loopback": false,
+   "url": "https://192.168.1.57:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://10.0.0.9"
+  },
+  {
+   "loopback": false,
+   "url": "https://0.0.0.0:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://128.0.0.1"
+  },
+  {
+   "loopback": false,
+   "url": "https://[::2]:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://127.1"
+  },
+  {
+   "loopback": true,
+   "url": "https://[::ffff:127.0.0.1]:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://[::ffff:10.0.0.1]:8000"
+  },
+  {
+   "loopback": false,
+   "url": "https://core.example.com"
+  }
+ ],
+ "source": "backend/wavr/status.py (is_loopback)"
+}

@@ -1,0 +1,94 @@
+name: clients
+
+# Build native clients when their inputs change. A release candidate exercises
+# both clients even if its last diff only changes packaging or documentation.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clients-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$HEAD_REF" == release/* ]]; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! changed=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}"); then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -qE '^(native/|clients/|core-launcher/|conformance/|\.github/workflows/clients\.yml$)'; then
+            echo "platform=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "platform=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  android:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            core-launcher/**/*.gradle
+            core-launcher/gradle/wrapper/gradle-wrapper.properties
+      - name: Build the app and run its unit tests (kiosk build; no native .so bundled)
+        working-directory: core-launcher
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain
+
+  desktop-linux:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop
+      - name: Test the Slint client
+        working-directory: clients/desktop
+        run: cargo test --release
+
+  desktop-windows:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop
+      - name: Test the Slint client
+        working-directory: clients/desktop
+        run: cargo test --release

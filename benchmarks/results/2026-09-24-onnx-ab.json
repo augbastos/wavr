@@ -1,0 +1,28 @@
+{
+ "rounds": 7,
+ "torch": {
+  "cold_start_s": 5.174,
+  "latency_p50_ms": 47.4,
+  "peak_rss_mb": 402.8,
+  "rss_after_warmup_mb": 400.4,
+  "threads": 32,
+  "processes_sampled": 2,
+  "audit_events": [
+   "socket.gethostname"
+  ],
+  "connections": []
+ },
+ "ort": {
+  "cold_start_s": 0.726,
+  "latency_p50_ms": 47.3,
+  "peak_rss_mb": 130.4,
+  "rss_after_warmup_mb": 125.1,
+  "threads": 27,
+  "processes_sampled": 2,
+  "audit_events": [
+   "socket.gethostname"
+  ],
+  "connections": []
+ },
+ "method": "benchmarks/onnx_ab.py: torch and ORT paths alternated for 7 rounds on a quiet machine; memory and connections sampled over the whole process tree (the venv python.exe is a launcher stub)."
+}

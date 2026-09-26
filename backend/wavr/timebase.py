@@ -199,6 +199,10 @@ class TimeBase:
         self._max = max_correction_s
         self._clocks: dict[str, ClockEstimate] = {}
 
+    def now(self) -> datetime:
+        """This Core's clock, as every stamp here is measured against."""
+        return self._now()
+
     def estimate(self, source_id: str) -> ClockEstimate:
         est = self._clocks.get(source_id)
         if est is None:

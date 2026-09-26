@@ -106,6 +106,25 @@ def test_yolo_detect_counts_persons(monkeypatch):
     assert det.count == 1            # only the person box
     assert det.confidence == 0.9
 
+
+def test_missing_onnx_and_no_local_pt_still_uses_legacy_detector(tmp_path, monkeypatch, caplog):
+    from wavr.sources import camera
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WAVR_PERSON_MODEL", str(tmp_path / "missing.onnx"))
+    assert not (tmp_path / "yolov8n.pt").exists()
+    monkeypatch.setattr(camera, "_MODEL_REASON", None)
+    calls = []
+    def legacy(frame, threshold):
+        calls.append((frame, threshold))
+        return camera.Detection(1, 0.8)
+    monkeypatch.setattr(camera, "yolo_detect", legacy)
+    source = camera.CameraSource("room", confidence=0.4)
+    frame = object()
+    assert source._detect(frame) == camera.Detection(1, 0.8)
+    assert source._detect(frame) == camera.Detection(1, 0.8)
+    assert calls == [(frame, 0.4), (frame, 0.4)]
+    assert caplog.text.count("person model not provisioned") == 1
+
 def test_yolo_detect_filters_by_confidence_threshold(monkeypatch):
     from wavr.sources import camera
     # Fake YOLO result: two person boxes (cls=0), confs [0.9, 0.3]

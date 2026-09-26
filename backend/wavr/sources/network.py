@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import ipaddress
 import logging
 import os
 import re
 import socket
 import sys
+import time
+import weakref
 from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable
 
@@ -60,20 +61,144 @@ def ping_argv(host: str, timeout_ms: int = 1000) -> tuple[str, ...]:
     return ("ping", "-c", "1", "-W", str(secs), host)  # Linux / other Unix
 
 
+# -- One sweep of the local /24, shared by everything that needs a warm ARP table
+#
+# Two consumers read the ARP table: this module's presence source (every
+# WAVR_NET_INTERVAL, 15 s) and the network inventory (every 30 s). Each used to
+# warm it with its OWN sweep of 254 `ping` subprocesses, so a Core with
+# inventory on spawned ~1,070 processes a minute and spent ~17 CPU-seconds a
+# minute doing it (benchmarks/results, 2026-09-23). Two changes, both measured:
+#
+#  * The warm-up is one empty UDP datagram per host instead of one process per
+#    host. Sending ANY packet to an unresolved neighbour makes the kernel ARP for
+#    it, and every IP host answers ARP whatever its firewall does to ICMP -- so
+#    this finds at least what ping found (on the development LAN: the same
+#    neighbours answered, the same `arp -a` rows) with zero child processes. The
+#    datagrams go to UDP 9 (discard) on the machine's own /24 only.
+#  * A sweep completed in the last `_SWEEP_REUSE_S` seconds is handed to the next
+#    caller instead of repeated, and concurrent callers wait for the one sweep in
+#    flight. The inventory's 30 s scan is then served by the presence source's
+#    15 s sweep instead of duplicating it.
+_SWEEP_REUSE_S = 10.0
+# How long neighbours get to answer the ARP requests before the table is read.
+# The ping sweep this replaces took ~3.8 s end to end on the development LAN;
+# 1.5 s returned the same neighbours there.
+_ARP_SETTLE_S = 1.5
+_DISCARD_PORT = 9
+
+
+class _Sweep:
+    """The shared sweep state of ONE event loop (a lock is bound to its loop)."""
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.at = float("-inf")
+        self.text = ""
+
+
+_sweeps: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _Sweep]" = (
+    weakref.WeakKeyDictionary())
+
+
+def _warm_arp_cache(own_ip: str) -> int:
+    """Send one empty datagram to every other host of `own_ip`'s /24.
+
+    Non-blocking and fire-and-forget: the replies that matter are the ARP ones,
+    which the kernel handles; nothing is read back from the socket. Returns how
+    many datagrams left, for tests.
+    """
+    net = ipaddress.ip_network(own_ip + "/24", strict=False)
+    sent = 0
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setblocking(False)
+        for host in net.hosts():
+            addr = str(host)
+            if addr == own_ip:
+                continue
+            try:
+                s.sendto(b"", (addr, _DISCARD_PORT))
+                sent += 1
+            except OSError:
+                # A full send buffer or an unreachable route for one host must
+                # not end the sweep for the rest.
+                continue
+    return sent
+
+
+async def arp_table_text(max_age_s: float = _SWEEP_REUSE_S) -> str:
+    """Warm the ARP cache of the local /24 and return raw `arp -a` text.
+
+    Shares one sweep between every caller that asks within `max_age_s`; callers
+    arriving while a sweep is running wait for it rather than starting another.
+    Best-effort: with no local IPv4 there is no sweep, only the table as it is.
+    """
+    loop = asyncio.get_running_loop()
+    state = _sweeps.get(loop)
+    if state is None:
+        state = _sweeps[loop] = _Sweep()
+    async with state.lock:
+        if time.monotonic() - state.at <= max_age_s:
+            return state.text
+        ip = _local_ipv4()
+        if ip:
+            _warm_arp_cache(ip)
+            await asyncio.sleep(_ARP_SETTLE_S)
+        text = await neighbour_table()
+        if ip:          # only a real sweep is worth handing to the next caller
+            state.at, state.text = time.monotonic(), text
+        return text
+
+
+_PROC_NET_ARP = "/proc/net/arp"
+_ATF_COM = 0x2          # kernel flag: the entry is complete (a MAC is known)
+
+
+def _proc_net_arp(path: str = _PROC_NET_ARP) -> str | None:
+    """The kernel's own neighbour table on Linux, as `ip mac` lines.
+
+    `arp` comes from net-tools, which modern Debian and Ubuntu no longer
+    install by default -- measured: absent on a stock Ubuntu (WSL). On such a
+    host every sweep ended in "arp: not found", presence saw no device and the
+    inventory stayed empty, with nothing on screen to say why. That is the
+    Raspberry Pi tier. /proc/net/arp is always there and needs no process.
+    None when unreadable (not Linux, or a sandbox that hides it -- Android
+    does), so the caller falls back to `arp -a`.
+    """
+    try:
+        with open(path, encoding="ascii", errors="replace") as fh:
+            rows = fh.read().splitlines()[1:]
+    except OSError:
+        return None
+    out = []
+    for row in rows:
+        cols = row.split()
+        if len(cols) < 4:
+            continue
+        ip, flags, mac = cols[0], cols[2], cols[3]
+        try:
+            complete = int(flags, 16) & _ATF_COM
+        except ValueError:
+            continue
+        if complete and mac != "00:00:00:00:00:00":
+            out.append(f"{ip} {mac}")
+    return "\n".join(out) + ("\n" if out else "")
+
+
+async def neighbour_table() -> str:
+    """This host's ARP/neighbour table as text the `arp -a` parsers read:
+    /proc/net/arp where it can be read, `arp -a` otherwise."""
+    if sys.platform.startswith("linux"):
+        text = _proc_net_arp()
+        if text is not None:
+            return text
+    return await _run("arp", "-a")
+
+
 async def arp_scan() -> set[str]:
-    """Default real scan: ping-sweep the local /24 to warm the ARP cache, then
-    parse `arp -a`, returning every MAC currently on the LAN. Best-effort — a
-    failed ping never raises. Windows-flavored ping flags (`-n 1 -w 200`)."""
-    ip = _local_ipv4()
-    if ip:
-        net = ipaddress.ip_network(ip + "/24", strict=False)
-        sem = asyncio.Semaphore(32)   # cap concurrent ping subprocesses (was up to 254)
-        async def ping(addr: str) -> None:
-            async with sem:
-                with contextlib.suppress(Exception):
-                    await _run(*ping_argv(addr, 200))
-        await asyncio.gather(*(ping(str(h)) for h in net.hosts()))
-    return parse_arp_table(await _run("arp", "-a"))
+    """Default real scan: every MAC currently in this host's ARP table after a
+    shared sweep of the local /24 (see `arp_table_text`). Best-effort, never
+    raises for an unreachable host."""
+    return parse_arp_table(await arp_table_text())
 
 
 _IPV4_RE = r"\d{1,3}(?:\.\d{1,3}){3}"

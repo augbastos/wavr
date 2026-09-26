@@ -49,6 +49,7 @@ misconfiguration rather than drift, says so and falls back to receipt time.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 import threading
@@ -133,7 +134,8 @@ CREATE TABLE IF NOT EXISTS ha_presence_map (
     modality   TEXT    NOT NULL,
     enabled    INTEGER NOT NULL DEFAULT 1,
     label      TEXT    NOT NULL DEFAULT '',
-    created_ts TEXT    NOT NULL
+    created_ts TEXT    NOT NULL,
+    areas      TEXT    NOT NULL DEFAULT ''
 );
 """
 
@@ -173,15 +175,27 @@ class Mapping:
     modality: str
     enabled: bool = True
     label: str = ""
+    # A LOCATION mapping: the entity's state is an HA area NAME (a Bermuda
+    # `sensor.<device>_area`), and this is the operator's own table from area
+    # name (normalised, see `_area_key`) to Wavr room. Empty for the ordinary
+    # binary mapping, whose room is `room`.
+    areas: tuple = ()
 
     @property
     def sensor_id(self) -> str:
         return f"{SENSOR_PREFIX}{self.entity_id}"
 
+    @property
+    def is_location(self) -> bool:
+        return bool(self.areas)
+
     def to_dict(self) -> dict:
-        return {"entity_id": self.entity_id, "room": self.room,
-                "modality": self.modality, "enabled": self.enabled,
-                "label": self.label, "sensor_id": self.sensor_id}
+        out = {"entity_id": self.entity_id, "room": self.room,
+               "modality": self.modality, "enabled": self.enabled,
+               "label": self.label, "sensor_id": self.sensor_id}
+        if self.areas:
+            out["areas"] = dict(self.areas)
+        return out
 
 
 class HAPresenceError(ValueError):
@@ -201,6 +215,10 @@ class HAPresenceStore:
         self._lock = threading.Lock()
         self._now = now_fn or (lambda: datetime.now(timezone.utc).isoformat())
         self._conn.executescript(_SCHEMA)
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(ha_presence_map)")}
+        if "areas" not in cols:        # a database from before location mappings
+            self._conn.execute(
+                "ALTER TABLE ha_presence_map ADD COLUMN areas TEXT NOT NULL DEFAULT ''")
         self._conn.commit()
 
     def map(self, entity_id: str, room: str, modality: str = "node",
@@ -233,10 +251,50 @@ class HAPresenceStore:
                 " VALUES (?, ?, ?, 1, ?, ?)"
                 " ON CONFLICT(entity_id) DO UPDATE SET"
                 " room = excluded.room, modality = excluded.modality,"
-                " label = excluded.label",
+                " label = excluded.label, areas = ''",
                 (entity_id, room, modality, label, self._now()))
             self._conn.commit()
         return Mapping(entity_id, room, modality, True, label)
+
+    def map_location(self, entity_id: str, areas: dict, label: str = "") -> Mapping:
+        """Map an entity whose STATE is an area name -- a Bermuda area sensor.
+
+        `areas` is the operator's table from HA area name to Wavr room. It is
+        the only way an area becomes a room: a name HA reports that is not in
+        it places the device in no room at all, rather than creating one. The
+        modality is `ble`, because that is what Bermuda measures, and it caps
+        the evidence at room precision and keeps it out of trusted absence.
+        """
+        entity_id = str(entity_id or "").strip()
+        if not entity_id or "." not in entity_id:
+            raise HAPresenceError("entity_id must look like 'sensor.phone_area'")
+        if is_wavr_entity(entity_id):
+            raise HAPresenceError(f"{entity_id} is one of Wavr's own sensors")
+        if not isinstance(areas, dict) or not areas:
+            raise HAPresenceError("a location mapping needs at least one area -> room")
+        table: dict[str, str] = {}
+        for area, room in areas.items():
+            key, room = _area_key(area), str(room or "").strip()
+            if not key or not room:
+                raise HAPresenceError(
+                    f"area {area!r} -> room {room!r}: both must be named")
+            if key in table and table[key] != room:
+                raise HAPresenceError(f"area {area!r} is mapped to two rooms")
+            table[key] = room
+        if len(table) > 64:
+            raise HAPresenceError("too many areas for one entity (max 64)")
+        stored = json.dumps(table, sort_keys=True)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO ha_presence_map"
+                " (entity_id, room, modality, enabled, label, created_ts, areas)"
+                " VALUES (?, '', 'ble', 1, ?, ?, ?)"
+                " ON CONFLICT(entity_id) DO UPDATE SET"
+                " room = '', modality = 'ble', label = excluded.label,"
+                " areas = excluded.areas",
+                (entity_id, label, self._now(), stored))
+            self._conn.commit()
+        return Mapping(entity_id, "", "ble", True, label, tuple(sorted(table.items())))
 
     def unmap(self, entity_id: str) -> bool:
         with self._lock:
@@ -254,7 +312,7 @@ class HAPresenceStore:
         return cur.rowcount > 0
 
     def list(self, *, enabled_only: bool = False) -> list[Mapping]:
-        sql = ("SELECT entity_id, room, modality, enabled, label"
+        sql = ("SELECT entity_id, room, modality, enabled, label, areas"
                " FROM ha_presence_map")
         if enabled_only:
             sql += " WHERE enabled = 1"
@@ -262,7 +320,8 @@ class HAPresenceStore:
         with self._lock:
             rows = self._conn.execute(sql).fetchall()
         return [Mapping(r["entity_id"], r["room"], r["modality"],
-                        bool(r["enabled"]), r["label"]) for r in rows]
+                        bool(r["enabled"]), r["label"], _areas_from_db(r["areas"]))
+                for r in rows]
 
     def get(self, entity_id: str) -> Mapping | None:
         for m in self.list():
@@ -365,6 +424,64 @@ def to_event(state: dict, mapping: Mapping, *, at: str,
     )
 
 
+def _area_key(name) -> str:
+    """An HA area name as a person reads it: case and spacing do not make a
+    different room."""
+    return " ".join(str(name or "").split()).casefold()
+
+
+def _areas_from_db(raw) -> tuple:
+    if not raw:
+        return ()
+    try:
+        table = json.loads(raw)
+    except ValueError:
+        return ()
+    if not isinstance(table, dict):
+        return ()
+    return tuple(sorted((str(k), str(v)) for k, v in table.items() if k and v))
+
+
+def to_events(state: dict, mapping: Mapping, *, at: str,
+              confidence: float = DEFAULT_CONFIDENCE) -> list[SensingEvent]:
+    """Everything one HA state says, as events -- one for a binary mapping, one
+    per mapped room for a location mapping.
+
+    A location mapping (a Bermuda area sensor) says where ONE device is, so it
+    speaks about every room in its table at once: present in the room its area
+    maps to, and a zero-mass reading in each of the others. That zero is what
+    moves the device out of the kitchen the moment Bermuda puts it in the
+    office, instead of leaving it in both until the kitchen reading decays.
+
+    An area the operator did not map puts the device in NO room -- Bermuda is
+    saying it is somewhere Wavr has no name for, so every mapped room is
+    released and none is invented. `unknown` (Bermuda's word for "not seen for
+    30 s") and `unavailable` say nothing at all, exactly as for a binary sensor:
+    Bermuda's own author frames it as asserting where something IS, not proving
+    where it is not.
+    """
+    if not mapping.is_location:
+        ev = to_event(state, mapping, at=at, confidence=confidence)
+        return [ev] if ev is not None else []
+    if not mapping.enabled:
+        return []
+    raw = state.get("state") if isinstance(state, dict) else None
+    if raw is not None and (not isinstance(raw, str) or len(raw) > 4096):
+        return []
+    value = raw.strip().lower() if raw is not None else None
+    # "Invalid Area for <device>" is Bermuda reporting a registry fault, not a
+    # place.
+    if value in NOT_REPORTING or value.startswith("invalid area"):
+        return []
+    table = dict(mapping.areas)
+    here = table.get(_area_key(raw))
+    return [SensingEvent(
+        sensor_id=mapping.sensor_id, room=room, modality=mapping.modality,
+        presence=room == here, motion=0.0, breathing_bpm=None, heart_bpm=None,
+        confidence=float(confidence) if room == here else 0.0,
+        ts=at, count=None) for room in sorted(set(table.values()))]
+
+
 class HomeAssistantSource:
     """Polls the MAPPED HA entities and emits canonical events.
 
@@ -384,6 +501,9 @@ class HomeAssistantSource:
         self._interval = max(0.5, float(interval))
         self._time = timebase or TimeBase()
         self._on_health = on_health
+        # entity_id -> the `last_changed` seen on the previous poll. Only a change
+        # between two polls is evidence about HA's clock (see `_observed_at`).
+        self._last_changed: dict[str, str | None] = {}
 
     async def events(self) -> AsyncIterator[SensingEvent]:
         while True:
@@ -396,12 +516,11 @@ class HomeAssistantSource:
                 # a crash the supervisor reports, not as "HA has no sensors".
                 _LOG.warning("ha_presence: mapping read failed", exc_info=True)
             for m in mappings:
-                ev = await asyncio.to_thread(self._poll_one, m)
-                if ev is not None:
+                for ev in await asyncio.to_thread(self._poll_one, m):
                     yield ev
             await asyncio.sleep(self._interval)
 
-    def _poll_one(self, mapping: Mapping) -> SensingEvent | None:
+    def _poll_one(self, mapping: Mapping) -> list[SensingEvent]:
         try:
             state = self._client.get_state(mapping.entity_id)
         except Exception:      # noqa: BLE001 -- reaching off-box, any failure
@@ -411,16 +530,42 @@ class HomeAssistantSource:
             _LOG.debug("ha_presence: %s unreadable", mapping.entity_id,
                        exc_info=True)
             self._report(mapping, False)
-            return None
+            return []
         if not isinstance(state, dict):
             self._report(mapping, False)
-            return None
-        stamp = self._time.normalize(
-            state.get("last_changed") or state.get("last_updated")
-            or datetime.now(timezone.utc),
-            source_id="home_assistant")
+            return []
         self._report(mapping, True)
-        return to_event(state, mapping, at=stamp.at.isoformat())
+        return to_events(state, mapping,
+                         at=self._observed_at(mapping, state).isoformat())
+
+    def _observed_at(self, mapping: Mapping, state: dict) -> datetime:
+        """When the state this poll returned was TRUE -- which is now.
+
+        HA answers a poll with the state it holds at this moment. `last_changed`
+        is when that state BEGAN, and the two are only close for a change that
+        landed since the previous poll. Stamping every poll with `last_changed`
+        made a sensor that stayed on look like one that went quiet: fusion aged
+        it out after ~90 s while HA was confirming it every few seconds, and a
+        Bermuda area sensor -- one value for as long as somebody stays in a room
+        -- could never have held a room at all. Staleness is HA's call, and HA
+        makes it: a sensor that stops reporting becomes `unavailable`, which
+        `to_event` already turns into silence.
+
+        The clock estimate is fed ONLY by a change observed between two polls,
+        because only then is the lag a measurement of HA's clock. The first
+        sighting of a sensor that has been on for an hour is not a clock in the
+        wrong timezone, and used to be reported as one.
+        """
+        stated = state.get("last_changed") or state.get("last_updated")
+        previous = self._last_changed.get(mapping.entity_id)
+        self._last_changed[mapping.entity_id] = stated
+        if stated and previous is not None and stated != previous:
+            try:
+                return self._time.normalize(stated, source_id="home_assistant").at
+            except ValueError:      # timebase.TimeError: an unreadable stamp
+                _LOG.debug("ha_presence: %s has an unreadable last_changed",
+                           mapping.entity_id)
+        return self._time.now()
 
     def _report(self, mapping: Mapping, ok: bool) -> None:
         if self._on_health is None:

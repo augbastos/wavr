@@ -16,7 +16,7 @@ import os
 import sys
 import urllib.request
 
-from wavr.status import context_for, is_loopback
+from wavr.status import context_for, is_loopback, open_url, printable_url
 
 
 def fetch_doctor(base_url: str, token: str | None = None, timeout: float = 40.0) -> dict:
@@ -30,8 +30,7 @@ def fetch_doctor(base_url: str, token: str | None = None, timeout: float = 40.0)
     # certificate was offered. A claimed scope that nothing enforces is the
     # failure this codebase keeps finding; `wavr.status.context_for` enforces it,
     # so this uses that rather than keeping a second, weaker copy.
-    ctx = context_for(url)
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+    with open_url(req, timeout) as resp:      # context_for + no redirects
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -47,7 +46,7 @@ def main(argv=None) -> int:
     try:
         data = fetch_doctor(args.url, args.token)
     except Exception as exc:  # noqa: BLE001 -- a CLI should print a friendly reason, not a traceback
-        print(f"wavr doctor: couldn't reach the Core at {args.url} ({exc}).\n"
+        print(f"wavr doctor: couldn't reach the Core at {printable_url(args.url)} ({exc}).\n"
               f"Is it running? Start it with:  python -m wavr.serve", file=sys.stderr)
         return 2
     report = data.get("report")

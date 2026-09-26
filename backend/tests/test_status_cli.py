@@ -55,6 +55,46 @@ def test_anything_off_loopback_still_verifies(url):
     assert ctx.check_hostname is True
 
 
+@pytest.mark.parametrize("url", [
+    "https://127.0.0.1.attacker.example:8000",   # a NAME that starts like an address
+    "https://127.evil.example",
+    "https://localhost.attacker.example",
+    "https://127.0.0.1@attacker.example",        # userinfo, the host is after the @
+])
+def test_a_name_that_looks_like_loopback_is_not_loopback(url):
+    """Found by review of the native port, which had copied the rule: any host
+    that merely started with "127." was trusted with verification off and the
+    local token attached. `127.0.0.1.attacker.example` is a DNS name its owner
+    points anywhere."""
+    assert not is_loopback(url)
+    assert context_for(url).verify_mode != ssl.CERT_NONE
+
+
+def test_plain_http_off_this_machine_is_refused_before_connecting(monkeypatch):
+    """No certificate means the token would cross the network in clear text.
+    Refused before a socket is opened -- the control proves loopback still
+    goes through."""
+    import wavr.status as status
+
+    opened = []
+    monkeypatch.setattr(status.urllib.request.OpenerDirector, "open",
+                        lambda self, req, **kw: opened.append(req.full_url) or (_ for _ in ()).throw(OSError("stub")))
+    with pytest.raises(ValueError):
+        status._get("http://192.168.1.57:8000", "/api/runtime", "secret-token")
+    with pytest.raises(ValueError):
+        status._get("http://127.0.0.1.attacker.example:8000", "/api/runtime", "secret-token")
+    assert opened == []
+    with pytest.raises(OSError):
+        status._get("http://127.0.0.1:8000", "/api/runtime", None)
+    assert opened == ["http://127.0.0.1:8000/api/runtime"]
+
+
+def test_a_password_in_the_url_is_never_printed():
+    from wavr.status import printable_url
+    assert printable_url("https://alice:hunter2@127.0.0.1:8000/x") == "https://***@127.0.0.1:8000/x"
+    assert printable_url("https://127.0.0.1:8000") == "https://127.0.0.1:8000"
+
+
 def test_the_doctor_tool_shares_this_rule_rather_than_keeping_its_own():
     """Two copies of a security decision is one copy that gets fixed and one
     that does not."""
@@ -158,6 +198,61 @@ def test_a_partially_read_inbox_is_not_a_clean_bill_either(monkeypatch):
 
     mod = _serve(answer, monkeypatch)
     assert mod.main(["--url", "http://x", "-q"]) == ATTENTION
+
+
+@pytest.mark.parametrize("wrong_shape", [[], "ok", 0, True])
+def test_an_inbox_answer_of_the_wrong_shape_is_not_a_clean_bill(monkeypatch, wrong_shape):
+    """Found by an independent review of the native port: `[]` crashed
+    exit_code here, and the native CLI read it as "nothing needs you"."""
+    def answer(path):
+        if path == "/api/runtime":
+            return _healthy_runtime()
+        return wrong_shape
+
+    mod = _serve(answer, monkeypatch)
+    assert mod.main(["--url", "http://x", "-q"]) == ATTENTION
+
+
+def test_a_redirect_is_refused_and_the_token_goes_nowhere_else():
+    """urlopen followed redirects with the token attached, and with the TLS
+    decision made for the ORIGINAL host. A Core never redirects its API."""
+    import http.server
+    import threading
+
+    import wavr.status as status
+
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.server.server_port, self.headers.get("Authorization")))
+            if self.path == "/api/runtime":
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{other.server_port}/elsewhere")
+                self.end_headers()
+            else:
+                body = b"{}"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    first = http.server.HTTPServer(("127.0.0.1", 0), H)
+    other = http.server.HTTPServer(("127.0.0.1", 0), H)
+    for s in (first, other):
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(Exception):
+            status._get(f"http://127.0.0.1:{first.server_port}", "/api/runtime", "secret")
+        assert seen == [(first.server_port, "Bearer secret")], "the redirect was followed"
+        # Control: the same client does reach a server that answers directly.
+        assert status._get(f"http://127.0.0.1:{other.server_port}", "/x", None) == {}
+    finally:
+        first.shutdown()
+        other.shutdown()
 
 
 def test_a_fully_read_empty_inbox_is_still_a_clean_zero(monkeypatch):
@@ -308,3 +403,17 @@ def test_the_one_answer_for_silence_is_the_one_this_prints(monkeypatch, capsys):
     mod.main(["--url", "http://x", "--json"])
     printed = json.loads(capsys.readouterr().out)["runtime"]
     assert printed == unreachable().to_dict()
+
+
+def test_the_default_address_is_the_one_this_machines_core_serves(monkeypatch):
+    """A Core without LAN access serves plain HTTP. The default used to be
+    https://127.0.0.1:8000 regardless, so on a default install this command
+    reported a healthy, running Core as "not answering" and exited 2."""
+    from wavr import status
+    monkeypatch.delenv("WAVR_MULTIDEVICE", raising=False)
+    monkeypatch.delenv("WAVR_PORT", raising=False)
+    assert status.default_url() == "http://127.0.0.1:8000"
+    monkeypatch.setenv("WAVR_PORT", "8123")
+    assert status.default_url() == "http://127.0.0.1:8123"
+    monkeypatch.setenv("WAVR_MULTIDEVICE", "1")
+    assert status.default_url() == "https://127.0.0.1:8123"

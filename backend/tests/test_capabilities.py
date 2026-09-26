@@ -277,6 +277,32 @@ def test_linux_keeps_its_confident_negative(monkeypatch):
     assert cap._has_ethernet_and_wifi() == (True, False)
 
 
+@pytest.mark.parametrize("types, expect", [
+    ({"battery": "Battery", "usb": "USB"}, True),
+    ({"ac": "Mains", "usb": "USB"}, False),       # every supply read, none a battery
+    ({"battery": None, "usb": None}, None),       # Android: listed, every read refused
+    ({"ac": "Mains", "battery": None}, None),     # one unread supply could be the battery
+])
+def test_an_unreadable_power_supply_is_not_a_missing_battery(monkeypatch, types, expect):
+    # Found on a real phone: SELinux lets /sys/class/power_supply be listed and
+    # refuses every `type` read, and the manifest said battery False,
+    # permanent_power True -- a phone presented as a mains-powered Core.
+    import io
+
+    import wavr.capabilities as cap
+
+    def fake_open(path, *a, **k):
+        value = types[path.split("/")[-2]]
+        if value is None:
+            raise PermissionError(13, "Permission denied", path)
+        return io.StringIO(value + "\n")
+
+    monkeypatch.setattr(cap.sys, "platform", "linux")
+    monkeypatch.setattr(cap.os, "listdir", lambda p: list(types))
+    monkeypatch.setattr(cap, "open", fake_open, raising=False)
+    assert cap._has_battery() is expect
+
+
 def test_mmwave_is_never_inferred_from_a_python_package():
     # `pyserial` being importable says Wavr COULD talk to a serial radar. It
     # does not say one is plugged in, and its absence does not say one isn't.

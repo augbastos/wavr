@@ -22,7 +22,7 @@ intentions is a catalog nobody can trust.
 """
 from __future__ import annotations
 
-from wavr import ha_presence
+from wavr import espresense, frigate, ha_presence
 from wavr.providers import (
     CONF_PROBABILITY, CONF_QUALITY, CONF_SCORE, KIND_DERIVED, KIND_NETWORK,
     KIND_SENSOR, REACH_CLOUD, REACH_INTERNET, REACH_LAN, REACH_LOCAL,
@@ -109,6 +109,8 @@ def _integrations() -> list:
         # at all — a catalogue entry promising more than the implementation
         # delivers, which is the exact failure this file's docstring forbids.
         ha_presence.descriptor(),
+        espresense.descriptor(),
+        frigate.descriptor(),
 
         describe("mqtt", "MQTT broker", KIND_SENSOR, REACH_LAN,
                  observes=("presence",),

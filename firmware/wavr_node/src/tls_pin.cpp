@@ -1,4 +1,5 @@
 #include "tls_pin.h"
+#include "fingerprint_fmt.h"
 #include <Preferences.h>
 #include <ssl_client.h>          // arduino-esp32 internal (same lib as
                                   // WiFiClientSecure.h) -- see tls_pin.h's
@@ -21,24 +22,21 @@ String candidateFp;
 
 // SHA-256 of the DER certificate bytes, formatted uppercase colon-separated
 // hex -- matches backend/wavr/tls.py::format_fingerprint exactly so an
-// operator can eyeball-compare the two.
+// operator can eyeball-compare the two. The digest-to-hex formatting itself
+// lives in fingerprint_fmt.{h,cpp} (pure, no Arduino/mbedtls dependency) so
+// it can be covered by the native Unity test in test/test_fingerprint_fmt/.
 String sha256Fingerprint(const unsigned char* der, size_t len) {
   unsigned char digest[32];
   // mbedtls_sha256(input, ilen, output, is224) is the current (mbedtls
   // >=3.0, i.e. current ESP-IDF/arduino-esp32) signature. Older cores
   // (ESP-IDF v4.x-era arduino-esp32 2.0.x, bundled mbedtls 2.x) name this
-  // mbedtls_sha256_ret() instead -- if `pio run` fails to resolve this
-  // symbol, that rename is the fix (see firmware/README.md).
+  // mbedtls_sha256_ret() instead -- pinned to espressif32@7.1.3 (Arduino-
+  // ESP32 3.x / mbedtls 3.x) in platformio.ini, so this signature is
+  // correct for every env actually built here (see firmware/README.md).
   mbedtls_sha256(der, len, digest, 0);
-  static const char kHex[] = "0123456789ABCDEF";
-  String out;
-  out.reserve(32 * 3);
-  for (int i = 0; i < 32; i++) {
-    if (i) out += ':';
-    out += kHex[(digest[i] >> 4) & 0xF];
-    out += kHex[digest[i] & 0xF];
-  }
-  return out;
+  char hex[kFingerprintHexBufLen];
+  formatFingerprintHex(digest, hex);
+  return String(hex);
 }
 
 // PEM-encodes DER certificate bytes so they can be handed to

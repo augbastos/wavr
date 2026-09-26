@@ -218,17 +218,22 @@ def _admin_deps_not_wired() -> None:
                         detail="node admin routes have no auth gate wired")
 
 
-def _build_pending_routes(router, node_store, on_decision=None):
-    """Approve/deny for node-initiated join requests. Mounted on the ADMIN
-    router, so these carry the same loopback-root gate as every other node
-    control-plane route -- an authenticated LAN device cannot approve a sensor
-    into the house."""
+def _build_pending_routes(router, node_store, admin_deps, on_decision=None):
+    """Approve/deny for node-initiated join requests, behind the SAME
+    loopback-root gate as every other node control-plane route -- an
+    authenticated LAN device cannot approve a sensor into the house.
 
-    @router.get("/api/nodes/pending")
+    The gate is passed in and put on each route. It used to be implied by the
+    docstring alone: mounting on "the admin router" gave these routes nothing,
+    because that router's gate lives on each route, not on the router. A LAN
+    'user' or 'guest' token -- or a loopback page without the dashboard's CSRF
+    header -- could approve a Node."""
+
+    @router.get("/api/nodes/pending", dependencies=admin_deps)
     async def list_pending():
         return {"pending": [n.to_dict() for n in node_store.list_pending()]}
 
-    @router.post("/api/nodes/{node_id}/approve")
+    @router.post("/api/nodes/{node_id}/approve", dependencies=admin_deps)
     async def approve(node_id: str, name: str = Body(...),
                       sensor_type: str = Body(...), room: str = Body(...),
                       transport: str = Body("native")):
@@ -251,7 +256,7 @@ def _build_pending_routes(router, node_store, on_decision=None):
                 "note": "The sensor will pick up its credential the next time it "
                         "checks in."}
 
-    @router.post("/api/nodes/{node_id}/deny")
+    @router.post("/api/nodes/{node_id}/deny", dependencies=admin_deps)
     async def deny(node_id: str):
         if not node_store.deny(node_id):
             raise HTTPException(status_code=404, detail="unknown or non-pending node")
@@ -303,6 +308,6 @@ def build_nodes_admin_router(node_store, enroller, admin_deps=None, on_decision=
 
     # Node-initiated join requests: approve/deny, same gate as the rest of
     # this router.
-    _build_pending_routes(router, node_store, on_decision=on_decision)
+    _build_pending_routes(router, node_store, admin_deps, on_decision=on_decision)
 
     return router

@@ -17,7 +17,9 @@ def test_config_has_source_b_defaults(monkeypatch):
     assert cfg.net_known_macs == set()
     assert cfg.net_interval == 15.0
     assert cfg.net_grace == 2
-    assert cfg.ruview_url == "ws://localhost:3000/ws/sensing"
+    # Unconfigured by default: RuView is an external service an operator runs
+    # and names, not something Wavr assumes is on localhost.
+    assert cfg.ruview_url == ""
     assert cfg.ruview_room == "sala"
     assert cfg.ruview_reconnect == 3.0
 

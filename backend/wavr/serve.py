@@ -47,8 +47,8 @@ def main() -> None:
     # and a genuine torch/DLL failure is logged, never crashing startup.
     import logging as _lg
     try:
-        from ultralytics import YOLO
-        _ = YOLO  # (import for its side effect: load torch now)
+        from wavr.sources.camera import import_yolo
+        _ = import_yolo()  # (import for its side effect: load torch now, offline)
         _lg.getLogger("wavr").info("torch/ultralytics warmed up in main thread (camera detection ready)")
     except ImportError:
         pass  # [camera] extra not installed — normal for a network-only install

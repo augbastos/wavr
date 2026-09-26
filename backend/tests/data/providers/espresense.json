@@ -1,0 +1,7 @@
+[
+  {"topic": "espresense/devices/watch:enrolled/kitchen", "payload": "{\"distance\":1.25,\"mac\":\"aa:bb:cc:dd:ee:ff\",\"irk\":\"private-irk\"}", "room": "kitchen", "present": true},
+  {"topic": "espresense/devices/watch:enrolled/garage", "payload": "{\"distance\":0.5}", "room": null, "present": null},
+  {"topic": "espresense/rooms/kitchen/status", "payload": "offline", "room": "kitchen", "present": false},
+  {"topic": "espresense/rooms/kitchen/status", "payload": "online", "room": null, "present": null},
+  {"topic": "espresense/devices/watch:enrolled/kitchen", "payload": "{\"distance\":1.0}", "room": "kitchen", "present": true}
+]

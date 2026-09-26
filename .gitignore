@@ -95,3 +95,6 @@ mobile/www/
 *.pfx
 keystore.properties
 local.properties
+
+# Local editor-hook caches (impeccable), never part of the product.
+.impeccable/
