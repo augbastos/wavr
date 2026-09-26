@@ -18,7 +18,7 @@ is live, every command below uses the raw GitHub URL instead, which resolves for
 
 | Route | Verified how |
 |---|---|
-| Windows — self-contained installer (MSI/NSIS, `desktop/`, **no Python needed**) | **Built and run for real** on one Windows machine with every Python interpreter stripped from `PATH`: the MSI (42.9 MB) and NSIS (41.9 MB) installers were installed **silently**, and `/healthz`, the dashboard, and the first-run setup wizard all answered/worked correctly. `.github/workflows/release.yml`'s `windows-desktop-smoke` job repeats the same silent-install → launch → `/healthz` → silent-uninstall round trip on every build, for both installer formats. **Not published anywhere yet** — see [below](#self-contained-installer-msi--nsis--no-python-needed). |
+| Windows — self-contained installer (MSI/NSIS, `desktop/`, **no Python needed**) | **Built and run for real** on one Windows machine with every Python interpreter stripped from `PATH`: the MSI and NSIS installers were installed **silently**, and `/healthz`, the dashboard, and the first-run setup wizard all answered/worked correctly. `.github/workflows/release.yml`'s `windows-desktop-smoke` job repeats the same silent-install → launch → `/healthz` → silent-uninstall round trip on every build, for both installer formats. **Attached to every release** on the [Releases page](https://github.com/augbastos/wavr/releases), unsigned — see [below](#self-contained-installer-msi--nsis--no-python-needed). |
 | Windows — `scripts/install.ps1` (developer/advanced bootstrap, needs Python) | **Run for real, end to end, on one Windows machine**: standalone download from `github.com/augbastos/wavr` (default branch), fresh venv, editable install, backend start, `GET /healthz` and `GET /` both returned real responses, re-running upgraded in place without a duplicate process, `-Uninstall` removed the venv/source and left the database untouched. `-DryRun` checked separately (creates nothing). |
 | Linux (`scripts/install.sh`) | **Run for real, on every push**, by the `install-matrix` workflow: install → start → `/healthz` → `--uninstall`, with a check that data survives the uninstall, on **Debian 12 (amd64 and arm64), Ubuntu 24.04, Fedora 40 and Alpine 3.20**. The script is also shellchecked in the POSIX dialect of its own shebang, and there is a leg asserting it prints the right message when no adequate Python is reachable. |
 | Raspberry Pi | **Not verified.** The arm64 leg above is Debian under QEMU on an x86 runner, which exercises the script and the architecture — not the hardware, not Raspberry Pi OS, not a real SD card, and not the thermal or power behaviour that makes a Pi a Pi. The Pi-specific detection in the script is written from documented behaviour. Treat this route as reviewed, not field-proven. |
@@ -38,9 +38,9 @@ or turn on network scanning; Wavr's own first-run screen asks about those.
 
 ## Windows
 
-Two routes. **Neither needs a Python install any more if you use the first one** —
-but the first one has nothing to download yet, so the second (`scripts/install.ps1`)
-is the one that actually works today.
+Two routes. **The first one needs no Python install**: download it from the
+[Releases page](https://github.com/augbastos/wavr/releases). The second
+(`scripts/install.ps1`) is for people who already have Python or want the source.
 
 ### Self-contained installer (MSI / NSIS) — no Python needed
 
@@ -60,24 +60,20 @@ for a system Python, because it never needs to. `.github/workflows/release.yml`'
 → `/healthz` → silent uninstall) on every CI build, for both installer formats,
 so this is not a one-off manual check.
 
-**Unsigned — and there's nothing to download yet.** Two separate, honest caveats:
+**Where to get it, and one honest caveat:**
 
 - Wavr has no code-signing certificate. Windows SmartScreen will warn ("Windows
   protected your PC") the first time you run either installer — that is expected
   for an unsigned binary from a small open-source project, not a sign of
-  tampering. When a release does ship, verify the file you downloaded against the
-  `SHA256SUMS.txt` published alongside it before trusting the SmartScreen bypass.
-- **No release has been published.** `.github/workflows/release.yml` builds both
-  installers on every version-tagged push, but the resulting GitHub Release is
-  always left as an unpublished **draft** ("a human presses publish, always") —
-  that step has not happened yet. There is currently no link to click and no file
-  to download; this route is built and verified, not shipped.
+  tampering. Verify the file you downloaded against the `SHA256SUMS.txt` published
+  alongside it before trusting the SmartScreen bypass.
+- **Each release attaches both installers.** `.github/workflows/release.yml` builds
+  them on every version-tagged push into a **draft** release, and a person publishes
+  it after review ("a human presses publish, always"). Download them from the
+  [Releases page](https://github.com/augbastos/wavr/releases).
 
-Until a release exists, the only way to get this installer is to build it
-yourself from source: see `desktop/BUILD.md` for the PyInstaller sidecar step that
-has to run before `npm run tauri build`. If that sounds like more setup than you
-want, use `scripts/install.ps1` below instead — it's the route that works today
-without building anything.
+To build the installer yourself instead, see `desktop/BUILD.md` for the
+PyInstaller sidecar step that has to run before `npm run tauri build`.
 
 ### `scripts/install.ps1` — the developer/advanced bootstrap (needs Python)
 
