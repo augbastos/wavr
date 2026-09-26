@@ -6,6 +6,7 @@ The input must already exist. This command never downloads weights or packages.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -15,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-from wavr.person_onnx import OrtDetector, model_path, verify_model  # noqa: E402
+from wavr.person_onnx import OrtDetector, model_path  # noqa: E402
 from wavr.sources.camera import import_yolo  # noqa: E402
 
 
@@ -52,18 +53,22 @@ def main() -> int:
         output = detector.s.run(None, {detector.name: np.zeros((1, 3, 640, 640), dtype=np.float32)})[0]
         if output.shape != (1, 84, 8400):
             raise RuntimeError(f"unexpected YOLOv8n output shape: {output.shape}")
-        # Validate against a pinned release hash before replacing any installed
-        # model; the staging file has a random basename.
-        digest = verify_model(staged, expected_filename=dest.name)
-        staged.replace(dest)
+        # A local export is vouched for by its OWN digest, recorded in the sidecar. It is
+        # never byte-identical to the release's copy (the exporter stamps the export
+        # time into the model's metadata), so holding it to the release's pinned hash
+        # would refuse every local export.
+        digest = hashlib.sha256(staged.read_bytes()).hexdigest()
         sidecar = {
             "sha256": digest,
             "source": pt.name,
             "license": "AGPL-3.0 (Ultralytics)",
             "export": {"format": "onnx", "imgsz": 640, "simplify": True, "dynamic": True},
-            "size_bytes": dest.stat().st_size,
+            "size_bytes": staged.stat().st_size,
         }
+        # Sidecar first, then the model: a running camera never sees this model
+        # without the digest that vouches for it.
         dest.with_suffix(dest.suffix + ".json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+        staged.replace(dest)
     finally:
         staged.unlink(missing_ok=True)
     print(f"Verified local person model: {dest}")

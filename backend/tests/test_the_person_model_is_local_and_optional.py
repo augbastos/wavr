@@ -6,6 +6,7 @@ import os
 import socket
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -157,3 +158,36 @@ def test_the_detector_turns_ort_telemetry_off_before_the_session(tmp_path, monke
     model.with_suffix(".onnx.json").write_text(json.dumps({"sha256": hashlib.sha256(b"synthetic").hexdigest()}))
     person_onnx.OrtDetector(model)
     assert calls == ["telemetry off", ("session", "1")]
+
+
+def test_a_local_export_is_accepted_even_with_the_release_hash_pinned(tmp_path, monkeypatch):
+    np = pytest.importorskip("numpy")
+    # The exporter stamps the export time into the model, so a local export never equals
+    # the release's pinned file. It must be vouched for by its own sidecar, not refused.
+    for name in ("connect", "connect_ex", "sendto"):
+        monkeypatch.setattr(socket.socket, name, getattr(socket.socket, name))
+    monkeypatch.setattr(socket, "create_connection", socket.create_connection)
+    monkeypatch.setattr(socket, "getaddrinfo", socket.getaddrinfo)
+    spec = importlib.util.spec_from_file_location(
+        "provision_person_model",
+        Path(__file__).resolve().parents[2] / "scripts" / "provision_person_model.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    pt = tmp_path / "yolov8n.pt"
+    pt.write_bytes(b"local weights")
+    exported = tmp_path / "export" / "yolov8n.onnx"
+    exported.parent.mkdir()
+    exported.write_bytes(b"a local export, stamped with its own export time")
+    monkeypatch.setattr(script, "import_yolo", lambda: lambda path: types.SimpleNamespace(export=lambda **_: str(exported)))
+    session = types.SimpleNamespace(run=lambda _o, _i: [np.zeros((1, 84, 8400), dtype=np.float32)])
+    monkeypatch.setattr(script, "OrtDetector", lambda path: types.SimpleNamespace(s=session, name="images"))
+    dest = tmp_path / "models" / "yolov8n.onnx"
+    monkeypatch.setenv("WAVR_PERSON_MODEL", str(dest))
+    monkeypatch.setattr(sys, "argv", ["provision_person_model.py", "--pt", str(pt)])
+    manifest = json.loads(person_onnx.MANIFEST.read_text(encoding="utf-8"))
+    assert manifest["sha256"], "this test is about a PINNED release hash"
+    assert script.main() == 0
+    assert dest.read_bytes() == exported.read_bytes()
+    sidecar = json.loads(dest.with_suffix(".onnx.json").read_text(encoding="utf-8"))
+    assert sidecar["sha256"] == hashlib.sha256(exported.read_bytes()).hexdigest() != manifest["sha256"]
+    assert person_onnx.verify_model(dest) == sidecar["sha256"]   # the camera will accept it
