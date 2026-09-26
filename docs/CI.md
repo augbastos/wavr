@@ -46,6 +46,7 @@ Measure after the first run with `gh run view --json jobs`.
 | `tests/guarantees` | Linux | Guards fail under mutation | Repeated pytest | Every PR and push | 5–15 |
 | `tests/sdk-python` | Linux | Independent Python SDK | pytest setup | PR, main, manual | 1–3 |
 | `tests/sdk-javascript` | Linux | Dependency-free JS SDK | Node setup | PR, main, manual | 1–2 |
+| `tests/sdk-kotlin` | Linux | Android JVM unit tests (a required check on `main`) | Gradle/Android compile | PR, main, manual | 5–12 |
 | `native/changes` | Linux | Platform diff decision | Full checkout | PR, manual | 1–2 |
 | `native/host` | Linux | C++ host build, answer key, C consumer | CMake dependency fetch/build | PR, main, manual | 3–8 |
 | `native/cross` | Linux | Eight Zig target builds | Zig download and cross compilation | Relevant PR, release PR, manual | 8–20 |
