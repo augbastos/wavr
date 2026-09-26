@@ -160,8 +160,10 @@ def release_manifest(version: str, c_abi: str | None, made: list[Path]) -> dict:
                         "sha256": hashlib.sha256(arc.read_bytes()).hexdigest(),
                         "platform_matrix_id": mid, "evidence": evidence(entry),
                         "how": ((entry or {}).get("native_runtime") or {}).get("how")})
+    # No "published" flag: this file is attached to a release as it is, so it must not
+    # state its own publication (this script never uploads anything).
     return {"schema": 1, "product": "wavr-native", "version": version, "c_abi": c_abi,
-            "published": False, "evidence_source": "docs/platform-matrix.json",
+            "evidence_source": "docs/platform-matrix.json",
             "note": "Evidence is what was run, not what is supported: compile only is never support.",
             "targets": targets}
 
