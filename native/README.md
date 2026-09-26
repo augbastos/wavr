@@ -91,7 +91,7 @@ cmake --build build/native && ctest --test-dir build/native --output-on-failure
 
 # Any other target, from any host, with Zig as the cross compiler
 cmake -S native -B build/native-aarch64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE=native/cmake/zig-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/native/cmake/zig-toolchain.cmake" \
   -DZIG=/path/to/zig -DZIG_TARGET=aarch64-linux-musl
 
 # Android (bionic): the JNI library for the app, and the CLI

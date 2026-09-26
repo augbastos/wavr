@@ -125,7 +125,7 @@ jobs:
           for t in aarch64-linux-musl arm-linux-musleabihf x86-linux-musl mipsel-linux-musleabi \
                    mips-linux-musleabi aarch64-windows-gnu aarch64-macos x86_64-macos; do
             cmake -S native -B "build-$t" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_TOOLCHAIN_FILE=native/cmake/zig-toolchain.cmake \
+              -DCMAKE_TOOLCHAIN_FILE="$PWD/native/cmake/zig-toolchain.cmake" \
               -DZIG="$PWD/zig/zig" -DZIG_TARGET="$t"
             cmake --build "build-$t"
           done

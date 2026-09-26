@@ -1,7 +1,7 @@
 # Cross-compile the native runtime with Zig's bundled clang and libcs.
 #
 #   cmake -S native -B build/native-aarch64-linux -G Ninja \
-#     -DCMAKE_TOOLCHAIN_FILE=native/cmake/zig-toolchain.cmake \
+#     -DCMAKE_TOOLCHAIN_FILE="$PWD/native/cmake/zig-toolchain.cmake" \
 #     -DZIG=/path/to/zig -DZIG_TARGET=aarch64-linux-musl
 #
 # One compiler for every target below, from one download, with no sysroot to

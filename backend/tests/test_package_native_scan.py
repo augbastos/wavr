@@ -9,10 +9,19 @@ and a test file full of them teaches everyone to ignore those scans."""
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
-_spec = importlib.util.spec_from_file_location("package_native", REPO / "scripts" / "package_native.py")
-pkg = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(pkg)
+
+
+def _load_pkg():
+    spec = importlib.util.spec_from_file_location("package_native", REPO / "scripts" / "package_native.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+pkg = _load_pkg()
 
 DASHES = "-" * 5
 PRIVATE_KEY = "PRIVATE" + " KEY"
@@ -43,7 +52,17 @@ def test_every_known_leak_shape_is_refused():
 
 def test_the_packagers_own_user_name_is_refused():
     import getpass
-    assert pkg.scan("f", b"built by " + getpass.getuser().encode())
+    user = getpass.getuser()
+    if len(user) < 3 or user.lower() in {"root", "runner", "user", "admin", "builder"}:
+        pytest.skip(f"packager deliberately excludes account {user!r}")
+    assert pkg.scan("f", b"built by " + user.encode())
+
+
+def test_a_non_generic_packager_user_name_is_refused(monkeypatch):
+    import getpass
+    user = "alice_buildhost"
+    monkeypatch.setattr(getpass, "getuser", lambda: user)
+    assert _load_pkg().scan("f", b"built by " + user.encode())
 
 
 def test_what_a_clean_binary_carries_is_not_refused():
