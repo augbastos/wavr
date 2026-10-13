@@ -14,7 +14,7 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "@capacitor/android": "^8.4.1",
+    "@capacitor/android": "^8.4.3",
     "@capacitor/core": "^8.4.1",
     "capacitor-zeroconf": "^4.0.0"
   },
